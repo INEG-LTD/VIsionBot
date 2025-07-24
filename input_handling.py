@@ -5,6 +5,26 @@ import json
 
 client = OpenAI()
 
+class ButtonInput(BaseModel):
+    button_description: str
+    button_id: str
+    button_class: str
+    button_type: str
+    button_value: str
+    
+    def to_dict(self):
+        return {
+            "button_description": self.button_description,
+            "button_id": self.button_id,
+            "button_class": self.button_class,
+            "button_type": self.button_type,
+            "button_value": self.button_value
+        }
+    
+    def to_json(self):
+        return json.dumps(self.to_dict(), indent=4
+                          )
+        
 class FormInput(BaseModel):
     input_description: str
     input_id: str
@@ -45,6 +65,26 @@ class Response(BaseModel):
     def to_json(self):
         return json.dumps(self.to_dict(), indent=4)
     
+def get_html_button_inputs(html_content):
+    response = client.responses.parse(
+        model="gpt-4.1",
+        input=[
+            {
+                "role": "system",
+                "content": """
+                    You will be given the HTML source code for a job board home page. 
+                    Your task is to identify the button element that submit the form.
+                """
+            },
+            {
+                "role": "user",
+                "content": f"Extract the button element that submit the form from the following HTML: {html_content}"
+            }
+        ],
+        text_format=ButtonInput
+    )
+    response = response.output_parsed
+    return response
 
 def get_html_form_inputs(html_content):
     response = client.responses.parse(

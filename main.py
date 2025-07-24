@@ -2,10 +2,11 @@
 
 from playwright.sync_api import sync_playwright
 from time import sleep
-from find_job_listings import find_job_listings_with_playwright
+from find_job_listings import visit_site
 from job_pref import JobPreferences
 from employment_types import EmploymentTypes
 from remote_flexibility import RemoteFlexibility
+from input_handling import get_html_form_inputs, get_html_button_inputs
 
 def run():
     preferences = JobPreferences(
@@ -23,8 +24,25 @@ def run():
         exclude_keywords=['unpaid', 'internship']
     )
     
-    jobs = find_job_listings_with_playwright(preferences)
-    print(jobs)
+    job_sites = [
+        'https://www.glassdoor.com',
+        'https://www.ziprecruiter.com',
+        'https://www.monster.co.uk',
+    ]
+    
+    for job_site in job_sites:
+        # 1. visit the job site
+        page_source, page = visit_site(job_site)
+
+        # 2. get the input fields for the job site
+        form_inputs = get_html_form_inputs(page_source)
+        button_inputs = get_html_button_inputs(page_source)
+
+        # 3. fill in the input fields
+        for form_input in form_inputs:
+            page.fill(form_input.input_id, form_input.input_value)
+        print(form_inputs)
+        print(button_inputs)
 
 if __name__ == "__main__":
     run()
