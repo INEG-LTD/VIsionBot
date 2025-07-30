@@ -1,5 +1,6 @@
-greenlet==3.2.3
-playwright==1.54.0
-pyee==13.0.0
-python-dotenv==1.1.1
-typing_extensions==4.14.1
+openai>=1.0.0
+requests>=2.31.0
+Pillow>=10.0.0
+python-dotenv>=1.0.0
+playwright>=1.40.0
+pydantic>=2.0.0
