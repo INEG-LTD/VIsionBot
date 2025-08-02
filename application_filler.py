@@ -3,19 +3,23 @@
 Application Filler
 
 A comprehensive job application form filler that can handle various form types
-and automatically fill them based on user preferences using gpt-4.1 analysis.
+and automatically fill them based on user preferences using gemini-2.5-pro analysis.
 """
 
 # Removed incorrect import
 import time
 import json
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Union
 from playwright.sync_api import Page
 import openai
 from pydantic import BaseModel
 from enum import Enum
 import traceback
 import os
+import difflib
+from google import genai
+
+# Import removed - using self.preferences instead
 
 class FieldType(Enum):
     TEXT = "text"
@@ -23,20 +27,71 @@ class FieldType(Enum):
     RADIO = "radio"
     CHECKBOX = "checkbox"
     UPLOAD = "upload"
+    SUBMIT = "submit"
 
-class ApplicationField(BaseModel):
+# Base class for all application fields
+class BaseApplicationField(BaseModel):
     field_order: int
     field_name: str
-    field_type: FieldType
     field_selector: str
     field_is_visible: bool
-    field_value: Optional[str | bool] = None
-    field_options: Optional[List[str]] = None
+    field_in_form: bool
     field_required: Optional[bool] = None
     field_placeholder: Optional[str] = None
+
+# Text input field
+class TextApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.TEXT
+    field_value: Optional[str] = None
+    field_max_length: Optional[int] = None
+    field_pattern: Optional[str] = None
     
-class ApplicationFieldResponse(BaseModel):
-    fields: List[ApplicationField]
+class TextApplicationFieldResponse(BaseModel):
+    fields: List[TextApplicationField]
+
+# Select dropdown field
+class SelectApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.SELECT
+    field_value: Optional[str] = None
+    field_options: Optional[List[str]] = None
+    field_multiple: Optional[bool] = False
+
+class SelectApplicationFieldResponse(BaseModel):
+    fields: List[SelectApplicationField] = []
+
+# Radio button field
+class RadioApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.RADIO
+    field_value: Optional[bool] = None
+    field_options: Optional[List[str]] = None
+    field_group_name: Optional[str] = None
+
+class RadioApplicationFieldResponse(BaseModel):
+    fields: List[RadioApplicationField]
+
+# Checkbox field
+class CheckboxApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.CHECKBOX
+    field_value: Optional[bool] = None
+    field_checked: Optional[bool] = False
+
+class CheckboxApplicationFieldResponse(BaseModel):
+    fields: List[CheckboxApplicationField]
+
+# File upload field
+class UploadApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.UPLOAD
+    field_value: Optional[bool] = None
+    field_file_path: Optional[str] = None
+    field_accepted_types: Optional[List[str]] = None
+    field_max_size: Optional[int] = None
+
+class SubmitButtonApplicationField(BaseApplicationField):
+    field_type: FieldType = FieldType.SUBMIT
+    field_selector: Optional[str] = None
+    field_is_visible: Optional[bool] = None
+    field_in_form: Optional[bool] = None
+    field_required: Optional[bool] = None
     
 class ApplicationStateResponse(BaseModel):
     submitted: bool
@@ -151,49 +206,100 @@ class ApplicationFiller:
                 # Step 2: Find all form fields based on context
                 if iframe_context['use_iframe_context']:
                     # Use unified field detection functions with frame context
-                    frame = iframe_context['frame']
-                    form_fields = self.find_all_form_inputs(frame)
-                    form_fields['iframe_context'] = iframe_context
+                    frame = iframe_context['iframe_context']['frame']
+                    text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs(frame)
                 else:
                     # Use unified field detection functions for main page
-                    form_fields = self.find_all_form_inputs()
+                    text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs()
                 
-                print(f"📋 Found {form_fields['total_fields']} total inputs:")
-                print(f"  - {len(form_fields['text_input_fields'])} text input fields")
-                print(f"  - {len(form_fields['radios'])} radio button groups")
-                print(f"  - {len(form_fields['checkboxes'])} checkboxes")
-                print(f"  - {len(form_fields['selectors'])} select fields")
-                print(f"  - {1 if form_fields['upload_button'] else 0} upload buttons")
+                total_fields = (len(text_fields) + len(select_fields) + 
+                               len(radio_fields) + len(checkbox_fields) + 
+                               len(upload_fields))
                 
-                for field in form_fields['text_input_fields']:
-                    print(f"Field: {field.field_name} - {field.field_value} ({field.field_options})")
-                for field in form_fields['selectors']:
-                    print(f"Field: {field.field_name} - {field.field_value} ({field.field_options})")
-                for field in form_fields['radios']:
-                    print(f"Field: {field.field_name} - {field.field_value} ({field.field_options})")
-                for field in form_fields['checkboxes']:
-                    print(f"Field: {field.field_name} - {field.field_value} ({field.field_options})")
-                print(f"Field: {form_fields['upload_button'].field_name} - {form_fields['upload_button'].field_value} ({form_fields['upload_button'].field_options})")
+                print(f"📋 Found {total_fields} total inputs:")
+                print(f"  - {len(text_fields)} text input fields")
+                print(f"  - {len(radio_fields)} radio button groups")
+                print(f"  - {len(checkbox_fields)} checkboxes")
+                print(f"  - {len(select_fields)} select fields")
+                print(f"  - {len(upload_fields)} upload buttons")
+                
+                # Print field details
+                for field in text_fields:
+                    print(f"Text Field: {field.field_name} - {field.field_value} - {field.field_selector}")
+                for field in select_fields:
+                    print(f"Select Field: {field.field_name} - {field.field_value} ({field.field_options}) - {field.field_selector}")
+                for field in radio_fields:
+                    print(f"Radio Field: {field.field_name} - {field.field_value} ({field.field_options}) - {field.field_selector}")
+                for field in checkbox_fields:
+                    print(f"Checkbox Field: {field.field_name} - {field.field_value} - {field.field_selector}")
+                for field in upload_fields:
+                    print(f"Upload Field: {field.field_name} - {field.field_value} - {field.field_selector}")
                     
                 # Step 3: Fill all form fields
-                success = self.fill_all_form_inputs(form_fields)
+                frame = iframe_context['iframe_context']['frame'] if iframe_context['use_iframe_context'] else None
+                success = self.fill_all_form_inputs(text_fields, select_fields, radio_fields, checkbox_fields, upload_fields, frame)
                 if not success:
                     print("❌ Failed to fill form inputs")
                     return False
                 
-                # Step 4: Find and click submit button
-                submit_result = self.find_and_click_submit_button()
-                if not submit_result:
+                # Step 4: Find a next button if there is one
+                next_button = self.find_and_click_next_button()
+                if not next_button:
+                    print("❌ Failed to find or click next button")
+                    print("🔍 Checking for submit button")
+                else:
+                    print("✅ Next button found and clicked")
+                    state_result = self.check_form_submission_with_gpt(frame)
+                    if state_result.error_in_submission:
+                        print("⚠️ Error in submission - continuing...")
+                        self.page.pause()
+                        continue
+                    elif state_result.verification_required:
+                        print("⚠️ Verification required - continuing...")
+                        self.page.pause()
+                        continue
+                    elif state_result.more_forms:
+                        print("➡️ More forms detected - continuing...")
+                        self.page.pause()
+                        continue
+                    elif state_result.submitted and state_result.completed:
+                        print("✅ Form successfully submitted!")
+                        print("🎉 Application process completed!")
+                        return True
+                    else:
+                        print("⚠️ Form submission may have failed or requires attention")
+                        # Continue to next iteration to handle any new fields
+                        continue
+                            
+                # Step 5: Find and click submit button
+                submit_btn = self.find_submit_button_with_gpt(frame)
+                if not submit_btn:
                     print("❌ Failed to find or click submit input")
                     return False
-                
-                # Step 5: Take screenshot and analyze submission
+                else:
+                    if submit_btn.field_selector is None:
+                        print("❌ No submit button found")
+                        return False
+                        
+                    print(f"🔍 Clicking submit button with selector: {submit_btn.field_selector}")
+                    if frame:
+                        element = frame.locator(submit_btn.field_selector)
+                    else:
+                        element = self.page.locator(submit_btn.field_selector)
+                    
+                    if not element:
+                        print(f"⚠️ Submit button not found with selector: {submit_btn.field_selector}")
+                        return False
+                    
+                    element.click()
+                               
+                # Step 6: Take screenshot and analyze submission
                 screenshot_path = f"form_submission_{self.current_iteration}.png"
                 self.page.screenshot(path=screenshot_path, full_page=True)
                 print(f"📸 Screenshot saved: {screenshot_path}")
                 
-                # Step 6: Analyze if form was submitted successfully
-                submission_result = self.check_form_submission_with_gpt(screenshot_path)
+                # Step 7: Analyze if form was submitted successfully
+                submission_result = self.check_form_submission_with_gpt(frame)
                 
                 if submission_result.submitted and submission_result.completed:
                     print("✅ Form successfully submitted!")
@@ -300,224 +406,33 @@ class ApplicationFiller:
                 'use_iframe_context': False,
                 'iframe_context': None
             }
-    
-    def find_all_text_input_fields_in_iframe(self, iframe_context: Dict[str, Any]) -> List[ApplicationField]:
-        """
-        Find all text input fields in iframe
-        """
-        frame = iframe_context['frame']
-        return self.find_all_text_input_fields(frame)
         
-    def find_all_radio_fields_in_iframe(self, iframe_context: Dict[str, Any]) -> List[ApplicationField]:
-        """
-        Find all radio fields in iframe
-        """
-        frame = iframe_context['frame']
-        return self.find_all_radio_fields(frame)
-    
-    def find_all_checkbox_fields_in_iframe(self, iframe_context: Dict[str, Any]) -> List[ApplicationField]:
-        """
-        Find all checkbox fields in iframe
-        """
-        frame = iframe_context['frame']
-        return self.find_all_checkbox_fields(frame)
-    
-    def find_and_handle_all_select_fields_in_iframe(self, iframe_context: Dict[str, Any]) -> List[ApplicationField]:
-        """
-        Find all select fields in iframe using gpt-4.1
-        """
-        try:
-            import openai
-            client = openai.OpenAI()
-            
-            # Get the iframe frame
-            frame = iframe_context['frame']
-            
-            # Get page content and structure from iframe
-            page_content = frame.content()
-            
-            # Step 1: Use gpt-4.1 to find all the select fields
-            print("🤖 Using gpt-4.1 to find select fields...")
-            prompt = f"""
-            Analyze this HTML and identify all the select/dropdown fields.
-            
-            Look for:
-            1. A select element or a dropdown component or an element mimicking a select element
-                - If there is no <select> element it is possible that there is a custom dropdown component or an element mimicking a select element
-                    - If that is the case you need to find the element that can be clicked to open the dropdown
-            2. Custom dropdown components (divs, buttons that open options)
-            3. React-style select components
-            4. Any clickable elements that show options when clicked
-            5. The type of the input field is "select" and not "text" otherwise it is not a select field
-            
-            For each select field found, return:
-            - field_name: The label of the field in the html
-            - field_selector: CSS selector to find the field
-            - field_type: "select"
-            - field_value: null (we'll determine this after seeing options)
-            - field_options: null (we'll populate this after clicking)
-            
-            Return a JSON object with ApplicationField objects.
-            
-            CRITICAL GUIDELINES:
-            1. Find all select/dropdown fields related to the job application
-            2. Use proper CSS selectors that target the ACTUAL select elements
-            3. DO NOT include iframe selectors - only target the form elements themselves
-            4. Examples of good selectors: "select[name='city']", "div[id='state-dropdown']", "[class*='select']"
-            5. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe select[name='city']"
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
-            """
-            
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying select/dropdown fields. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationFieldResponse
-            )
-            
-            all_fields = response.output_parsed.fields
-            select_fields: List[ApplicationField] = [field for field in all_fields if field.field_type == FieldType.SELECT]
-            
-            print(f"✅ gpt-4.1 found {len(select_fields)} select fields")
-            
-            # Step 2: Iteratively click each select field to see the options
-            enhanced_select_fields = []
-            
-            for i, select_field in enumerate(select_fields):
-                print(f"🔄 Processing select field {i+1}/{len(select_fields)}: {select_field.field_name}")
-                
-                try:
-                    # Find the select field element
-                    select_element = frame.locator(select_field.field_selector)
-                    if not select_element:
-                        print(f"⚠️ Could not find select element with selector: {select_field.field_selector}")
-                        continue
-                    
-                    # Step 3: Take HTML snapshot before clicking
-                    html_before_click = frame.content()
-                    
-                    # Click the select field to open options
-                    print(f"🎯 Clicking select field: {select_field.field_selector}")
-                    # frame.wait_for_selector(select_field.field_selector, state="visible")
-                    # select_element.scroll_into_view_if_needed()
-                    # time.sleep(0.5)
-                    select_element.click()
-                    
-                    # Wait for options to appear
-                    time.sleep(1.0)
-                    
-                    # Step 4: Take HTML snapshot after clicking to see options
-                    html_after_click = frame.content()
-                    
-                    # Step 5: Use gpt-4.1 to find the select field and the options
-                    options_prompt = f"""
-                    Analyze these two HTML snapshots to find the select field and its options.
-                    
-                    HTML BEFORE clicking the select field:
-                    {html_before_click}
-                    
-                    HTML AFTER clicking the select field (options should now be visible):
-                    {html_after_click}
-                    
-                    The select field selector is: {select_field.field_selector}
-                    The select field name is: {select_field.field_name}
-                    
-                    Instructions:
-                    1. Compare the two HTML snapshots to identify what changed when the select field was clicked
-                    2. Find all the available options that are now visible
-                    3. Determine the best option value based on the user preferences: {self.preferences}
-                    4. Return a JSON object with:
-                       - field_name: The field name
-                       - field_selector: The CSS selector for the field
-                       - field_type: "select"
-                       - field_value: The best option value to select from the list of options
-                            - You are not allowed to use values that are not in the list of options
-                       - field_options: Array of all available options
-                    
-                    Focus on finding options that are now visible in the second HTML snapshot that weren't visible in the first.
-                    """
-                    
-                    options_response = client.responses.parse(
-                        model="gpt-4.1",
-                        input=[
-                            {"role": "system", "content": "You are an expert at analyzing HTML changes and identifying dropdown options. Return only valid JSON."},
-                            {"role": "user", "content": options_prompt}
-                        ],
-                        text_format=ApplicationFieldResponse
-                    )
-                    
-                    # Get the enhanced field with options
-                    enhanced_field = options_response.output_parsed.fields[0] if options_response.output_parsed.fields else select_field
-                    
-                    print(f"✅ Found {len(enhanced_field.field_options) if enhanced_field.field_options else 0} options for {enhanced_field.field_name}")
-                    print(f"   Best value: {enhanced_field.field_value}")
-                    
-                    enhanced_select_fields.append(enhanced_field)
-                    frame.get_by_role("option", name=enhanced_field.field_value).click(force=True, timeout=5000)
-                    print(f"🔄 Clicked {enhanced_field.field_name}")
-                    # Close the dropdown by clicking outside or pressing Escape
-                    try:
-                        # Try clicking outside the dropdown
-                        frame.click("body", position={"x": 0, "y": 0})
-                    except:
-                        # Try pressing Escape
-                        frame.keyboard.press("Escape")
-                    
-                    time.sleep(0.5)  # Wait for dropdown to close
-                    
-                except Exception as e:
-                    print(f"❌ Error processing select field {select_field.field_name}: {e}")
-                    # Add the original field without options
-                    enhanced_select_fields.append(select_field)
-                    continue
-            
-            print(f"✅ Successfully processed {len(enhanced_select_fields)} select fields with options")
-            return enhanced_select_fields
-            
-        except Exception as e:
-            print(f"❌ Error in find_and_handle_all_select_fields_in_iframe: {e}")
-            return []
-    
-    def find_upload_file_button_in_iframe(self, iframe_context: Dict[str, Any]) -> ApplicationField:
-        """
-        Find all upload file buttons in iframe
-        """
-        frame = iframe_context['frame']
-        return self.find_upload_file_button(frame)
-    
-    def fill_all_form_inputs(self, form_fields: Dict[str, List[ApplicationField]]) -> bool: 
+    def fill_all_form_inputs(self, text_fields: List[TextApplicationField], select_fields: List[SelectApplicationField], radio_fields: List[RadioApplicationField], checkbox_fields: List[CheckboxApplicationField], upload_fields: List[UploadApplicationField], frame=None) -> bool: 
         """Fill all form inputs using unified functions"""
         try:
-            # Check if we're working with iframe context
-            iframe_context = form_fields.get('iframe_context')
-            frame = iframe_context['frame'] if iframe_context else None
-            
             context_str = "iframe" if frame else "main page"
             print(f"🎯 Filling form fields in {context_str} context...")
             
             # Fill text input fields
-            for field in form_fields.get('text_input_fields', []):
+            for field in text_fields:
                 self.click_and_type_in_field(field, field.field_value, frame)
             
             # Fill select fields
-            for field in form_fields.get('selectors', []):
+            for field in select_fields:
                 self.handle_select_field(field, frame)
             
             # Fill radio buttons
-            for field in form_fields.get('radios', []):
+            for field in radio_fields:
                 self.click_radio_button(field, frame)
             
             # Fill checkboxes
-            for field in form_fields.get('checkboxes', []):
+            for field in checkbox_fields:
                 self.click_checkbox(field, frame)
             
             # Fill upload buttons
-            for field in form_fields.get('upload_button', []):
-                self.handle_file_upload(field, frame)
+            for field in upload_fields:
+                if field is not None:
+                    self.handle_file_upload(field, frame)
             
             return True
         except Exception as e:
@@ -525,29 +440,10 @@ class ApplicationFiller:
             traceback.print_exc()
             return False
     
-    def click_and_type_in_field_iframe(self, field: ApplicationField, text: str, frame) -> bool:
-        """Click on a field and type text using Playwright within iframe context"""
-        return self.click_and_type_in_field(field, text, frame)
-    
-    def click_radio_button_iframe(self, radio_button: ApplicationField, frame) -> bool:
-        """Click on a radio button within iframe context"""
-        return self.click_radio_button(radio_button, frame)
-        
-    def click_checkbox_iframe(self, checkbox: ApplicationField, frame) -> bool:
-        """Click on a checkbox within iframe context"""
-        return self.click_checkbox(checkbox, frame)
-        
-    def click_upload_button_iframe(self, upload_button: ApplicationField, frame) -> bool:
-        """Click on an upload button within iframe context"""
-        return self.click_upload_button(upload_button, frame)
-        
-    def handle_select_field_iframe(self, select_field: ApplicationField, frame) -> bool:
-        """Handle a select field within iframe context"""
-        return self.handle_select_field(select_field, frame)
-    
-    def handle_select_field(self, select_field: ApplicationField, frame=None) -> bool:
+    def handle_select_field(self, select_field: SelectApplicationField, frame=None) -> bool:
         """Handle select field in page or iframe context"""
         try:
+            print(f"🔄 Handling select field: {select_field.field_name} - {select_field.field_selector}")
             # Use id= selector engine for IDs with special characters like []
             if select_field.field_selector.startswith('#'):
                 if frame:
@@ -564,6 +460,12 @@ class ApplicationFiller:
                 print(f"⚠️ Select field not found with selector: {select_field.field_selector}")
                 return False
             
+            # Check if element is interactive before attempting to interact
+            if not self._is_element_interactive(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping non-interactive select field in {context_str}: {select_field.field_name}")
+                return True  # Return True to continue with other fields
+            
             # Check if element is within form context before interacting
             if not self._is_element_in_form_context(element, frame):
                 context_str = "iframe" if frame else "page"
@@ -576,95 +478,54 @@ class ApplicationFiller:
                 print(f"⏭️ Skipping system/preference select field in {context_str}: {select_field.field_name}")
                 return True
             
-            select_value: bool = select_field.field_value
-            if not select_value:
-                context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping select field with false value in {context_str}: {select_field.field_name}")
-                return True
-            
             # Try to handle as standard select first
             try:
-                # Check if already selected
-                if self._check_select_already_selected(element, str(select_value), frame):
-                    context_str = "iframe" if frame else "page"
-                    print(f"✅ Select field already has correct value in {context_str}: {select_field.field_name}")
-                    return True
-                
                 # Try standard select handling
-                element.select_option(value=str(select_value))
-                context_str = "iframe" if frame else "page"
-                print(f"✅ Successfully selected option in {context_str}: {select_field.field_name}")
-                return True
+                possible_values = element.locator("option").evaluate_all(
+                    "options => options.map(option => option.value)"
+                )
+                
+                alternative_value = self._find_alternative_select_value(possible_values, select_field, self.preferences)
+                select_value = alternative_value
+                
+                if possible_values:
+                    if alternative_value:
+                        print(f"🔄 Using alternative value: {alternative_value}")
+                        element.select_option(value=str(select_value))
+                        context_str = "iframe" if frame else "page"
+                        print(f"✅ Successfully selected option in {context_str}: {select_field.field_name}")
+                        return True
+                    else:
+                        print(f"❌ Could not find alternative value for {select_field.field_name}")
+                        return False
+                else:
+                    # Alternative: Click the select field and then click the option that is the closest match to the value
+                    print("🔄 Clicking select field and then clicking the option that is the closest match to the value")
+                    element.click()
+                    # self.page.pause()
+                    time.sleep(0.5)
+                    print(f"🔄 Clicked select field and waiting for options to appear")
+                    
+                    result = self._find_and_click_option_with_gpt(frame.content(), self.preferences, frame)
+                    if result:
+                        print(f"✅ Successfully selected option: {result}")
+                        return True
+                    else:
+                        print(f"❌ Could not find option element with selector: {result}")
+                    return False
                 
             except Exception as e:
-                print(f"⚠️ Standard select handling failed, trying custom dropdown: {e}")
-                # Fallback to custom dropdown handling
-                return self._handle_custom_dropdown(select_field, frame)
+                print(f"❌ Standard select handling failed: {e}")
+                return False
                 
         except Exception as e:
             context_str = "iframe" if frame else "page"
             print(f"❌ Error handling select field in {context_str}: {e}")
             return False
 
-    def _handle_custom_dropdown_iframe(self, select_field: ApplicationField, frame) -> bool:
-        """Handle custom dropdown components within iframe context"""
-        return self._handle_custom_dropdown(select_field, frame)
-    
-    def _handle_custom_dropdown(self, select_field: ApplicationField, frame=None) -> bool:
-        """Handle custom dropdown components in main page context using gpt-4.1"""
+    def _find_dropdown_field_with_gpt(self, page_html: str, original_selector: str, target_value: str, context: str) -> bool:
+        """Use gemini-2.5-pro to find the dropdown field from HTML snapshot"""
         try:
-            select_value: str = select_field.field_value
-            print(f"🤖 Using gpt-4.1 to handle dropdown in main page for value: {select_value}")
-            
-            # Step 1: Take HTML snapshot to find the dropdown field
-            print("📸 Taking HTML snapshot to find dropdown field...")
-            page_html = self.page.content()
-            
-            # Step 2: Use gpt-4.1 to find the dropdown field
-            dropdown_info = self._find_dropdown_field_with_gpt(page_html, select_field.field_selector, select_value, "main page")
-            if not dropdown_info:
-                print(f"❌ gpt-4.1 could not find dropdown field")
-                return False
-            
-            # Step 3: Click the dropdown field
-            print(f"🎯 Clicking dropdown field: {dropdown_info['selector']}")
-            try:
-                dropdown_element = self.page.locator(dropdown_info['selector'])
-                if dropdown_element:
-                    dropdown_element.scroll_into_view_if_needed()
-                    time.sleep(0.5)
-                    dropdown_element.click(force=True, timeout=5000)
-                    print("✅ Clicked dropdown field")
-                else:
-                    print(f"❌ Could not find dropdown element with selector: {dropdown_info['selector']}")
-                    return False
-            except Exception as e:
-                print(f"❌ Error clicking dropdown field: {e}")
-                return False
-            
-            # Step 4: Take another HTML snapshot to see the options
-            print("📸 Taking HTML snapshot to see dropdown options...")
-            time.sleep(1.0)  # Wait for dropdown to open
-            page_html_after_click = self.page.content()
-            
-            # Step 5: Use gpt-4.1 to click the correct option
-            option_info = self._find_and_click_option_with_gpt(page_html_after_click, select_value, self.page)
-            if option_info:
-                print(f"✅ Successfully selected option: {select_value}")
-                time.sleep(0.5)  # Wait for selection to register
-                return True
-            else:
-                print(f"❌ Could not find or click option: {select_value}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error handling custom dropdown in main page with gpt-4.1: {e}")
-            return False
-    
-    def _find_dropdown_field_with_gpt(self, page_html: str, original_selector: str, target_value: str, context: str) -> Optional[Dict[str, Any]]:
-        """Use gpt-4.1 to find the dropdown field from HTML snapshot"""
-        try:
-            import openai
             import json
             
             prompt = f"""
@@ -687,16 +548,16 @@ class ApplicationFiller:
             {page_html}
             """
             
-            client = openai.OpenAI()
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and finding dropdown fields. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and finding dropdown fields. Return only valid JSON."
+                )
             )
             
-            result = response.choices[0].message.content.strip()
+            result = response.text.strip()
             
             # Parse JSON response
             try:
@@ -710,7 +571,7 @@ class ApplicationFiller:
                     dropdown_data = json.loads(result.strip())
                     
                     if 'selector' in dropdown_data:
-                        print(f"✅ gpt-4.1 found dropdown field: {dropdown_data['selector']}")
+                        print(f"✅ gemini-2.5-pro found dropdown field: {dropdown_data['selector']}")
                         return dropdown_data
                     else:
                         print("⚠️ GPT response missing selector field")
@@ -723,44 +584,68 @@ class ApplicationFiller:
                 return None
                 
         except Exception as e:
-            print(f"❌ Error in gpt-4.1 dropdown field detection: {e}")
+            print(f"❌ Error in gemini-2.5-pro dropdown field detection: {e}")
             return None
     
-    def _find_and_click_option_with_gpt(self, page_html: str, target_value: str, frame) -> Optional[Dict[str, Any]]:
-        """Use gpt-4.1 to find and click the correct option from HTML snapshot"""
+    def _find_and_click_option_with_gpt(self, page_html: str, preferences: str, frame) -> Optional[Dict[str, Any]]:
+        """Use gemini-2.5-pro to find and click the correct option from HTML snapshot"""
         try:
-            import openai
-            
             prompt = f"""
-            Analyze this HTML and return the selector that will find the option that matches "{target_value}".
+                You are **Gemini 2.5**, a state-of-the-art language model with DOM-parsing skills.
+
+                **Task**  
+                Given the raw HTML of an **open** *react-select* dropdown, output **only** the single, Playwright-Python selector that uniquely matches the user's preferences.  
+                Return **nothing but that selector string** - no quotes, no back-ticks, no explanations.
+
+                ------------------------------------------------------------------------
+                Selection rules (follow in order; stop at the first one that yields a unique match)
+                1. **Exact visible text**  
+                `div[role="option"]:has-text("target_value")`
+                2. **Autogenerated id** (stable within the page's lifetime)  
+                Example: `#react-select-7-option-0`
+                3. **Class ending in "-option"**  
+                Example: `div.css-xyz789-option`
+                4. **data-value** attribute  
+                Example: `div[role="option"][data-value="target_value"]`
+                5. If multiple candidates remain, prefer the shortest selector that is still unique.
+
+                **Constraints**  
+                • The selector must match **only the desired `<div role="option">` element** - never its parent listbox, descendants, or siblings.  
+                • It must be a valid **Playwright Python** selector.  
+                • Output nothing except the selector itself (no quotes, code fences, or commentary).  
+                • Do **not** rely on brittle positional selectors (`nth-child`, `nth-of-type`, etc.) unless all other strategies fail.
+
+                ------------------------------------------------------------------------
+                ✅ **GOOD examples** (unique)  
+                • `div[role="option"]:has-text("United Kingdom")`  
+                • `#react-select-3-option-5`  
+                • `div.css-a1b2c3-option[data-value="ca"]`  
+                • `div[role="option"][data-value="fr"]`  
+
+                ❌ **BAD examples** (non-unique or fragile)  
+                • `div[role="option"]`                — matches every option  
+                • `.css-123456`                       — class may apply to many nodes  
+                • `div[role="option"]:first-child`   — position breaks if list changes  
+                • `#react-select-3-option-`           — partial id, not unique
+
+                ------------------------------------------------------------------------
+                **Return format**  
+                Exactly the selector string, nothing else.
+
+                HTML of the open dropdown:
+                {page_html}
+                """
             
-            The dropdown is now open and showing options. Find the option that should be clicked to select "{target_value}".
-            
-            Look for dropdown options that are now visible and find the css selector that will find the option element exactly.
-                This could be with the text of the option or with the value of the option or with the id of the option or with the class of the option.
-                The selector must be exact and must not be a parent or a child of the option element.
-            
-            You must only return the selector that will find the option element.
-            You must not return any other text.
-            
-            Example of a good response:
-            "div[class='dropdown-option']"
-            
-            
-            HTML content (dropdown is open):
-            {page_html}
-            """
-            
-            client = openai.OpenAI()
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element."},
-                    {"role": "user", "content": prompt}
-                ],
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element."
+                )
             )
+            result = response.text.strip()
             
-            result = response.choices[0].message.content.strip()
             print(result)
         
             option_element = frame.locator(result)
@@ -773,7 +658,7 @@ class ApplicationFiller:
                 return None
             
         except Exception as e:
-            print(f"❌ Error in gpt-4.1 option detection: {e}")
+            print(f"❌ Error in gemini-2.5-pro option detection: {e}")
             return None
     
     def _check_select_already_selected(self, element, target_value: str, frame=None) -> bool:
@@ -975,7 +860,7 @@ class ApplicationFiller:
             print(f"⚠️ Error checking form context: {e}")
             return True  # Default to allowing interaction
     
-    def _is_system_or_preference_field(self, select_field: ApplicationField) -> bool:
+    def _is_system_or_preference_field(self, select_field: SelectApplicationField) -> bool:
         """
         Detect system or preference fields that should typically be skipped
         """
@@ -1014,7 +899,7 @@ class ApplicationFiller:
         return False
     
     # Removed _get_enhanced_option_selectors and _is_valid_option_match methods
-    # These are no longer needed since we use gpt-4.1 for intelligent dropdown handling
+    # These are no longer needed since we use gemini-2.5-pro for intelligent dropdown handling
     
     def _get_file_upload_button_selectors(self, file_input_id: str = None, file_input_name: str = None) -> list:
         """
@@ -1086,6 +971,71 @@ class ApplicationFiller:
         except:
             return False
     
+    def _is_element_interactive(self, element, frame=None) -> bool:
+        """
+        Check if an element is interactive (visible, enabled, and in viewport)
+        """
+        try:
+            if not element:
+                return False
+            
+            # Check if element exists
+            try:
+                element.count()
+            except:
+                return False
+            
+            # Check if element is visible
+            if not element.is_visible():
+                return False
+            
+            # Check if element is enabled
+            if not element.is_enabled():
+                return False
+            
+            # Check if element is in viewport (not hidden by CSS)
+            try:
+                bounding_box = element.bounding_box()
+                if not bounding_box:
+                    return False
+                
+                # Check if element has zero dimensions (hidden)
+                if bounding_box['width'] <= 0 or bounding_box['height'] <= 0:
+                    return False
+                
+                # Check if element is positioned off-screen
+                if (bounding_box['x'] < -1000 or bounding_box['y'] < -1000 or 
+                    bounding_box['x'] > 10000 or bounding_box['y'] > 10000):
+                    return False
+                    
+            except:
+                # If we can't get bounding box, assume it's interactive
+                pass
+            
+            # Check if element is not hidden by CSS
+            try:
+                display = element.evaluate("el => window.getComputedStyle(el).display")
+                if display == 'none':
+                    return False
+                    
+                visibility = element.evaluate("el => window.getComputedStyle(el).visibility")
+                if visibility == 'hidden':
+                    return False
+                    
+                opacity = element.evaluate("el => window.getComputedStyle(el).opacity")
+                if opacity == '0':
+                    return False
+                    
+            except:
+                # If we can't check CSS properties, assume it's interactive
+                pass
+            
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Error checking element interactivity: {e}")
+            return False
+    
     def _safe_click_element(self, element) -> bool:
         """
         Safely click an element with multiple fallback strategies
@@ -1096,8 +1046,6 @@ class ApplicationFiller:
             
             # Strategy 1: Scroll into view and direct click
             try:
-                element.scroll_into_view_if_needed()
-                time.sleep(0.3)
                 element.click(force=True, timeout=5000)
                 print(f"✅ Element clicked successfully")
                 return True
@@ -1135,52 +1083,7 @@ class ApplicationFiller:
             print(f"❌ Safe click failed: {e}")
             return False
     
-    def _handle_field_error(self, field: ApplicationField, error: Exception, context: str = "") -> bool:
-        """
-        Handle field processing errors with intelligent recovery
-        """
-        print(f"⚠️ Error processing {field.field_type.value} field '{field.field_name}': {error}")
-        
-        # Log the error for debugging
-        if context:
-            print(f"📍 Context: {context}")
-        
-        # For select fields, try a simplified approach
-        if field.field_type == FieldType.SELECT:
-            try:
-                print(f"🔄 Attempting simplified select handling for {field.field_name}")
-                # Just return True to skip problematic selects gracefully
-                return True
-            except:
-                pass
-        
-        # For text fields, try a basic approach
-        if field.field_type == FieldType.TEXT:
-            try:
-                print(f"🔄 Attempting simplified text input for {field.field_name}")
-                element = self.page.locator(field.field_selector)
-                if element:
-                    element.fill(field.field_value)
-                    return True
-            except:
-                pass
-        
-        # For upload fields, try direct file path setting
-        if field.field_type == FieldType.UPLOAD:
-            try:
-                print(f"🔄 Attempting direct file upload for {field.field_name}")
-                file_input = self.page.locator('input[type="file"]')
-                if file_input and hasattr(field, 'file_path'):
-                    file_input.set_input_files(field.file_path)
-                    return True
-            except:
-                pass
-        
-        # Return True to continue with other fields rather than failing completely
-        print(f"⏭️ Skipping problematic field: {field.field_name}")
-        return True
-    
-    def click_and_type_in_field(self, field: ApplicationField, text: str, frame=None) -> bool:
+    def click_and_type_in_field(self, field: TextApplicationField, text: str, frame=None) -> bool:
         """Click on a field and type text using Playwright in page or iframe context"""
         try:
             # Use id= selector engine for IDs with special characters like []
@@ -1199,18 +1102,17 @@ class ApplicationFiller:
                 print(f"⚠️ Element not found with selector: {field.field_selector}")
                 return False
             
+            # Check if element is interactive before attempting to interact
+            if not self._is_element_interactive(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping non-interactive text field in {context_str}: {field.field_name}")
+                return True  # Return True to continue with other fields
+            
             # Check if element is within form context before interacting
             if not self._is_element_in_form_context(element, frame):
                 context_str = "iframe" if frame else "page"
                 print(f"⏭️ Skipping text field outside form context in {context_str}: {field.field_name}")
                 return True
-            
-            # Scroll element into view first
-            try:
-                element.scroll_into_view_if_needed()
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"⚠️ Scroll failed, continuing anyway: {e}")
             
             # Try multiple approaches to interact with the field
             success = False
@@ -1219,9 +1121,7 @@ class ApplicationFiller:
             try:
                 element.focus()
                 time.sleep(0.3)
-                element.fill('')
-                time.sleep(0.2)
-                element.fill(text)
+                element.fill(text if text else '')
                 time.sleep(0.5)
                 context_str = "iframe" if frame else "page"
                 print(f"✅ Successfully typed '{text}' in {context_str} field using fill method")
@@ -1274,7 +1174,7 @@ class ApplicationFiller:
             print(f"❌ Error clicking and typing in {context_str} field: {e}")
             return False
 
-    def click_radio_button(self, radio_button: ApplicationField, frame=None) -> bool:
+    def click_radio_button(self, radio_button: RadioApplicationField, frame=None) -> bool:
         """Click on a radio button in page or iframe context"""
         try:
             # Use id= selector engine for IDs with special characters like []
@@ -1292,6 +1192,12 @@ class ApplicationFiller:
             if not element:
                 print(f"⚠️ Radio button not found with selector: {radio_button.field_selector}")
                 return False
+            
+            # Check if element is interactive before attempting to click
+            if not self._is_element_interactive(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping non-interactive radio button in {context_str}: {radio_button.field_name}")
+                return True  # Return True to continue with other fields
                 
             radio_value: bool = radio_button.field_value
             if radio_value:
@@ -1304,7 +1210,7 @@ class ApplicationFiller:
             print(f"❌ Error checking radio button in {context_str}: {e}")
             return False
 
-    def click_checkbox(self, checkbox: ApplicationField, frame=None) -> bool:
+    def click_checkbox(self, checkbox: CheckboxApplicationField, frame=None) -> bool:
         """Click on a checkbox in page or iframe context"""
         try:
             # Use id= selector engine for IDs with special characters like []
@@ -1322,6 +1228,12 @@ class ApplicationFiller:
             if not element:
                 print(f"⚠️ Checkbox not found with selector: {checkbox.field_selector}")
                 return False
+            
+            # Check if element is interactive before attempting to click
+            if not self._is_element_interactive(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping non-interactive checkbox in {context_str}: {checkbox.field_name}")
+                return True  # Return True to continue with other fields
                 
             checkbox_value: bool = checkbox.field_value
             if checkbox_value:
@@ -1334,7 +1246,7 @@ class ApplicationFiller:
             print(f"❌ Error clicking checkbox in {context_str}: {e}")
             return False
 
-    def click_upload_button(self, upload_button: ApplicationField, frame=None) -> bool:
+    def click_upload_button(self, upload_button: UploadApplicationField, frame=None) -> bool:
         """Click on an upload button in page or iframe context"""
         try:
             # Use id= selector engine for IDs with special characters like []
@@ -1364,21 +1276,7 @@ class ApplicationFiller:
             print(f"❌ Error clicking upload button in {context_str}: {e}")
             return False
 
-    def handle_file_upload_iframe(self, upload_button: ApplicationField, frame, times_tried=0) -> bool:
-        """
-        Handle file upload in iframe context
-        
-        Args:
-            upload_button: Upload button field information
-            frame: Iframe frame object
-            
-        Returns:
-            bool: True if file upload was handled successfully
-        """
-        return self.handle_file_upload(upload_button, frame, times_tried)
-            
-    
-    def handle_file_upload(self, upload_button: ApplicationField, frame=None, times_tried=0) -> bool:
+    def handle_file_upload(self, upload_button: UploadApplicationField, frame=None, times_tried=0) -> bool:
         """Handle file upload in page or iframe context"""
         try:
             # Use id= selector engine for IDs with special characters like []
@@ -1403,14 +1301,9 @@ class ApplicationFiller:
                 print(f"⏭️ Skipping upload button outside form context in {context_str}: {upload_button.field_name}")
                 return True
             
-            upload_value: bool = upload_button.field_value
-            if not upload_value:
-                context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping upload button with false value in {context_str}: {upload_button.field_name}")
-                return True
-            
             try:
                 element.click()
+                self.page.pause()
                 
                 context_str = "iframe" if frame else "page"
                 print(f"✅ Successfully triggered file dialog in {context_str}")
@@ -1481,247 +1374,131 @@ class ApplicationFiller:
             print(f"⚠️ Error setting file path directly: {e}")
             return False
 
-    def find_submit_button_with_gpt(self, iframe_context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def find_submit_button_with_gpt(self, frame: Dict[str, Any] = None) -> SubmitButtonApplicationField:
         """
-        Use gpt-4.1 to contextually find submit buttons on the page or in iframe
+        Use gemini-2.5-pro to contextually find submit buttons on the page or in iframe
         
         Args:
             iframe_context: Iframe context if searching within an iframe
             
         Returns:
-            Dict with submit button information and action
+            SubmitButtonApplicationField with submit button information and action
         """
         try:
-            print("🤖 Using gpt-4.1 to find submit button contextually...")
+            print("🤖 Using gemini-2.5-pro to find submit button contextually...")
             
-            # Get the appropriate content and frame
-            if iframe_context:
-                frame = iframe_context['frame']
+            if frame:
                 page_content = frame.content()
-                context_name = f"iframe {iframe_context['index']+1}"
             else:
-                frame = self.page
                 page_content = self.page.content()
-                context_name = "main page"
             
-            import openai
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             prompt = f"""
-            Analyze this HTML and find the submit/continue button for a job application form.
             
-            Look for buttons that would submit or continue the application process.
-            Common submit button indicators:
-            - Text like "Submit", "Continue", "Next", "Apply", "Send", "Save"
-            - Buttons with submit-related classes or IDs
-            - Form submit buttons
-            - Buttons that appear to advance the application process
-            
-            Return a JSON object with:
-            {{
-                "submit_button_found": true/false,
-                "button_selector": "CSS selector for the button",
-                "button_text": "Text content of the button",
-                "button_type": "submit/button/input",
-                "confidence": 0.0-1.0,
-                "reasoning": "Why you think this is the submit button"
-            }}
-            
-            If no submit button is found, return:
-            {{
-                "submit_button_found": false,
-                "button_selector": null,
-                "button_text": null,
-                "button_type": null,
-                "confidence": 0.0,
-                "reasoning": "Why no submit button was found"
-            }}
-            
-            HTML content from {context_name}:
+                1.	TASK
+            Locate the single HTML element that submits or advances a job-application form and return it as an instantiation of SubmitButtonApplicationField.
+                2.	OUTPUT CONTRACT — return ONLY this Python snippet, nothing else
+            SubmitButtonApplicationField(
+            field_type       = FieldType.SUBMIT,
+            field_selector   = ,
+            field_is_visible = <True | False | None>,
+            field_in_form    = <True | False | None>,
+            field_required   = <True | False | None>
+            )
+            If no suitable element exists, set field_selector = None and all booleans to False.
+                3.	SELECTION RULES
+            • Allowed element types: , , or any tag with role=“button”.
+            • Text cues (case-insensitive): submit, continue, next, apply, send, save, finish, complete.
+            • Attribute cues: type=“submit”; class/id containing a text cue; data-action*=“submit”; onclick that submits a form or advances the process.
+            • Preference hierarchy:
+
+                1.	Prefer elements that are descendants of the primary .
+                2.	If multiple candidates exist within that form, choose the one nearest the end of the form’s content flow.
+                3.	If ties remain, prefer elements with explicit type=“submit” or a text cue from the list.
+
+                4.	FIELD VALUE GUIDANCE
+            • field_selector   — stable, concise CSS selector (id if present, otherwise a specific path).
+            • field_is_visible — True if element is not hidden (no hidden attribute, not aria-hidden=“true”, not style/display:none, not visibility:hidden); False if hidden; None if unknown.
+            • field_in_form    — True if the element is inside a ; False otherwise; None if unknown.
+            • field_required   — True only if the element explicitly has required or aria-required=“true”; otherwise False or None if unknown.
+                5.	IN-CONTEXT EXAMPLES
+
+            GOOD G1 (inside form, explicit submit)
+            HTML:
+            <form id="app">
+            …
+            <button type="submit" class="btn primary">Apply Now</button>
+            </form>
+            Python:
+            SubmitButtonApplicationField(
+            field_type       = FieldType.SUBMIT,
+            field_selector   = "#app button[type='submit']",
+            field_is_visible = True,
+            field_in_form    = True,
+            field_required   = False
+            )
+
+            GOOD G2 (role=button with submit cue)
+            HTML:
+            <form>
+            …
+            <a role="button" id="continue" class="next">Continue</a>
+            </form>
+            Python:
+            SubmitButtonApplicationField(
+            field_type       = FieldType.SUBMIT,
+            field_selector   = "a#continue.next",
+            field_is_visible = True,
+            field_in_form    = True,
+            field_required   = False
+            )
+
+            BAD B1 (not a submit element)
+            HTML:
+            <a href="/privacy">Read our privacy policy</a>
+            Python:
+            SubmitButtonApplicationField(
+            field_type       = FieldType.SUBMIT,
+            field_selector   = None,
+            field_is_visible = False,
+            field_in_form    = False,
+            field_required   = False
+            )
+
+            BAD B2 (multiple candidates — do NOT pick arbitrarily)
+            HTML:
+            <form>
+            <button>Back</button>
+            <button>Next</button>
+            <button>Save Draft</button>
+            </form>
+            Correct behaviour: choose the element that advances the flow (“Next”); if ambiguous, pick the one nearest the end of the form.
+                6.	INPUT
+            HTML source:
             {page_content}
             """
             
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying submit buttons for job application forms. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying submit buttons for job application forms. Return only valid JSON.",
+                    response_mime_type="application/json",
+                    response_schema=SubmitButtonApplicationField
+                )
             )
             
-            result = response.choices[0].message.content.strip()
+            result = response.parsed
             
-            # Parse JSON response
-            try:
-                analysis = json.loads(result)
-                submit_button_found = analysis.get('submit_button_found', False)
-                button_selector = analysis.get('button_selector')
-                button_text = analysis.get('button_text')
-                confidence = analysis.get('confidence', 0.0)
-                reasoning = analysis.get('reasoning', '')
-                
-                if submit_button_found and button_selector and confidence > 0.5:
-                    print(f"✅ gpt-4.1 found submit button: '{button_text}' (confidence: {confidence:.2f})")
-                    print(f"   Selector: {button_selector}")
-                    print(f"   Reasoning: {reasoning}")
-                    
-                    # Try to find the button using the selector
-                    try:
-                        button_element = frame.locator(button_selector)
-                        print(f"Button element: {button_element}")
-                        if button_element and button_element.is_enabled():
-                            return {
-                                'found': True,
-                                'element': button_element,
-                                'selector': button_selector,
-                                'text': button_text,
-                                'confidence': confidence,
-                                'reasoning': reasoning,
-                                'context': context_name
-                            }
-                        else:
-                            print(f"⚠️ Button found by GPT but not accessible: {button_selector}")
-                    except Exception as e:
-                        print(f"⚠️ Error accessing button with selector {button_selector}: {e}")
-                
-                else:
-                    print(f"ℹ️ gpt-4.1 analysis: {reasoning}")
-                    
-            except json.JSONDecodeError:
-                print(f"⚠️ Could not parse GPT response: {result}")
+            print(f"🤖 gemini-2.5-pro found submit button: {result}")
             
-            return {
-                'found': False,
-                'element': None,
-                'selector': None,
-                'text': None,
-                'confidence': 0.0,
-                'reasoning': 'GPT analysis failed or no button found',
-                'context': context_name
-            }
+            return result
             
         except Exception as e:
             print(f"❌ Error in GPT submit button detection: {e}")
-            return {
-                'found': False,
-                'element': None,
-                'selector': None,
-                'text': None,
-                'confidence': 0.0,
-                'reasoning': f'Error: {e}',
-                'context': context_name if 'context_name' in locals() else 'unknown'
-            }
+            return None
 
-    def find_and_click_submit_button(self) -> bool:
-        """
-        Find and click the submit/continue button using gpt-4.1 contextual analysis
-        
-        Returns:
-            bool: True if button was found and clicked successfully
-        """
-        try:
-            print("🔍 Looking for submit/continue button using gpt-4.1...")
-            
-            # First, check if there are any iframes on the page
-            iframes = self.page.query_selector_all('iframe')
-            visible_iframes = [iframe for iframe in iframes if iframe.is_visible()]
-            
-            if visible_iframes:
-                print(f"📋 Found {len(visible_iframes)} visible iframes - checking if submit button is in iframe...")
-                
-                # Check iframes first for submit button
-                for i, iframe in enumerate(visible_iframes):
-                    try:
-                        iframe_frame = iframe.content_frame()
-                        if not iframe_frame:
-                            continue
-                        
-                        # Check if iframe contains form elements
-                        form_elements = iframe_frame.query_selector_all('input, select, textarea')
-                        if not form_elements:
-                            continue
-                        
-                        print(f"🔍 Checking iframe {i+1} for submit button...")
-                        
-                        # Use gpt-4.1 to find submit button in iframe
-                        iframe_context = {
-                            'index': i,
-                            'iframe': iframe,
-                            'frame': iframe_frame,
-                            'form_count': len(form_elements)
-                        }
-                        
-                        gpt_result = self.find_submit_button_with_gpt(iframe_context)
-                        
-                        if gpt_result['found']:
-                            print(f"🎯 Found submit button in iframe {i+1}: '{gpt_result['text']}'")
-                            return self._click_submit_button(gpt_result)
-                            
-                    except Exception as e:
-                        print(f"⚠️ Error checking iframe {i+1} for submit button: {e}")
-                        continue
-                
-                # If not found in iframes, check main page
-                print("🔍 Submit button not found in iframes, checking main page...")
-                gpt_result = self.find_submit_button_with_gpt()
-                
-                if gpt_result['found']:
-                    print(f"🎯 Found submit button in main page: '{gpt_result['text']}'")
-                    return self._click_submit_button(gpt_result)
-            else:
-                print("ℹ️ No iframes found - checking main page for submit button...")
-                # No iframes, check main page directly
-                gpt_result = self.find_submit_button_with_gpt()
-                
-                if gpt_result['found']:
-                    print(f"🎯 Found submit button in main page: '{gpt_result['text']}'")
-                    return self._click_submit_button(gpt_result)
-            
-            # Fallback to traditional selectors if gpt-4.1 didn't find anything
-            print("🔄 gpt-4.1 didn't find submit button, trying traditional selectors...")
-            return self._find_and_click_submit_button_fallback()
-            
-        except Exception as e:
-            print(f"❌ Error in GPT submit button detection: {e}")
-            # Fallback to traditional method
-            return self._find_and_click_submit_button_fallback()
-    
-    def _click_submit_button(self, gpt_result: Dict[str, Any]) -> bool:
-        """
-        Click the submit button found by gpt-4.1
-        
-        Args:
-            gpt_result: Result from gpt-4.1 submit button detection
-            
-        Returns:
-            bool: True if button was clicked successfully
-        """
-        try:
-            button_element = gpt_result['element']
-            button_text = gpt_result['text']
-            context = gpt_result['context']
-            
-            print(f"🎯 Clicking submit button '{button_text}' in {context}...")
-            
-            # Scroll button into view
-            button_element.scroll_into_view_if_needed()
-            time.sleep(0.5)
-            
-            # Click the button
-            button_element.click()
-            
-            # Wait for form submission
-            time.sleep(3)
-            
-            print(f"✅ Successfully clicked submit button '{button_text}' in {context}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error clicking submit button: {e}")
-            print("🎯 No submit button found, finding next button...")
-            return self.find_and_click_next_button()
-            return False
-    
     def _find_and_click_submit_button_fallback(self) -> bool:
         """
         Fallback method to find and click submit button using traditional selectors
@@ -1821,68 +1598,93 @@ class ApplicationFiller:
         """
         Find and click the next button
         """
-        next_button = self.page.locator("button:has-text(/^(Next|Continue)$/i)")
-        if next_button.is_visible():
-            next_button.click()
-            time.sleep(3)
-            print("✅ Clicked next button")
-            return True
+        # Try multiple selectors for next/continue buttons
+        next_selectors = [
+            "button:has-text('Next')",
+            "button:has-text('Continue')",
+            "button:has-text('next')",
+            "button:has-text('continue')",
+            "[data-testid*='next']",
+            "[data-testid*='continue']",
+            "[class*='next']",
+            "[class*='continue']",
+            "input[value*='Next']",
+            "input[value*='Continue']"
+        ]
+        
+        for selector in next_selectors:
+            try:
+                next_button = self.page.locator(selector)
+                if next_button.is_visible():
+                    next_button.click()
+                    time.sleep(3)
+                    print(f"✅ Clicked next button with selector: {selector}")
+                    return True
+            except Exception as e:
+                print(f"⚠️ Error with selector {selector}: {e}")
+                continue
+        
+        print("❌ No next/continue button found")
         return False
-    
-    def check_form_submission_with_gpt(self, screenshot_path: str) -> ApplicationStateResponse:
+  
+    def check_form_submission_with_gpt(self, frame: Dict[str, Any] = None) -> ApplicationStateResponse:
         """
-        Use gpt-4.1 to analyze if the form was successfully submitted
+        Use gemini-2.5-pro to analyze if the form was successfully submitted
         
         Args:
-            screenshot_path: Path to the screenshot file
+            frame: Frame to analyze
             
         Returns:
-            Dict with 'submitted' and 'completed' status
+            ApplicationStateResponse with submission status and categorized fields
         """
         try:
             # For now, use page content analysis instead of image analysis
             # In a real implementation, you could use GPT-4 Vision API
             
-            page_content = self.page.content()
-            current_url = self.page.url
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
             
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             prompt = f"""
-            Analyze this job application page to determine if a form was successfully submitted and if the application process is complete.
+                Analyse the web page below and output a STRICTLY-minified JSON object that conforms to this schema:
+
+                {{
+                "submitted":            bool,  # form data accepted
+                "completed":            bool,  # application fully finished
+                "error_in_submission":  bool,  # any submission/validation/server error present
+                "verification_required":bool,  # login/OTP/captcha or similar gate
+                "more_forms":           bool   # additional steps or forms still visible
+                }}
+
+                Guidelines  
+                - Success-phrases (“thank you”, “application submitted”, confirmation URLs) → submitted = true  
+                - “Application complete” / final confirmation page → completed = true  
+                - Error messages or HTTP errors → error_in_submission = true  
+                - Requests for sign-in, OTP, captcha, identity check → verification_required = true  
+                - “Next”, “Continue”, progress bars, or extra form elements → more_forms = true  
+                - If completed is true then submitted must be true and more_forms must be false.
+
+                === PAGE CONTENT ===
+                {page_content}
+                === END PAGE CONTENT ===
+
+                Return the JSON only - no extra text, comments, or formatting.
+                """
             
-            CURRENT URL: {current_url}
-            
-            PAGE CONTENT:
-            {page_content}
-            
-            INSTRUCTIONS:
-            1. Look for indicators that a form was successfully submitted:
-               - Success messages ("Thank you", "Application submitted", "Form submitted", etc)
-               - Confirmation pages
-               - Progress indicators showing advancement
-               - New form sections appearing
-               - URL changes indicating progression
-            
-            2. Determine if the application process is complete:
-               - Final confirmation messages
-               - "Application complete" or similar messages
-               - No more forms or steps indicated
-               - Thank you page or final confirmation
-            
-            Return only the JSON, nothing else.
-            """
-            
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing job application pages. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationStateResponse
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing job application pages. Return only valid JSON.",
+                    response_mime_type="application/json",
+                    response_schema=ApplicationStateResponse
+                )
             )
             
-            result: ApplicationStateResponse = response.output_parsed
+            result: ApplicationStateResponse = response.parsed
             
             # Parse JSON response
             try:
@@ -1897,7 +1699,7 @@ class ApplicationFiller:
             print(f"❌ Error in GPT submission analysis: {e}")
             return ApplicationStateResponse(submitted=False, completed=False, verification_required=False, more_forms=False, error_in_submission=False)
 
-    def find_all_text_input_fields(self, frame=None) -> List[ApplicationField]:
+    def find_all_text_input_fields(self, frame=None) -> List[TextApplicationField]:
         """
         Find all text input fields in page or iframe context
         
@@ -1905,8 +1707,8 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            import openai
-            client = openai.OpenAI()
+            from google import genai
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Get page content from frame or main page
             if frame:
@@ -1914,7 +1716,7 @@ class ApplicationFiller:
             else:
                 page_content = self.page.content()
             
-            # Use gpt-4.1 to analyze the page and identify form fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
             prompt = f"""
             Analyze this HTML and identify all the text input fields.
             Also fill in the values for the input using the preferences.
@@ -1934,29 +1736,37 @@ class ApplicationFiller:
             4. If form elements are inside an iframe, use selectors that would work within that iframe context.
             5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
             6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
+            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
+                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
+                - Do NOT include fields that are positioned off-screen or have zero dimensions
+                - Do NOT include fields that are disabled or not enabled
+                - Do NOT include fields from future form steps that aren't visible yet
+                - Only include fields that a user can actually see and interact with on the current page
+            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
             
             Preferences: {self.preferences}
             HTML of the page: {page_content}
             """
             
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationFieldResponse
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=TextApplicationFieldResponse
+                )
             )
             
-            all_fields = response.output_parsed.fields
+            all_fields = response.parsed.fields
             
-            all_fields = [field for field in all_fields if field.field_is_visible]
+            all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
             # Parse the JSON response
-            text_input_fields: List[ApplicationField] = [field for field in all_fields if field.field_type == FieldType.TEXT]
+            text_input_fields: List[TextApplicationField] = [field for field in all_fields if field.field_type == FieldType.TEXT]
             
             context_str = "iframe" if frame else "page"
-            print(f"✅ gpt-4.1 found {len(text_input_fields)} text input fields in {context_str}")
+            print(f"✅ gemini-2.5-pro found {len(text_input_fields)} text input fields in {context_str}")
             
             return text_input_fields
             
@@ -1964,7 +1774,7 @@ class ApplicationFiller:
             print(f"❌ Error in find_all_text_input_fields: {e}")
             return []
 
-    def find_all_radio_fields(self, frame=None) -> List[ApplicationField]:
+    def find_all_radio_fields(self, frame=None) -> List[RadioApplicationField]:
         """
         Find all radio fields in page or iframe context
         
@@ -1972,8 +1782,7 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            import openai
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Get page content from frame or main page
             if frame:
@@ -1981,7 +1790,7 @@ class ApplicationFiller:
             else:
                 page_content = self.page.content()
             
-            # Use gpt-4.1 to analyze the page and identify form fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
             prompt = f"""
             Analyze this HTML and identify all the radio fields.
             Also fill in the values for the input using the preferences.
@@ -1998,30 +1807,38 @@ class ApplicationFiller:
             4. If form elements are inside an iframe, use selectors that would work within that iframe context.
             5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
             6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
+            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
+                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
+                - Do NOT include fields that are positioned off-screen or have zero dimensions
+                - Do NOT include fields that are disabled or not enabled
+                - Do NOT include fields from future form steps that aren't visible yet
+                - Only include fields that a user can actually see and interact with on the current page
+            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
             
             Preferences: {self.preferences}
             HTML of the page: {page_content}
             """
             
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationFieldResponse
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=RadioApplicationFieldResponse
+                )
             )
             
-            all_fields = response.output_parsed.fields
+            all_fields = response.parsed.fields
             
-            all_fields = [field for field in all_fields if field.field_is_visible]
+            all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
             context_str = "iframe" if frame else "page"
             
             # Parse the JSON response
-            radio_fields: List[ApplicationField] = [field for field in all_fields if field.field_type == FieldType.RADIO]
+            radio_fields: List[RadioApplicationField] = [field for field in all_fields if field.field_type == FieldType.RADIO]
             
-            print(f"✅ gpt-4.1 found {len(radio_fields)} radio fields in {context_str}")
+            print(f"✅ gemini-2.5-pro found {len(radio_fields)} radio fields in {context_str}")
             
             return radio_fields
             
@@ -2029,7 +1846,7 @@ class ApplicationFiller:
             print(f"❌ Error in find_all_radio_fields: {e}")
             return []
 
-    def find_all_checkbox_fields(self, frame=None) -> List[ApplicationField]:
+    def find_all_checkbox_fields(self, frame=None) -> List[CheckboxApplicationField]:
         """
         Find all checkbox fields in page or iframe context
         
@@ -2037,8 +1854,7 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            import openai
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Get page content from frame or main page
             if frame:
@@ -2046,13 +1862,13 @@ class ApplicationFiller:
             else:
                 page_content = self.page.content()
             
-            # Use gpt-4.1 to analyze the page and identify form fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
             prompt = f"""
             Analyze this HTML and identify all the checkbox fields.
             Also fill in the values for the input using the preferences.
             For each input you need to fill in the value of the input.
             
-            For a checkbox input the possible values are a boolean (true/false)
+            For a checkbox input the possible field_value must be a boolean (true/false)
             
             Return a JSON object with ApplicationField objects.
             
@@ -2063,29 +1879,37 @@ class ApplicationFiller:
             4. If form elements are inside an iframe, use selectors that would work within that iframe context.
             5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
             6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
+            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
+                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
+                - Do NOT include fields that are positioned off-screen or have zero dimensions
+                - Do NOT include fields that are disabled or not enabled
+                - Do NOT include fields from future form steps that aren't visible yet
+                - Only include fields that a user can actually see and interact with on the current page
+            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
             
             Preferences: {self.preferences}
             HTML of the page: {page_content}
             """
             
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationFieldResponse
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=CheckboxApplicationFieldResponse
+                )
             )
             
-            all_fields = response.output_parsed.fields
+            all_fields = response.parsed.fields
             
-            all_fields = [field for field in all_fields if field.field_is_visible]
+            all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
             context_str = "iframe" if frame else "page"
             # Parse the JSON response
-            checkbox_fields: List[ApplicationField] = [field for field in all_fields if field.field_type == FieldType.CHECKBOX]
+            checkbox_fields: List[CheckboxApplicationField] = [field for field in all_fields if field.field_type == FieldType.CHECKBOX]
             
-            print(f"✅ gpt-4.1 found {len(checkbox_fields)} checkbox fields in {context_str}")
+            print(f"✅ gemini-2.5-pro found {len(checkbox_fields)} checkbox fields in {context_str}")
             
             return checkbox_fields
             
@@ -2093,7 +1917,7 @@ class ApplicationFiller:
             print(f"❌ Error in find_all_checkbox_fields: {e}")
             return []
 
-    def find_and_handle_all_select_fields(self, frame=None) -> List[ApplicationField]:
+    def find_all_select_fields(self, frame=None) -> List[SelectApplicationField]:
         """
         Find all select fields in page or iframe context
         
@@ -2101,8 +1925,7 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            import openai
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Get page content from frame or main page
             if frame:
@@ -2110,57 +1933,107 @@ class ApplicationFiller:
             else:
                 page_content = self.page.content()
             
-            # Use gpt-4.1 to analyze the page and identify form fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
             prompt = f"""
-            Analyze this HTML and identify all the select dropdown fields.
-            Also fill in the values for the input using the preferences.
-            For each input you need to fill in the value of the input.
+                You are an expert HTML form analyzer. Your task is to extract ONLY SELECT dropdown input fields from the given HTML of a job application form and return them in strict JSON format.
+                Your output should be suitable for python playwright and will be used like this:
+                    if select_field.field_selector.startswith('#'):
+                        if frame:
+                            element = frame.locator(f'id={{select_field.field_selector[1:]}}').first
+                        else:
+                            element = self.page.locator(f'id={{select_field.field_selector[1:]}}').first
+                    else:
+                        if frame:
+                            element = frame.locator(select_field.field_selector)
+                        else:
+                            element = self.page.locator(select_field.field_selector)
+                
+                Follow these instructions precisely:
+
+                1 GOAL
+                - Detect all dropdown fields that let a user choose one or multiple options.
+                - Detect both:
+                - Native <select> dropdowns with <option> tags.
+                - React Select dropdowns rendered as a clickable <div> (usually with class*="select__control") that opens a dropdown menu.
+
+                2 SELECTION RULES
+                - Include only dropdown fields that are:
+                - Inside the job application form.
+                - Visible and interactive for the user (not hidden, disabled, or off-screen).
+                - Currently displayed on the page (ignore future-step fields not yet visible).
+                - For native selects: Target the <select> element directly using a unique, minimal CSS selector.
+                Examples of GOOD field_selector:
+                    ✅ "select[name='country']"
+                    ✅ "select#job_type"
+                    ✅ "form#application-form select[name='department']"
+                - For React Select dropdowns: Target the main clickable container of the component.
+                Examples of GOOD field_selector:
+                    ✅ "div.select__control"
+                    ✅ "div[class*='select__control']"
+                    ✅ "form#job-application div.select__control"
+                - BAD field_selector examples (never include these):
+                    ❌ "iframe#grnhse_iframe select[name='country']"                            (iframe references are not allowed)
+                    ❌ "body iframe iframe div.select__control"                                 (cross-document selectors)
+                    ❌ "div.select__control[aria-labelledby="question_32214839002-label"]"      (aria-labelledby is not a select dropdown)
+                    ❌ "html body div"                                                          (too generic, does not specifically target the field)
+                    ❌ "div.select__menu"                                                       (menu list, not the interactive control element)
+                    ❌ "span" or "label"                                                        (not the actual interactive field)
+
+                3 OUTPUT FORMAT
+                - field_selector → Minimal, stable CSS selector directly targeting the dropdown control (never include iframes or overly generic selectors).
+                - field_name → Name attribute or visible label for the field.
+                - field_type → Always "select".
+                - field_is_visible → true only if visible and interactive.
+                - field_in_form → true only if part of the job application form.
+                - field_value → Leave empty.
+                - field_options → List visible options if available, otherwise [].
+
+                4 CRITICAL CONSTRAINTS
+                - Accuracy is mandatory: Do not guess fields or selectors that don't exist.
+                - No hidden fields: Skip elements with display:none, visibility:hidden, zero size, or off-screen positioning.
+                - No iframes: Never include "iframe#..." or cross-document selectors.
+                - No other input types: Only return select dropdown fields, ignore text, checkbox, radio, file upload, etc.
+
+                Input Data:
+                - Preferences: {self.preferences}
+                - HTML of the page: {page_content}
+
+                Expected behavior:
+                - A clean, strictly valid JSON array with only select dropdowns, each fully described according to the schema above.
+                - No extra commentary or explanation in the output—just valid JSON.
+                """
             
-            For a select input the possible values are a boolean (true/false)
-            
-            Return a JSON object with ApplicationField objects.
-            
-            CRITICAL GUIDELINES:
-            1. Find all the form inputs related to the job application.
-            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
-            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
-            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
-            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
-            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
-            """
-            
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationFieldResponse
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=SelectApplicationFieldResponse
+                )
             )
             
-            all_fields = response.output_parsed.fields
+            all_fields = response.parsed.fields
             
-            all_fields = [field for field in all_fields if field.field_is_visible]
+            all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
             # Filter out fields that are not visible
             context_str = "iframe" if frame else "page"
             
             # Parse the JSON response
-            select_fields: List[ApplicationField] = [field for field in all_fields if field.field_type == FieldType.SELECT]
+            select_fields: List[SelectApplicationField] = [field for field in all_fields if field.field_type == FieldType.SELECT]
             
             context_str = "iframe" if frame else "page"
-            print(f"✅ gpt-4.1 found {len(select_fields)} select fields in {context_str}")
+            print(f"✅ gemini-2.5-pro found {len(select_fields)} select fields in {context_str}")
             
             return select_fields
             
         except Exception as e:
             print(f"❌ Error in find_and_handle_all_select_fields: {e}")
+            traceback.print_exc()
             return []
 
-    def find_upload_file_button(self, frame=None) -> ApplicationField:
+    def find_upload_file_button(self, frame=None) -> UploadApplicationField:
         """
         Find upload file button in page or iframe context
         
@@ -2168,8 +2041,7 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            import openai
-            client = openai.OpenAI()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Get page content from frame or main page
             if frame:
@@ -2177,41 +2049,68 @@ class ApplicationFiller:
             else:
                 page_content = self.page.content()
             
-            # Use gpt-4.1 to analyze the page and identify form fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
             prompt = f"""
-            Analyze this HTML and identify the upload file button.
-            Also fill in the values for the input using the preferences.
-            For each input you need to fill in the value of the input.
+                ##########  CONTEXT  ##########
+                You are a senior front-end engineer.  
+                Your task: scan the supplied HTML and return **exactly one** CSS selector that matches the user-visible control that lets an applicant upload a file (resume, CV, cover letter, etc.).
+
+                The upload control may be a <button>, <a>, or <div> acting as a button.  
+                **Never** return an <input> selector.
+
+                ##########  CONSTRAINTS  ##########
+                1. Target the real form element — not wrappers or generic containers.  
+                2. Ignore every <input>, even if it is type="file".  
+                3. **Do not** prepend iframe selectors (e.g. `iframe#grnhse_iframe …`).  
+                • If the control lives inside an iframe, write the selector **as if you are already inside** that iframe's DOM.  
+                4. Exclude controls that are hidden (display:none, aria-hidden="true", etc.) or that belong to steps not yet visible.  
+                5. Use robust attribute / class patterns; avoid brittle nth-child or positional selectors unless unavoidable.  
+
+                ##########  GOOD FIELD SELECTOR EXAMPLES  ##########
+                button[aria-label='Upload resume']
+                button#resumeUpload
+                div.upload-btn[role='button']
+                a[data-testid='fileUploader']
+                div[class*='upload'][role='button']
+                button[type='button'][data-action='upload']
+                .resume-section button:not([disabled])
+                button:has(svg[aria-label='Upload'])
+                a[aria-label='Attach file']
+                div[role='button'][data-qa='attachment']
+
+                ##########  BAD FIELD SELECTOR EXAMPLES  ##########
+                input[type='file']                          # input, not button/link/div  
+                iframe#grnhse_iframe button[type='file']    # crosses iframe boundary  
+                div                                         # hopelessly generic  
+                body button                                 # far too broad  
+                button:nth-child(3)                         # brittle index-based  
+                div[aria-labelledby='upload-label-resume'] .button-container button  # wrapper, not actual control  
+                .modal[style*='display:none'] button        # hidden element  
+                form:first-of-type button[type='submit']    # submit button, not upload  
+                a[href='#']                                 # generic anchor  
+
+                ##########  DATA  ##########
+                User-specific preferences:
+                {self.preferences}
+
+                HTML to analyse
+                {page_content}
+                """
             
-            For a upload input the possible values are a boolean (true/false)
-            
-            Return a JSON object with ApplicationField object.
-            
-            CRITICAL GUIDELINES:
-            1. Find all the form inputs related to the job application.
-            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
-            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
-            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
-            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
-            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
-            """
-            
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {"role": "system", "content": "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=ApplicationField
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=UploadApplicationField
+                )
             )
             
-            application_field = response.output_parsed
+            upload_field = response.parsed
             
             # Parse the JSON response
-            return application_field
+            return upload_field
             
         except Exception as e:
             print(f"❌ Error in find_upload_file_button: {e}")
@@ -2239,7 +2138,7 @@ class ApplicationFiller:
         
         return file_path
 
-    def find_all_form_inputs(self, frame=None) -> Dict[str, List[ApplicationField]]:
+    def find_all_form_inputs(self, frame=None) -> Tuple[List[TextApplicationField], List[SelectApplicationField], List[RadioApplicationField], List[CheckboxApplicationField], List[UploadApplicationField]]:
         """
         Find all types of form inputs on the current page or in iframe using unified field detection
         
@@ -2247,46 +2146,223 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
             
         Returns:
-            Dict containing lists of different field types
+            Tuple with categorized fields
         """
         try:
             # Use unified field detection functions
             text_input_fields = self.find_all_text_input_fields(frame)
-            selectors = self.find_and_handle_all_select_fields(frame)
+            selectors = self.find_all_select_fields(frame)
             radio_groups = self.find_all_radio_fields(frame)
             checkboxes = self.find_all_checkbox_fields(frame)
             
             # For upload buttons, we need to handle the single return value
             upload_button = self.find_upload_file_button(frame)
+            upload_fields = [upload_button] if upload_button is not None else []
             
             total_fields = (len(text_input_fields) + len(selectors) + len(radio_groups) + 
-                            len(checkboxes) + len([upload_button]))
+                            len(checkboxes) + len(upload_fields))
             
             context_str = "iframe" if frame else "page"
             print(f"✅ Unified field detection found {total_fields} total form fields in {context_str}")
             print(f"  - {len(text_input_fields)} text input fields")
-            print(text_input_fields)
             print(f"  - {len(selectors)} select dropdowns")
-            print(selectors)
             print(f"  - {len(radio_groups)} radio button groups")
-            print(radio_groups)
             print(f"  - {len(checkboxes)} checkboxes")
-            print(checkboxes)
-            print(f"  - {len([upload_button])} upload buttons")
-            print(upload_button)
+            print(f"  - {len(upload_fields)} upload buttons")
             
-            return {
-                'text_input_fields': text_input_fields,
-                'selectors': selectors, 
-                'radios': radio_groups,
-                'checkboxes': checkboxes,
-                'upload_button': upload_button,
-                'total_fields': total_fields
-            }
+            # Categorize fields by type
+            text_fields = []
+            select_fields = []
+            radio_fields = []
+            checkbox_fields = []
+            upload_fields_list = []
+            
+            # Process text fields
+            for field in text_input_fields:
+                if isinstance(field, TextApplicationField):
+                    text_fields.append(field)
+                else:
+                    # Convert generic field to TextApplicationField
+                    text_field = TextApplicationField(
+                        field_order=field.field_order,
+                        field_name=field.field_name,
+                        field_selector=field.field_selector,
+                        field_is_visible=field.field_is_visible,
+                        field_in_form=field.field_in_form,
+                        field_required=field.field_required,
+                        field_placeholder=field.field_placeholder,
+                        field_value=field.field_value
+                    )
+                    text_fields.append(text_field)
+            
+            # Process select fields
+            for field in selectors:
+                if isinstance(field, SelectApplicationField):
+                    select_fields.append(field)
+                else:
+                    # Convert generic field to SelectApplicationField
+                    select_field = SelectApplicationField(
+                        field_order=field.field_order,
+                        field_name=field.field_name,
+                        field_selector=field.field_selector,
+                        field_is_visible=field.field_is_visible,
+                        field_in_form=field.field_in_form,
+                        field_required=field.field_required,
+                        field_placeholder=field.field_placeholder,
+                        field_value=field.field_value,
+                        field_options=field.field_options
+                    )
+                    select_fields.append(select_field)
+            
+            # Process radio fields
+            for field in radio_groups:
+                if isinstance(field, RadioApplicationField):
+                    radio_fields.append(field)
+                else:
+                    # Convert generic field to RadioApplicationField
+                    radio_field = RadioApplicationField(
+                        field_order=field.field_order,
+                        field_name=field.field_name,
+                        field_selector=field.field_selector,
+                        field_is_visible=field.field_is_visible,
+                        field_in_form=field.field_in_form,
+                        field_required=field.field_required,
+                        field_placeholder=field.field_placeholder,
+                        field_value=field.field_value,
+                        field_options=field.field_options
+                    )
+                    radio_fields.append(radio_field)
+            
+            # Process checkbox fields
+            for field in checkboxes:
+                if isinstance(field, CheckboxApplicationField):
+                    checkbox_fields.append(field)
+                else:
+                    # Convert generic field to CheckboxApplicationField
+                    checkbox_field = CheckboxApplicationField(
+                        field_order=field.field_order,
+                        field_name=field.field_name,
+                        field_selector=field.field_selector,
+                        field_is_visible=field.field_is_visible,
+                        field_in_form=field.field_in_form,
+                        field_required=field.field_required,
+                        field_placeholder=field.field_placeholder,
+                        field_value=field.field_value
+                    )
+                    checkbox_fields.append(checkbox_field)
+            
+            # Process upload fields
+            for field in upload_fields:
+                if isinstance(field, UploadApplicationField):
+                    upload_fields_list.append(field)
+                else:
+                    # Convert generic field to UploadApplicationField
+                    upload_field = UploadApplicationField(
+                        field_order=field.field_order,
+                        field_name=field.field_name,
+                        field_selector=field.field_selector,
+                        field_is_visible=field.field_is_visible,
+                        field_in_form=field.field_in_form,
+                        field_required=field.field_required,
+                        field_placeholder=field.field_placeholder,
+                        field_value=field.field_value
+                    )
+                    upload_fields_list.append(upload_field)
+            
+            return text_fields, select_fields, radio_fields, checkbox_fields, upload_fields_list
             
         except Exception as e:
             context_str = "iframe" if frame else "page"
             print(f"❌ Error finding form fields with unified detection in {context_str}: {e}")
+            return [], [], [], [], []
+
+    def _find_alternative_select_value(self, possible_values: List[str], select_field: SelectApplicationField, preferences: Dict[str, Any]) -> Optional[str]:
+        """
+        Use gemini-2.5-pro to find an alternative value from the available options when the original value is not found
+        
+        Args:
+            possible_values: List of available values in the select field
+            select_field: The select field that needs an alternative value
+            preferences: User preferences for filling forms
+            
+        Returns:
+            Optional[str]: Alternative value if found, None otherwise
+        """
+        try:
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            
+            field_name = select_field.field_name or ""
+            page_content = self.page.content()
+            print(f"🤖 Using gemini-2.5-pro to find alternative value for field: {field_name}")
+            print(f"   Available values: {possible_values}")
+            
+            prompt = f"""
+            You are helping to fill out a job application form. A select field has an invalid value that needs to be replaced with one of the available options.
+            You are given the html of the page: {page_content}
+            
+            FIELD INFORMATION:
+            - Field name: {field_name}
+            - Possible options: {possible_values}
+            
+            USER PREFERENCES:
+            {preferences}
+            
+            INSTRUCTIONS:
+            1. Analyze the field name and understand what type of information it's asking for
+            2. Consider the user's preferences to find the most suitable option
+            3. Choose the best alternative from the available options
+            4. If no good match exists, choose the most reasonable default option
+            5. Avoid placeholder values like "Select", "Choose", "--", etc.
+            
+            Return only the selected value as a string, nothing else.
+            
+            Examples:
+            - If field is "location" and user prefers "London" but only "Remote" is available, return "Remote"
+            - If field is "experience_level" and user prefers "Senior" but only "Mid-level" is available, return "Mid-level"
+            - If field is "employment_type" and user prefers "Full-time" but only "Permanent" is available, return "Permanent"
+            """
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing form fields and selecting appropriate values. Return only the selected value as a string."
+                )
+            )
+            
+            selected_value = response.text.strip()
+            
+            if not possible_values:
+                return selected_value
+            
+            # Verify the selected value is actually in the available options
+            if selected_value in possible_values:
+                print(f"✅ gemini-2.5-pro selected: {selected_value}")
+                return selected_value
+            else:
+                # Try case-insensitive match
+                for value in possible_values:
+                    if value.lower() == selected_value.lower():
+                        print(f"✅ gemini-2.5-pro selected (case-insensitive): {value}")
+                        return value
+                
+                # If still no match, use the first valid option
+                for value in possible_values:
+                    if value and value.strip() and value.lower() not in ['select', 'choose', 'please select', '--', '']:
+                        print(f"⚠️ gemini-2.5-pro selection '{selected_value}' not found, using fallback: {value}")
+                        return value
+            
+            print(f"❌ No suitable alternative value found for {field_name}")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error in gemini-2.5-pro alternative value selection: {e}")
+            # Fallback to first valid option
+            for value in possible_values:
+                if value and value.strip() and value.lower() not in ['select', 'choose', 'please select', '--', '']:
+                    print(f"🔄 Using fallback value: {value}")
+                    return value
+            return None
 
 
 # Example usage and testing

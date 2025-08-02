@@ -12,7 +12,8 @@ from application_filler import ApplicationFiller
     
 # Test preferences for iOS Engineer position
 preferences = {
-    'name': 'John Doe',
+    'first_name': 'John',
+    'last_name': 'Doe',
     'resume_path': 'cv.pdf',
     'cover_letter_path': 'cover_letter.pdf',
     'photo_path': 'photo.png',
@@ -21,7 +22,7 @@ preferences = {
     'address': '123 Main St, Anytown, USA',
     'city': 'Bristol',
     'country': 'United Kingdom',
-    'county': 'Gloucestershire',
+    'county/region': 'Gloucestershire',
     'state': 'England',
     'postcode': 'BS1 1AA',
     'age': 30,
@@ -155,69 +156,31 @@ def test_application_filler_robust():
         print("\n🧪 Testing Individual Components...")
         print("=" * 40)
         
-        # Test 1: Apply button detection
-        # try:
-        #     print("🔍 Testing apply button detection...")
-        #     apply_result = app_filler.check_and_click_apply_button()
-        #     print(f"Apply button result: {apply_result}")
-        # except Exception as e:
-        #     print(f"❌ Apply button test failed: {e}")
-        
-        
-        # Test 2: Form field detection
-        # try:
-        #     print("🔍 Testing form field detection...")
-        #     form_fields = app_filler.find_all_form_inputs()
-        #     print(f"Form fields: {form_fields}")
-        # except Exception as e:
-        #     print(f"❌ Form field test failed: {e}")
-        #     form_fields = {'total_fields': 0}
-        
         # Decide whether to run full algorithm
-        if True:
-            print("\n🚀 Running Full Application Filling Process...")
-            print("=" * 50)
+        print("\n🚀 Running Full Application Filling Process...")
+        print("=" * 50)
+        
+        try:
+            success = app_filler.fill_application()
             
-            try:
-                success = app_filler.fill_application()
-                
-                if success:
-                    print("\n🎉 Application filling completed successfully!")
-                    try:
-                        bot.take_screenshot("sumup_application_completed.png")
-                    except:
-                        pass
-                else:
-                    print("\n⚠️ Application filling encountered issues")
-                    try:
-                        bot.take_screenshot("sumup_application_issues.png")
-                    except:
-                        pass
-            except Exception as e:
-                print(f"\n❌ Application filling error: {e}")
+            if success:
+                print("\n🎉 Application filling completed successfully!")
                 try:
-                    bot.take_screenshot("sumup_application_error.png")
+                    bot.take_screenshot("sumup_application_completed.png")
                 except:
                     pass
-        else:
-            print("\n📝 No form fields detected - this may be a job description page")
-            print("You may need to click an 'Apply' button first to access the application form.")
-            
-            # Try to find and show any buttons on the page
+            else:
+                print("\n⚠️ Application filling encountered issues")
+                try:
+                    bot.take_screenshot("sumup_application_issues.png")
+                except:
+                    pass
+        except Exception as e:
+            print(f"\n❌ Application filling error: {e}")
             try:
-                buttons = bot.page.query_selector_all('button, a[href*="apply"], [class*="apply"]')
-                if buttons:
-                    print(f"🔍 Found {len(buttons)} potential buttons/links:")
-                    for i, button in enumerate(buttons[:5]):  # Show first 5
-                        try:
-                            text = button.inner_text().strip()[:50]
-                            if text:
-                                print(f"  {i+1}. '{text}'")
-                        except:
-                            pass
-            except Exception as e:
-                print(f"⚠️ Error finding buttons: {e}")
-        
+                bot.take_screenshot("sumup_application_error.png")
+            except:
+                pass
         # Keep browser open for manual inspection
         print("\n⏸️ Test complete. Browser will remain open for inspection.")
         print("You can manually review the page and application process.")
