@@ -11,7 +11,6 @@ import time
 import json
 from typing import List, Dict, Optional, Any, Tuple, Union
 from playwright.sync_api import Page
-import openai
 from pydantic import BaseModel
 from enum import Enum
 import traceback
@@ -574,17 +573,17 @@ class ApplicationFiller:
                         print(f"✅ gemini-2.5-pro found dropdown field: {dropdown_data['selector']}")
                         return dropdown_data
                     else:
-                        print("⚠️ GPT response missing selector field")
+                        print("⚠️ Gemini response missing selector field")
                         return None
                 else:
                     return None
                     
             except json.JSONDecodeError as e:
-                print(f"⚠️ Could not parse GPT response as JSON: {e}")
+                print(f"⚠️ Could not parse Gemini response as JSON: {e}")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error in gemini-2.5-pro dropdown field detection: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro dropdown field detection: {e}")
             return None
     
     def _find_and_click_option_with_gpt(self, page_html: str, preferences: str, frame) -> Optional[Dict[str, Any]]:
@@ -658,7 +657,7 @@ class ApplicationFiller:
                 return None
             
         except Exception as e:
-            print(f"❌ Error in gemini-2.5-pro option detection: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro option detection: {e}")
             return None
     
     def _check_select_already_selected(self, element, target_value: str, frame=None) -> bool:
@@ -1496,7 +1495,7 @@ class ApplicationFiller:
             return result
             
         except Exception as e:
-            print(f"❌ Error in GPT submit button detection: {e}")
+            print(f"❌ Error in Gemini submit button detection: {e}")
             return None
 
     def _find_and_click_submit_button_fallback(self) -> bool:
@@ -1639,7 +1638,7 @@ class ApplicationFiller:
         """
         try:
             # For now, use page content analysis instead of image analysis
-            # In a real implementation, you could use GPT-4 Vision API
+            # In a real implementation, you could use Gemini 2.5 Pro API
             
             if frame:
                 page_content = frame.content()
@@ -1688,15 +1687,15 @@ class ApplicationFiller:
             
             # Parse JSON response
             try:
-                print(f"🤖 GPT analysis - Submitted: {result.submitted}, Completed: {result.completed}, Verification required: {result.verification_required}, More forms: {result.more_forms}, Error in submission: {result.error_in_submission}")
+                print(f"🤖 Gemini 2.5 Pro analysis - Submitted: {result.submitted}, Completed: {result.completed}, Verification required: {result.verification_required}, More forms: {result.more_forms}, Error in submission: {result.error_in_submission}")
                 return result
                 
             except json.JSONDecodeError:
-                print(f"⚠️ Could not parse GPT response: {result}")
+                print(f"⚠️ Could not parse Gemini response: {result}")
                 return ApplicationStateResponse(submitted=False, completed=False, verification_required=False, more_forms=False, error_in_submission=False)
                 
         except Exception as e:
-            print(f"❌ Error in GPT submission analysis: {e}")
+            print(f"❌ Error in Gemini submission analysis: {e}")
             return ApplicationStateResponse(submitted=False, completed=False, verification_required=False, more_forms=False, error_in_submission=False)
 
     def find_all_text_input_fields(self, frame=None) -> List[TextApplicationField]:
@@ -2356,7 +2355,7 @@ class ApplicationFiller:
             return None
             
         except Exception as e:
-            print(f"❌ Error in gemini-2.5-pro alternative value selection: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro alternative value selection: {e}")
             # Fallback to first valid option
             for value in possible_values:
                 if value and value.strip() and value.lower() not in ['select', 'choose', 'please select', '--', '']:

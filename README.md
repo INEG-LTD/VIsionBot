@@ -1,11 +1,11 @@
 # Job Application Automation Engine
 
-A comprehensive Python-based automation engine for job applications using Playwright and GPT-4.1 for intelligent form filling.
+A comprehensive Python-based automation engine for job applications using Playwright and Gemini 2.5 Pro for intelligent form filling.
 
 ## Features
 
-- **Intelligent Form Detection**: Uses GPT-4.1 to analyze and identify form fields
-- **Smart Dropdown Handling**: GPT-4.1-powered dropdown field interaction with HTML snapshots
+- **Intelligent Form Detection**: Uses Gemini 2.5 Pro to analyze and identify form fields
+- **Smart Dropdown Handling**: Gemini 2.5 Pro-powered dropdown field interaction with HTML snapshots
 - **Multi-Page Support**: Handles complex multi-step application processes
 - **Iframe Support**: Automatically detects and handles forms inside iframes
 - **Smart Field Mapping**: Maps user preferences to appropriate form fields
@@ -27,7 +27,7 @@ The application filler now includes comprehensive iframe detection and handling 
 ### Key Methods
 
 - `detect_and_handle_iframes()`: Detects iframes and determines if form fields are inside them
-- `find_form_fields_in_iframe()`: Finds form fields within a specific iframe using GPT-4.1 analysis
+- `find_form_fields_in_iframe()`: Finds form fields within a specific iframe using Gemini 2.5 Pro analysis
 - `fill_all_form_inputs()`: Automatically handles both main page and iframe contexts
 - `find_and_click_submit_button()`: Searches for submit buttons in both contexts
 
@@ -38,28 +38,28 @@ The application filler now includes comprehensive iframe detection and handling 
 - **Robust Fallbacks**: Falls back to traditional selectors if GPT analysis fails
 - **Error Handling**: Graceful handling of iframe access issues
 
-## GPT-4.1 Dropdown Handling
+## Gemini 2.5 Pro Dropdown Handling
 
-The application filler now uses GPT-4.1 for intelligent dropdown field handling:
+The application filler now uses Gemini 2.5 Pro for intelligent dropdown field handling:
 
 ### How It Works
 
 1. **HTML Snapshot**: Takes a snapshot of the current page HTML
-2. **Dropdown Detection**: Uses GPT-4.1 to find the dropdown field from the HTML
+2. **Dropdown Detection**: Uses Gemini 2.5 Pro to find the dropdown field from the HTML
 3. **Field Interaction**: Clicks the dropdown field to open options
 4. **Options Snapshot**: Takes another HTML snapshot to see available options
-5. **Option Selection**: Uses GPT-4.1 to find and click the correct option
+5. **Option Selection**: Uses Gemini 2.5 Pro to find and click the correct option
 
 ### Key Methods
 
-- `_handle_custom_dropdown()`: Handles dropdowns in main page context using GPT-4.1
-- `_handle_custom_dropdown_iframe()`: Handles dropdowns in iframe context using GPT-4.1
-- `_find_dropdown_field_with_gpt()`: Uses GPT-4.1 to find dropdown fields from HTML
-- `_find_and_click_option_with_gpt()`: Uses GPT-4.1 to find and click options
+- `_handle_custom_dropdown()`: Handles dropdowns in main page context using Gemini 2.5 Pro
+- `_handle_custom_dropdown_iframe()`: Handles dropdowns in iframe context using Gemini 2.5 Pro
+- `_find_dropdown_field_with_gpt()`: Uses Gemini 2.5 Pro to find dropdown fields from HTML
+- `_find_and_click_option_with_gpt()`: Uses Gemini 2.5 Pro to find and click options
 
 ### Benefits
 
-- **Intelligent Recognition**: GPT-4.1 understands complex dropdown structures
+- **Intelligent Recognition**: Gemini 2.5 Pro understands complex dropdown structures
 - **Universal Compatibility**: Works with traditional selects, custom dropdowns, React components, etc.
 - **Context Awareness**: Understands the relationship between dropdown fields and their options
 - **Robust Matching**: Handles variations in option text and dropdown structure
@@ -88,7 +88,7 @@ success = app_filler.fill_application()
 
 1. Clone the repository
 2. Install dependencies: `pip install -r requirements.txt`
-3. Set up your OpenAI API key
+3. Set up your Google AI API key
 4. Configure your preferences
 
 ## Testing

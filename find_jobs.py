@@ -15,18 +15,26 @@ import json as json_module
 import random
 import string
 from typing import List, Dict, Optional, Any
+from google import genai
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
 from pydantic import BaseModel
 from page_detector import PageDetector, PageType
 from typing import Any, Dict, List, TypedDict
 import json as json_module
-from application_filler import ApplicationFiller
+from application_filler import ApplicationFiller, FieldType, TextApplicationField, SubmitButtonApplicationField, TextApplicationFieldResponse
+
 
 class JobListing(BaseModel):
     title: str
     company: str
     href: str
     selector: str
+    
+class JobListingDetails(BaseModel):
+    job_listing: JobListing
+    job_description: str
+    job_fit: Dict[str, Any]
+    job_url: str
 
 class JobListingPayload(BaseModel):
     job_listings: List[JobListing]
@@ -43,6 +51,8 @@ class HybridBrowserBot:
         self.max_restarts = 3
         self.restart_count = 0
         self.preferences = preferences
+        self.accepted_job_listings: List[JobListingDetails] = []
+        self.rejected_job_listings: List[JobListingDetails] = []
         
     def start_browser(self):
         """Start the Playwright browser using your default Chrome profile"""
@@ -160,232 +170,123 @@ class HybridBrowserBot:
             print(f"❌ Failed to navigate to {url}: {e}")
             return False
     
-    def find_input_fields(self) -> List[Dict[str, Any]]:
+    def find_search_page_input_fields(self) -> TextApplicationFieldResponse:
         """Find all input fields using Playwright"""
         try:
-            # Find all input elements
-            inputs = self.page.query_selector_all('input, textarea, [contenteditable="true"]')
+            from google import genai
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
-            input_fields = []
-            for i, input_elem in enumerate(inputs):
-                try:
-                    # Get input properties
-                    input_type = input_elem.get_attribute('type') or 'text'
-                    placeholder = input_elem.get_attribute('placeholder') or ''
-                    name = input_elem.get_attribute('name') or ''
-                    id_attr = input_elem.get_attribute('id') or ''
-                    value = input_elem.input_value() if input_elem.get_attribute('type') != 'file' else ''
-                    
-                    # Get visible text (label or aria-label)
-                    label = ''
-                    try:
-                        # Try to find associated label
-                        if id_attr:
-                            label_elem = self.page.query_selector(f'label[for="{id_attr}"]')
-                            if label_elem:
-                                label = label_elem.inner_text().strip()
-                        
-                        # Try aria-label
-                        if not label:
-                            aria_label = input_elem.get_attribute('aria-label')
-                            if aria_label:
-                                label = aria_label
-                        
-                        # Try to find nearby text
-                        if not label:
-                            # Look for text within 100px of the input
-                            bbox = input_elem.bounding_box()
-                            if bbox:
-                                nearby_text = self.page.query_selector_all('text')
-                                for text_elem in nearby_text:
-                                    text_bbox = text_elem.bounding_box()
-                                    if text_bbox:
-                                        distance = abs(bbox['y'] - text_bbox['y'])
-                                        if distance < 50:  # Within 50px vertically
-                                            text_content = text_elem.inner_text().strip()
-                                            if text_content and len(text_content) < 100:
-                                                label = text_content
-                                                break
-                    except:
-                        pass
-                    
-                    input_fields.append({
-                        'index': i,
-                        'type': input_type,
-                        'name': name,
-                        'id': id_attr,
-                        'placeholder': placeholder,
-                        'value': value,
-                        'label': label,
-                        'element': input_elem
-                    })
-                    
-                except Exception as e:
-                    print(f"Error processing input {i}: {e}")
-                    continue
+            # Get page content from frame or main page
+            page_content = self.page.content()
             
-            print(f"✅ Found {len(input_fields)} input fields using Playwright")
-            return input_fields
+            # Use gemini-2.5-pro to analyze the page and identify form fields
+            prompt = f"""
+            Analyze this HTML and identify all the text input fields in the search page.
+            Also fill in the values for the input using the preferences.
+            For each input you need to fill in the value of the input.
+            Ensure that the input is not used for a dropdown or a radio button or a checkbox.
+            The input should be contextually used to enter a value.
+            Some text inputs are used for a dropdown or a radio button or a checkbox, do not include them.
             
+            For a text input the possible values are a string
+            
+            Return a JSON object with ApplicationField objects.
+            
+            CRITICAL GUIDELINES:
+            1. Find all the form inputs related to the job search.
+            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
+            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
+            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
+            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
+            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
+            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
+                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
+                - Do NOT include fields that are positioned off-screen or have zero dimensions
+                - Do NOT include fields that are disabled or not enabled
+                - Do NOT include fields from future form steps that aren't visible yet
+                - Only include fields that a user can actually see and interact with on the current page
+            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
+            
+            Preferences: {self.preferences}
+            HTML of the page: {page_content}
+            """
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=TextApplicationFieldResponse
+                )
+            )
+            
+            all_fields = response.parsed.fields
+            
+            all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+            
+            # Parse the JSON response
+            text_input_fields: List[TextApplicationField] = [field for field in all_fields if field.field_type == FieldType.TEXT]
+            
+            return TextApplicationFieldResponse(fields=text_input_fields)
         except Exception as e:
             print(f"❌ Error finding input fields: {e}")
-            return []
-    
-
-    
-    def find_submit_button(self) -> Optional[Dict[str, Any]]:
+            return TextApplicationFieldResponse(fields=[])
+     
+    def fill_text_input_fields(self, text_input_fields: TextApplicationFieldResponse) -> bool:
+        """Fill the text input fields with the preferences"""
+        try:
+            for field in text_input_fields.fields:
+                element = self.page.locator(field.field_selector)
+                if element:
+                    element.type(field.field_value)
+                else:
+                    print(f"❌ Element not found: {field.field_selector}")
+            return True
+        except Exception as e:
+            print(f"❌ Error filling text input fields: {e}")
+            return False
+      
+    def find_search_page_submit_button(self) -> Optional[SubmitButtonApplicationField]:
         """Find the most likely submit button using Playwright"""
         try:
-            # Find all buttons and clickable elements
-            buttons = self.page.query_selector_all('button, input[type="submit"], input[type="button"], [role="button"], a[href="#"], [onclick]')
+            from google import genai
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
-            if not buttons:
-                print("❌ No buttons found on the page")
-                return None
+            # Get page content from frame or main page
+            page_content = self.page.content()
             
-            print(f"🔍 Analyzing {len(buttons)} buttons for submit button...")
+            prompt = f"""
+            Analyze this HTML and identify the most likely submit button in the search page.
+            Return a JSON object with the SubmitButtonApplicationField object.
             
-            # Score each button based on submit likelihood
-            submit_keywords = ['submit', 'search', 'find', 'go', 'apply', 'continue', 'next', 'save', 'send', 'post']
+            CRITICAL GUIDELINES:
+            1. Find the most likely submit button in the search page.
+            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
+            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
+            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
+            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
+            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
+            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
+                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
+                - Do NOT include fields that are positioned off-screen or have zero dimensions
+                - Do NOT include fields that are disabled or not enabled
+            HTML of the page: {page_content}
+            """
             
-            scored_buttons = []
-            for i, button in enumerate(buttons):
-                try:
-                    score = 0
-                    
-                    # Get button properties
-                    button_type = button.get_attribute('type') or ''
-                    button_text = button.inner_text().strip().lower()
-                    button_value = button.get_attribute('value') or ''
-                    button_name = button.get_attribute('name') or ''
-                    button_id = button.get_attribute('id') or ''
-                    button_class = button.get_attribute('class') or ''
-                    button_role = button.get_attribute('role') or ''
-                    
-                    # Check if button is visible and enabled
-                    is_visible = button.is_visible()
-                    is_enabled = not button.get_attribute('disabled')
-                    
-                    if not is_visible or not is_enabled:
-                        continue  # Skip invisible or disabled buttons
-                    
-                    # Combine all text for analysis
-                    all_text = f"{button_text} {button_value} {button_name} {button_id} {button_class}".lower()
-                    
-                    # Check for submit-related keywords
-                    for keyword in submit_keywords:
-                        if keyword in all_text:
-                            score += 10
-                    
-                    # Prefer submit type buttons
-                    if button_type == 'submit':
-                        score += 15
-                    
-                    # Prefer buttons with text content
-                    if button_text:
-                        score += 5
-                    
-                    # Prefer buttons with common submit text
-                    submit_texts = ['submit', 'search', 'find jobs', 'apply', 'continue', 'go']
-                    for submit_text in submit_texts:
-                        if submit_text in button_text:
-                            score += 8
-                    
-                    # Prefer buttons with action-oriented text
-                    action_words = ['search', 'find', 'apply', 'submit', 'go', 'continue', 'next']
-                    for word in action_words:
-                        if word in button_text:
-                            score += 5
-                    
-                    # Prefer buttons that are prominently positioned (first few buttons)
-                    if i < 5:
-                        score += 2
-                    
-                    # Prefer buttons with specific roles
-                    if button_role == 'button':
-                        score += 3
-                    
-                    # Prefer buttons with common submit IDs/classes
-                    submit_identifiers = ['submit', 'search', 'apply', 'btn-submit', 'btn-search']
-                    for identifier in submit_identifiers:
-                        if identifier in button_id.lower() or identifier in button_class.lower():
-                            score += 6
-                    
-                    # Special handling for job sites
-                    if 'monster' in self.current_url.lower():
-                        monster_keywords = ['search', 'find jobs', 'apply', 'submit']
-                        for keyword in monster_keywords:
-                            if keyword in button_text:
-                                score += 10
-                    
-                    if 'indeed' in self.current_url.lower():
-                        indeed_keywords = ['find jobs', 'search', 'apply']
-                        for keyword in indeed_keywords:
-                            if keyword in button_text:
-                                score += 10
-                    
-                    if 'linkedin' in self.current_url.lower():
-                        linkedin_keywords = ['search', 'apply', 'easy apply']
-                        for keyword in linkedin_keywords:
-                            if keyword in button_text:
-                                score += 10
-                    
-                    # Create button info
-                    button_info = {
-                        'index': i,
-                        'type': button_type,
-                        'text': button_text,
-                        'value': button_value,
-                        'name': button_name,
-                        'id': button_id,
-                        'class': button_class,
-                        'role': button_role,
-                        'element': button,
-                        'score': score
-                    }
-                    
-                    scored_buttons.append(button_info)
-                    
-                except Exception as e:
-                    print(f"Error processing button {i}: {e}")
-                    continue
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    response_mime_type="application/json",
+                    response_schema=SubmitButtonApplicationField
+                )
+            )
             
-            if not scored_buttons:
-                print("❌ No visible/enabled buttons found")
-                return None
+            submit_button = response.parsed
             
-            # Sort by score (highest first)
-            scored_buttons.sort(key=lambda x: x['score'], reverse=True)
-            
-            # Show top 3 candidates
-            print("🏆 Top submit button candidates:")
-            for i, button in enumerate(scored_buttons[:3]):
-                print(f"  {i+1}. '{button['text']}' (score: {button['score']}) - type: {button['type']}")
-            
-            # Return the best button
-            best_button = scored_buttons[0]
-            print(f"✅ Best submit button: '{best_button['text']}' (score: {best_button['score']})")
-            
-            # Test if the button is clickable
-            try:
-                # Check if button is in viewport
-                is_in_viewport = best_button['element'].is_visible()
-                if not is_in_viewport:
-                    print("🔄 Button not in viewport, scrolling into view...")
-                    best_button['element'].scroll_into_view_if_needed()
-                    time.sleep(0.5)
-                
-                # Verify button is still clickable
-                if best_button['element'].is_enabled():
-                    print("✅ Button is visible and enabled - ready to click")
-                    return best_button
-                else:
-                    print("❌ Button is disabled")
-                    return None
-                    
-            except Exception as e:
-                print(f"❌ Error testing button clickability: {e}")
-                return None
+            return submit_button
             
         except Exception as e:
             print(f"❌ Error finding submit button: {e}")
@@ -432,13 +333,9 @@ class HybridBrowserBot:
             except Exception as e2:
                 print(f"❌ Alternative approach also failed: {e2}")
                 return False
-    
-
-    
-
-    
+     
     def find_job_listings(self) -> List[JobListing]:
-        """Find job listings (title + company) that are clickable using GPT-4.1 first, then fallback to heuristics"""
+        """Find job listings (title + company) that are clickable using Gemini 2.5 Pro first, then fallback to heuristics"""
         try:
             print("🔍 Finding job listings...")
             
@@ -450,16 +347,11 @@ class HybridBrowserBot:
                 print(f"⚠️ Page load timeout, continuing anyway: {e}")
                 time.sleep(2)
             
-            # Try GPT-4.1 approach first
-            print("🤖 Using GPT-4.1 to find job listings...")
+            print("🤖 Using Gemini 2.5 Pro to find job listings...")
             gpt_job_listings = self.find_job_listings_with_gpt()
             
             if gpt_job_listings:
-                print(f"✅ GPT-4.1 found {len(gpt_job_listings)} job listings")
-                # Limit to top 10 job listings to avoid too many API calls
-                if len(gpt_job_listings) > 10:
-                    print(f"⚠️ Limiting to top 10 job listings (found {len(gpt_job_listings)})")
-                    gpt_job_listings = gpt_job_listings[:10]
+                print(f"✅ Gemini 2.5 Pro found {len(gpt_job_listings)} job listings")
                 
                 # Show found listings
                 print("🏆 Job listings found:")
@@ -467,57 +359,118 @@ class HybridBrowserBot:
                     print(f"  {i+1}. '{listing.title}' at {listing.company}")
                 
                 return gpt_job_listings
-            
-            # Fallback to heuristics approach
-            print("🔄 GPT-4.1 approach failed, falling back to heuristics...")
-            return self.find_job_listings_with_heuristics()
+            else:
+                print("❌ No job listings found with Gemini 2.5 Procx")
+                return []
             
         except Exception as e:
             print(f"❌ Error finding job listings: {e}")
             # Final fallback to heuristics
             return self.find_job_listings_with_heuristics()
     
-
     def find_job_listings_with_gpt(self) -> List[JobListing]:
-        """Use GPT structured output to find job listings from the entire page source."""
+        """Use Gemini 2.5 Pro structured output to find job listings from the entire page source."""
         try:
-            import openai
-            client = openai.OpenAI()
+            from google import genai
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
 
             page_source = self.page.content()
-            current_url = self.page.url
 
-            user_prompt = f"""
-    Analyze this HTML page source and extract all job listings. The page is from: {current_url}
-    There are more than one job listing on the page.
-    The button's selector element is very important. It is the element that is clicked to open the job details page.
+            prompt = f"""
+                You are analyzing an HTML page that lists multiple job postings, typically shown in a vertical list on the left side.
 
-    Return objects that have:
-    - title: visible job title text
-    - company: visible company text (empty string if truly absent)
-    - href: absolute or relative link to details (use the anchor's href)
-    - selector: a CSS selector that can re-find the element (use something stable like [data-*], ids, classes + :nth-of-type when needed)
-    
-    The HTML will have the job in a list, so you need to find the jobs and return them.
+                Your task is to extract all visible job listings, focusing on these fields:
+                    •	title: The visible job title text shown to the user.
+                    •	company: The visible company or employer name (return “” if truly absent).
+                    •	href: The absolute or relative link to the job details (from the clickable anchor's href).
+                    •	selector: A CSS selector that Playwright can use to re-find and click the button or link that opens the job detail page. The selector MUST be stable and as specific as possible (prefer [data-*] attributes, unique IDs, or meaningful classes, and use :nth-of-type if needed).
 
-    HTML Source:
-    {page_source}
-    """
+                Instructions:
+                    •	Only include actual job listings, not ads, navigation, or placeholders.
+                    •	Listings will often be grouped inside a list (ul, ol, div, etc). Detect jobs from repeating elements.
+                    •	The selector must point to the clickable element that opens the job detail page.
+                    •	Never include selectors for parent containers, only the clickable item (usually a button or anchor).
+                    •	If a job's company is missing, set company to “” (empty string).
+                    •	If you are unsure about a field, make the best reasonable guess.
 
-            response = client.responses.parse(
-                model="gpt-4.1",
-                input=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert web scraper. Extract job listings from raw HTML and return them."
-                    },
-                    {"role": "user", "content": user_prompt}
-                ],
-                text_format=JobListingPayload,
+                Return a single JSON object containing job_listings: a list of JobListing objects, like this:
+                {{
+                    "job_listings": [
+                        {{
+                        "title": "…",
+                        "company": "…",
+                        "href": "…",
+                        "selector": "…"
+                        }},
+                        …
+                    ]
+                }}
+
+                Good Selector Examples:
+                    •	'a[data-job-id="1234"]'
+                    •	'button.job-card__link'
+                    •	'a.job-listing-title'
+                    •	'a#job_5678'
+                    •	'div.job-card:nth-of-type(2) a'
+                    •	'a[href="/jobs/abcd"]'
+                    •	'a[data-testid="job-link-5"]'
+
+                Bad Selector Examples:
+                    •	'div.job-list'  (parent container, not clickable)
+                    •	'ul li'  (too broad, not stable)
+                    •	'a'  (too generic, will match all links)
+                    •	'.button'  (generic class, may match unrelated buttons)
+                    •	'div'  (not clickable)
+                    •	'a[href]'  (matches all links, not specific)
+                    •	Selectors that match multiple elements without being unique to each job listing
+
+                Good Extraction Example:
+                {{
+                "job_listings": [
+                    {{
+                        "title": "Software Engineer",
+                        "company": "OpenAI",
+                        "href": "/jobs/123",
+                        "selector": "a[data-job-id='123']"
+                    }},
+                    {{
+                        "title": "Product Manager",
+                        "company": "",
+                        "href": "/jobs/124",
+                        "selector": "a#job_124"
+                    }}
+                ]
+                }}
+
+                Bad Extraction Example:
+                {{
+                    "job_listings": [
+                    {{
+                        "title": "",
+                        "company": "OpenAI",
+                        "href": "",
+                        "selector": "div.job-list"
+                    }}
+                ]
+                }}
+
+                Only return the JSON object. Do not return any other explanation or text.
+
+                HTML Source:
+                {page_source}
+                """
+
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert web scraper. Extract job listings from raw HTML and return them.",
+                    response_mime_type="application/json",
+                    response_schema=JobListingPayload
+                )
             )
 
-            # The Responses API returns a structured object; pull the text field.
-            payload: JobListingPayload = response.output_parsed
+            payload: JobListingPayload = response.parsed
 
             job_listings: List[JobListing] = []
             seen = set()
@@ -532,19 +485,11 @@ class HybridBrowserBot:
                     if not element:
                         continue
 
-                    # Ensure the clickable element
-                    clickable = element
-                    tag = element.evaluate('el => el.tagName.toLowerCase()')
-                    if tag != 'a':
-                        parent_link = element.evaluate('el => el.closest("a") && el.closest("a").getAttribute("href")')
-                        if parent_link:
-                            clickable = self.page.query_selector(f'a[href="{parent_link}"]')
-
                     title = jl.title.strip()
                     company = jl.company.strip()
                     href = jl.href.strip()
 
-                    if not title or not href or not clickable:
+                    if not title or not href:
                         continue
 
                     key = (title.lower(), company.lower())
@@ -562,8 +507,9 @@ class HybridBrowserBot:
 
         except Exception as e:
             print(f"❌ Error in GPT job listing detection: {e}")
+            import traceback
+            traceback.print_exc()
             return []
-
 
     def find_job_listings_with_heuristics(self) -> List[Dict[str, Any]]:
         """Find job listings using the original heuristics approach"""
@@ -676,7 +622,7 @@ class HybridBrowserBot:
                             # Get href
                             href = clickable.get_attribute('href') or ''
                             
-                            # Vet the job listing with GPT-4.1
+                            # Vet the job listing with Gemini 2.5 Pro
                             if self.vet_job_listing_with_gpt(job_title, company_name, href):
                                 # Create job listing info
                                 job_listing = {
@@ -741,7 +687,7 @@ class HybridBrowserBot:
                                     job_title = parts[0].strip()
                                     company_name = parts[1].strip()
                             
-                            # Vet the job listing with GPT-4.1
+                            # Vet the job listing with Gemini 2.5 Pro
                             if self.vet_job_listing_with_gpt(job_title, company_name, href):
                                 job_listing = {
                                     'title': job_title,
@@ -774,12 +720,11 @@ class HybridBrowserBot:
             print(f"❌ Error finding job listings: {e}")
             return []
     
-
-    
     def evaluate_job_fit_with_gpt(self, job_description: str) -> Dict[str, Any]:
-        """Use GPT-4.1 to evaluate if a job is a good fit based on preferences"""
+        """Use Gemini 2.5 Pro to evaluate if a job is a good fit based on preferences"""
         try:
-            import openai
+            from google import genai
+            import json as json_module
             
             # Create the evaluation prompt
             prompt = f"""
@@ -822,20 +767,20 @@ class HybridBrowserBot:
             Return only valid JSON.
             """
             
-            # Get OpenAI client (you'll need to set up your API key)
+            # Get Gemini client
             try:
-                client = openai.OpenAI()
+                client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
                 
-                response = client.chat.completions.create(
-                    model="gpt-4.1",
-                    messages=[
-                        {"role": "system", "content": "You are an expert job matching assistant. Analyze job descriptions and provide detailed matching scores based on candidate preferences."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.1
+                response = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction="You are an expert job matching assistant. Analyze job descriptions and provide detailed matching scores based on candidate preferences. Return only valid JSON.",
+                        response_mime_type="application/json"
+                    )
                 )
                 
-                result = response.choices[0].message.content.strip()
+                result = response.text.strip()
                 
                 # Clean up markdown code blocks if present
                 if result.startswith('```json'):
@@ -850,13 +795,13 @@ class HybridBrowserBot:
                 # Parse JSON response
                 evaluation = json_module.loads(result)
                 
-                print(f"🤖 GPT-4.1 Evaluation: {evaluation.get('recommendation', 'unknown')} (score: {evaluation.get('overall_score', 'unknown')}/10)")
+                print(f"🤖 Gemini 2.5 Pro Evaluation: {evaluation.get('recommendation', 'unknown')} (score: {evaluation.get('overall_score', 'unknown')}/10)")
                 print(f"   Reasoning: {evaluation.get('reasoning', 'No reasoning provided')}")
                 
                 return evaluation
                 
             except Exception as gpt_error:
-                print(f"❌ GPT-4.1 evaluation failed: {gpt_error}")
+                print(f"❌ Gemini 2.5 Pro evaluation failed: {gpt_error}")
                 # Fallback to simple keyword matching
                 return self.evaluate_job_fit_simple(job_description)
                 
@@ -951,18 +896,18 @@ class HybridBrowserBot:
             }
     
     def find_apply_button(self) -> Optional[Dict[str, Any]]:
-        """Find the apply button on a job page using GPT-4.1"""
+        """Find the apply button on a job page using Gemini 2.5 Pro"""
         try:
-            print("🔍 Looking for apply button using GPT-4.1...")
+            print("🔍 Looking for apply button using Gemini 2.5 Pro...")
             
             # Get the page HTML content
             page_html = self.page.content()
             
-            # Use GPT-4.1 to find the apply button
+            # Use Gemini 2.5 Pro to find the apply button
             apply_button_info = self._find_apply_button_with_gpt(page_html)
             
             if apply_button_info:
-                # Try to find the actual element using the selector from GPT
+                # Try to find the actual element using the selector from Gemini
                 try:
                     element = self.page.query_selector(apply_button_info['selector'])
                     if element:
@@ -973,7 +918,7 @@ class HybridBrowserBot:
                         except:
                             pass
                         
-                        print(f"✅ GPT-4.1 found apply button: '{apply_button_info['text']}' (selector: {apply_button_info['selector']}, href: {href})")
+                        print(f"✅ Gemini 2.5 Pro found apply button: '{apply_button_info['text']}' (selector: {apply_button_info['selector']}, href: {href})")
                         return {
                             'text': apply_button_info['text'],
                             'element': element,
@@ -983,61 +928,76 @@ class HybridBrowserBot:
                 except Exception as e:
                     print(f"⚠️ Could not find element with selector '{apply_button_info['selector']}': {e}")
             
-            print("❌ GPT-4.1 could not find apply button")
+            print("❌ Gemini 2.5 Pro could not find apply button")
             return None
             
         except Exception as e:
-            print(f"❌ Error finding apply button with GPT-4.1: {e}")
+            print(f"❌ Error finding apply button with Gemini 2.5 Pro: {e}")
+            return None
+    
+    def find_job_listing_url(self) -> Optional[Dict[str, Any]]:
+        """Find the URL of a job listing"""
+        try:
+            # Open the job in another tab, and get the URL, and close the new tab
+            apply_button = self.find_apply_button()
+            apply_button_selector = apply_button['selector']
+            apply_button_element = self.page.query_selector(apply_button_selector)
+            apply_button_element.click()
+            time.sleep(1)
+            url = self.page.url
+            self.page.close()
+            return url
+        except Exception as e:
+            print(f"❌ Error finding job listing URL: {e}")
             return None
     
     def _find_apply_button_with_gpt(self, page_html: str) -> Optional[Dict[str, Any]]:
-        """Use GPT-4.1 to find apply button from page HTML"""
+        """Use Gemini 2.5 Pro to find apply button from page HTML"""
         try:
-            import openai
+            from google import genai
             import json
             
-            # Create the prompt for GPT-4.1
+            # Create the prompt for Gemini 2.5 Pro
             prompt = f"""
-You are an expert at analyzing job posting pages and finding apply buttons. 
+                You are an expert at analyzing job posting pages and finding apply buttons. 
 
-Given the HTML content of a job posting page, your task is to identify the main apply button that users would click to start the job application process.
+                Given the HTML content of a job posting page, your task is to identify the main apply button that users would click to start the job application process.
 
-Instructions:
-1. Look for buttons or links that would initiate a job application
-2. Common apply button text includes: "Apply", "Apply Now", "Easy Apply", "Quick Apply", "Submit Application", "Start Application"
-3. Focus on buttons that are prominently displayed and clearly meant for applying
-4. Return the information in JSON format with these fields:
-   - text: The button text/label
-   - selector: A CSS selector that would uniquely identify this button (prefer data-testid, id, or specific class combinations)
-   - type: Either "button" or "link" depending on the element type
+                Instructions:
+                1. Look for buttons or links that would initiate a job application
+                2. Common apply button text includes: "Apply", "Apply Now", "Easy Apply", "Quick Apply", "Submit Application", "Start Application"
+                3. Focus on buttons that are prominently displayed and clearly meant for applying
+                4. Return the information in JSON format with these fields:
+                - text: The button text/label
+                - selector: A CSS selector that would uniquely identify this button (prefer data-testid, id, or specific class combinations)
+                - type: Either "button" or "link" depending on the element type
 
-5. If you cannot find a clear apply button, return null
-6. The button should be together with the focused job
-7. There will be other apply buttons on the page, but we are looking for the one that is together with the focused job
+                5. If you cannot find a clear apply button, return null
+                6. The button should be together with the focused job
+                7. There will be other apply buttons on the page, but we are looking for the one that is together with the focused job
 
-Here is the HTML content of the page:
+                Here is the HTML content of the page:
 
-{page_html}
+                {page_html}
 
-Find the apply button and return the result as JSON:
-"""
+                Find the apply button and return the result as JSON:
+                """
             
-            # Get OpenAI client
-            client = openai.OpenAI()
+            # Get Gemini client
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Make the API call
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are an apply button detection expert. Return only valid JSON with text, selector, and type fields."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=300,
-                temperature=0.1
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an apply button detection expert. Return only valid JSON with text, selector, and type fields.",
+                    response_mime_type="application/json"
+                )
             )
             
             # Extract the result
-            result = response.choices[0].message.content.strip()
+            result = response.text.strip()
             
             # Parse JSON result
             try:
@@ -1054,104 +1014,81 @@ Find the apply button and return the result as JSON:
                     if 'text' in apply_button_data and 'selector' in apply_button_data:
                         return apply_button_data
                     else:
-                        print("⚠️ GPT response missing required fields")
+                        print("⚠️ Gemini response missing required fields")
                         return None
                 else:
                     return None
                     
             except json.JSONDecodeError as e:
-                print(f"⚠️ Could not parse GPT response as JSON: {e}")
+                print(f"⚠️ Could not parse Gemini response as JSON: {e}")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error in GPT-4.1 apply button detection: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro apply button detection: {e}")
             return None
     
-    def click_apply_button(self, apply_button: Dict[str, Any]) -> bool:
-        """Click the apply button to start application process"""
-        try:
-            print(f"🎯 Clicking apply button: '{apply_button['text']}'")
-            
-            # Scroll into view and click
-            apply_button['element'].scroll_into_view_if_needed()
-            apply_button['element'].click()
-            
-            # Wait for application form to load
-            time.sleep(3)
-            
-            print(f"✅ Successfully clicked apply button")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error clicking apply button: {e}")
-            return False
-    
-
-    
     def extract_job_title_from_page(self) -> Optional[str]:
-        """Extract job title from the current page using GPT-4.1"""
+        """Extract job title from the current page using Gemini 2.5 Pro"""
         try:
-            print("📋 Extracting job title from current page using GPT-4.1...")
+            print("📋 Extracting job title from current page using Gemini 2.5 Pro...")
             
             # Get the page HTML content
             page_html = self.page.content()
             
-            # Use GPT-4.1 to extract the job title
+            # Use Gemini 2.5 Pro to extract the job title
             job_title = self._extract_job_title_with_gpt(page_html)
             
             if job_title and job_title != "Unknown Job Title":
-                print(f"✅ GPT-4.1 extracted job title: '{job_title}'")
+                print(f"✅ Gemini 2.5 Pro extracted job title: '{job_title}'")
                 return job_title
             else:
-                print("❌ GPT-4.1 could not extract job title")
+                print("❌ Gemini 2.5 Pro could not extract job title")
                 return "Unknown Job Title"
                 
         except Exception as e:
-            print(f"❌ Error extracting job title with GPT-4.1: {e}")
+            print(f"❌ Error extracting job title with Gemini 2.5 Pro: {e}")
             return "Unknown Job Title"
     
     def _extract_job_title_with_gpt(self, page_html: str) -> str:
-        """Use GPT-4.1 to extract job title from page HTML"""
+        """Use Gemini 2.5 Pro to extract job title from page HTML"""
         try:
-            import openai
+            from google import genai
             
-            # Create the prompt for GPT-4.1
+            # Create the prompt for Gemini 2.5 Pro
             prompt = f"""
-You are an expert at analyzing job posting pages and extracting job titles. 
+                You are an expert at analyzing job posting pages and extracting job titles. 
 
-Given the HTML content of a job posting page, your task is to identify and extract the main job title that is currently in focus or being displayed.
+                Given the HTML content of a job posting page, your task is to identify and extract the main job title that is currently in focus or being displayed.
 
-Instructions:
-1. Look for the most prominent job title on the page
-2. Focus on headings (h1, h2, h3), title elements, or elements with job-related classes
-3. The job title should be the specific position being advertised (e.g., "Senior Software Engineer", "Product Manager", "Data Analyst")
-4. Avoid company names, location information, or other metadata
-5. Return ONLY the job title as a clean string, nothing else
-6. If you cannot find a clear job title, return "Unknown Job Title"
+                Instructions:
+                1. Look for the most prominent job title on the page
+                2. Focus on headings (h1, h2, h3), title elements, or elements with job-related classes
+                3. The job title should be the specific position being advertised (e.g., "Senior Software Engineer", "Product Manager", "Data Analyst")
+                4. Avoid company names, location information, or other metadata
+                5. Return ONLY the job title as a clean string, nothing else
+                6. If you cannot find a clear job title, return "Unknown Job Title"
 
-Here is the HTML content of the page:
+                Here is the HTML content of the page:
 
-{page_html}
+                {page_html}
 
-Extract the job title:
-"""
+                Extract the job title:
+                """
             
-            # Get OpenAI client
-            client = openai.OpenAI()
+            # Get Gemini client
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Make the API call
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are a job title extraction expert. Return only the job title as a clean string."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.1
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are a job title extraction expert. Return only the job title as a clean string."
+                )
             )
             
             # Extract the result
-            result = response.choices[0].message.content.strip()
+            result = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
             
             # Clean up the result
             if result and result != "Unknown Job Title":
@@ -1165,79 +1102,77 @@ Extract the job title:
                 return "Unknown Job Title"
                 
         except Exception as e:
-            print(f"❌ Error in GPT-4.1 job title extraction: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro job title extraction: {e}")
             return "Unknown Job Title"
     
     def extract_job_description_from_page(self) -> Optional[str]:
-        """Extract job description from the current page using GPT-4.1"""
+        """Extract job description from the current page using Gemini 2.5 Pro"""
         try:
-            print("📄 Extracting job description from current page using GPT-4.1...")
+            print("📄 Extracting job description from current page using Gemini 2.5 Pro...")
             
             # Get the page HTML content
             page_html = self.page.content()
             
-            # Use GPT-4.1 to extract the job description
+            # Use Gemini 2.5 Pro to extract the job description
             job_description = self._extract_job_description_with_gpt(page_html)
             
             if job_description:
-                print(f"✅ GPT-4.1 extracted job description ({len(job_description)} characters)")
+                print(f"✅ Gemini 2.5 Pro extracted job description ({len(job_description)} characters)")
                 return job_description
             else:
-                print("❌ GPT-4.1 could not extract job description")
+                print("❌ Gemini 2.5 Pro could not extract job description")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error extracting job description with GPT-4.1: {e}")
+            print(f"❌ Error extracting job description with Gemini 2.5 Pro: {e}")
             return None
     
     def _extract_job_description_with_gpt(self, page_html: str) -> Optional[str]:
-        """Use GPT-4.1 to extract job description from page HTML"""
+        """Use Gemini 2.5 Pro to extract job description from page HTML"""
         try:
-            import openai
+            from google import genai
             
-            # Create the prompt for GPT-4.1
+            # Create the prompt for Gemini 2.5 Pro
             prompt = f"""
-You are an expert at analyzing job posting pages and extracting job descriptions. 
+                You are an expert at analyzing job posting pages and extracting job descriptions. 
 
-Given the HTML content of a job posting page, your task is to identify and extract the main job description that details the role, responsibilities, requirements, and qualifications.
+                Given the HTML content of a job posting page, your task is to identify and extract the main job description that details the role, responsibilities, requirements, and qualifications.
 
-Instructions:
-1. Look for the main job description content on the page
-2. Focus on sections that describe the role, responsibilities, requirements, qualifications, and benefits
-3. Include key information such as:
-   - Job responsibilities and duties
-   - Required skills and qualifications
-   - Preferred qualifications
-   - Education requirements
-   - Experience requirements
-   - Benefits and perks (if mentioned)
-4. Exclude navigation elements, headers, footers, and other non-job-related content
-5. Return the job description as a clean, well-formatted text
-6. If you cannot find a clear job description, return "No job description found"
+                Instructions:
+                1. Look for the main job description content on the page
+                2. Focus on sections that describe the role, responsibilities, requirements, qualifications, and benefits
+                3. Include key information such as:
+                - Job responsibilities and duties
+                - Required skills and qualifications
+                - Preferred qualifications
+                - Education requirements
+                - Experience requirements
+                - Benefits and perks (if mentioned)
+                4. Exclude navigation elements, headers, footers, and other non-job-related content
+                5. Return the job description as a clean, well-formatted text
+                6. If you cannot find a clear job description, return "No job description found"
 
-Here is the HTML content of the page:
+                Here is the HTML content of the page:
 
-{page_html}
+                {page_html}
 
-Extract the job description:
-"""
+                Extract the job description:
+                """
             
-            # Get OpenAI client
-            client = openai.OpenAI()
+            # Get Gemini client
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
             
             # Make the API call
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You are a job description extraction expert. Return only the job description as clean, well-formatted text."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=2000,
-                temperature=0.1
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are a job description extraction expert. Return only the job description as clean, well-formatted text."
+                )
             )
             
             # Extract the result
-            result = response.choices[0].message.content.strip()
+            result = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
             
             # Clean up the result
             if result and result != "No job description found":
@@ -1251,10 +1186,8 @@ Extract the job description:
                 return None
                 
         except Exception as e:
-            print(f"❌ Error in GPT-4.1 job description extraction: {e}")
+            print(f"❌ Error in Gemini 2.5 Pro job description extraction: {e}")
             return None
-    
-
     
     def take_screenshot(self, filename: Optional[str] = None) -> str:
         """Take screenshot using Playwright"""
@@ -1272,160 +1205,7 @@ Extract the job description:
         except Exception as e:
             print(f"❌ Error taking screenshot: {e}")
             return ""
-    
-
-    
-
-    
-    def find_relevant_fields_for_job_preferences(self) -> List[Dict[str, Any]]:
-        """Find relevant fields for job preferences using Playwright"""
-        try:
-            # Find all input fields
-            input_fields = self.find_input_fields()
-            
-            if not input_fields:
-                print("❌ No input fields found")
-                return []
-            
-            print(f"🔍 Analyzing {len(input_fields)} fields for job preferences...")
-            
-            # Score each field based on relevance
-            scored_fields = []
-            for field in input_fields:
-                score = 0
-                field_text = f"{field['label']} {field['placeholder']} {field['name']} {field['id']}".lower()
-                
-                # Check for job title/keyword fields
-                job_title_keywords = ['job', 'jobs', 'keyword', 'title', 'position', 'role', 'search']
-                for keyword in job_title_keywords:
-                    if keyword in field_text:
-                        score += 15
-                
-                # Check for location-related keywords
-                location_keywords = ['location', 'city', 'state', 'country', 'where', 'place', 'area']
-                for keyword in location_keywords:
-                    if keyword in field_text:
-                        score += 12
-                
-                # Check for salary-related keywords
-                salary_keywords = ['salary', 'pay', 'compensation', 'wage', 'hourly', 'annual', 'rate']
-                for keyword in salary_keywords:
-                    if keyword in field_text:
-                        score += 10
-                
-                # Check for employment type-related keywords
-                employment_keywords = ['full-time', 'part-time', 'contract', 'temporary', 'internship', 'freelance', 'remote']
-                for keyword in employment_keywords:
-                    if keyword in field_text:
-                        score += 8
-                
-                # Check for experience-related keywords
-                experience_keywords = ['experience', 'level', 'seniority', 'years', 'entry', 'mid', 'senior']
-                for keyword in experience_keywords:
-                    if keyword in field_text:
-                        score += 7
-                
-                # Check for skills-related keywords
-                skills_keywords = ['skills', 'technologies', 'languages', 'tools', 'frameworks']
-                for keyword in skills_keywords:
-                    if keyword in field_text:
-                        score += 6
-                
-                # Check for company-related keywords
-                company_keywords = ['company', 'employer', 'organization', 'firm']
-                for keyword in company_keywords:
-                    if keyword in field_text:
-                        score += 5
-                
-                # Check for industry-related keywords
-                industry_keywords = ['industry', 'sector', 'field', 'domain']
-                for keyword in industry_keywords:
-                    if keyword in field_text:
-                        score += 5
-                
-                # Check for remote/work flexibility keywords
-                remote_keywords = ['remote', 'flexibility', 'telecommuting', 'work from home', 'hybrid']
-                for keyword in remote_keywords:
-                    if keyword in field_text:
-                        score += 8
-                
-                # Check for visa/sponsorship keywords
-                visa_keywords = ['visa', 'sponsorship', 'work permit', 'immigration']
-                for keyword in visa_keywords:
-                    if keyword in field_text:
-                        score += 6
-                
-                # Prefer text inputs over other types
-                if field['type'] in ['text', 'search', '']:
-                    score += 3
-                
-                # Prefer empty fields (ready to be filled)
-                if not field['value']:
-                    score += 2
-                
-                # Prefer fields with placeholders (more descriptive)
-                if field['placeholder']:
-                    score += 1
-                
-                # Special handling for specific job sites
-                if 'indeed' in self.current_url.lower():
-                    indeed_keywords = ['what', 'where', 'job title', 'keywords']
-                    for keyword in indeed_keywords:
-                        if keyword in field_text:
-                            score += 5
-                
-                if 'monster' in self.current_url.lower():
-                    monster_keywords = ['keywords', 'job title', 'location']
-                    for keyword in monster_keywords:
-                        if keyword in field_text:
-                            score += 5
-                
-                if 'linkedin' in self.current_url.lower():
-                    linkedin_keywords = ['keywords', 'title', 'location']
-                    for keyword in linkedin_keywords:
-                        if keyword in field_text:
-                            score += 5
-                
-                # Create field info with score
-                field_info = {
-                    **field,
-                    'score': score,
-                    'matched_preferences': []
-                }
-                
-                # Track which preferences this field matches
-                if self.preferences.get('job_titles') and score > 10:
-                    field_info['matched_preferences'].append('job_titles')
-                if self.preferences.get('locations') and 'location' in field_text:
-                    field_info['matched_preferences'].append('locations')
-                if self.preferences.get('salary_min') and 'salary' in field_text:
-                    field_info['matched_preferences'].append('salary')
-                if self.preferences.get('employment_types') and any(emp in field_text for emp in ['full-time', 'part-time', 'contract']):
-                    field_info['matched_preferences'].append('employment_types')
-                if self.preferences.get('remote_flexibility') and 'remote' in field_text:
-                    field_info['matched_preferences'].append('remote_flexibility')
-                
-                scored_fields.append(field_info)
-            
-            # Sort by score (highest first)
-            scored_fields.sort(key=lambda x: x['score'], reverse=True)
-            
-            # Show top 5 relevant fields
-            print("🏆 Top relevant fields for job preferences:")
-            for i, field in enumerate(scored_fields[:5]):
-                field_name = field['label'] or field['placeholder'] or field['name'] or f"Field {field['index']}"
-                print(f"  {i+1}. '{field_name}' (score: {field['score']}) - matches: {field['matched_preferences']}")
-            
-            # Return fields with scores above threshold
-            relevant_fields = [field for field in scored_fields if field['score'] >= 5]
-            
-            print(f"✅ Found {len(relevant_fields)} relevant fields for job preferences")
-            return relevant_fields
-            
-        except Exception as e:
-            print(f"❌ Error finding relevant fields: {e}")
-            return []
-                    
+             
     def run_job_application(self, job_site_url: str) -> bool:
         """
         Main automation function that orchestrates the entire job application process.
@@ -1441,11 +1221,6 @@ Extract the job description:
         - Results Page → Find job listings → Job Detail Page  
         - Job Detail Page → Evaluate job → Apply or continue to next job
         - Application Page → Fill application form → Continue
-        
-        Simplified Architecture:
-        - Removed redundant action-based routing system
-        - Page handlers now directly perform their actions
-        - Main loop only handles page detection and stopping conditions
         """
         print(f"🚀 Starting job application for: {job_site_url}")
         
@@ -1459,7 +1234,6 @@ Extract the job description:
             # State tracking variables for the automation loop
             current_url = self.page.url                    # Track URL changes to detect page navigation
             current_page_type = None                       # Current page type (search, results, etc.)
-            current_action = None                          # Current action being performed
             
             # Main automation loop - runs until completion or error
             max_iterations = 50  # Safety limit to prevent infinite loops
@@ -1469,42 +1243,13 @@ Extract the job description:
                 iteration += 1
                 print(f"\n🔄 Iteration {iteration}/{max_iterations}")
                 
-                # PAGE NAVIGATION DETECTION
-                # Check if the user/bot has navigated to a different page
-                new_url = self.page.url
-                if new_url != current_url:
-                    # URL changed - we're on a new page, need to detect and handle it
-                    print(f"📍 New page detected: {new_url}")
-                    current_url = new_url
+                self.click_accept_cookies_button()
                     
-                    # Detect the page type and handle it directly
-                    # This uses the page detector to analyze the current page
-                    page_result = self.detect_and_handle_page()
-                    current_page_type = page_result.get('page_type', 'unknown')
-                    
-                    print(f"🎯 Page type: {current_page_type}")
-                    
-                    # Check if we should stop
-                    if page_result.get('action') == 'stop':
-                        print("🛑 Stopping automation")
-                        return False
-                        
-                else:
-                    # Same URL - check if this is the first time on this page
-                    if current_page_type is None:
-                        # First time on this page, need to detect what type it is
-                        page_result = self.detect_and_handle_page()
-                        current_page_type = page_result.get('page_type', 'unknown')
-                        
-                        print(f"🎯 Page type: {current_page_type}")
-                        
-                        # Check if we should stop
-                        if page_result.get('action') == 'stop':
-                            print("🛑 Stopping automation")
-                            return False
-                    else:
-                        # Same page, no need to re-detect
-                        print(f"🔄 Continuing on same page: {current_page_type}")
+                # Detect the page type and handle it directly
+                # This uses the page detector to analyze the current page
+                if not self.handle_page_type():
+                    print("❌ Error detecting page type")
+                    return False
             
             print("⚠️ Max iterations reached")
             return False
@@ -1518,81 +1263,33 @@ Extract the job description:
             else:
                 print("⚠️ Browser not started, skipping pause")
     
-    def _fill_search_form(self) -> bool:
+    def _fill_search_form(self) -> TextApplicationFieldResponse:
         """Fill the job search form with preferences"""
         try:
             print("🔍 Finding relevant fields for search form...")
-            relevant_fields = self.find_relevant_fields_for_job_preferences()
+            search_inputs = self.find_search_page_input_fields()
             
-            if not relevant_fields:
+            if not search_inputs:
                 print("❌ No relevant fields found")
                 return False
             
-            print(f"🔍 Found {len(relevant_fields)} relevant fields")
-            fields_filled = 0
+            print(f"🔍 Found {len(search_inputs.fields)} relevant fields")
             
-            # Fill job title field
-            if self.preferences.get('job_titles'):
-                job_title_field = None
-                for field in relevant_fields:
-                    if ('job_titles' in field['matched_preferences'] or 
-                        'job' in field.get('label', '').lower() or 
-                        'keyword' in field.get('placeholder', '').lower()):
-                        job_title_field = field
-                        break
-                
-                if job_title_field:
-                    search_term = self.preferences['job_titles'][0]
-                    if self.click_and_type_in_field(job_title_field, search_term):
-                        print(f"✅ Filled job title field: '{search_term}'")
-                        fields_filled += 1
-                    else:
-                        print("❌ Failed to fill job title field")
+            fill_result = self.fill_text_input_fields(search_inputs)
+            if not fill_result:
+                print("❌ Failed to fill text input fields")
+                return False
             
-            # Fill location field
-            if self.preferences.get('locations'):
-                location_field = None
-                for field in relevant_fields:
-                    if ('locations' in field['matched_preferences'] or 
-                        'location' in field.get('label', '').lower() or 
-                        'where' in field.get('placeholder', '').lower()):
-                        location_field = field
-                        break
-                
-                if location_field:
-                    location = self.preferences['locations'][0]
-                    if self.click_and_type_in_field(location_field, location):
-                        print(f"✅ Filled location field: '{location}'")
-                        fields_filled += 1
-                    else:
-                        print("❌ Failed to fill location field")
-            
-            # Fill salary field
-            if self.preferences.get('salary_min'):
-                salary_field = None
-                for field in relevant_fields:
-                    if ('salary' in field['matched_preferences'] or 
-                        'salary' in field.get('label', '').lower()):
-                        salary_field = field
-                        break
-                
-                if salary_field:
-                    salary = str(self.preferences['salary_min'])
-                    if self.click_and_type_in_field(salary_field, salary):
-                        print(f"✅ Filled salary field: '{salary}'")
-                        fields_filled += 1
-                    else:
-                        print("❌ Failed to fill salary field")
-            
-            print(f"✅ Filled {fields_filled} fields with job preferences")
+            print(f"✅ Filled {len(search_inputs.fields)} fields with job preferences")
             
             # Submit the form
-            submit_button_info = self.find_submit_button()
-            if submit_button_info:
+            submit_button = self.find_search_page_submit_button()
+            if submit_button:
                 try:
-                    submit_button_info['element'].click()
+                    submit_button_element = self.page.locator(submit_button.field_selector)
+                    submit_button_element.click()
                     time.sleep(3)
-                    print(f"✅ Successfully clicked submit button: '{submit_button_info['text']}'")
+                    print(f"✅ Successfully clicked submit button: '{submit_button.field_name}'")
                     self.take_screenshot("after_submit.png")
                     return True
                 except Exception as e:
@@ -1616,7 +1313,7 @@ Extract the job description:
                 try:
                     job_css_selector = job_listing.selector
                     job_element = self.page.query_selector(job_css_selector)
-                    job_element.scroll_into_view_if_needed()
+
                     job_element.click()
                     time.sleep(3)  # Wait for job details to load
                 except Exception as e:
@@ -1628,13 +1325,89 @@ Extract the job description:
                 
                 print("✅ Proceeding with evaluation")
                 # The job detail page handler will evaluate and open applications in new tabs
-                self._handle_job_detail_page()
+                self._handle_job_detail_page(job_listing)
                 
+                self.clear_modal_if_present(job_listing.title)
+                
+            return True
         except Exception as e:
             print(f"❌ Error processing job listings: {e}")
             return False
     
+    def clear_modal_if_present(self, modal_title: str = None):
+        """Clear any modal if present"""
+        try:
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            prompt = f"""
+            Analyze the provided HTML of the current webpage and identify if there is a modal dialog currently present and visible to the user.  
+            A modal is a popup, dialog, overlay, or window that prevents interaction with the main page until it is dismissed (e.g., login dialogs, cookie consent popups, alert overlays).
 
+            Your objectives:
+            1. Determine if a modal dialog is currently visible.
+            2. If so, identify the single button, link, or element that closes the modal when clicked (e.g., "Close", "X", "Dismiss", "Cancel", etc).
+            3. Return ONLY the most specific, stable, and reliable CSS selector for the close button.
+
+            Guidelines for selector:
+            - The close button will be in a modal with title {modal_title}. Ensure that the selector is with the modal title.
+            - Selector must be valid, stable, and as specific as possible (use data-* attributes, IDs, unique classes, nth-of-type, etc).
+            - Selector must directly target the clickable close element (never a parent container, never a generic button).
+            - Do NOT use extremely generic selectors (like "button" or ".btn").
+            - Do NOT return XPath or non-CSS selectors.
+            - Do NOT include anything except the selector string in the response.
+            - If no modal is present, return an empty string ("").
+            - The close button is often an X icon or a close button in the modal
+
+            Good selector examples:
+            "button[data-testid='modal-close']"
+            "button.close-modal"
+            "div[role='dialog'] button[aria-label='Close']"
+            "button#closeDialogButton"
+            "a.modal__close"
+            "span.icon-close"
+            "button[class*='close']"
+            "button[aria-label='Dismiss']"
+            "div.cookie-modal button:nth-of-type(2)"
+
+            Bad selector examples (do NOT return):
+            "button"
+            ".btn"
+            ".close"      (if not unique on the page)
+            "div"         (never target a non-clickable container)
+            ".modal"      (the modal, not the button)
+            "input"       (unless it's actually the close control)
+            Any XPath selector
+            Anything that matches multiple, unrelated elements
+
+            Your output should be:
+            - If a modal is present: the CSS selector for the close button, nothing else.
+            - If no modal is present: return "" (an empty string).
+
+            HTML of the page:
+            {self.page.content()}
+            """
+
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert at analyzing web pages and identifying modal elements.",
+                )
+            )
+            
+            if response.text:
+                close_button_selector = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
+                close_button = self.page.query_selector(close_button_selector)
+                if close_button:
+                    print(f"✅ Found close button: {close_button_selector}")
+                    close_button.click()
+                else:
+                    # Try and click outside the modal
+                    print("❌ No close button found, clicking outside the modal")
+                    self.page.click("body")
+
+        except Exception as e:
+            print(f"❌ Error clearing modal: {e}")
+            return False
     
     def _fill_application_form(self) -> bool:
         """Fill out a job application form"""
@@ -1651,41 +1424,34 @@ Extract the job description:
             print(f"❌ Error filling application form: {e}")
             return False
 
-    def detect_and_handle_page(self) -> Dict[str, Any]:
+    def handle_page_type(self) -> bool:
         """Detect current page type and handle it appropriately"""
         if not self.page_detector:
             print("❌ Page detector not initialized")
-            return {'action': 'error', 'reason': 'page_detector_not_initialized'}
+            return False
         
         # Detect page type
-        detection_result = self.page_detector.detect_page_type()
-        page_type = detection_result['page_type']
-        
-        # Add preferences to detection result if provided
-        if self.preferences:
-            detection_result['preferences'] = self.preferences
+        page_type = self.page_detector.detect_page_type()
         
         # Handle different page types
         if page_type == PageType.SEARCH_PAGE:
-            return self._handle_search_page(detection_result)
+            return self._handle_search_page()
         elif page_type == PageType.RESULTS_PAGE:
-            return self._handle_results_page(detection_result)
+            return self._handle_search_results_page()
         elif page_type == PageType.JOB_DETAIL_PAGE:
             return self._handle_job_detail_page()
         elif page_type == PageType.APPLICATION_PAGE:
-            return self._handle_application_page(detection_result)
+            return self._handle_application_page()
         elif page_type == PageType.LOGIN_PAGE:
-            return self._handle_login_page(detection_result)
+            return self._handle_login_page()
         elif page_type == PageType.CAPTCHA_PAGE:
-            return self._handle_captcha_page(detection_result)
+            return self._handle_captcha_page()
         elif page_type == PageType.ERROR_PAGE:
-            return self._handle_error_page(detection_result)
+            return self._handle_error_page()
         else:
-            return self._handle_unknown_page(detection_result)
+            return self._handle_unknown_page()
     
-
-    
-    def _handle_search_page(self) -> Dict[str, Any]:
+    def _handle_search_page(self) -> bool:
         """Handle job search form page"""
         print("🔍 Handling search page...")
         
@@ -1698,13 +1464,11 @@ Extract the job description:
         success = self._fill_search_form()
         if not success:
             print("❌ Failed to fill search form")
-            return {'action': 'stop', 'page_type': 'search_page', 'reason': 'fill_form_failed'}
+            return False
         
-        # After filling form, we expect navigation to results page
-        # The form submission should trigger navigation, so we return None to continue
-        return {'action': None, 'page_type': 'search_page', 'reason': 'form_filled'}
+        return True
     
-    def _handle_results_page(self) -> Dict[str, Any]:
+    def _handle_search_results_page(self) -> bool:
         """Handle job search results page"""
         print("📋 Handling results page...")
         
@@ -1715,16 +1479,22 @@ Extract the job description:
             success = self._process_job_listings(job_listings)
             if not success:
                 print("❌ Failed to process job listings")
-                return {'action': 'stop', 'page_type': 'results_page', 'reason': 'process_listings_failed'}
+                return False
+            
+            print(f"✅ Accepted {len(self.accepted_job_listings)} job listings")
+            print(f"❌ Rejected {len(self.rejected_job_listings)} job listings")
+            
+            print(f"✅ Job listings: {self.accepted_job_listings}")
+            print(f"❌ Job listings: {self.rejected_job_listings}")
         else:
             print("⚠️ No job listings found")
-            return {'action': 'stop', 'page_type': 'results_page', 'reason': 'no_listings_found'}
+            return False
         
         # After processing jobs, we expect navigation to job detail page
         # The job processing should trigger navigation, so we return None to continue
-        return {'action': None, 'page_type': 'results_page', 'reason': 'listings_processed'}
+        return True
     
-    def _handle_job_detail_page(self):
+    def _handle_job_detail_page(self, job_listing: JobListing) -> bool:
         """Handle individual job posting page"""
         print("📄 Handling job detail page...")
         
@@ -1736,15 +1506,11 @@ Extract the job description:
             
             if not job_description:
                 print("❌ Could not extract job description")
-                return {'action': 'stop', 'page_type': 'job_detail_page', 'reason': 'no_job_description'}
+                return False
             
             print(f"✅ Extracted job description ({len(job_description)} characters)")
             
-            # Get current job info from page
-            current_url = self.page.url
-            
             print(f"📋 Job: {job_title}")
-            print(f"🔗 URL: {current_url}")
             
             # Evaluate job fit
             print("🤖 Evaluating job fit...")
@@ -1761,69 +1527,30 @@ Extract the job description:
                 print("🎯 Good match! Looking for apply button...")
                 
                 # Find apply button
-                apply_button = self.find_apply_button()
-                if apply_button:
-                    print("✅ Found apply button, opening in new tab...")
-                    
-                    # Get the apply URL
-                    apply_url = apply_button.get('href', '')
-                    if not apply_url:
-                        # Try to get href from the element
-                        try:
-                            apply_url = apply_button['element'].get_attribute('href')
-                        except:
-                            pass
-                    
-                    if apply_url:
-                        # Open apply URL in new tab
-                        print(f"🔗 Opening application in new tab: {apply_url}")
-                        new_page = self.page.context.new_page()
-                        new_page.goto(apply_url, wait_until='networkidle')
-                        
-                        # Take screenshot of application form
-                        screenshot_path = new_page.screenshot(path=f"application_{job_title.replace(' ', '_')[:30]}.png")
-                        print(f"📸 Screenshot saved: {screenshot_path}")
-                        print("✅ Application opened in new tab - continuing to next job")
-                        
-                        # Check if we're in a panel view (job listings still visible)
-                        job_listings = self.page.query_selector_all('[class*="job"], [class*="position"], [class*="listing"]')
-                        if len(job_listings) > 0:
-                            print("🔄 Job listings still visible - continuing to next job")
-                            return {'action': None, 'page_type': 'job_detail_page', 'reason': 'good_match_continue'}
-                        else:
-                            print("🔄 Full job detail page - going back to results")
-                            self.page.go_back()
-                            time.sleep(2)
-                            return {'action': None, 'page_type': 'results_page', 'reason': 'good_match_back'}
-                    else:
-                        # No URL available, click the button instead
-                        print("🔗 No direct URL, clicking apply button...")
-                        if self.click_apply_button(apply_button):
-                            print("✅ Successfully clicked apply button!")
-                            
-                            # Wait for application form to load
-                            time.sleep(3)
-                            
-                            # Take screenshot of application form
-                            screenshot_path = self.take_screenshot(f"application_{job_title.replace(' ', '_')[:30]}.png")
-                            print(f"📸 Screenshot saved: {screenshot_path}")
-                            
-                            print("✅ Application form opened - continuing to next job")
-                        else:
-                            print("❌ Failed to click apply button")
-                else:
-                    print("⚠️ No apply button found")
+                job_listing_url = self.find_job_listing_url()
+                self.accepted_job_listings.append(JobListingDetails(
+                    job_listing=job_listing,
+                    job_description=job_description,
+                    job_fit=evaluation,
+                    job_url=job_listing_url
+                ))
+                return True
             else:
                 print("❌ Job doesn't match preferences well enough")
-                
+                job_listing_url = self.find_job_listing_url()
+                self.rejected_job_listings.append(JobListingDetails(
+                    job_listing=job_listing,
+                    job_description=job_description,
+                    job_fit=evaluation,
+                    job_url=job_listing_url
+                ))
+                return False
         except Exception as e:
             print(f"❌ Error handling job detail page: {e}")
-            return {'action': 'stop', 'page_type': 'job_detail_page', 'reason': str(e)}
+            return False
         
-        # Default return for job detail page - continue to next job
-        return {'action': None, 'page_type': 'job_detail_page', 'reason': 'job_evaluated'}
     
-    def _handle_application_page(self) -> Dict[str, Any]:
+    def _handle_application_page(self) -> bool:
         """Handle job application form page"""
         print("📝 Handling application page...")
         
@@ -1836,7 +1563,7 @@ Extract the job description:
         # After filling form, we expect navigation to next step
         return {'action': None, 'page_type': 'application_page', 'reason': 'application_filled'}
     
-    def _handle_login_page(self) -> Dict[str, Any]:
+    def _handle_login_page(self) -> bool:
         """Handle login/authentication page"""
         print("🔒 Handling login page...")
         print("⏸️ Pausing for user login. Please log in manually and resume.")
@@ -1845,14 +1572,14 @@ Extract the job description:
         # After resume, check if login was successful
         time.sleep(2)
         new_detection = self.page_detector.detect_page_type()
-        if new_detection['page_type'] == PageType.LOGIN_PAGE:
+        if new_detection == PageType.LOGIN_PAGE:
             print("❌ Still on login page. Please complete login and resume again.")
             self.page.pause()
         
         print("✅ Login appears complete. Continuing...")
         return {'action': None, 'page_type': 'login_page', 'reason': 'login_completed'}
     
-    def _handle_captcha_page(self) -> Dict[str, Any]:
+    def _handle_captcha_page(self) -> bool:
         """Handle CAPTCHA verification page"""
         print("🤖 Handling CAPTCHA page...")
         print("⏸️ CAPTCHA detected. Please solve the CAPTCHA manually and resume.")
@@ -1861,45 +1588,31 @@ Extract the job description:
         # After resume, check if CAPTCHA was solved
         time.sleep(2)
         new_detection = self.page_detector.detect_page_type()
-        if new_detection['page_type'] == PageType.CAPTCHA_PAGE:
+        if new_detection == PageType.CAPTCHA_PAGE:
             print("❌ Still on CAPTCHA page. Please solve the CAPTCHA and resume again.")
             self.page.pause()
         
         print("✅ CAPTCHA appears solved. Continuing...")
         return {'action': None, 'page_type': 'captcha_page', 'reason': 'captcha_solved'}
     
-    def _handle_error_page(self) -> Dict[str, Any]:
+    def _handle_error_page(self) -> bool:
         """Handle error pages"""
         print("❌ Handling error page...")
         return {'action': 'stop', 'page_type': 'error_page', 'reason': 'error_page_detected'}
     
-    def _handle_unknown_page(self) -> Dict[str, Any]:
+    def _handle_unknown_page(self) -> bool:
         """Handle unknown page types"""
         print("❓ Handling unknown page...")
-        
-        # Check if we've been on unknown pages too long
-        if self.page_detector.should_restart():
-            print("🔄 Too many unknown pages - considering restart")
-            if self.restart_count < self.max_restarts:
-                self.restart_count += 1
-                # For now, just wait for user intervention instead of trying to restart
-                print("⏸️ Too many unknown pages - waiting for user intervention...")
-                self.page.pause()
-                return {'action': None, 'page_type': 'unknown_page', 'reason': 'user_intervention_after_restart'}
-            else:
-                print("❌ Max restarts reached, stopping")
-                return {'action': 'stop', 'page_type': 'restart', 'reason': 'max_restarts_reached'}
         
         # Wait for user intervention
         print("⏸️ Waiting for user intervention...")
         self.page.pause()
-        return {'action': None, 'page_type': 'unknown_page', 'reason': 'user_intervention_completed'}
-
+        return False
 
     def vet_job_listing_with_gpt(self, job_title: str, company_name: str = "", href: str = "") -> bool:
-        """Use GPT-4.1 to determine if this is actually a job listing"""
+        """Use Gemini 2.5 Pro to determine if this is actually a job listing"""
         try:
-            import openai
+            from google import genai
             
             # Quick pre-filter to avoid unnecessary API calls
             if self.vet_job_listing_simple(job_title, company_name, href) == False:
@@ -1924,28 +1637,25 @@ Extract the job description:
             """
             
             try:
-                client = openai.OpenAI()
+                client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
                 
-                response = client.chat.completions.create(
-                    model="gpt-4.1",
-                    messages=[
-                        {"role": "system", "content": "You are a job listing classifier. Determine if text represents an actual job posting or just navigation/UI elements."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.1,
-                    max_tokens=10,
-                    timeout=10  # 10 second timeout
+                response = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction="You are a job listing classifier. Determine if text represents an actual job posting or just navigation/UI elements. Return only YES or NO."
+                    )
                 )
                 
-                result = response.choices[0].message.content.strip().upper()
+                result = response.text.strip().upper()
                 
                 is_job = result == "YES"
-                print(f"🤖 GPT-4.1 vetting: '{job_title}' -> {result} ({'Job' if is_job else 'Not a job'})")
+                print(f"🤖 Gemini 2.5 Pro vetting: '{job_title}' -> {result} ({'Job' if is_job else 'Not a job'})")
                 
                 return is_job
                 
             except Exception as gpt_error:
-                print(f"❌ GPT-4.1 vetting failed: {gpt_error}")
+                print(f"❌ Gemini 2.5 Pro vetting failed: {gpt_error}")
                 # Fallback to simple keyword-based vetting
                 return self.vet_job_listing_simple(job_title, company_name, href)
                 
@@ -2004,7 +1714,51 @@ Extract the job description:
         except Exception as e:
             print(f"❌ Error in simple job vetting: {e}")
             return False
-
+     
+    def click_accept_cookies_button(self) -> bool:
+        """
+        Click the accept cookies button
+        
+        Returns:
+            bool: True if button was found and clicked successfully
+        """
+        try:
+            print("🔍 Looking for accept cookies button...")
+            
+            # Common accept cookies button selectors
+            accept_cookies_selectors = [
+                'button:has-text("Accept all")',
+                'button:has-text("Accept cookies")',
+                'button:has-text("Accept")',
+                'button:has-text("Allow all")',
+                'button:has-text("Allow")',
+                'button:has-text("Allow cookies")',
+            ]
+            
+            accept_cookies_button = None
+            for selector in accept_cookies_selectors:
+                try:
+                    accept_cookies_button = self.page.locator(selector)
+                    if accept_cookies_button and accept_cookies_button.is_visible():
+                        print(f"✅ Found accept cookies button with selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not accept_cookies_button:
+                print("ℹ️ No accept cookies button found")
+                return False
+            
+            # Click the accept cookies button
+            print("🎯 Clicking accept cookies button...")
+            accept_cookies_button.click()
+            
+            return True
+        
+        except Exception as e:
+            print(f"❌ Error clicking accept cookies button: {e}")
+            return False
+   
 # Example usage
 if __name__ == "__main__":
     # Ensure we're not in an asyncio context
@@ -2039,7 +1793,7 @@ if __name__ == "__main__":
     print("🧪 Testing Hybrid Browser Bot")
     print("=" * 50)
     
-    success = bot.run_job_application("https://www.monster.co.uk")
+    success = bot.run_job_application("https://www.reed.co.uk/")
     
     if success:
         print("✅ Job application test completed successfully!")
