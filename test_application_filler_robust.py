@@ -6,8 +6,8 @@ A more robust test script that handles network issues and provides better debugg
 """
 
 import time
-from hybrid_browser_bot import HybridBrowserBot
-from application_filler import ApplicationFiller
+from find_jobs import FindJobsBot
+from fill_and_submit_job_form import ApplicationFiller
 
     
 # Test preferences for iOS Engineer position
@@ -76,7 +76,7 @@ def test_application_filler_robust():
     print("=" * 60)
     
     # Initialize browser bot
-    bot = HybridBrowserBot(headless=False, preferences=preferences)
+    bot = FindJobsBot(headless=False, preferences=preferences)
     
     try:
         # Start browser and navigate to job page with retries
@@ -161,20 +161,10 @@ def test_application_filler_robust():
         print("=" * 50)
         
         try:
-            success = app_filler.fill_application()
-            
-            if success:
-                print("\n🎉 Application filling completed successfully!")
-                try:
-                    bot.take_screenshot("sumup_application_completed.png")
-                except:
-                    pass
-            else:
-                print("\n⚠️ Application filling encountered issues")
-                try:
-                    bot.take_screenshot("sumup_application_issues.png")
-                except:
-                    pass
+            app_filler.fill_application(
+                on_success_callback=lambda: print("Application filling completed successfully!"),
+                on_failure_callback=lambda: print("Application filling encountered issues")
+            )
         except Exception as e:
             print(f"\n❌ Application filling error: {e}")
             try:
@@ -214,7 +204,7 @@ def test_simple_application_form():
     print("This test will open a browser and allow you to navigate")
     print("to any job application form to test the ApplicationFiller.")
     
-    bot = HybridBrowserBot(headless=False, preferences=preferences)
+    bot = FindJobsBot(headless=False, preferences=preferences)
     
     try:
         if not bot.start_browser():

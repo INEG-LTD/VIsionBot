@@ -9,7 +9,7 @@ and automatically fill them based on user preferences using gemini-2.5-pro analy
 # Removed incorrect import
 import time
 import json
-from typing import List, Dict, Optional, Any, Tuple, Union
+from typing import Callable, List, Dict, Optional, Any, Tuple, Union
 from playwright.sync_api import Page
 from pydantic import BaseModel
 from enum import Enum
@@ -113,7 +113,7 @@ class ApplicationFiller:
         self.max_form_iterations = 10  # Prevent infinite loops
         self.current_iteration = 0
         
-    def fill_application(self) -> bool:
+    def fill_application(self, on_success_callback: Callable[[], None] = None, on_failure_callback: Callable[[], None] = None) -> bool:
         """
         Main entry point for application filling process
         
@@ -130,7 +130,13 @@ class ApplicationFiller:
             #     print("✅ Apply button handled - continuing to main algorithm")
             
             # Step 2: Run main form filling algorithm
-            return self.run_main_algorithm()
+            success = self.run_main_algorithm()
+            if success:
+                if on_success_callback:
+                    on_success_callback()
+            else:
+                if on_failure_callback:
+                    on_failure_callback()
             
         except Exception as e:
             print(f"❌ Error in application filling: {e}")
@@ -1245,36 +1251,6 @@ class ApplicationFiller:
             print(f"❌ Error clicking checkbox in {context_str}: {e}")
             return False
 
-    def click_upload_button(self, upload_button: UploadApplicationField, frame=None) -> bool:
-        """Click on an upload button in page or iframe context"""
-        try:
-            # Use id= selector engine for IDs with special characters like []
-            if upload_button.field_selector.startswith('#'):
-                if frame:
-                    element = frame.locator(f'id={upload_button.field_selector[1:]}').first
-                else:
-                    element = self.page.locator(f'id={upload_button.field_selector[1:]}').first
-            else:
-                if frame:
-                    element = frame.locator(upload_button.field_selector)
-                else:
-                    element = self.page.locator(upload_button.field_selector)
-            
-            if not element:
-                print(f"⚠️ Upload button not found with selector: {upload_button.field_selector}")
-                return False
-                
-            upload_value: bool = upload_button.field_value
-            if upload_value:
-                element.click()
-                context_str = "iframe" if frame else "page"
-                print(f"✅ Clicked upload button in {context_str}")
-            return True
-        except Exception as e:
-            context_str = "iframe" if frame else "page"
-            print(f"❌ Error clicking upload button in {context_str}: {e}")
-            return False
-
     def handle_file_upload(self, upload_button: UploadApplicationField, frame=None, times_tried=0) -> bool:
         """Handle file upload in page or iframe context"""
         try:
@@ -1324,53 +1300,6 @@ class ApplicationFiller:
         except Exception as e:
             context_str = "iframe" if frame else "page"
             print(f"❌ Error handling file upload in {context_str}: {e}")
-            return False
-
-    def _trigger_file_dialog(self, file_input, frame=None) -> bool:
-        """Trigger file dialog in page or iframe context"""
-        try:
-            # Try clicking the file input
-            time.sleep(0.5)
-            time.sleep(0.5)
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Error triggering file dialog: {e}")
-            return False
-
-    def _set_file_path_directly(self, file_input, file_path: str, frame=None) -> bool:
-        """Set file path directly in page or iframe context"""
-        try:
-            # Try to set file path using JavaScript
-            js_code = f"""
-                (element) => {{
-                    element.style.display = 'block';
-                    element.style.visibility = 'visible';
-                    element.style.opacity = '1';
-                    element.style.position = 'static';
-                    
-                    // Create a new FileList-like object
-                    const file = new File([''], '{os.path.basename(file_path)}', {{ type: 'application/octet-stream' }});
-                    const dataTransfer = new DataTransfer();
-                    dataTransfer.items.add(file);
-                    element.files = dataTransfer.files;
-                    
-                    // Trigger change event
-                    element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                }}
-            """
-            
-            if frame:
-                frame.evaluate(js_code, file_input)
-            else:
-                self.page.evaluate(js_code, file_input)
-            
-            time.sleep(0.5)
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Error setting file path directly: {e}")
             return False
 
     def find_submit_button_with_gpt(self, frame: Dict[str, Any] = None) -> SubmitButtonApplicationField:

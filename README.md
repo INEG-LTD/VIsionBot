@@ -67,7 +67,7 @@ The application filler now uses Gemini 2.5 Pro for intelligent dropdown field ha
 ### Example Usage
 
 ```python
-from application_filler import ApplicationFiller
+from fill_and_submit_job_form import ApplicationFiller
 
 # Initialize with preferences
 preferences = {

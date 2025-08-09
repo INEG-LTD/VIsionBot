@@ -8,6 +8,7 @@ and AppleScript for system-level tasks. This combines the best of both worlds:
 - AppleScript for system-level automation when needed
 """
 
+from enum import Enum
 import time
 import subprocess
 import os
@@ -21,8 +22,8 @@ from pydantic import BaseModel
 from page_detector import PageDetector, PageType
 from typing import Any, Dict, List, TypedDict
 import json as json_module
-from application_filler import ApplicationFiller, FieldType, TextApplicationField, SubmitButtonApplicationField, TextApplicationFieldResponse
-
+from fill_and_submit_job_form import ApplicationFiller, FieldType, TextApplicationField, SubmitButtonApplicationField, TextApplicationFieldResponse
+from job_detail_to_form_transition_handler import JobDetailToFormTransitionHandler
 
 class JobListing(BaseModel):
     title: str
@@ -39,7 +40,12 @@ class JobListingDetails(BaseModel):
 class JobListingPayload(BaseModel):
     job_listings: List[JobListing]
     
-class HybridBrowserBot:
+class PageTypeResult(Enum):
+    SUCCESS = "success"
+    CONTINUE = "continue"
+    ERROR = "error"
+    
+class FindJobsBot:
     def __init__(self, headless: bool = False, preferences: Dict[str, Any] = None):
         self.headless = headless
         self.playwright = None
@@ -53,6 +59,8 @@ class HybridBrowserBot:
         self.preferences = preferences
         self.accepted_job_listings: List[JobListingDetails] = []
         self.rejected_job_listings: List[JobListingDetails] = []
+        
+        self.max_jobs_to_find = 5
         
     def start_browser(self):
         """Start the Playwright browser using your default Chrome profile"""
@@ -339,14 +347,6 @@ class HybridBrowserBot:
         try:
             print("🔍 Finding job listings...")
             
-            # Wait for job listings to load
-            try:
-                self.page.wait_for_load_state('networkidle', timeout=10000)  # 10 second timeout
-                time.sleep(2)  # Extra wait for dynamic content
-            except Exception as e:
-                print(f"⚠️ Page load timeout, continuing anyway: {e}")
-                time.sleep(2)
-            
             print("🤖 Using Gemini 2.5 Pro to find job listings...")
             gpt_job_listings = self.find_job_listings_with_gpt()
             
@@ -355,10 +355,10 @@ class HybridBrowserBot:
                 
                 # Show found listings
                 print("🏆 Job listings found:")
-                for i, listing in enumerate(gpt_job_listings[:5]):
+                for i, listing in enumerate(gpt_job_listings[:self.max_jobs_to_find]):
                     print(f"  {i+1}. '{listing.title}' at {listing.company}")
                 
-                return gpt_job_listings
+                return gpt_job_listings[:self.max_jobs_to_find]
             else:
                 print("❌ No job listings found with Gemini 2.5 Procx")
                 return []
@@ -1206,7 +1206,7 @@ class HybridBrowserBot:
             print(f"❌ Error taking screenshot: {e}")
             return ""
              
-    def run_job_application(self, job_site_url: str) -> bool:
+    def run_bot(self, job_site_url: str, transition_handler: JobDetailToFormTransitionHandler = None) -> bool:
         """
         Main automation function that orchestrates the entire job application process.
         
@@ -1231,24 +1231,26 @@ class HybridBrowserBot:
             if not self.open_url(job_site_url):
                 return False
             
-            # State tracking variables for the automation loop
-            current_url = self.page.url                    # Track URL changes to detect page navigation
-            current_page_type = None                       # Current page type (search, results, etc.)
+            self.transition_handler = transition_handler
             
             # Main automation loop - runs until completion or error
             max_iterations = 50  # Safety limit to prevent infinite loops
             iteration = 0
             
             while iteration < max_iterations:
+                self.click_accept_cookies_button()
+                
                 iteration += 1
                 print(f"\n🔄 Iteration {iteration}/{max_iterations}")
-                
-                self.click_accept_cookies_button()
-                    
+                                    
                 # Detect the page type and handle it directly
                 # This uses the page detector to analyze the current page
-                if not self.handle_page_type():
-                    print("❌ Error detecting page type")
+                page_type_result = self.handle_page_type()
+                if page_type_result == PageTypeResult.SUCCESS:
+                    print("✅ Done with Finding Jobs -> Navigating to Form -> Filling Form")
+                    
+                    return True
+                elif page_type_result == PageTypeResult.ERROR:
                     return False
             
             print("⚠️ Max iterations reached")
@@ -1258,7 +1260,7 @@ class HybridBrowserBot:
             print(f"❌ Error in job application: {e}")
             return False
         finally:
-            if hasattr(self, 'page') and self.page:
+            if self.page:
                 self.page.pause()
             else:
                 print("⚠️ Browser not started, skipping pause")
@@ -1334,79 +1336,195 @@ class HybridBrowserBot:
             print(f"❌ Error processing job listings: {e}")
             return False
     
-    def clear_modal_if_present(self, modal_title: str = None):
-        """Clear any modal if present"""
-        try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            prompt = f"""
-            Analyze the provided HTML of the current webpage and identify if there is a modal dialog currently present and visible to the user.  
-            A modal is a popup, dialog, overlay, or window that prevents interaction with the main page until it is dismissed (e.g., login dialogs, cookie consent popups, alert overlays).
+    def clear_modal_if_present(self, modal_title: str = None, max_retries: int = 3):
+        """Clear any modal if present with retry logic for API errors"""
+        import time
+        
+        print("🔍 Checking for modal")
+        
+        for attempt in range(max_retries):
+            try:
+                
+                client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+                prompt = f"""
+                Analyze the provided HTML of the current webpage and identify if there is a modal dialog currently present and visible to the user.  
+                A modal is a popup, dialog, overlay, or window that prevents interaction with the main page until it is dismissed (e.g., login dialogs, cookie consent popups, alert overlays).
 
-            Your objectives:
-            1. Determine if a modal dialog is currently visible.
-            2. If so, identify the single button, link, or element that closes the modal when clicked (e.g., "Close", "X", "Dismiss", "Cancel", etc).
-            3. Return ONLY the most specific, stable, and reliable CSS selector for the close button.
+                Your objectives:
+                1. Determine if a modal dialog is currently visible.
+                2. If so, identify the single button, link, or element that closes the modal when clicked (e.g., "Close", "X", "Dismiss", "Cancel", etc).
+                3. Return ONLY the most specific, stable, and reliable CSS selector for the close button.
 
-            Guidelines for selector:
-            - The close button will be in a modal with title {modal_title}. Ensure that the selector is with the modal title.
-            - Selector must be valid, stable, and as specific as possible (use data-* attributes, IDs, unique classes, nth-of-type, etc).
-            - Selector must directly target the clickable close element (never a parent container, never a generic button).
-            - Do NOT use extremely generic selectors (like "button" or ".btn").
-            - Do NOT return XPath or non-CSS selectors.
-            - Do NOT include anything except the selector string in the response.
-            - If no modal is present, return an empty string ("").
-            - The close button is often an X icon or a close button in the modal
+                Guidelines for selector:
+                - The close button will be in a modal with title {modal_title}. Ensure that the selector is with the modal title.
+                - Selector must be valid, stable, and as specific as possible (use data-* attributes, IDs, unique classes, nth-of-type, etc).
+                - Selector must directly target the clickable close element (never a parent container, never a generic button).
+                - Do NOT use extremely generic selectors (like "button" or ".btn").
+                - Do NOT return XPath or non-CSS selectors.
+                - Do NOT include anything except the selector string in the response.
+                - If no modal is present, return an empty string ("").
+                - The close button is often an X icon or a close button in the modal
 
-            Good selector examples:
-            "button[data-testid='modal-close']"
-            "button.close-modal"
-            "div[role='dialog'] button[aria-label='Close']"
-            "button#closeDialogButton"
-            "a.modal__close"
-            "span.icon-close"
-            "button[class*='close']"
-            "button[aria-label='Dismiss']"
-            "div.cookie-modal button:nth-of-type(2)"
+                Good selector examples:
+                "button[data-testid='modal-close']"
+                "button.close-modal"
+                "div[role='dialog'] button[aria-label='Close']"
+                "button#closeDialogButton"
+                "a.modal__close"
+                "span.icon-close"
+                "button[class*='close']"
+                "button[aria-label='Dismiss']"
+                "div.cookie-modal button:nth-of-type(2)"
 
-            Bad selector examples (do NOT return):
-            "button"
-            ".btn"
-            ".close"      (if not unique on the page)
-            "div"         (never target a non-clickable container)
-            ".modal"      (the modal, not the button)
-            "input"       (unless it's actually the close control)
-            Any XPath selector
-            Anything that matches multiple, unrelated elements
+                Bad selector examples (do NOT return):
+                "button"
+                ".btn"
+                ".close"      (if not unique on the page)
+                "div"         (never target a non-clickable container)
+                ".modal"      (the modal, not the button)
+                "input"       (unless it's actually the close control)
+                Any XPath selector
+                Anything that matches multiple, unrelated elements
 
-            Your output should be:
-            - If a modal is present: the CSS selector for the close button, nothing else.
-            - If no modal is present: return "" (an empty string).
+                Your output should be:
+                - If a modal is present: the CSS selector for the close button, nothing else.
+                - If no modal is present: return "" (an empty string).
 
-            HTML of the page:
-            {self.page.content()}
-            """
+                HTML of the page:
+                {self.page.content()}
+                """
 
-            response = client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing web pages and identifying modal elements.",
+                response = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction="You are an expert at analyzing web pages and identifying modal elements.",
+                    )
                 )
-            )
-            
-            if response.text:
-                close_button_selector = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
-                close_button = self.page.query_selector(close_button_selector)
-                if close_button:
-                    print(f"✅ Found close button: {close_button_selector}")
-                    close_button.click()
+                
+                if response.text:
+                    print(f"🔍 Attempting to clear modal (attempt {attempt + 1}/{max_retries})...")
+                    
+                    close_button_selector = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
+                    close_button = self.page.query_selector(close_button_selector)
+                    if close_button:
+                        print(f"✅ Found close button: {close_button_selector}")
+                        close_button.click()
+                        return True
+                    else:
+                        # Try and click outside the modal
+                        print("❌ No close button found, clicking outside the modal")
+                        self.page.click("body")
+                        return True
                 else:
-                    # Try and click outside the modal
-                    print("❌ No close button found, clicking outside the modal")
-                    self.page.click("body")
+                    print("ℹ️ No modal detected")
+                    return True
 
+            except Exception as e:
+                error_message = str(e)
+                print(f"❌ Error clearing modal (attempt {attempt + 1}/{max_retries}): {error_message}")
+                
+                # Check if it's a 500 internal error or other retryable error
+                if "500 INTERNAL" in error_message or "internal error" in error_message.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                        print(f"🔄 Retrying in {wait_time} seconds due to internal server error...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print("❌ Max retries reached for internal server error")
+                        return self._fallback_modal_clear()
+                
+                # Check if it's an API quota or rate limit error
+                elif any(keyword in error_message.lower() for keyword in ["quota", "rate limit", "too many requests", "429"]):
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 5  # Longer wait for rate limits: 5s, 10s, 15s
+                        print(f"🔄 Retrying in {wait_time} seconds due to rate limit...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print("❌ Max retries reached for rate limit")
+                        return self._fallback_modal_clear()
+                
+                # For other errors, don't retry
+                else:
+                    print("❌ Non-retryable error encountered")
+                    return self._fallback_modal_clear()
+        
+        # If we get here, all retries failed
+        print("❌ All retry attempts failed")
+        return self._fallback_modal_clear()
+    
+    def _fallback_modal_clear(self) -> bool:
+        """Fallback method to clear modals when API fails"""
+        try:
+            print("🔄 Using fallback modal clearing method...")
+            
+            # Common modal close selectors to try
+            common_close_selectors = [
+                'button[aria-label*="Close"]',
+                'button[aria-label*="Dismiss"]',
+                'button[title*="Close"]',
+                'button[title*="Dismiss"]',
+                '.modal-close',
+                '.modal__close',
+                '.close-modal',
+                '.dialog-close',
+                '.popup-close',
+                'button.close',
+                'a.close',
+                'span.close',
+                'button[class*="close"]',
+                'button[class*="dismiss"]',
+                'button[class*="cancel"]',
+                '.btn-close',
+                '.btn-dismiss',
+                '.btn-cancel',
+                '[data-testid*="close"]',
+                '[data-testid*="dismiss"]',
+                'button:has-text("Close")',
+                'button:has-text("Dismiss")',
+                'button:has-text("Cancel")',
+                'button:has-text("×")',
+                'button:has-text("X")',
+                'span:has-text("×")',
+                'span:has-text("X")',
+                'a:has-text("Close")',
+                'a:has-text("Dismiss")'
+            ]
+            
+            # Try each selector
+            for selector in common_close_selectors:
+                try:
+                    element = self.page.query_selector(selector)
+                    if element and element.is_visible():
+                        print(f"✅ Found fallback close button: {selector}")
+                        element.click()
+                        time.sleep(1)  # Wait for modal to close
+                        return True
+                except Exception as e:
+                    continue
+            
+            # If no close button found, try clicking outside the modal
+            print("🔄 No close button found, trying to click outside modal...")
+            try:
+                # Click in the top-left corner of the page (usually outside modals)
+                self.page.click("body", position={"x": 10, "y": 10})
+                time.sleep(1)
+                
+                # Also try pressing Escape key
+                self.page.keyboard.press("Escape")
+                time.sleep(1)
+                
+                print("✅ Fallback modal clearing completed")
+                return True
+                
+            except Exception as e:
+                print(f"❌ Fallback modal clearing failed: {e}")
+                return False
+                
         except Exception as e:
-            print(f"❌ Error clearing modal: {e}")
+            print(f"❌ Error in fallback modal clearing: {e}")
             return False
     
     def _fill_application_form(self) -> bool:
@@ -1424,11 +1542,11 @@ class HybridBrowserBot:
             print(f"❌ Error filling application form: {e}")
             return False
 
-    def handle_page_type(self) -> bool:
+    def handle_page_type(self) -> PageTypeResult:
         """Detect current page type and handle it appropriately"""
         if not self.page_detector:
             print("❌ Page detector not initialized")
-            return False
+            return PageTypeResult.ERROR
         
         # Detect page type
         page_type = self.page_detector.detect_page_type()
@@ -1436,8 +1554,6 @@ class HybridBrowserBot:
         # Handle different page types
         if page_type == PageType.SEARCH_PAGE:
             return self._handle_search_page()
-        elif page_type == PageType.RESULTS_PAGE:
-            return self._handle_search_results_page()
         elif page_type == PageType.JOB_DETAIL_PAGE:
             return self._handle_job_detail_page()
         elif page_type == PageType.APPLICATION_PAGE:
@@ -1448,27 +1564,102 @@ class HybridBrowserBot:
             return self._handle_captcha_page()
         elif page_type == PageType.ERROR_PAGE:
             return self._handle_error_page()
+        elif page_type == PageType.RESULTS_PAGE:
+            self._handle_search_results_page()
+            
+            if len(self.rejected_job_listings) > 0:
+                original_page = self.page
+                context = self.page.context
+                
+                for job_listing in self.rejected_job_listings:
+                    # Duplocate the tab
+                    print(f"Duplicating tab for {job_listing.job_listing.title}")
+                    with context.expect_page() as new_page_info:
+                        original_page.evaluate("window.open()")
+                    new_page = new_page_info.value
+                    
+                    try:
+                        new_page.goto(original_page.url, wait_until="domcontentloaded")
+                    except Exception as e:
+                        print(f"⚠️ Could not duplicate URL into new tab: {e}")
+
+                    self.page = new_page
+                    print(f"Navigating to the job form for {job_listing.job_listing.title}")
+                    
+                    try:
+                        if not self._click_job_listing(job_listing.job_listing):
+                            print(f"❌ Failed to click job listing: {job_listing.job_listing.title}")
+                            continue
+                        
+                        handler = self.transition_handler or JobDetailToFormTransitionHandler(new_page)
+                        navigation_result = handler.navigate_to_form()
+                        
+                        if navigation_result.success:
+                            if navigation_result.requires_user_intervention:
+                                print(f"⏸️ User intervention required for {job_listing.job_listing.title}")
+                                new_page.pause()
+                                continue
+                            elif navigation_result.form_ready:
+                                print(f"✅ Successfully navigated to job form for {job_listing.job_listing.title}")
+                                
+                                # Fill the form
+                                app_filler = ApplicationFiller(self.page, self.preferences)
+                                app_filler.fill_application(
+                                    on_success_callback=lambda: print(f"✅ Application filling completed successfully for {job_listing.job_listing.title}"),
+                                    on_failure_callback=lambda: print(f"❌ Application filling failed for {job_listing.job_listing.title}")
+                                )
+                                
+                                # Go back to the original tab
+                        else:
+                            print(f"❌ Failed to navigate to job form: {job_listing.job_listing.title}")
+                            continue
+                        
+                    finally:
+                        # Close the new page
+                        new_page.close()
+                        
+                        self.page = original_page
+                
+                return PageTypeResult.SUCCESS
+            else:
+                print("❌ No accepted job listings found")
+                return PageTypeResult.SUCCESS
+                
+                
+                
         else:
             return self._handle_unknown_page()
     
-    def _handle_search_page(self) -> bool:
+    def _click_job_listing(self, job_listing: JobListing) -> bool:
+        """Click on a job listing"""
+        try:
+            # self.clear_modal_if_present(job_listing.title)
+            job_element = self.page.query_selector(job_listing.selector)
+            job_element.click()
+            time.sleep(3)
+            return True
+        except Exception as e:
+            print(f"❌ Error clicking job listing: {e}")
+            return False
+    
+    def _handle_search_page(self) -> PageTypeResult:
         """Handle job search form page"""
         print("🔍 Handling search page...")
         
         # Wait for the user to complete any login process needed
-        print("⏸️ Waiting for user to complete login process if needed...")
-        self.page.pause()
+        # print("⏸️ Waiting for user to complete login process if needed...")
+        # self.page.pause()
         
         # Resume when user is ready
         print("📝 Filling search form...")
         success = self._fill_search_form()
         if not success:
             print("❌ Failed to fill search form")
-            return False
+            return PageTypeResult.ERROR
         
-        return True
+        return PageTypeResult.CONTINUE
     
-    def _handle_search_results_page(self) -> bool:
+    def _handle_search_results_page(self) -> PageTypeResult:
         """Handle job search results page"""
         print("📋 Handling results page...")
         
@@ -1479,22 +1670,18 @@ class HybridBrowserBot:
             success = self._process_job_listings(job_listings)
             if not success:
                 print("❌ Failed to process job listings")
-                return False
+                return PageTypeResult.ERROR
             
             print(f"✅ Accepted {len(self.accepted_job_listings)} job listings")
             print(f"❌ Rejected {len(self.rejected_job_listings)} job listings")
             
-            print(f"✅ Job listings: {self.accepted_job_listings}")
-            print(f"❌ Job listings: {self.rejected_job_listings}")
         else:
             print("⚠️ No job listings found")
             return False
         
-        # After processing jobs, we expect navigation to job detail page
-        # The job processing should trigger navigation, so we return None to continue
-        return True
+        return PageTypeResult.SUCCESS
     
-    def _handle_job_detail_page(self, job_listing: JobListing) -> bool:
+    def _handle_job_detail_page(self, job_listing: JobListing) -> PageTypeResult:
         """Handle individual job posting page"""
         print("📄 Handling job detail page...")
         
@@ -1506,7 +1693,7 @@ class HybridBrowserBot:
             
             if not job_description:
                 print("❌ Could not extract job description")
-                return False
+                return PageTypeResult.ERROR
             
             print(f"✅ Extracted job description ({len(job_description)} characters)")
             
@@ -1527,30 +1714,27 @@ class HybridBrowserBot:
                 print("🎯 Good match! Looking for apply button...")
                 
                 # Find apply button
-                job_listing_url = self.find_job_listing_url()
                 self.accepted_job_listings.append(JobListingDetails(
                     job_listing=job_listing,
                     job_description=job_description,
                     job_fit=evaluation,
-                    job_url=job_listing_url
+                    job_url=""
                 ))
-                return True
+                return PageTypeResult.CONTINUE
             else:
                 print("❌ Job doesn't match preferences well enough")
-                job_listing_url = self.find_job_listing_url()
                 self.rejected_job_listings.append(JobListingDetails(
                     job_listing=job_listing,
                     job_description=job_description,
                     job_fit=evaluation,
-                    job_url=job_listing_url
+                    job_url=""
                 ))
-                return False
+                return PageTypeResult.ERROR
         except Exception as e:
             print(f"❌ Error handling job detail page: {e}")
-            return False
-        
-    
-    def _handle_application_page(self) -> bool:
+            return PageTypeResult.ERROR
+          
+    def _handle_application_page(self) -> PageTypeResult:
         """Handle job application form page"""
         print("📝 Handling application page...")
         
@@ -1558,12 +1742,12 @@ class HybridBrowserBot:
         success = self._fill_application_form()
         if not success:
             print("❌ Failed to fill application form")
-            return {'action': 'stop', 'page_type': 'application_page', 'reason': 'fill_application_failed'}
+            return PageTypeResult.ERROR
         
         # After filling form, we expect navigation to next step
-        return {'action': None, 'page_type': 'application_page', 'reason': 'application_filled'}
+        return PageTypeResult.CONTINUE
     
-    def _handle_login_page(self) -> bool:
+    def _handle_login_page(self) -> PageTypeResult:
         """Handle login/authentication page"""
         print("🔒 Handling login page...")
         print("⏸️ Pausing for user login. Please log in manually and resume.")
@@ -1577,9 +1761,9 @@ class HybridBrowserBot:
             self.page.pause()
         
         print("✅ Login appears complete. Continuing...")
-        return {'action': None, 'page_type': 'login_page', 'reason': 'login_completed'}
+        return PageTypeResult.CONTINUE
     
-    def _handle_captcha_page(self) -> bool:
+    def _handle_captcha_page(self) -> PageTypeResult:
         """Handle CAPTCHA verification page"""
         print("🤖 Handling CAPTCHA page...")
         print("⏸️ CAPTCHA detected. Please solve the CAPTCHA manually and resume.")
@@ -1595,19 +1779,19 @@ class HybridBrowserBot:
         print("✅ CAPTCHA appears solved. Continuing...")
         return {'action': None, 'page_type': 'captcha_page', 'reason': 'captcha_solved'}
     
-    def _handle_error_page(self) -> bool:
+    def _handle_error_page(self) -> PageTypeResult:
         """Handle error pages"""
         print("❌ Handling error page...")
-        return {'action': 'stop', 'page_type': 'error_page', 'reason': 'error_page_detected'}
+        return PageTypeResult.ERROR
     
-    def _handle_unknown_page(self) -> bool:
+    def _handle_unknown_page(self) -> PageTypeResult:
         """Handle unknown page types"""
         print("❓ Handling unknown page...")
         
         # Wait for user intervention
         print("⏸️ Waiting for user intervention...")
         self.page.pause()
-        return False
+        return PageTypeResult.ERROR
 
     def vet_job_listing_with_gpt(self, job_title: str, company_name: str = "", href: str = "") -> bool:
         """Use Gemini 2.5 Pro to determine if this is actually a job listing"""
@@ -1787,13 +1971,13 @@ if __name__ == "__main__":
         'exclude_keywords': ['unpaid', 'internship']
     }
     
-    bot = HybridBrowserBot(headless=False, preferences=preferences)
+    bot = FindJobsBot(headless=False, preferences=preferences)
     
     # Test the bot
     print("🧪 Testing Hybrid Browser Bot")
     print("=" * 50)
     
-    success = bot.run_job_application("https://www.reed.co.uk/")
+    success = bot.run_bot("https://www.reed.co.uk/")
     
     if success:
         print("✅ Job application test completed successfully!")

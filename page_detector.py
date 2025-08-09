@@ -5,9 +5,11 @@ Page Detector Module
 This module detects what type of page we're on and determines the best action to take.
 """
 
+import base64
 from typing import Dict, Any
 from enum import Enum
 from playwright.sync_api import Page
+from google.genai import types
 
 class PageType(Enum):
     """Enumeration of different page types"""
@@ -104,9 +106,18 @@ class PageDetector:
             # Get some page content for context
             page_content = self.page.content()
             
+            # Take a screenshot of the page
+            screenshot = self.page.screenshot()
+            # screenshot_base64 = base64.b64encode(screenshot).decode('utf-8')
+            screenshot_part = types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            )
+            
             prompt = f"""
                 You are an expert page-classifier. Read the supplied metadata, ignore all HTML markup, and return **one** label—exactly as written— matching the page.
-
+                You are also given a screenshot of the page. Use the screenshot to help you determine the page type.
+                
                 ### Input
                 • URL: {page_url}  
                 • Title: {title}  
@@ -144,7 +155,9 @@ class PageDetector:
             
             response = client.models.generate_content(
                 model="gemini-2.5-pro",
-                contents=prompt,
+                contents=[
+                    screenshot_part,
+                    prompt],
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are an expert at analyzing webpages and determining page types for job search automation. Return only valid JSON.",
                     response_mime_type="application/json",
