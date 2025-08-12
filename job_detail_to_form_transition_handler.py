@@ -16,6 +16,7 @@ from playwright.sync_api import Page
 from pydantic import BaseModel
 from enum import Enum
 import re
+from google import genai
 from page_detector import PageDetector, PageType
 from typing import Optional, Dict, Any
 import time
@@ -1171,12 +1172,584 @@ class JobDetailToFormTransitionHandler:
     def _detect_page_state_with_ai(self, frame=None, iframe_context=None) -> PageState:
         """Use AI to detect page state when page detector is uncertain"""
         try:
-            response = generate_content_with_gemini(
-                prompt=prompt,
-                screenshot=screenshot,
-                system_instruction="You are an action determiner",
-                response_mime_type="text/plain",
-            )actions_paragraph = response.text.strip()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            
+            page_content = self.page.content()
+            screenshot, context_str = self._take_smart_screenshot(full_page=False, frame=frame, iframe_context=iframe_context)
+            screenshot_part = types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            )
+            prompt = f"""
+            Analyze the page in the screenshot and classify it as exactly ONE of the following page types.
+            
+            Each type is **mutually exclusive**. 
+            Select the most specific, primary function the page serves, based ONLY on what the user is clearly meant to do NOW.
+
+            Possible page types and definitions (choose ONLY one, read each CAREFULLY):
+            "login_website"
+            "verification_website"
+            "input_needed"
+            "application_submitted"
+            "already_applied"
+
+            1. login_website
+            - The only main actionable area is a form to SIGN IN or authenticate.
+            - Features: username/email and password fields, “Sign In”/“Log in” buttons, SSO or OAuth (Google, LinkedIn) options.
+            - **User must provide credentials to proceed**.
+            - DO NOT select if the user can proceed without logging in, or if the page’s main action is verification or input of non-credential information.
+
+            2. verification_website
+            - The sole main action is to complete a security or identity check, NOT login.
+            - Features: CAPTCHA (“I am not a robot”), SMS/email 2FA code entry, authentication app prompt, email link confirmation.
+            - User cannot proceed without passing the verification.
+            - **DO NOT select if the main page function is logging in, browsing jobs, or filling any application details**.
+
+            3. input_needed
+            - The ONLY way to proceed is to provide a single, non-sensitive, non-login, non-application piece of info (NOT a full form or credential).
+            - Examples: “What is your location?”, “Are you eligible to work in the UK?”, “Please enter your date of birth”, checkbox consent.
+            - The mini form could be in a modal or popup and will contain only a few fields.
+            - DO NOT select if the page contains or leads to an application form, login, or verification.
+
+            4. application_submitted
+            - The MAIN page content (not just a modal) confirms a job application was successfully submitted.
+            - Features: prominent message such as “Thank you for your application”, “Application received”, “We’ll be in touch”, or clear submission confirmation.
+            - **The user is NOT asked for any more information**—this is a final, stand-alone confirmation screen.
+            - This could be a modal or popup with an "Applied", "Submitted", "Received", "Thank you" message.
+            - DO NOT select if the confirmation is only in a modal overlay (use “application_modal_form”), or if the page indicates you have already applied (use “already_applied”).
+
+            5. already_applied
+            - The page confirms that the user has ALREADY applied for the job, and CANNOT reapply.
+            - Features: explicit message like “You have already applied for this job”, “Already applied”, “Application previously submitted”, or similar.
+            - The user is NOT asked for further action or information.
+            - DO NOT select if this is a generic confirmation (use “application_submitted”).
+
+            Instructions:
+            - Analyze ALL visible main content, forms, and user actions—IGNORE nav bars, ads, or unrelated widgets.
+            - If the page fits more than one category, **pick the most specific, immediate user task (not the broadest context)**.
+            - Return ONLY one of these strings, and NOTHING else:
+
+            Allowed page types:
+            "login_website"
+            "verification_website"
+            "input_needed"
+            "application_submitted"
+            "already_applied"
+            "application_submitted_modal"
+
+            HTML Content:
+            {page_content}
+            """
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=[
+                    screenshot_part,
+                    prompt],
+                config=genai.types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(thinking_budget=32768),
+                    system_instruction="You are a page type classifier. Return only the page type as a string."
+                )
+            )
+            
+            result = response.text.strip().lower()
+            print(f"🔍 AI detected page type: {result}")
+            
+            # Map AI result to PageState
+            state_mapping = {
+                'login_website': PageState.LOGIN_WEBSITE,
+                'verification_website': PageState.VERIFICATION_WEBSITE,
+                'input_needed': PageState.INPUT_NEEDED,
+                'job_application_form': PageState.JOB_APPLICATION_FORM,
+                'application_submitted': PageState.APPLICATION_SUBMITTED,
+                'already_applied': PageState.ALREADY_APPLIED,
+            }
+            
+            return state_mapping.get(result, PageState.UNKNOWN)
+            
+        except Exception as e:
+            print(f"⚠️ Error in AI page state detection: {e}")
+            return PageState.UNKNOWN
+    
+    def clear_modal_if_present(self, modal_title: str = None, max_retries: int = 3):
+        """Clear any modal if present with retry logic for API errors"""
+        import time
+        
+        print("🔍 Checking for modal")
+        
+        for attempt in range(max_retries):
+            try:
+                
+                client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+                prompt = f"""
+                Analyze the provided HTML of the current webpage and identify if there is a modal dialog currently present and visible to the user.  
+                A modal is a popup, dialog, overlay, or window that prevents interaction with the main page until it is dismissed (e.g., login dialogs, cookie consent popups, alert overlays).
+
+                Your objectives:
+                1. Determine if a modal dialog is currently visible.
+                2. If so, identify the single button, link, or element that closes the modal when clicked (e.g., "Close", "X", "Dismiss", "Cancel", etc).
+                3. Return ONLY the most specific, stable, and reliable CSS selector for the close button.
+
+                Guidelines for selector:
+                - The close button will be in a modal with title {modal_title}. Ensure that the selector is with the modal title.
+                - Selector must be valid, stable, and as specific as possible (use data-* attributes, IDs, unique classes, nth-of-type, etc).
+                - Selector must directly target the clickable close element (never a parent container, never a generic button).
+                - Do NOT use extremely generic selectors (like "button" or ".btn").
+                - Do NOT return XPath or non-CSS selectors.
+                - Do NOT include anything except the selector string in the response.
+                - If no modal is present, return an empty string ("").
+                - The close button is often an X icon or a close button in the modal
+
+                Good selector examples:
+                "button[data-testid='modal-close']"
+                "button.close-modal"
+                "div[role='dialog'] button[aria-label='Close']"
+                "button#closeDialogButton"
+                "a.modal__close"
+                "span.icon-close"
+                "button[class*='close']"
+                "button[aria-label='Dismiss']"
+                "div.cookie-modal button:nth-of-type(2)"
+
+                Bad selector examples (do NOT return):
+                "button"
+                ".btn"
+                ".close"      (if not unique on the page)
+                "div"         (never target a non-clickable container)
+                ".modal"      (the modal, not the button)
+                "input"       (unless it's actually the close control)
+                Any XPath selector
+                Anything that matches multiple, unrelated elements
+
+                Your output should be:
+                - If a modal is present: the CSS selector for the close button, nothing else.
+                - If no modal is present: return "" (an empty string).
+
+                HTML of the page:
+                {self.page.content()}
+                """
+
+                response = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction="You are an expert at analyzing web pages and identifying modal elements.",
+                    )
+                )
+                
+                if response.text:
+                    print(f"🔍 Attempting to clear modal (attempt {attempt + 1}/{max_retries})...")
+                    
+                    close_button_selector = response.text.replace("```json", "").replace("```", "").replace('"', "").strip()
+                    close_button = self.page.query_selector(close_button_selector)
+                    if close_button:
+                        print(f"✅ Found close button: {close_button_selector}")
+                        close_button.click()
+                        return True
+                    else:
+                        # Try and click outside the modal
+                        print("❌ No close button found, clicking outside the modal")
+                        self.page.click("body")
+                        return True
+                else:
+                    print("ℹ️ No modal detected")
+                    return True
+
+            except Exception as e:
+                error_message = str(e)
+                print(f"❌ Error clearing modal (attempt {attempt + 1}/{max_retries}): {error_message}")
+                
+                if attempt < max_retries - 1:
+                    print(f"Retrying modal clearing (attempt {attempt + 1}/{max_retries})...")
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print("❌ Max retries reached for internal server error")
+                    return self._fallback_modal_clear()
+    
+    def _fallback_modal_clear(self) -> bool:
+        """Fallback method to clear modals when API fails"""
+        try:
+            print("🔄 Using fallback modal clearing method...")
+            
+            # Common modal close selectors to try
+            common_close_selectors = [
+                'button[aria-label*="Close"]',
+                'button[aria-label*="Dismiss"]',
+                'button[title*="Close"]',
+                'button[title*="Dismiss"]',
+                '.modal-close',
+                '.modal__close',
+                '.close-modal',
+                '.dialog-close',
+                '.popup-close',
+                'button.close',
+                'a.close',
+                'span.close',
+                'button[class*="close"]',
+                'button[class*="dismiss"]',
+                'button[class*="cancel"]',
+                '.btn-close',
+                '.btn-dismiss',
+                '.btn-cancel',
+                '[data-testid*="close"]',
+                '[data-testid*="dismiss"]',
+                'button:has-text("Close")',
+                'button:has-text("Dismiss")',
+                'button:has-text("Cancel")',
+                'button:has-text("×")',
+                'button:has-text("X")',
+                'span:has-text("×")',
+                'span:has-text("X")',
+                'a:has-text("Close")',
+                'a:has-text("Dismiss")'
+            ]
+            
+            # Try each selector
+            for selector in common_close_selectors:
+                try:
+                    element = self.page.query_selector(selector)
+                    if element and element.is_visible():
+                        print(f"✅ Found fallback close button: {selector}")
+                        element.click()
+                        time.sleep(1)  # Wait for modal to close
+                        return True
+                except Exception as e:
+                    continue
+            
+            # If no close button found, try clicking outside the modal
+            print("🔄 No close button found, trying to click outside modal...")
+            try:
+                # Click in the top-left corner of the page (usually outside modals)
+                self.page.click("body", position={"x": 10, "y": 10})
+                time.sleep(1)
+                
+                # Also try pressing Escape key
+                self.page.keyboard.press("Escape")
+                time.sleep(1)
+                
+                print("✅ Fallback modal clearing completed")
+                return True
+                
+            except Exception as e:
+                print(f"❌ Fallback modal clearing failed: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error in fallback modal clearing: {e}")
+            return False
+    
+    def _handle_current_state(self, preferences) -> NavigationResult:
+        """Handle the current page state and determine next action"""
+        iframe_context = self.detect_and_handle_iframes()
+        if iframe_context['use_iframe_context']:
+            frame = iframe_context['iframe_context']['frame']
+        else:
+            frame = None
+        
+        try:
+            if self.current_state == PageState.LOGIN_WEBSITE:
+                return self._handle_login_website()
+            elif self.current_state == PageState.VERIFICATION_WEBSITE:
+                return self._handle_verification_website()
+            elif self.current_state == PageState.INPUT_NEEDED:
+                return self._handle_input_needed(preferences, frame, iframe_context)
+            elif self.current_state == PageState.JOB_APPLICATION_FORM:
+                return self._handle_job_application_form()
+            elif self.current_state == PageState.APPLICATION_SUBMITTED:
+                return NavigationResult(
+                    success=True,
+                    try_restart=False,
+                    form_ready=False,
+                    already_applied=True,
+                    current_state=self.current_state
+                )
+            elif self.current_state == PageState.ALREADY_APPLIED:
+                return NavigationResult(
+                    success=True,
+                    try_restart=False,
+                    form_ready=False,
+                    already_applied=True,
+                    current_state=self.current_state
+                )
+            elif self.current_state == PageState.APPLICATION_SUBMITTED:
+                return NavigationResult(
+                    success=True,
+                    try_restart=False,
+                    form_ready=False,
+                    current_state=self.current_state
+                )
+            else:
+                return self._handle_unknown_state()
+                
+        except Exception as e:
+            print(f"❌ Error handling current state: {e}")
+            return NavigationResult(
+                success=False,
+                current_state=self.current_state,
+                try_restart=True,
+                error_message=str(e)
+            )
+           
+    def _handle_job_board_website(self) -> NavigationResult:
+        """Handle job board website - look for apply button and click next"""
+        try:
+            print("🔍 Looking for apply button on job board website...")
+            
+            # Find advance button
+            advance_button = self._find_advance_button()
+            context = self.page.context
+            original_pages = set(context.pages) 
+            
+            if advance_button:
+                print(f"✅ Found advance button: {advance_button.button_text}")
+                
+                # Click the apply button
+                try:
+                    button_element = self.page.query_selector(advance_button.button_selector)
+                    button_element.click()
+                    
+                    # Check if navigated to new tab
+                    # Wait for potential new tab
+                    time.sleep(1)  # Replace with a smarter wait if possible
+
+                    current_pages = set(context.pages)
+                    new_pages = current_pages - original_pages
+
+                    if new_pages:
+                        # A new tab was opened
+                        new_page = new_pages.pop()
+                        self.page = new_page  # Switch to the new tab
+                        print("🆕 Switched to new tab.")
+
+                    # Check if we navigated to a new URL
+                    new_url = self.page.url
+                    if new_url not in self.visited_urls:
+                        self.visited_urls.add(new_url)
+                        print(f"📍 Navigated to: {new_url}")
+                        
+                    return NavigationResult(
+                        success=True,
+                        current_state=self.current_state,
+                        next_url=new_url
+                    )
+                        
+                except Exception as e:
+                    print(f"❌ Error clicking apply button: {e}")
+                    return NavigationResult(
+                        success=False,
+                        current_state=self.current_state,
+                        try_restart=True,
+                        error_message=f"Failed to click apply button: {e}"
+                    )
+            else:
+                print("❌ No apply button found")
+                return NavigationResult(
+                    success=False,
+                    current_state=self.current_state,
+                    try_restart=True,
+                    error_message="No apply button found on job board website"
+                )
+                
+        except Exception as e:
+            print(f"❌ Error handling job board website: {e}")
+            return NavigationResult(
+                success=False,
+                current_state=self.current_state,
+                try_restart=True,
+                error_message=str(e)
+            )
+    
+    def _handle_intermediary_website(self) -> NavigationResult:
+        """Handle intermediary website - click next to continue"""
+        try:
+            print("🔍 Handling intermediary website...")
+            
+            # Look for continue/next buttons on intermediary pages
+            advance_button = self._find_advance_button()
+            context = self.page.context
+            original_pages = set(context.pages) 
+            
+            if advance_button:
+                print(f"✅ Found advance button: {advance_button.button_text}")
+                
+                try:
+                    button_element = self.page.query_selector(advance_button.button_selector)
+                    button_element.click()
+                    
+                    # Check if navigated to new tab
+                    # Wait for potential new tab
+                    time.sleep(1)  # Replace with a smarter wait if possible
+
+                    current_pages = set(context.pages)
+                    new_pages = current_pages - original_pages
+
+                    if new_pages:
+                        # A new tab was opened
+                        new_page = new_pages.pop()
+                        self.page = new_page  # Switch to the new tab
+                        print("🆕 Switched to new tab.")
+
+                    new_url = self.page.url
+                    if new_url not in self.visited_urls:
+                        self.visited_urls.add(new_url)
+                        print(f"📍 Navigated to: {new_url}")
+                    
+                    return NavigationResult(
+                        success=True,
+                        current_state=self.current_state,
+                        next_url=new_url
+                    )
+                        
+                except Exception as e:
+                    print(f"❌ Error clicking continue button: {e}")
+                    return NavigationResult(
+                        success=False,
+                        current_state=self.current_state,
+                        try_restart=True,
+                        error_message=f"Failed to click continue button: {e}"
+                    )
+            else:
+                # If no continue button, wait a bit and check if page auto-navigates
+                print("⏳ No continue button found, waiting for auto-navigation...")
+                time.sleep(5)
+                
+                new_url = self.page.url
+                if new_url not in self.visited_urls:
+                    self.visited_urls.add(new_url)
+                    print(f"📍 Auto-navigated to: {new_url}")
+                    
+                    return NavigationResult(
+                        success=True,
+                        current_state=self.current_state,
+                        try_restart=True,
+                        next_url=new_url
+                    )
+                else:
+                    return NavigationResult(
+                        success=False,
+                        current_state=self.current_state,
+                        try_restart=True,
+                        error_message="No continue button and no auto-navigation"
+                    )
+                    
+        except Exception as e:
+            print(f"❌ Error handling intermediary website: {e}")
+            return NavigationResult(
+                success=False,
+                current_state=self.current_state,
+                try_restart=True,
+                error_message=str(e)
+            )
+    
+    def _handle_login_website(self) -> NavigationResult:
+        """Handle login website - defer to user"""
+        
+        print("🔒 Login website detected - deferring to user...")
+        
+        return NavigationResult(
+            success=True,
+            current_state=self.current_state,
+            requires_user_intervention=True
+        )
+    
+    def _handle_verification_website(self) -> NavigationResult:
+        """Handle verification website (CAPTCHA, etc.) - defer to user"""
+        
+        print("🤖 Verification website detected - deferring to user...")
+        
+        return NavigationResult(
+            success=True,
+            current_state=self.current_state,
+            requires_user_intervention=True
+        )
+    
+    def _convert_screenshot_to_actions(self, frame=None, iframe_context=None) -> str:
+        try:
+            # Wait for 5 seconds
+            time.sleep(5)
+            
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            
+            screenshot, context_info = self._take_smart_screenshot(full_page=True, frame=frame, iframe_context=iframe_context)
+            screenshot_part = types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            )
+            
+            prompt = f"""
+                You are given the screenshot of a webpage.
+                Your task is to **analyze the page and describe in a single, clear paragraph the specific user actions required to progress the application.**
+                Your instruction should be direct and not have alternatives. Just provide what
+                You must not return a short answer, you must return a long comprehensive, detailed answer.
+
+                Actions to describe (ONLY if they are clearly present and visible on the page):
+                1. **Click** - Any visible, interactive element that must be clicked to proceed (buttons, links, icons, clickable divs, elements with role="button", etc.).
+                2. **Fill input** - Any visible, enabled input field that must be filled, checked, or selected before proceeding. This includes:
+                - Text fields: Describe what value should be typed, using the input’s label, placeholder, or aria-label (e.g., "type your email address in the 'Email' field").
+                - Radio buttons and checkboxes: State which one to select or check, always using the visible label, group question, or their location for disambiguation.
+                - Dropdowns (native or custom): Instruct the user to "select the best option from the dropdown," always referencing it by its visible label, placeholder, or clear location (e.g., "select the best option from the 'Country' dropdown at the top of the form").
+                - File upload: If a visible upload button is present (not just an input), instruct the user to click the upload button (describe it by label, aria-label, or icon and location) and select their file.
+
+                ---
+
+                **Good Example 1:**  
+                "To continue, type your email address in the 'Email' input field at the top of the form, select the best option from the 'Country' dropdown just below the email field, check the box labeled 'Subscribe to newsletter' at the bottom left, and then click the 'Next' button in the bottom right corner of the page."
+                    - Identifies each input by label and location
+                    - Dropdown is referenced with label and position, and the instruction is to select the best option
+
+                **Good Example 2:**  
+                "Begin by selecting the 'Yes' radio button beneath the eligibility question, then select the best option from the dropdown labeled 'Department' in the center of the page, and finally, click the circular icon with the arrow at the bottom right to proceed."
+                    - Identifies each input by label and location
+                    - Dropdown is referenced with label and position, and the instruction is to select the best option
+                    - Radio button is referenced by label and location
+
+                ---
+
+                **Bad Example 1:**  
+                "Choose an option from the dropdown and move on."
+                    - Too vague; does not specify which dropdown or where
+
+                **Bad Example 2:**  
+                "Select the second option in the dropdown."
+                    - Assumes which option to pick; never guess or invent the value
+
+                **Bad Example 3:**  
+                "Select from the dropdown with a blue border."
+                    - References unreliable styling; not accessible or robust
+
+                **Bad Example 4:**
+                "click"
+                    - Too vague; does not specify which element to click
+
+                **Bad Example 5:**
+                "click the button"
+                    - Too vague; does not specify which button to click
+
+                **Bad Example 6:**
+                "SELECT_AND_CLICK"
+                    - Too vague; does not specify which element to select and click
+
+                **Bad Example 7:**
+                "SELECT_AND_CLICK_AND_FILL"
+                    - Too vague; does not specify which element to select and click and fill
+                
+                ---
+                
+                Your responses should be like the good examples, not the bad examples.
+                """
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=[screenshot_part, prompt],
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an action determiner",
+                    response_mime_type="text/plain"
+                )
+            )
+            
+            actions_paragraph = response.text.strip()
             
             return actions_paragraph
                     
@@ -1200,11 +1773,38 @@ class JobDetailToFormTransitionHandler:
         try:
             time.sleep(5)
 
-            response = generate_json_with_gemini(
-                prompt=prompt,
-                screenshot=screenshot,
-                system_instruction="You are an action converter. Return only the interactions as a list of JSON objects.",
-                response_schema=PageInteractionResponse
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            screenshot, context_info = self._take_smart_screenshot(full_page=True, frame=frame, iframe_context=iframe_context)
+            screenshot_part = genai.types.Part.from_bytes(data=screenshot, mime_type="image/png")
+
+            base_prompt = f"""
+                You are given a paragraph describing the actions that need to be taken to progress to the next page, a dictionary of user preferences, and the HTML content of the page.
+                Use the screenshot to resolve ambiguity. If a modal is visible, focus ONLY on visible, enabled elements inside the modal.
+
+                If provided, incorporate the FEEDBACK section strictly to correct prior mistakes.
+
+                FEEDBACK (optional):
+                {selector_feedback or "(none)"}
+
+                [... the rest of your big prompt from before, unchanged ...]
+                Paragraph:
+                {text}
+
+                Preferences:
+                {json.dumps(preferences)}
+
+                HTML content:
+                {page_content}
+                """
+
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=[screenshot_part, base_prompt],
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an action converter. Return only the interactions as a list of JSON objects.",
+                    response_mime_type="application/json",
+                    response_schema=PageInteractionResponse
+                )
             ).parsed
 
             # Normalize selectors to avoid invalid Playwright syntax (e.g., :contains)
@@ -1293,7 +1893,15 @@ class JobDetailToFormTransitionHandler:
                 }}
                 """
 
-            out = .parsed
+            out = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=[prompt],
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are a strict selector validator. Output ONLY the JSON object per the schema.",
+                    response_mime_type="application/json",
+                    response_schema=SelectorValidation
+                )
+            ).parsed
 
             valid = bool(out.valid)
             reason = out.reason or ("OK" if valid else "Invalid selector.")
@@ -1971,7 +2579,9 @@ class JobDetailToFormTransitionHandler:
     def _find_advance_button(self) -> AdvanceButton:
         """Find advance button using AI"""
         try:
-                        page_content = self.page.content()
+            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
+            
+            page_content = self.page.content()
             
             prompt = f"""
             You are given the HTML of a job application page.
@@ -2025,7 +2635,15 @@ class JobDetailToFormTransitionHandler:
             {page_content}
             """
             
-            response = 
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an apply button finder. Return only valid JSON with text and selector fields.",
+                    response_mime_type="application/json",
+                    response_schema=AdvanceButton
+                )
+            )
             
             return response.parsed
             

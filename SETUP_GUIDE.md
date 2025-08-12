@@ -65,22 +65,41 @@ After the first setup, `main.py` will automatically load your saved configuratio
 🎯 Job Application Automation Engine
 ==================================================
 What would you like to do?
-[1] View current configuration
-[2] Edit configuration  
-[3] Start automation
-[4] Exit
+[1] Full Job Application | Job board → Filter Acceptable Jobs → Apply to acceptable jobs (in development)
+[2] Easy apply
+[3] Job Form Filler
+[4] Edit/Delete config
+[5] Exit
 ```
 
-### Option 1: View Configuration
-Shows a summary of your current settings.
+### Option 1: Full Job Application Pipeline
+**Status**: In Development  
+This feature will provide a complete automated job application pipeline including:
+- Job board scraping and monitoring
+- AI-powered job filtering and scoring  
+- Automated application submission
+- Progress tracking and analytics
 
-### Option 2: Edit Configuration
-Provides guidance on how to modify your preferences.
+### Option 2: Easy Apply
+Quick application to jobs you've already found. The system will:
+- Fill out application forms automatically
+- Upload your resume and cover letter
+- Submit applications with one click
 
-### Option 3: Start Automation
-Launches the job application automation engine using your saved preferences.
+### Option 3: Job Form Filler
+Fill out job application forms with your saved preferences:
+- Auto-fill personal information
+- Populate job-specific fields
+- Handle various form layouts
 
-### Option 4: Exit
+### Option 4: Edit/Delete Configuration
+Manage your configuration with options to:
+- View current configuration
+- Edit configuration manually
+- Delete configuration and restart setup
+- Return to main menu
+
+### Option 5: Exit
 Closes the application.
 
 ## 🔧 Configuration Management
