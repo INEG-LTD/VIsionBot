@@ -2,94 +2,71 @@
 # pip install playwright pyobjc
 # playwright install chromium   # or use channel="chrome" if Chrome is installed
 
-import subprocess, json, time
+import argparse
+import subprocess
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple
 
-# ---- AppKit (pyobjc) to get real work area (excludes Dock & menu bar)
 from AppKit import NSScreen
 from playwright.sync_api import sync_playwright
 
-@dataclass
-class Layout:
-    # "left" | "right" | "top" | "bottom"
-    browser_side: str = "right"
-    # fraction of the available work area given to the browser (0.2..0.9)
-    browser_fraction: float = 0.58
-    # pixel margin around the windows
-    margin: int = 8
-    # if Stage Manager is ON but we cannot read Apple's hidden inset, use this
-    stage_left_inset_fallback: int = 80
-    # force-disable Stage Manager adjustments (for testing)
-    ignore_stage_manager: bool = False
+# -------------------- Stage Manager toggle --------------------
 
-# ---------- Stage Manager detection ----------
+def _read_bool(domain: str, key: str) -> bool:
+    out = subprocess.run(
+        ["defaults", "read", domain, key],
+        capture_output=True, text=True
+    ).stdout.strip().lower()
+    return out in ("1", "true", "yes")
 
-def _defaults_read_bool(domain: str, key: str) -> Optional[bool]:
+def stage_manager_enabled() -> bool:
+    return _read_bool("com.apple.WindowManager", "GloballyEnabled")
+
+def _set_stage_manager(enabled: bool, hard_reload: bool = False):
+    subprocess.run(
+        ["defaults", "write", "com.apple.WindowManager", "GloballyEnabled", "-bool", "true" if enabled else "false"],
+        check=False
+    )
+    # Nudge Control Center so the toggle applies immediately.
+    subprocess.run(["killall", "ControlCenter"], check=False)
+    if hard_reload:
+        # More disruptive; only if you absolutely need it.
+        subprocess.run(["killall", "Dock"], check=False)
+
+@contextmanager
+def stage_manager_temporarily(disabled: bool = True, hard_reload: bool = False):
+    prev = stage_manager_enabled()
     try:
-        out = subprocess.run(
-            ["defaults", "read", domain, key],
-            check=False, capture_output=True, text=True
-        ).stdout.strip().lower()
-        if out in ("1", "true", "yes"):
-            return True
-        if out in ("0", "false", "no"):
-            return False
-    except Exception:
-        pass
-    return None
+        target = not disabled
+        if prev != target:
+            _set_stage_manager(target, hard_reload=hard_reload)
+            time.sleep(0.25)
+        yield
+    finally:
+        if stage_manager_enabled() != prev:
+            _set_stage_manager(prev, hard_reload=hard_reload)
+            time.sleep(0.25)
 
-def _defaults_read_int(domain: str, key: str) -> Optional[int]:
-    try:
-        out = subprocess.run(
-            ["defaults", "read", domain, key],
-            check=False, capture_output=True, text=True
-        ).stdout.strip()
-        return int(out)
-    except Exception:
-        return None
+# -------------------- Geometry helpers (top-left origin) --------------------
 
-def is_stage_manager_enabled() -> bool:
-    val = _defaults_read_bool("com.apple.WindowManager", "GloballyEnabled")
-    return bool(val)
-
-def read_stage_manager_left_inset() -> Optional[int]:
-    # This key exists on some macOS builds; if missing, return None.
-    # When present, 0 means "allow full width"; positive values leave a gap at the left.
-    return _defaults_read_int("com.apple.WindowManager", "StageFrameMinimumHorizontalInset")
-
-# ---------- Geometry helpers (top-left origin) ----------
-
-def _screen_frames_top_origin() -> Tuple[Tuple[int,int,int,int], Tuple[int,int,int,int]]:
-    """
-    Returns (screen_full, visible_work_area) as (x,y,w,h) using TOP-left origin.
-    """
+def visible_work_area_top_left() -> Tuple[int, int, int, int]:
+    """Main display visible frame in top-left origin coords."""
     scr = NSScreen.mainScreen()
-    full = scr.frame()          # NSRect in bottom-left origin
-    vis  = scr.visibleFrame()   # excludes Dock & menu bar
+    full = scr.frame()        # bottom-left origin
+    vis  = scr.visibleFrame() # bottom-left origin; excludes Dock/menu bar
 
-    # Convert to top-left origin
     full_w, full_h = int(full.size.width), int(full.size.height)
-    full_top = (0, 0, full_w, full_h)
+    vis_x_bl, vis_y_bl = int(vis.origin.x), int(vis.origin.y)
+    vis_w, vis_h = int(vis.size.width), int(vis.size.height)
 
-    # visibleFrame origin is bottom-left; convert to top-left
-    vis_x_bl = int(vis.origin.x)
-    vis_y_bl = int(vis.origin.y)
-    vis_w    = int(vis.size.width)
-    vis_h    = int(vis.size.height)
     vis_x_tl = vis_x_bl
     vis_y_tl = full_h - (vis_y_bl + vis_h)
+    return (vis_x_tl, vis_y_tl, vis_w, vis_h)
 
-    return full_top, (vis_x_tl, vis_y_tl, vis_w, vis_h)
-
-def _apply_stage_manager_inset(work: Tuple[int,int,int,int], inset_left: int) -> Tuple[int,int,int,int]:
-    x,y,w,h = work
-    x += inset_left
-    w -= inset_left
-    return (x,y,w,h)
-
-def _split_rect(work: Tuple[int,int,int,int], side: str, frac: float, margin: int):
-    x,y,w,h = work
+def split_rect(work, side: str, frac: float, margin: int):
+    x, y, w, h = work
     frac = max(0.2, min(0.9, frac))
     m = margin
 
@@ -113,10 +90,10 @@ def _split_rect(work: Tuple[int,int,int,int], side: str, frac: float, margin: in
             browser  = (x+m, y+2*m+th, w-2*m, bh)
     return browser, terminal
 
-# ---------- Move terminal (AppleScript) & launch Chrome ----------
+# -------------------- Window move + Playwright launch --------------------
 
 def move_frontmost_window(rect):
-    x,y,w,h = map(int, rect)
+    x, y, w, h = map(int, rect)
     right, bottom = x + w, y + h
     ascript = f'''
     set targetBounds to {{{x}, {y}, {right}, {bottom}}}
@@ -143,39 +120,54 @@ def move_frontmost_window(rect):
     '''
     subprocess.run(["osascript", "-e", ascript], check=False)
 
-def launch_chrome_at(pw, rect):
-    x,y,w,h = map(int, rect)
+def launch_chrome_at(pw, rect, channel="chrome"):
+    x, y, w, h = map(int, rect)
     args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
-    browser = pw.chromium.launch(channel="chrome", headless=False, args=args)  # use Chrome.app
+    browser = pw.chromium.launch(channel=channel, headless=False, args=args)
     context = browser.new_context(viewport={"width": w, "height": h})
     page = context.new_page()
     return browser, context, page
 
-# ---------- Public API ----------
+# -------------------- Orchestrator --------------------
 
-def place_terminal_and_browser(layout: Layout) -> None:
-    _, work = _screen_frames_top_origin()
+@dataclass
+class Layout:
+    side: str = "right"    # left|right|top|bottom
+    fraction: float = 0.60 # 0.2..0.9
+    margin: int = 8
+    channel: str = "chrome"  # "chrome" or "chromium"
 
-    sm_enabled = is_stage_manager_enabled() if not layout.ignore_stage_manager else False
+def run(layout: Layout, url: str, hard_reload=False):
+    # Disable Stage Manager for the session, then restore.
+    with stage_manager_temporarily(disabled=True, hard_reload=hard_reload):
+        work = visible_work_area_top_left()
+        browser_rect, term_rect = split_rect(work, layout.side, layout.fraction, layout.margin)
 
-    # Try to read Apple's left inset when Stage Manager is on; otherwise use fallback.
-    if sm_enabled:
-        inset = read_stage_manager_left_inset()
-        inset_left = inset if (inset is not None and inset >= 0) else layout.stage_left_inset_fallback
-        work = _apply_stage_manager_inset(work, inset_left)
+        # 1) Move terminal first so it stays visible
+        move_frontmost_window(term_rect)
+        time.sleep(0.15)
 
-    browser_rect, term_rect = _split_rect(work, layout.browser_side, layout.browser_fraction, layout.margin)
-
-    # Move terminal first so it doesn't get covered
-    move_frontmost_window(term_rect)
-    time.sleep(0.15)
-
-    with sync_playwright() as pw:
-        browser, ctx, page = launch_chrome_at(pw, browser_rect)
-        page.goto("https://example.com")
-        # ... your automation here ...
-        page.wait_for_timeout(2000)
-        # browser.close()  # keep open while debugging
+        # 2) Launch Chrome exactly where we want it
+        with sync_playwright() as pw:
+            browser, ctx, page = launch_chrome_at(pw, browser_rect, channel=layout.channel)
+            page.goto(url)
+            # TODO: your automation here
+            page.wait_for_timeout(2000)
+            # browser.close()  # keep open while debugging
 
 if __name__ == "__main__":
-    place_terminal_and_browser(Layout(browser_side="right", browser_fraction=0.6))
+    ap = argparse.ArgumentParser(description="Tile Terminal + Chrome with Stage Manager temporarily disabled.")
+    ap.add_argument("--side", choices=["left", "right", "top", "bottom"], default="right")
+    ap.add_argument("--frac", type=float, default=0.60, help="Browser share of screen (0.2..0.9).")
+    ap.add_argument("--margin", type=int, default=8)
+    ap.add_argument("--channel", choices=["chrome", "chromium"], default="chrome")
+    ap.add_argument("--url", default="https://example.com")
+    ap.add_argument("--hard-reload", action="store_true",
+                    help="Also restart Dock (more disruptive) when toggling Stage Manager.")
+    args = ap.parse_args()
+
+    run(
+        Layout(side=args.side, fraction=args.frac, margin=args.margin, channel=args.channel),
+        url=args.url,
+        hard_reload=args.hard_reload
+    )

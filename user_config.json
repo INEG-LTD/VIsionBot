@@ -1,0 +1,47 @@
+{
+  "first_name": "chris",
+  "last_name": "ineg",
+  "email": "eromoseleinegbe@gmail.com",
+  "phone": "07365260995",
+  "age": 23,
+  "gender": "Male",
+  "nationality": "British",
+  "address": "36 Slade Baker Way",
+  "city": "Bristol",
+  "state": "England",
+  "country": "United Kingdom",
+  "postcode": "BS161QT",
+  "job_titles": [
+    "ios engineer"
+  ],
+  "locations": [
+    "Remote",
+    "London",
+    "UK"
+  ],
+  "salary_min": 50000,
+  "salary_max": 100000,
+  "currency": "GBP",
+  "employment_types": [
+    "Full time"
+  ],
+  "required_skills": [
+    "Swift",
+    "Git",
+    "Python"
+  ],
+  "experience_levels": [
+    "Mid-level"
+  ],
+  "remote_flexibility": [
+    "Remote"
+  ],
+  "resume_path": "",
+  "cover_letter_path": "",
+  "photo_path": "",
+  "max_jobs_to_find": 10,
+  "max_applications_per_day": 10,
+  "min_job_match_score": 70,
+  "auto_apply": false,
+  "headless": false
+}
