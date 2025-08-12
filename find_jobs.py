@@ -15,7 +15,9 @@ import os
 import json as json_module
 import random
 import string
+import traceback
 from typing import List, Dict, Optional, Any
+from urllib.parse import urlparse
 from google import genai
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
 from pydantic import BaseModel
@@ -187,9 +189,16 @@ class FindJobsBot:
             # Get page content from frame or main page
             page_content = self.page.content()
             
-            # Use gemini-2.5-pro to analyze the page and identify form fields
+            screenshot = self.page.screenshot(full_page=True)
+            screenshot_part = genai.types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            )
+            
+            # Use gemini-2.5-flash to analyze the page and identify form fields
             prompt = f"""
             Analyze this HTML and identify all the text input fields in the search page.
+            You are provided with a screenshot of the page to use as context.
             Also fill in the values for the input using the preferences.
             For each input you need to fill in the value of the input.
             Ensure that the input is not used for a dropdown or a radio button or a checkbox.
@@ -220,8 +229,11 @@ class FindJobsBot:
             """
             
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
+                model="gemini-2.5-flash",
+                contents=[
+                    prompt,
+                    screenshot_part
+                ],
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
                     response_mime_type="application/json",
@@ -264,8 +276,15 @@ class FindJobsBot:
             # Get page content from frame or main page
             page_content = self.page.content()
             
+            screenshot = self.page.screenshot(full_page=True)
+            screenshot_part = genai.types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            )
+            
             prompt = f"""
             Analyze this HTML and identify the most likely submit button in the search page.
+            You are provided with a screenshot of the page to use as context.
             Return a JSON object with the SubmitButtonApplicationField object.
             
             CRITICAL GUIDELINES:
@@ -283,8 +302,11 @@ class FindJobsBot:
             """
             
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
+                model="gemini-2.5-flash",
+                contents=[
+                    prompt,
+                    screenshot_part
+                ],
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
                     response_mime_type="application/json",
@@ -461,7 +483,7 @@ class FindJobsBot:
                 """
 
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are an expert web scraper. Extract job listings from raw HTML and return them.",
@@ -772,7 +794,7 @@ class FindJobsBot:
                 client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
                 
                 response = client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         system_instruction="You are an expert job matching assistant. Analyze job descriptions and provide detailed matching scores based on candidate preferences. Return only valid JSON.",
@@ -988,7 +1010,7 @@ class FindJobsBot:
             
             # Make the API call
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are an apply button detection expert. Return only valid JSON with text, selector, and type fields.",
@@ -1080,7 +1102,7 @@ class FindJobsBot:
             
             # Make the API call
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are a job title extraction expert. Return only the job title as a clean string."
@@ -1164,7 +1186,7 @@ class FindJobsBot:
             
             # Make the API call
             response = client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
                     system_instruction="You are a job description extraction expert. Return only the job description as clean, well-formatted text."
@@ -1243,9 +1265,15 @@ class FindJobsBot:
                 iteration += 1
                 print(f"\n🔄 Iteration {iteration}/{max_iterations}")
                                     
+                frame = None
+                iframe_context = self.detect_and_handle_iframes()
+                
+                if iframe_context['use_iframe_context']:
+                    frame = iframe_context['iframe_context']['frame']
+                
                 # Detect the page type and handle it directly
                 # This uses the page detector to analyze the current page
-                page_type_result = self.handle_page_type()
+                page_type_result = self.handle_page_type(frame, iframe_context['iframe_context'])
                 if page_type_result == PageTypeResult.SUCCESS:
                     print("✅ Done with Finding Jobs -> Navigating to Form -> Filling Form")
                     
@@ -1395,7 +1423,7 @@ class FindJobsBot:
                 """
 
                 response = client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         system_instruction="You are an expert at analyzing web pages and identifying modal elements.",
@@ -1542,26 +1570,26 @@ class FindJobsBot:
             print(f"❌ Error filling application form: {e}")
             return False
 
-    def handle_page_type(self) -> PageTypeResult:
+    def handle_page_type(self, frame=None, iframe_context=None) -> PageTypeResult:
         """Detect current page type and handle it appropriately"""
         if not self.page_detector:
             print("❌ Page detector not initialized")
             return PageTypeResult.ERROR
         
         # Detect page type
-        page_type = self.page_detector.detect_page_type()
+        page_type = self.page_detector.detect_page_type(frame, iframe_context)
         
         # Handle different page types
         if page_type == PageType.SEARCH_PAGE:
             return self._handle_search_page()
-        elif page_type == PageType.JOB_DETAIL_PAGE:
-            return self._handle_job_detail_page()
+        # elif page_type == PageType.JOB_DETAIL_PAGE:
+        #     return self._handle_job_detail_page()
         elif page_type == PageType.APPLICATION_PAGE:
             return self._handle_application_page()
         elif page_type == PageType.LOGIN_PAGE:
-            return self._handle_login_page()
+            return self._handle_login_page(frame, iframe_context)
         elif page_type == PageType.CAPTCHA_PAGE:
-            return self._handle_captcha_page()
+            return self._handle_captcha_page(frame, iframe_context)
         elif page_type == PageType.ERROR_PAGE:
             return self._handle_error_page()
         elif page_type == PageType.RESULTS_PAGE:
@@ -1571,8 +1599,8 @@ class FindJobsBot:
                 original_page = self.page
                 context = self.page.context
                 
-                for job_listing in self.rejected_job_listings:
-                    # Duplocate the tab
+                for job_listing in self.accepted_job_listings:
+                    # Duplicate the tab
                     print(f"Duplicating tab for {job_listing.job_listing.title}")
                     with context.expect_page() as new_page_info:
                         original_page.evaluate("window.open()")
@@ -1592,7 +1620,7 @@ class FindJobsBot:
                             continue
                         
                         handler = self.transition_handler or JobDetailToFormTransitionHandler(new_page)
-                        navigation_result = handler.navigate_to_form()
+                        navigation_result = handler.navigate_to_form(self.preferences)
                         
                         if navigation_result.success:
                             if navigation_result.requires_user_intervention:
@@ -1609,7 +1637,6 @@ class FindJobsBot:
                                     on_failure_callback=lambda: print(f"❌ Application filling failed for {job_listing.job_listing.title}")
                                 )
                                 
-                                # Go back to the original tab
                         else:
                             print(f"❌ Failed to navigate to job form: {job_listing.job_listing.title}")
                             continue
@@ -1623,10 +1650,7 @@ class FindJobsBot:
                 return PageTypeResult.SUCCESS
             else:
                 print("❌ No accepted job listings found")
-                return PageTypeResult.SUCCESS
-                
-                
-                
+                return PageTypeResult.SUCCESS           
         else:
             return self._handle_unknown_page()
     
@@ -1747,7 +1771,7 @@ class FindJobsBot:
         # After filling form, we expect navigation to next step
         return PageTypeResult.CONTINUE
     
-    def _handle_login_page(self) -> PageTypeResult:
+    def _handle_login_page(self, frame=None, iframe_context=None) -> PageTypeResult:
         """Handle login/authentication page"""
         print("🔒 Handling login page...")
         print("⏸️ Pausing for user login. Please log in manually and resume.")
@@ -1755,7 +1779,7 @@ class FindJobsBot:
         
         # After resume, check if login was successful
         time.sleep(2)
-        new_detection = self.page_detector.detect_page_type()
+        new_detection = self.page_detector.detect_page_type(frame, iframe_context)
         if new_detection == PageType.LOGIN_PAGE:
             print("❌ Still on login page. Please complete login and resume again.")
             self.page.pause()
@@ -1763,7 +1787,7 @@ class FindJobsBot:
         print("✅ Login appears complete. Continuing...")
         return PageTypeResult.CONTINUE
     
-    def _handle_captcha_page(self) -> PageTypeResult:
+    def _handle_captcha_page(self, frame=None, iframe_context=None) -> PageTypeResult:
         """Handle CAPTCHA verification page"""
         print("🤖 Handling CAPTCHA page...")
         print("⏸️ CAPTCHA detected. Please solve the CAPTCHA manually and resume.")
@@ -1771,7 +1795,7 @@ class FindJobsBot:
         
         # After resume, check if CAPTCHA was solved
         time.sleep(2)
-        new_detection = self.page_detector.detect_page_type()
+        new_detection = self.page_detector.detect_page_type(frame, iframe_context)
         if new_detection == PageType.CAPTCHA_PAGE:
             print("❌ Still on CAPTCHA page. Please solve the CAPTCHA and resume again.")
             self.page.pause()
@@ -1824,7 +1848,7 @@ class FindJobsBot:
                 client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
                 
                 response = client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         system_instruction="You are a job listing classifier. Determine if text represents an actual job posting or just navigation/UI elements. Return only YES or NO."
@@ -1846,7 +1870,7 @@ class FindJobsBot:
         except Exception as e:
             print(f"❌ Error in job listing vetting: {e}")
             return self.vet_job_listing_simple(job_title, company_name, href)
-    
+
     def vet_job_listing_simple(self, job_title: str, company_name: str = "", href: str = "") -> bool:
         """Simple keyword-based vetting as fallback"""
         try:
@@ -1943,6 +1967,912 @@ class FindJobsBot:
             print(f"❌ Error clicking accept cookies button: {e}")
             return False
    
+    def _take_smart_screenshot(self, frame=None, iframe_context=None):
+        """
+        Take a screenshot that includes iframe content if the form is in an iframe
+        
+        Args:
+            frame: Optional iframe frame context. If None, uses main page.
+            iframe_context: Optional iframe context dict with 'iframe' element info.
+            
+        Returns:
+            Screenshot bytes and context info
+        """
+        try:
+            # First priority: if we have iframe_context with iframe element, use it
+            if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
+                print(f"📸 Opening iframe URL in new tab for screenshot")
+                iframe_element = iframe_context['iframe']
+                iframe_url = iframe_element.get_attribute('src')
+                
+                if not iframe_url:
+                    print("⚠️ Iframe has no src URL, falling back to main page")
+                    screenshot = self.page.screenshot(type="png", full_page=True)
+                    context_str = "main page (no iframe src)"
+                else:
+                    # Make URL absolute if it's relative
+                    if not iframe_url.startswith(('http://', 'https://')):
+                        current_url = self.page.url
+                        if iframe_url.startswith('/'):
+                            # Absolute path from domain
+                            parsed = urlparse(current_url)
+                            iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
+                        else:
+                            # Relative path
+                            iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
+                    
+                    print(f"🔗 Opening iframe URL")
+                    
+                    # Store current page context
+                    original_page = self.page
+                    original_context = self.page.context
+                    
+                    try:
+                        # Open iframe URL in new tab
+                        new_page = original_context.new_page()
+                        new_page.goto(iframe_url, wait_until='networkidle')
+                        
+                        # Take screenshot of the iframe content
+                        screenshot = new_page.screenshot(type="png", full_page=True)
+                        context_str = "iframe_content"
+                        
+                        print(f"✅ Successfully captured iframe content screenshot")
+                        
+                    finally:
+                        # Always close the new tab and restore original page context
+                        try:
+                            new_page.close()
+                        except Exception as close_error:
+                            print(f"⚠️ Warning: Could not close iframe tab: {close_error}")
+                        
+                        # Restore original page context
+                        self.page = original_page
+                        
+            # Second priority: if we have a frame with screenshot method, try to get iframe URL
+            elif frame:
+                # print(f"📸 Attempting to open iframe URL in new tab for better screenshot")
+                
+                # Try to find the iframe element that contains this frame
+                iframe_element = None
+                try:
+                    # Get all iframes on the page
+                    iframes = self.page.query_selector_all('iframe')
+                    for iframe in iframes:
+                        try:
+                            if iframe.content_frame() == frame:
+                                iframe_element = iframe
+                                break
+                        except:
+                            continue
+                except:
+                    pass
+                
+                if iframe_element:
+                    iframe_url = iframe_element.get_attribute('src')
+                    if iframe_url:
+                        # Make URL absolute if it's relative
+                        if not iframe_url.startswith(('http://', 'https://')):
+                            current_url = self.page.url
+                            if iframe_url.startswith('/'):
+                                # Absolute path from domain
+                                parsed = urlparse(current_url)
+                                iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
+                            else:
+                                # Relative path
+                                iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
+                        
+                        print(f"🔗 Opening iframe URL")
+                        
+                        # Store current page context
+                        original_page = self.page
+                        original_context = self.page.context
+                        
+                        try:
+                            # Open iframe URL in new tab
+                            new_page = original_context.new_page()
+                            new_page.goto(iframe_url, wait_until='networkidle')
+                            
+                            # Take screenshot of the iframe content
+                            screenshot = new_page.screenshot(type="png", full_page=True)
+                            context_str = "iframe_content"
+                            
+                            print(f"✅ Successfully captured iframe content screenshot")
+                            
+                        finally:
+                            # Always close the new tab and restore original page context
+                            try:
+                                new_page.close()
+                            except Exception as close_error:
+                                print(f"⚠️ Warning: Could not close iframe tab: {close_error}")
+                            
+                            # Restore original page context
+                            self.page = original_page
+                            print(f"🔄 Restored original page context")
+                    else:
+                        # Fallback to frame screenshot
+                        print(f"⚠️ Iframe has no src URL, using frame screenshot")
+                        screenshot = frame.screenshot(type="png", full_page=True)
+                        context_str = "iframe_frame"
+                else:
+                    # Fallback to frame screenshot
+                    print(f"⚠️ Could not find iframe element, using frame screenshot")
+                    screenshot = frame.screenshot(type="png", full_page=True)
+                    context_str = "iframe_frame"
+                    
+            # Third priority: if frame is a dict with 'frame' key
+            elif frame and isinstance(frame, dict) and 'frame' in frame:
+                print(f"📸 Taking screenshot of iframe content (extracted from dict)")
+                actual_frame = frame['frame']
+                if hasattr(actual_frame, 'screenshot'):
+                    screenshot = actual_frame.screenshot(type="png", full_page=True)
+                    context_str = "iframe"
+                else:
+                    raise Exception(f"Frame object does not have screenshot method: {type(actual_frame)}")
+            else:
+                # Take screenshot of main page
+                print(f"📸 Taking screenshot of main page")
+                screenshot = self.page.screenshot(type="png", full_page=True)
+                context_str = "main page"
+            
+            # Save screenshot to file with context info
+            filename = f"screenshot_{context_str.replace(' ', '_')}.png"
+            with open(filename, "wb") as f:
+                f.write(screenshot)
+            
+            return screenshot, context_str
+            
+        except Exception as e:
+            print(f"❌ Error taking screenshot: {e}")
+            # Fallback to main page screenshot
+            try:
+                screenshot = self.page.screenshot(type="png", full_page=True)
+                with open("screenshot_fallback.png", "wb") as f:
+                    f.write(screenshot)
+                print(f"💾 Fallback screenshot saved: screenshot_fallback.png")
+                return screenshot, "main page (fallback)"
+            except Exception as fallback_error:
+                print(f"❌ Critical error: Could not take any screenshot: {fallback_error}")
+                return None, "error"
+
+    def _take_screenshot_with_highlighted_elements(self, frame=None, iframe_context=None, highlight_selectors=None):
+        """
+        Take a screenshot with highlighted elements for debugging purposes
+        
+        Args:
+            frame: Optional iframe frame context. If None, uses main page.
+            iframe_context: Optional iframe context dict with 'iframe' element info.
+            highlight_selectors: List of CSS selectors to highlight. If None, highlights ALL elements.
+            
+        Returns:
+            Screenshot bytes and context info
+        """
+        try:
+            # Determine which page context to use
+            target_page = None
+            target_frame = None
+            
+            if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
+                # Use iframe URL approach for better quality
+                print(f"🎯 Opening iframe URL in new tab for highlighted screenshot")
+                iframe_element = iframe_context['iframe']
+                iframe_url = iframe_element.get_attribute('src')
+                
+                if iframe_url:
+                    # Make URL absolute if it's relative
+                    if not iframe_url.startswith(('http://', 'https://')):
+                        current_url = self.page.url
+                        if iframe_url.startswith('/'):
+                            parsed = urlparse(current_url)
+                            iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
+                        else:
+                            iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
+                    
+                    # Store current page context
+                    original_page = self.page
+                    original_context = self.page.context
+                    
+                    try:
+                        # Open iframe URL in new tab
+                        new_page = original_context.new_page()
+                        new_page.goto(iframe_url, wait_until='networkidle')
+                        target_page = new_page
+                        context_str = "iframe_content"
+                    except Exception as e:
+                        print(f"⚠️ Could not open iframe URL: {e}, falling back to frame")
+                        target_frame = frame
+                        context_str = "iframe_frame"
+                else:
+                    target_frame = frame
+                    context_str = "iframe_frame"
+                    
+            elif frame:
+                target_frame = frame
+                context_str = "iframe_frame"
+            else:
+                target_page = self.page
+                context_str = "main_page"
+            
+            # Default selectors to highlight if none provided
+            if highlight_selectors is None:
+                # Highlight ALL elements on the page with more specific selectors
+                highlight_selectors = [
+                    'input', 'select', 'textarea', 'button', 'a', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                    'label', 'form', 'fieldset', 'legend', 'option', 'optgroup', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th'
+                ]
+            
+            # Add highlighting styles to the page
+            if target_page:
+                print(f"🎯 Taking highlighted screenshot of page")
+                # Add CSS for highlighting with stronger properties
+                highlight_css = """
+                <style id="element-highlighting">
+                .highlighted-element {
+                    outline: 4px solid #ff0000 !important;
+                    outline-offset: 3px !important;
+                    background-color: rgba(255, 0, 0, 0.2) !important;
+                    position: relative !important;
+                    z-index: 999999 !important;
+                    box-shadow: 0 0 10px rgba(255, 0, 0, 0.8) !important;
+                }
+                .highlighted-element::after {
+                    content: attr(data-selector);
+                    position: absolute;
+                    top: -30px;
+                    left: 0;
+                    background: #ff0000;
+                    color: white;
+                    padding: 4px 8px;
+                    font-size: 12px;
+                    font-family: monospace;
+                    border-radius: 4px;
+                    white-space: nowrap;
+                    z-index: 1000000 !important;
+                    font-weight: bold;
+                    border: 2px solid white;
+                }
+                </style>
+                """
+                # Apply highlighting immediately using evaluate with arguments (avoid f-string brace issues)
+                highlighted_count = target_page.evaluate(
+                    """
+                    (args) => {
+                        const { highlightCss, selectors } = args;
+                        // Add CSS
+                        if (!document.getElementById('element-highlighting')) {
+                            const style = document.createElement('style');
+                            style.id = 'element-highlighting';
+                            style.textContent = highlightCss;
+                            document.head.appendChild(style);
+                        }
+                        // Add label CSS once
+                        if (!document.getElementById('highlight-label-style')) {
+                            const lblStyle = document.createElement('style');
+                            lblStyle.id = 'highlight-label-style';
+                            lblStyle.textContent = `
+                                .highlight-label {
+                                position: absolute;
+                                background: #ff0000;
+                                color: #ffffff;
+                                padding: 2px 6px;
+                                font-size: 11px;
+                                font-family: monospace;
+                                border-radius: 3px;
+                                border: 2px solid #ffffff;
+                                z-index: 1000001 !important;
+                                pointer-events: none;
+                                max-width: 420px;
+                                overflow: hidden;
+                                text-overflow: ellipsis;
+                                white-space: nowrap;
+                                }
+                                `;
+                            document.head.appendChild(lblStyle);
+                        }
+                        
+                        // Highlight elements
+                        let totalHighlighted = 0;
+                        const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
+                        const getUniqueSelector = (element) => {
+                            if (!element || element.nodeType !== 1) return '';
+                            if (element.id) return '#' + cssEscape(element.id);
+                            const parts = [];
+                            let el = element;
+                            while (el && el.nodeType === 1 && parts.length < 6) {
+                                let selector = el.tagName.toLowerCase();
+                                if (el.classList && el.classList.length > 0) {
+                                    const className = Array.from(el.classList)[0];
+                                    if (className) selector += '.' + cssEscape(className);
+                                }
+                                let siblingIndex = 1;
+                                let prev = el.previousElementSibling;
+                                while (prev) {
+                                    if (prev.tagName === el.tagName) siblingIndex++;
+                                    prev = prev.previousElementSibling;
+                                }
+                                selector += ':nth-of-type(' + siblingIndex + ')';
+                                parts.unshift(selector);
+                                if (el.id) { parts[0] = '#' + cssEscape(el.id); break; }
+                                el = el.parentElement;
+                                if (!el || el === document.body) break;
+                            }
+                            return parts.join(' > ');
+                        };
+                        selectors.forEach((selector) => {
+                            try {
+                                const elements = document.querySelectorAll(selector);
+                                elements.forEach((el) => {
+                                    el.classList.add('highlighted-element');
+                                    const uniqueSelector = getUniqueSelector(el);
+                                    el.setAttribute('data-selector', uniqueSelector || selector);
+                                    totalHighlighted++;
+                                });
+                            } catch (e) {
+                                console.log('Could not highlight selector:', selector, e);
+                            }
+                        });
+                        // Remove any existing labels before placing new ones
+                        document.querySelectorAll('.highlight-label').forEach(n => n.remove());
+                        // Place non-overlapping labels
+                        const placed = [];
+                        const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
+                        allHighlighted.forEach((el) => {
+                            const uniqueSelector = el.getAttribute('data-selector') || '';
+                            const rect = el.getBoundingClientRect();
+                            const label = document.createElement('div');
+                            label.className = 'highlight-label';
+                            label.textContent = uniqueSelector;
+                            // Initial position above element
+                            let left = rect.left + window.scrollX;
+                            let top = rect.top + window.scrollY - 22;
+                            // Clamp within page width
+                            const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+                            label.style.left = left + 'px';
+                            label.style.top = top + 'px';
+                            document.body.appendChild(label);
+                            let lr = label.getBoundingClientRect();
+                            let moved = true;
+                            let guard = 0;
+                            while (moved && guard < 20) {
+                                moved = false;
+                                for (const r of placed) {
+                                    const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
+                                    if (overlaps) {
+                                        top = r.bottom + 2;
+                                        label.style.top = top + 'px';
+                                        lr = label.getBoundingClientRect();
+                                        moved = true;
+                                    }
+                                }
+                                guard++;
+                            }
+                            // Clamp horizontally if needed (after layout)
+                            if (lr.right > pageWidth) {
+                                const newLeft = Math.max(0, pageWidth - lr.width - 4);
+                                label.style.left = newLeft + 'px';
+                                lr = label.getBoundingClientRect();
+                            }
+                            placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
+                        });
+                        
+                        const highlightedElements = document.querySelectorAll('.highlighted-element');
+                        return {
+                            totalHighlighted: totalHighlighted,
+                            highlightedClassCount: highlightedElements.length,
+                            bodyChildren: document.body.children.length
+                        };
+                    }
+                    """,
+                    {"highlightCss": highlight_css, "selectors": highlight_selectors},
+                )
+                
+                print(f"🎯 Highlighting applied: {highlighted_count}")
+                
+                # Wait a moment for highlighting to apply
+                target_page.wait_for_timeout(1000)
+                
+                # Verify highlighting is still there before taking screenshot
+                verification = target_page.evaluate("""
+                    () => {
+                        const highlighted = document.querySelectorAll('.highlighted-element');
+                        const style = document.getElementById('element-highlighting');
+                        return {
+                            highlightedCount: highlighted.length,
+                            styleExists: !!style,
+                            bodyChildren: document.body.children.length
+                        };
+                    }
+                """)
+                print(f"🔍 Pre-screenshot verification: {verification}")
+                
+                # Take screenshot
+                screenshot = target_page.screenshot(type="png", full_page=True)
+                
+                # Clean up highlighting
+                target_page.evaluate("""
+                    () => {
+                        const highlighted = document.querySelectorAll('.highlighted-element');
+                        highlighted.forEach((el) => {
+                            el.classList.remove('highlighted-element');
+                            el.removeAttribute('data-selector');
+                        });
+                        document.querySelectorAll('.highlight-label').forEach(n => n.remove());
+                        const style = document.getElementById('element-highlighting');
+                        if (style) style.remove();
+                    }
+                """)
+                
+            elif target_frame:
+                print(f"🎯 Taking highlighted screenshot of frame")
+                # For frames, we need to inject the highlighting into the frame context
+                # but also ensure it's visible when taking a screenshot of the main page
+                
+                # First, get the iframe element's position and dimensions (Frame itself has no bounding_box)
+                iframe_element_for_box = None
+                try:
+                    if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
+                        iframe_element_for_box = iframe_context.get('iframe')
+                    if not iframe_element_for_box:
+                        # Try to locate the iframe element by matching content_frame()
+                        page_iframes = self.page.query_selector_all('iframe')
+                        for _iframe_el in page_iframes:
+                            try:
+                                if _iframe_el.content_frame() == target_frame:
+                                    iframe_element_for_box = _iframe_el
+                                    break
+                            except Exception:
+                                continue
+                except Exception:
+                    iframe_element_for_box = None
+
+                frame_box = None
+                try:
+                    if iframe_element_for_box:
+                        frame_box = iframe_element_for_box.bounding_box()
+                except Exception:
+                    frame_box = None
+                if not frame_box:
+                    print("⚠️ Could not get frame bounding box, falling back to main page screenshot")
+                    screenshot = self.page.screenshot(type="png", full_page=True)
+                    context_str = "main_page_fallback"
+                else:
+                    print(f"📍 Frame position: x={frame_box['x']}, y={frame_box['y']}, width={frame_box['width']}, height={frame_box['height']}")
+                    
+                    # Prepare CSS strings to avoid quoting issues in JS
+                    frame_highlight_css = (
+                        ".highlighted-element {\n"
+                        "  outline: 3px solid #ff0000 !important;\n"
+                        "  outline-offset: 2px !important;\n"
+                        "  background-color: rgba(255, 0, 0, 0.1) !important;\n"
+                        "  position: relative !important;\n"
+                        "  z-index: 10000 !important;\n"
+                        "}\n"
+                        ".highlighted-element::after { content: none !important; }\n"
+                    )
+                    label_css = (
+                        ".highlight-label {\n"
+                        "  position: absolute;\n"
+                        "  background: #ff0000;\n"
+                        "  color: #ffffff;\n"
+                        "  padding: 2px 6px;\n"
+                        "  font-size: 11px;\n"
+                        "  font-family: monospace;\n"
+                        "  border-radius: 3px;\n"
+                        "  border: 2px solid #ffffff;\n"
+                        "  z-index: 10001 !important;\n"
+                        "  pointer-events: none;\n"
+                        "  max-width: 420px;\n"
+                        "  overflow: hidden;\n"
+                        "  text-overflow: ellipsis;\n"
+                        "  white-space: nowrap;\n"
+                        "}\n"
+                    )
+
+                    # Try preferred method: open iframe src in a new tab and highlight there
+                    try:
+                        iframe_url = None
+                        if iframe_element_for_box:
+                            iframe_url = iframe_element_for_box.get_attribute('src')
+                        if iframe_url:
+                            if not iframe_url.startswith(('http://', 'https://')):
+                                current_url = self.page.url
+                                if iframe_url.startswith('/'):
+                                    parsed = urlparse(current_url)
+                                    iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
+                                else:
+                                    iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
+
+                            new_page = self.page.context.new_page()
+                            new_page.goto(iframe_url, wait_until='networkidle')
+
+                            # Inject highlighting and labels on the iframe page
+                            new_page.evaluate(
+                                """
+                                (args) => {
+                                    const { selectors, highlightCss, labelCss } = args;
+                                    if (!document.getElementById('element-highlighting')) {
+                                        const style = document.createElement('style');
+                                        style.id = 'element-highlighting';
+                                        style.textContent = highlightCss;
+                                        document.head.appendChild(style);
+                                    }
+                                    if (!document.getElementById('highlight-label-style')) {
+                                        const lblStyle = document.createElement('style');
+                                        lblStyle.id = 'highlight-label-style';
+                                        lblStyle.textContent = labelCss;
+                                        document.head.appendChild(lblStyle);
+                                    }
+                                    let totalHighlighted = 0;
+                                    const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
+                                    const getUniqueSelector = (element) => {
+                                        if (!element || element.nodeType !== 1) return '';
+                                        if (element.id) return '#' + cssEscape(element.id);
+                                        const parts = [];
+                                        let el = element;
+                                        while (el && el.nodeType === 1 && parts.length < 6) {
+                                            let selector = el.tagName.toLowerCase();
+                                            if (el.classList && el.classList.length > 0) {
+                                                const className = Array.from(el.classList)[0];
+                                                if (className) selector += '.' + cssEscape(className);
+                                            }
+                                            let siblingIndex = 1;
+                                            let prev = el.previousElementSibling;
+                                            while (prev) {
+                                                if (prev.tagName === el.tagName) siblingIndex++;
+                                                prev = prev.previousElementSibling;
+                                            }
+                                            selector += ':nth-of-type(' + siblingIndex + ')';
+                                            parts.unshift(selector);
+                                            if (el.id) { parts[0] = '#' + cssEscape(el.id); return parts.join(' > '); }
+                                            el = el.parentElement;
+                                            if (!el || el === document.body) break;
+                                        }
+                                        return parts.join(' > ');
+                                    };
+                                    document.querySelectorAll('.highlight-label').forEach(n => n.remove());
+                                    selectors.forEach((selector) => {
+                                        try {
+                                            const elements = document.querySelectorAll(selector);
+                                            elements.forEach((el) => {
+                                                el.classList.add('highlighted-element');
+                                                const uniqueSelector = getUniqueSelector(el);
+                                                el.setAttribute('data-selector', uniqueSelector || selector);
+                                                totalHighlighted++;
+                                            });
+                                        } catch (e) {
+                                            console.log('Could not highlight selector:', selector, e);
+                                        }
+                                    });
+                                    const placed = [];
+                                    const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
+                                    allHighlighted.forEach((el) => {
+                                        const uniqueSelector = el.getAttribute('data-selector') || '';
+                                        const rect = el.getBoundingClientRect();
+                                        const label = document.createElement('div');
+                                        label.className = 'highlight-label';
+                                        label.textContent = uniqueSelector;
+                                        let left = rect.left + window.scrollX;
+                                        let top = rect.top + window.scrollY - 20;
+                                        const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+                                        label.style.left = left + 'px';
+                                        label.style.top = top + 'px';
+                                        document.body.appendChild(label);
+                                        let lr = label.getBoundingClientRect();
+                                        let moved = true;
+                                        let guard = 0;
+                                        while (moved && guard < 20) {
+                                            moved = false;
+                                            for (const r of placed) {
+                                                const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
+                                                if (overlaps) {
+                                                    top = r.bottom + 2;
+                                                    label.style.top = top + 'px';
+                                                    lr = label.getBoundingClientRect();
+                                                    moved = true;
+                                                }
+                                            }
+                                            guard++;
+                                        }
+                                        if (lr.right > pageWidth) {
+                                            const newLeft = Math.max(0, pageWidth - lr.width - 4);
+                                            label.style.left = newLeft + 'px';
+                                            lr = label.getBoundingClientRect();
+                                        }
+                                        placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
+                                    });
+                                    return true;
+                                }
+                                """,
+                                {"selectors": highlight_selectors, "highlightCss": frame_highlight_css, "labelCss": label_css},
+                            )
+                            new_page.wait_for_timeout(500)
+                            screenshot = new_page.screenshot(type="png", full_page=True)
+                            # Clean up on the new page
+                            new_page.evaluate("() => { document.querySelectorAll('.highlight-label').forEach(n => n.remove()); const st = document.getElementById('element-highlighting'); if (st) st.remove(); }")
+                            try:
+                                new_page.close()
+                            except Exception:
+                                pass
+                            context_str = "iframe_content_highlighted"
+                        else:
+                            raise Exception("No iframe src")
+                    except Exception:
+                        # Fallback: highlight inside frame and overlay frame bounds on main page
+                        target_frame.evaluate(
+                            """
+                            (args) => {
+                                const { selectors, highlightCss, labelCss } = args;
+                                // Add CSS for highlighting
+                                if (!document.getElementById('element-highlighting')) {
+                                    const style = document.createElement('style');
+                                    style.id = 'element-highlighting';
+                                    style.textContent = highlightCss;
+                                    document.head.appendChild(style);
+                                }
+                                // Add label CSS once
+                                if (!document.getElementById('highlight-label-style')) {
+                                    const lblStyle = document.createElement('style');
+                                    lblStyle.id = 'highlight-label-style';
+                                    lblStyle.textContent = labelCss;
+                                    document.head.appendChild(lblStyle);
+                                }
+                                
+                                // Highlight elements
+                                let totalHighlighted = 0;
+                                const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
+                                const getUniqueSelector = (element) => {
+                                    if (!element || element.nodeType !== 1) return '';
+                                    if (element.id) return '#' + cssEscape(element.id);
+                                    const parts = [];
+                                    let el = element;
+                                    while (el && el.nodeType === 1 && parts.length < 6) {
+                                        let selector = el.tagName.toLowerCase();
+                                        if (el.classList && el.classList.length > 0) {
+                                            const className = Array.from(el.classList)[0];
+                                            if (className) selector += '.' + cssEscape(className);
+                                        }
+                                        let siblingIndex = 1;
+                                        let prev = el.previousElementSibling;
+                                        while (prev) {
+                                            if (prev.tagName === el.tagName) siblingIndex++;
+                                            prev = prev.previousElementSibling;
+                                        }
+                                        selector += ':nth-of-type(' + siblingIndex + ')';
+                                        parts.unshift(selector);
+                                        if (el.id) { parts[0] = '#' + cssEscape(el.id); break; }
+                                        el = el.parentElement;
+                                        if (!el || el === document.body) break;
+                                    }
+                                    return parts.join(' > ');
+                                };
+                                selectors.forEach((selector) => {
+                                    try {
+                                        const elements = document.querySelectorAll(selector);
+                                        elements.forEach((el) => {
+                                            el.classList.add('highlighted-element');
+                                            const uniqueSelector = getUniqueSelector(el);
+                                            el.setAttribute('data-selector', uniqueSelector || selector);
+                                            totalHighlighted++;
+                                        });
+                                    } catch (e) {
+                                        console.log('Could not highlight selector:', selector, e);
+                                    }
+                                });
+                                // Remove any existing labels before placing new ones
+                                document.querySelectorAll('.highlight-label').forEach(n => n.remove());
+                                // Place non-overlapping labels in frame context
+                                const placed = [];
+                                const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
+                                allHighlighted.forEach((el) => {
+                                    const uniqueSelector = el.getAttribute('data-selector') || '';
+                                    const rect = el.getBoundingClientRect();
+                                    const label = document.createElement('div');
+                                    label.className = 'highlight-label';
+                                    label.textContent = uniqueSelector;
+                                    let left = rect.left + window.scrollX;
+                                    let top = rect.top + window.scrollY - 20;
+                                    const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+                                    label.style.left = left + 'px';
+                                    label.style.top = top + 'px';
+                                    document.body.appendChild(label);
+                                    let lr = label.getBoundingClientRect();
+                                    let moved = true;
+                                    let guard = 0;
+                                    while (moved && guard < 20) {
+                                        moved = false;
+                                        for (const r of placed) {
+                                            const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
+                                            if (overlaps) {
+                                                top = r.bottom + 2;
+                                                label.style.top = top + 'px';
+                                                lr = label.getBoundingClientRect();
+                                                moved = true;
+                                            }
+                                        }
+                                        guard++;
+                                    }
+                                    if (lr.right > pageWidth) {
+                                        const newLeft = Math.max(0, pageWidth - lr.width - 4);
+                                        label.style.left = newLeft + 'px';
+                                        lr = label.getBoundingClientRect();
+                                    }
+                                    placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
+                                });
+                                
+                                console.log('Total elements highlighted in frame: ' + totalHighlighted);
+                                return totalHighlighted;
+                            }
+                            """,
+                            {"selectors": highlight_selectors, "highlightCss": frame_highlight_css, "labelCss": label_css},
+                        )
+                    
+                    # Wait a moment for highlighting to apply
+                    self.page.wait_for_timeout(500)
+                    
+                    # Also add a visible border around the frame itself on the main page
+                    # so we can see where the frame is located
+                    self.page.evaluate(f"""
+                        () => {{
+                            // Remove any existing frame highlight
+                            const existing = document.getElementById('frame-highlight');
+                            if (existing) existing.remove();
+                            
+                            // Add frame highlight
+                            const frameHighlight = document.createElement('div');
+                            frameHighlight.id = 'frame-highlight';
+                            frameHighlight.style.cssText = `
+                                position: absolute;
+                                left: {frame_box['x']}px;
+                                top: {frame_box['y']}px;
+                                width: {frame_box['width']}px;
+                                height: {frame_box['height']}px;
+                                border: 4px solid #00ff00 !important;
+                                background-color: rgba(0, 255, 0, 0.1) !important;
+                                pointer-events: none;
+                                z-index: 9999;
+                            `;
+                            
+                            // Add label
+                            frameHighlight.innerHTML = '<div style="position: absolute; top: -30px; left: 0; background: #00ff00; color: black; padding: 4px 8px; font-weight: bold; border-radius: 4px;">IFRAME CONTENT</div>';
+                            
+                            document.body.appendChild(frameHighlight);
+                        }}
+                    """)
+                    
+                    # Wait for frame highlight to be added
+                    self.page.wait_for_timeout(200)
+                    
+                    # Take screenshot of the main page (which now includes both the frame highlight and the highlighted elements inside the frame)
+                    screenshot = self.page.screenshot(type="png", full_page=True)
+                    
+                    # Clean up the frame highlight on the main page
+                    self.page.evaluate("""
+                        () => {
+                            const frameHighlight = document.getElementById('frame-highlight');
+                            if (frameHighlight) frameHighlight.remove();
+                        }
+                    """)
+                    
+                    # Clean up highlighting in the frame
+                    target_frame.evaluate("""
+                        () => {
+                            const highlighted = document.querySelectorAll('.highlighted-element');
+                            highlighted.forEach((el) => {
+                                el.classList.remove('highlighted-element');
+                                el.removeAttribute('data-selector');
+                            });
+                            document.querySelectorAll('.highlight-label').forEach(n => n.remove());
+                            
+                            const style = document.getElementById('element-highlighting');
+                            if (style) style.remove();
+                        }
+                    """)
+                    
+                    context_str = "iframe_frame_highlighted"
+            
+            # Save highlighted screenshot to file
+            filename = f"highlighted_screenshot_{context_str.replace(' ', '_')}.png"
+            with open(filename, "wb") as f:
+                f.write(screenshot)
+            
+            print(f"✅ Highlighted screenshot saved: {filename}")
+            
+            # Clean up if we opened a new page
+            if target_page and target_page != self.page:
+                try:
+                    target_page.close()
+                except Exception as close_error:
+                    print(f"⚠️ Warning: Could not close highlighted screenshot tab: {close_error}")
+                # Restore original page context
+                self.page = original_page
+            
+            return screenshot, context_str
+            
+        except Exception as e:
+            print(f"❌ Error taking highlighted screenshot: {e}")
+            traceback.print_exc()
+            # Fallback to regular screenshot
+            try:
+                return self._take_smart_screenshot(frame, iframe_context)
+            except Exception as fallback_error:
+                print(f"❌ Critical error: Could not take any screenshot: {fallback_error}")
+                return None, "error"
+
+    def detect_and_handle_iframes(self) -> Dict[str, Any]:
+        """
+        Detect iframes on the page and determine if form fields are inside them
+        
+        Returns:
+            Dict with iframe information and whether to use iframe context
+        """
+        try:
+            print("🔍 Detecting iframes on the page...")
+            
+            # Find all iframes on the page
+            iframes = self.page.query_selector_all('iframe')
+            visible_iframes = [iframe for iframe in iframes if iframe.is_visible()]
+            
+            print(f"📋 Found {len(iframes)} total iframes, {len(visible_iframes)} visible")
+            
+            if not visible_iframes:
+                print("ℹ️ No visible iframes found - using main page context")
+                return {
+                    'has_iframes': False,
+                    'iframe_count': 0,
+                    'use_iframe_context': False,
+                    'iframe_context': None
+                }
+            
+            # Check if any iframes contain form elements
+            iframe_with_forms = None
+            for i, iframe in enumerate(visible_iframes):
+                try:
+                    # Get iframe frame object
+                    iframe_frame = iframe.content_frame()
+                    if not iframe_frame:
+                        continue
+                    
+                    # Check if iframe contains form elements
+                    form_elements = iframe_frame.query_selector_all('input, select, textarea')
+                    if form_elements:
+                        print(f"✅ Found iframe {i+1} with {len(form_elements)} form elements")
+                        iframe_with_forms = {
+                            'index': i,
+                            'iframe': iframe,
+                            'frame': iframe_frame,
+                            'form_count': len(form_elements)
+                        }
+                        break
+                        
+                except Exception as e:
+                    print(f"⚠️ Error checking iframe {i+1}: {e}")
+                    continue
+            
+            if iframe_with_forms:
+                print(f"🎯 Using iframe context for form fields")
+                return {
+                    'has_iframes': True,
+                    'iframe_count': len(visible_iframes),
+                    'use_iframe_context': True,
+                    'iframe_context': iframe_with_forms
+                }
+            else:
+                print("ℹ️ No iframes with form elements found - using main page context")
+                return {
+                    'has_iframes': True,
+                    'iframe_count': len(visible_iframes),
+                    'use_iframe_context': False,
+                    'iframe_context': None
+                }
+                
+        except Exception as e:
+            print(f"❌ Error detecting iframes: {e}")
+            return {
+                'has_iframes': False,
+                'iframe_count': 0,
+                'use_iframe_context': False,
+                'iframe_context': None
+            }
+      
 # Example usage
 if __name__ == "__main__":
     # Ensure we're not in an asyncio context
@@ -1957,7 +2887,7 @@ if __name__ == "__main__":
     
     # Test preferences
     preferences = {
-        'job_titles': ['ios engineer'],
+        'job_titles': ['rust developer'],
         'locations': ['london'],
         'salary_min': 12000,
         'employment_types': ['Full-time'],
