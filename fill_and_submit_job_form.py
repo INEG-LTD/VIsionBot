@@ -3,22 +3,27 @@
 Application Filler
 
 A comprehensive job application form filler that can handle various form types
-and automatically fill them based on user preferences using gemini-2.5-flash analysis.
+and automatically fill them based on user preferences using gpt-5-mini analysis.
 """
 
 # Removed incorrect import
 import time
 import json
-from typing import Callable, List, Dict, Optional, Any, Tuple, Union
+from typing import Callable, List, Dict, Optional, Any, Tuple
 from playwright.sync_api import Page
 from pydantic import BaseModel
 from enum import Enum
 import traceback
-import os
-import difflib
-from google import genai
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from urllib.parse import urlparse
+from yaspin import Spinner, yaspin
+from yaspin.api import Yaspin
+from yaspin.spinners import Spinners
+
+from ai_utils import generate_model, generate_text
+from terminal import term
+
+from bot_utils import debug_mode, start_browser, dprint
 
 # Import removed - using self.preferences instead
 
@@ -73,7 +78,7 @@ class RadioApplicationFieldResponse(BaseModel):
 # Checkbox field
 class CheckboxApplicationField(BaseApplicationField):
     field_type: FieldType = FieldType.CHECKBOX
-    field_value: Optional[bool] = None
+    field_value: Optional[bool] = True
     field_checked: Optional[bool] = False
 
 class CheckboxApplicationFieldResponse(BaseModel):
@@ -103,7 +108,7 @@ class ApplicationStateResponse(BaseModel):
     reason: str
 
 class ApplicationFiller:
-    def __init__(self, page: Page, preferences: Dict[str, Any] = None):
+    def __init__(self, page: Page = None, preferences: Dict[str, Any] = None):
         """
         Initialize the Application Filler
         
@@ -111,11 +116,27 @@ class ApplicationFiller:
             page: Playwright page object
             preferences: User preferences for filling forms
         """
-        self.page = page
+        if page is None:
+            _, _, new_page = start_browser()
+            self.page = new_page
+        else:
+            self.page = page
+            
         self.preferences = preferences or {}
         self.max_form_iterations = 10  # Prevent infinite loops
         self.current_iteration = 0
-        
+        self.old_url = None
+    
+    def _serialize_field_for_json(self, field) -> dict:
+        """
+        Custom serialization function to handle FieldType enums properly
+        """
+        field_dict = field.model_dump()
+        # Convert FieldType enum to string for JSON serialization
+        if 'field_type' in field_dict and isinstance(field_dict['field_type'], FieldType):
+            field_dict['field_type'] = field_dict['field_type'].value
+        return field_dict
+    
     def fill_application(self, on_success_callback: Callable[[], None] = None, on_failure_callback: Callable[[], None] = None) -> bool:
         """
         Main entry point for application filling process
@@ -144,7 +165,188 @@ class ApplicationFiller:
         except Exception as e:
             print(f"❌ Error in application filling: {e}")
             return False
+    
+    def verify_cookie_button(self, selector_to_verify: str, best_of: int = 3) -> str:
+        """
+        Verify the cookie policy is accepted using best_of parameter for consensus
+        """
+        print(f"🔍 Verifying cookie button: {selector_to_verify} (best_of: {best_of})")
         
+        if best_of <= 1:
+            # Single run - use original logic
+            try:
+                system_prompt = f"""
+                    ROLE
+                    You are a senior UI/DOM analyst. Verify a proposed Playwright CSS selector for the site's cookie-consent "accept" button. If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from the HTML. Output EXACTLY ONE line: the selector string or an empty string.
+
+                    INPUTS
+                    - proposed_selector: {selector_to_verify}
+                    - NOTE: {"The proposed selector is empty - you MUST find a cookie accept button from scratch" if not selector_to_verify else "The proposed selector exists and should be validated"}
+
+                    TARGET (WHAT COUNTS)
+                    A single, visible, enabled control in the TOP DOCUMENT (no iframes) that accepts cookies:
+                    - Element is a <button>, <a>, or any element with button-like semantics (e.g., role="button").
+                    - Accessible name/label implies acceptance: accept, accept all, allow, allow all, agree, i agree, ok, yes (case-insensitive).
+                    - Prefer the primary "accept all" action over partial/necessary-only acceptance.
+
+                    FORBIDDEN / EXCLUDE
+                    - Anything inside an <iframe> (selector must not include iframe nodes; top document only).
+                    - Hidden/disabled/off-screen/zero-size elements (display:none, visibility:hidden, opacity:0, [hidden], [aria-hidden="true"], [disabled], aria-disabled="true"]).
+                    - Non-accept actions: reject/decline/deny/disagree/manage/settings/preferences/customize/options/only necessary|essential.
+                    - Brittle selectors: :nth-*, inline style predicates, state-dependent hacks ([aria-expanded], transient classes).
+                    - Overly generic roots: html body button, body a.
+
+                    PREFERENCES FOR SELECTOR STABILITY
+                    - Prefer stable attributes: #id, [data-*], [name], [aria-label], [title], [data-testid], [data-qa].
+                    - Otherwise: select the nearest stable consent container (id/class contains cookie|consent|gdpr|privacy) + a button with :has-text(...) or attribute match.
+                    - Vendor-known targets (when present; highest priority):
+                    #onetrust-accept-btn-handler
+                    #CybotCookiebotDialogBodyButtonAccept
+                    .didomi-accept-button
+                    #sp-accept, #sp-accept-all
+                    #qc-cmp2-ui .qc-cmp2-accept
+                    #truste-consent-button
+                    #cookie_action_close_header
+
+                    VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                    1) Resolves to EXACTLY ONE element in the top document.
+                    2) Element is <button> or <a> or has role="button" (button-like), NOT an <input>.
+                    3) Element is visible & enabled now.
+                    4) Accessible name/label/text matches acceptance (positive) and does NOT match any negative/management wording.
+                    5) Selector has NO iframe prefixes/nodes and is reasonably stable (uses id/data/aria/container + :has-text rather than positional/state hacks).
+
+                    DECISION RULE
+                    - If ALL checklist items pass AND no more primary "accept all" button exists in the same banner, RETURN proposed_selector UNCHANGED.
+                    - Otherwise, RECOMPUTE:
+                    a) Locate the active cookie/consent banner container.
+                    b) Enumerate visible, enabled <button>/<a>/<div[role='button']> within it.
+                    c) Filter by positive acceptance semantics; drop negatives/management/partial-only if a true "accept all" exists.
+                    d) Prefer vendor-known targets; else build the most stable unique selector (id/data/aria/container + :has-text(/accept|allow|agree|ok|yes|accept all/i)).
+                    e) Ensure uniqueness, visibility, top-document, and not <input>.
+
+                    OUTPUT
+                    - Output EXACTLY ONE line with ONLY the selector string (no quotes, no extra text).
+                    - If no qualifying button in the top document, output an empty string.
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Validate proposed_selector with the checklist.
+                    - If invalid/ambiguous or a better primary accept-all exists, recompute per procedure.
+                    - Final self-check before output: uniqueness, visibility, semantics, stability, no forbidden patterns.
+                    """
+
+                accept_cookies_selector = generate_text(
+                    "You are an expert at analyzing HTML and finding cookie accept buttons",
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                )
+                
+                print(f"🔍 Verified accept cookies button: {accept_cookies_selector}")
+                return accept_cookies_selector
+            except Exception as e:
+                print(f"❌ Error in verify_cookie_policy: {e}")
+                return selector_to_verify
+        
+        # Multiple runs for consensus
+        results = []
+        for i in range(best_of):
+            try:
+                print(f"🔍 Run {i+1}/{best_of} for cookie button verification...")
+                
+                system_prompt = f"""
+                    ROLE
+                    You are a senior UI/DOM analyst. Verify a proposed Playwright CSS selector for the site's cookie-consent "accept" button. If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from the HTML. Output EXACTLY ONE line: the selector string or an empty string.
+
+                    INPUTS
+                    - proposed_selector: {selector_to_verify}
+                    - NOTE: {"The proposed selector is empty - you MUST find a cookie accept button from scratch" if not selector_to_verify else "The proposed selector exists and should be validated"}
+
+                    TARGET (WHAT COUNTS)
+                    A single, visible, enabled control in the TOP DOCUMENT (no iframes) that accepts cookies:
+                    - Element is a <button>, <a>, or any element with button-like semantics (e.g., role="button").
+                    - Accessible name/label implies acceptance: accept, accept all, allow, allow all, agree, i agree, ok, yes (case-insensitive).
+                    - Prefer the primary "accept all" action over partial/necessary-only acceptance.
+
+                    FORBIDDEN / EXCLUDE
+                    - Anything inside an <iframe> (selector must not include iframe nodes; top document only).
+                    - Hidden/disabled/off-screen/zero-size elements (display:none, visibility:hidden, opacity:0, [hidden], [aria-hidden="true"], [disabled], aria-disabled="true"]).
+                    - Non-accept actions: reject/decline/deny/disagree/manage/settings/preferences/customize/options/only necessary|essential.
+                    - Brittle selectors: :nth-*, inline style predicates, state-dependent hacks
+                    - Overly generic roots: html body button, body a.
+
+                    PREFERENCES FOR SELECTOR STABILITY
+                    - Prefer stable attributes: #id, [data-*], [name], [aria-label], [title], [data-testid], [data-qa].
+                    - Otherwise: select the nearest stable consent container (id/class contains cookie|consent|gdpr|privacy) + a button with :has-text(...) or attribute match.
+                    - Vendor-known targets (when present; highest priority):
+                    #onetrust-accept-btn-handler
+                    #CybotCookiebotDialogBodyButtonAccept
+                    .didomi-accept-button
+                    #sp-accept, #sp-accept-all
+                    #qc-cmp2-ui .qc-cmp2-accept
+                    #truste-consent-button
+                    #cookie_action_close_header
+
+                    VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                    1) Resolves to EXACTLY ONE element in the top document.
+                    2) Element is <button> or <a> or has role="button" (button-like), NOT an <input>.
+                    3) Element is visible & enabled now.
+                    4) Accessible name/label/text matches acceptance (positive) and does NOT match any negative/management wording.
+                    5) Selector has NO iframe prefixes/nodes and is reasonably stable (uses id/data/aria/container + :has-text rather than positional/state hacks).
+
+                    DECISION RULE
+                    - If ALL checklist items pass AND no more primary "accept all" button exists in the same banner, RETURN proposed_selector UNCHANGED.
+                    - Otherwise, RECOMPUTE:
+                    a) Locate the active cookie/consent banner container.
+                    b) Enumerate visible, enabled <button>/<a>/<div[role='button']> within it.
+                    c) Filter by positive acceptance semantics; drop negatives/management/partial-only if a true "accept all" exists.
+                    d) Prefer vendor-known targets; else build the most stable unique selector (id/data/aria/container + :has-text(/accept|allow|agree|ok|yes|accept all/i)).
+                    e) Ensure uniqueness, visibility, top-document, and not <input>.
+
+                    OUTPUT
+                    - Output EXACTLY ONE line with ONLY the selector string (no quotes, no extra text).
+                    - If no qualifying button in the top document, output an empty string.
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Validate proposed_selector with the checklist.
+                    - If fnvalid/ambiguous or a better primary accept-all exists, recompute per procedure.
+                    - Final self-check before output: uniqueness, visibility, semantics, stability, no forbidden patterns.
+                    """
+
+                result = generate_text(
+                    "You are an expert at analyzing HTML and finding cookie accept buttons",
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                )
+                
+                if result and result.strip():
+                    results.append(result.strip())
+                    print(f"🔍 Run {i+1} result: {result.strip()}")
+                else:
+                    print(f"🔍 Run {i+1} returned empty result")
+                    
+            except Exception as e:
+                print(f"❌ Error in run {i+1}: {e}")
+                continue
+        
+        if not results:
+            print(f"❌ All {best_of} runs failed, returning original selector")
+            return selector_to_verify
+        
+        # Find most common result
+        from collections import Counter
+        result_counts = Counter(results)
+        most_common_result = result_counts.most_common(1)[0]
+        
+        print(f"🔍 Consensus results: {dict(result_counts)}")
+        print(f"🔍 Most common result: {most_common_result[0]} (frequency: {most_common_result[1]}/{best_of})")
+        
+        # If most common result appears more than once and is different from original, use it
+        if most_common_result[1] > 1 and most_common_result[0] != selector_to_verify:
+            print(f"🔍 Using consensus result: {most_common_result[0]}")
+            return most_common_result[0]
+        else:
+            print(f"🔍 No clear consensus, returning last result: {results[-1] if results else selector_to_verify}")
+            return results[-1] if results else selector_to_verify
+    
     def click_accept_cookies_button(self) -> bool:
         """
         Click the accept cookies button
@@ -153,38 +355,104 @@ class ApplicationFiller:
             bool: True if button was found and clicked successfully
         """
         try:
-            print("🔍 Looking for accept cookies button...")
+            if self.old_url is None:
+                self.old_url = self.page.url
+            else:
+                # Check the domain of the old url and the new url
+                old_domain = urlparse(self.old_url).netloc
+                new_domain = urlparse(self.page.url).netloc
+                if old_domain == new_domain:
+                    return True
             
             # Common accept cookies button selectors
-            accept_cookies_selectors = [
-                'button:has-text("Accept all")',
-                'button:has-text("Accept cookies")',
-                'button:has-text("Accept")',
-                'button:has-text("Allow all")',
-                'button:has-text("Allow")',
-                'button:has-text("Allow cookies")',
-            ]
-            
-            accept_cookies_button = None
-            for selector in accept_cookies_selectors:
+            with yaspin(text="Looking for accept cookies button...", color="cyan") as spinner:
                 try:
-                    accept_cookies_button = self.page.locator(selector)
-                    if accept_cookies_button and accept_cookies_button.is_visible():
-                        print(f"✅ Found accept cookies button with selector: {selector}")
-                        break
-                except:
-                    continue
+                    system_prompt = """
+                    ROLE
+                    You are a senior UI/DOM analyst. Return a single Playwright-compatible selector for the site's cookie-consent "accept" button.
+
+                    INPUT
+                    - html: full page HTML
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    1) Locate the active cookie/consent banner container.
+                    2) Enumerate candidate buttons whose accessible name implies acceptance: accept, accept all, allow, allow all, agree, i agree, ok, yes (case-insensitive).
+                    3) Exclude negatives: reject, decline, deny, disagree, manage, settings, preferences, customize, options, only necessary/essential.
+                    4) Keep only visible, enabled, top-document elements (ignore iframes, hidden/disabled/off-screen).
+                    5) Prefer the primary "accept all" action over partial/necessary-only.
+                    6) Build a unique, stable selector. Prefer vendor IDs first; otherwise scope to the consent container + a text match.
+                    7) Self-check: selector resolves to exactly one element; no positional or state-dependent hacks.
+
+                    RULES
+                    - Prefer stable attributes: id, data-*, name, aria-label, title, data-testid.
+                    - Known vendor targets (when present): 
+                    #onetrust-accept-btn-handler
+                    #CybotCookiebotDialogBodyButtonAccept
+                    .didomi-accept-button
+                    #sp-accept, #sp-accept-all
+                    #qc-cmp2-ui .qc-cmp2-accept
+                    #truste-consent-button
+                    #cookie_action_close_header
+                    - Otherwise: pick nearest stable consent container (id/class contains cookie|consent|gdpr|privacy) then a button with :has-text(...) or attribute match.
+                    - Avoid brittle selectors: :nth-*, inline style filters, transient state ([aria-expanded], [style*='display:none'], [aria-hidden]).
+                    - Do NOT return anything inside an <iframe>; frame scoping is out of scope for a single selector string.
+
+                    OUTPUT
+                    - Output EXACTLY one line containing ONLY the selector string (no quotes, no extra text).
+                    - If no qualifying button in the top document, output an empty string.
+
+                    GOOD EXAMPLES (DO NOT OUTPUT)
+                    #onetrust-accept-btn-handler
+                    button#CybotCookiebotDialogBodyButtonAccept
+                    button.didomi-accept-button
+                    div#cookie-banner button:has-text("Accept all")
+                    section.consent-modal button:has-text(/accept|allow|agree/i)
+
+                    BAD EXAMPLES (DO NOT OUTPUT)
+                    button:nth-of-type(2)                 # positional
+                    [aria-hidden="true"] button           # hidden
+                    iframe[name="sp_message_iframe"] ...  # requires iframe handling
+                    a.manage-preferences                  # wrong action
+                    """
+
+                    
+                    prompt = f"""
+                    Here is the HTML of the page:
+                    "{self.page.content()}"
+                    """
+                    
+                    accept_cookies_selector = generate_text(prompt, system_prompt=system_prompt, model="gpt-5-mini")
+                    
+                    verified_accept_cookies_selector = self.verify_cookie_button(accept_cookies_selector)
+                    accept_cookies_selector = verified_accept_cookies_selector
+                    
+                    try:
+                        accept_cookies_button = None
+                        
+                        accept_cookies_button = self.page.locator(accept_cookies_selector)
+                        if accept_cookies_button and accept_cookies_button.is_visible():
+                            if debug_mode:
+                                spinner.write("Found accept cookies button, clicking...")
+
+                            # Click the accept cookies button
+                            accept_cookies_button.click()
+                            spinner.hide()
+                            print(term.green + "> Accepted cookies on " + term.normal + self.page.url)
+                        else:
+                            dprint(f"❌ No accept cookies button found with selector: {accept_cookies_selector}")
+                            spinner.hide()
+                            return False
+                    except Exception as e:
+                        dprint(f"❌ Error finding accept cookies button: {e}")
+                        spinner.hide()
+                        return False
+                    
+                    return True
+                except Exception as e:
+                    spinner.hide()
+                    print(f"❌ Error clicking accept cookies button: {e}")
+                    return False
             
-            if not accept_cookies_button:
-                print("ℹ️ No accept cookies button found")
-                return False
-            
-            # Click the accept cookies button
-            print("🎯 Clicking accept cookies button...")
-            accept_cookies_button.click()
-            
-            return True
-        
         except Exception as e:
             print(f"❌ Error clicking accept cookies button: {e}")
             return False
@@ -196,34 +464,43 @@ class ApplicationFiller:
         Returns:
             bool: True if all forms were successfully filled
         """
-        print("🎯 Starting main form filling algorithm...")
+        print(term.bold + "🎯 Starting Application Filler..." + term.reset)
         
         self.current_iteration = 0
         
         while self.current_iteration < self.max_form_iterations:
             self.current_iteration += 1
-            print(f"\n🔄 Form iteration {self.current_iteration}/{self.max_form_iterations}")
+            dprint(f"\n🔄 Form iteration {self.current_iteration}/{self.max_form_iterations}")
+            
             
             try:
-                # Initial page screenshot
-                
                 # Step 0: Click accept cookies button
                 self.click_accept_cookies_button()
                 
+                self.old_url = self.page.url
+                
                 # Step 1: Detect iframes and determine context
                 iframe_context = self.detect_and_handle_iframes()
-                
+
                 # Step 2: Find all form fields based on context
-                print("Finding all form fields...")
-                if iframe_context['use_iframe_context']:
-                    # Use unified field detection functions with frame context
-                    frame = iframe_context['iframe_context']['frame']
-                    text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs(frame, iframe_context["iframe_context"])
-                else:
-                    # Use unified field detection functions for main page
-                    text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs()
+                with yaspin(Spinners.binary, text="Finding all form fields...", color="cyan") as spinner:
+                    if iframe_context['use_iframe_context']:
+                        # Use unified field detection functions with frame context
+                        frame = iframe_context['iframe_context']['frame']
+                        text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs(frame, iframe_context["iframe_context"], spinner)
+                    else:
+                        # Use unified field detection functions for main page
+                        text_fields, select_fields, radio_fields, checkbox_fields, upload_fields = self.find_all_form_inputs(spinner=spinner)
+                    
+                    spinner.hide()
                 
-                initial_screenshot_bytes, initial_screenshot_context = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
+                if not text_fields and not select_fields and not radio_fields and not checkbox_fields and not upload_fields:
+                    print("Hmmmm, this is weird. We couldn't find any job application form fields on this page.")
+                    print("Please check if the page is a job application form.")
+                    print("If it is, please report this as a bug.")
+                    return False
+                
+                initial_screenshot_bytes, initial_screenshot_context = self._take_smart_screenshot(frame, iframe_context)
                 
                 total_fields = (len(text_fields) + len(select_fields) + 
                                len(radio_fields) + len(checkbox_fields) + 
@@ -345,16 +622,16 @@ class ApplicationFiller:
             Dict with iframe information and whether to use iframe context
         """
         try:
-            print("🔍 Detecting iframes on the page...")
+            dprint("🔍 Detecting iframes on the page...")
             
             # Find all iframes on the page
             iframes = self.page.query_selector_all('iframe')
             visible_iframes = [iframe for iframe in iframes if iframe.is_visible()]
             
-            print(f"📋 Found {len(iframes)} total iframes, {len(visible_iframes)} visible")
+            dprint(f"📋 Found {len(iframes)} total iframes, {len(visible_iframes)} visible")
             
             if not visible_iframes:
-                print("ℹ️ No visible iframes found - using main page context")
+                dprint("ℹ️ No visible iframes found - using main page context")
                 return {
                     'has_iframes': False,
                     'iframe_count': 0,
@@ -374,7 +651,7 @@ class ApplicationFiller:
                     # Check if iframe contains form elements
                     form_elements = iframe_frame.query_selector_all('input, select, textarea')
                     if form_elements:
-                        print(f"✅ Found iframe {i+1} with {len(form_elements)} form elements")
+                        dprint(f"✅ Found iframe {i+1} with {len(form_elements)} form elements")
                         iframe_with_forms = {
                             'index': i,
                             'iframe': iframe,
@@ -384,11 +661,11 @@ class ApplicationFiller:
                         break
                         
                 except Exception as e:
-                    print(f"⚠️ Error checking iframe {i+1}: {e}")
+                    dprint(f"⚠️ Error checking iframe {i+1}: {e}")
                     continue
             
             if iframe_with_forms:
-                print(f"🎯 Using iframe context for form fields")
+                dprint(f"🎯 Using iframe context for form fields")
                 return {
                     'has_iframes': True,
                     'iframe_count': len(visible_iframes),
@@ -396,7 +673,7 @@ class ApplicationFiller:
                     'iframe_context': iframe_with_forms
                 }
             else:
-                print("ℹ️ No iframes with form elements found - using main page context")
+                dprint("ℹ️ No iframes with form elements found - using main page context")
                 return {
                     'has_iframes': True,
                     'iframe_count': len(visible_iframes),
@@ -405,7 +682,7 @@ class ApplicationFiller:
                 }
                 
         except Exception as e:
-            print(f"❌ Error detecting iframes: {e}")
+            dprint(f"❌ Error detecting iframes: {e}")
             return {
                 'has_iframes': False,
                 'iframe_count': 0,
@@ -478,12 +755,6 @@ class ApplicationFiller:
                 print(f"⏭️ Skipping select field outside form context in {context_str}: {select_field.field_name}")
                 return True
             
-            # Check if this is a system or preference field that should be skipped
-            if self._is_system_or_preference_field(select_field):
-                context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping system/preference select field in {context_str}: {select_field.field_name}")
-                return True
-            
             # Try to handle as standard select first
             try:
                 # Try standard select handling
@@ -512,8 +783,17 @@ class ApplicationFiller:
                     time.sleep(0.5)
                     print(f"🔄 Clicked select field and waiting for options to appear")
                     
-                    result = self._find_and_click_option_with_gpt(frame.content(), self.preferences, frame)
+                    result = self._find_option_with_gpt(frame.content(), self.preferences, frame)
+
+                    # Verify the result using the verify function
+                    verified_result = self.verify_option_selector(result, frame.content(), self.preferences, best_of=3)
+                    if verified_result and verified_result != result:
+                        print(f"🔍 Selector verified and updated: {result} -> {verified_result}")
+                        result = verified_result
+                        
                     if result:
+                        option_element = frame.locator(result)
+                        option_element.click(force=True, timeout=5000)
                         print(f"✅ Successfully selected option: {result}")
                         return True
                     else:
@@ -529,8 +809,8 @@ class ApplicationFiller:
             print(f"❌ Error handling select field in {context_str}: {e}")
             return False
 
-    def _find_and_click_option_with_gpt(self, page_html: str, preferences: str, frame) -> Optional[Dict[str, Any]]:
-        """Use gemini-2.5-flash to find and click the correct option from HTML snapshot"""
+    def _find_option_with_gpt(self, page_html: str, preferences: str, frame) -> Optional[Dict[str, Any]]:
+        """Use gpt-5-mini to find and click the correct option from HTML snapshot"""
         try:
             prompt = f"""
                 You are **Gemini 2.5**, a state-of-the-art language model with DOM-parsing skills.
@@ -560,7 +840,7 @@ class ApplicationFiller:
                 ------------------------------------------------------------------------
                 ✅ **Allowed examples** (unique)  
                 • `div[role="option"]:has-text("United Kingdom")`  
-                • `#react-select-3-option-5`  
+                • `#react-select-7-option-0`  
                 • `div.css-a1b2c3-option[data-value="ca"]`  
                 • `div[role="option"][data-value="fr"]`  
 
@@ -580,30 +860,192 @@ class ApplicationFiller:
                 {page_html}
                 """
             
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element."
-                )
-            )
-            result = response.text.strip()
+            result = generate_text(
+                prompt,
+                system_prompt="You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element.",
+                model="gpt-5-mini"
+            ).strip()
             
             print(result)
         
-            option_element = frame.locator(result)
-            if option_element:
-                option_element.click(force=True, timeout=5000)
-                print(f"✅ Clicked option: {result}")
-                return result
-            else:
-                print(f"❌ Could not find option element with selector: {result}")
-                return None
+            return result
             
         except Exception as e:
             print(f"❌ Error in Gemini 2.5 Pro option detection: {e}")
             return None
+
+    def verify_option_selector(self, selector_to_verify: str, page_html: str, preferences: str, best_of: int = 3) -> str:
+        """
+        Verify the option selector using best_of parameter for consensus
+        """
+        print(f"🔍 Verifying option selector: {selector_to_verify} (best_of: {best_of})")
+        
+        if best_of <= 1:
+            # Single run - use original logic
+            try:
+                system_prompt = f"""
+                    ROLE
+                    You are a senior UI/DOM analyst. Verify a proposed Playwright CSS selector for a dropdown option element. If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from the HTML. Output EXACTLY ONE line: the selector string or an empty string.
+
+                    INPUTS
+                    - proposed_selector: {selector_to_verify}
+                    - page_html: HTML of the open dropdown
+                    - preferences: {preferences}
+                    - NOTE: {"The proposed selector is empty - you MUST find a dropdown option from scratch" if not selector_to_verify else "The proposed selector exists and should be validated"}
+
+                    TARGET (WHAT COUNTS)
+                    A single, visible dropdown option element that matches the user's preferences:
+                    - Element is a <div role="option"> or similar dropdown option element
+                    - Element text/content matches the user's preferences
+                    - Element is visible and clickable
+                    - Element is unique within the dropdown
+
+                    FORBIDDEN / EXCLUDE
+                    - Hidden/disabled/off-screen elements (display:none, visibility:hidden, opacity:0, [hidden], [aria-hidden="true"])
+                    - Non-option elements (parent containers, siblings, descendants)
+                    - Brittle selectors: :nth-*, inline style predicates, state-dependent hacks
+                    - Overly generic selectors that match multiple elements
+
+                    PREFERENCES FOR SELECTOR STABILITY
+                    - Prefer stable attributes: #id, [data-*], [data-value], [aria-label], [title]
+                    - Use :has-text() for text-based matching when stable attributes aren't available
+                    - Prefer class-based selectors ending in "-option" for react-select components
+                    - Avoid positional selectors unless absolutely necessary
+
+                    VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                    1) Resolves to EXACTLY ONE element in the dropdown
+                    2) Element has role="option" or similar dropdown option semantics
+                    3) Element is visible & clickable now
+                    4) Element text/content matches the user's preferences
+                    5) Selector is reasonably stable and not overly brittle
+
+                    DECISION RULE
+                    - If ALL checklist items pass, RETURN proposed_selector UNCHANGED
+                    - Otherwise, RECOMPUTE:
+                    a) Locate the open dropdown container
+                    b) Enumerate visible, clickable option elements within it
+                    c) Filter by text/content matching the user's preferences
+                    d) Build the most stable unique selector (id/data/aria + :has-text or class-based)
+                    e) Ensure uniqueness, visibility, and proper role semantics
+
+                    OUTPUT
+                    - Output EXACTLY ONE line with ONLY the selector string (no quotes, no extra text)
+                    - If no qualifying option found, output an empty string
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Validate proposed_selector with the checklist
+                    - If invalid/ambiguous, recompute per procedure
+                    - Final self-check: uniqueness, visibility, semantics, stability
+                    """
+
+                verified_selector = generate_text(
+                    "You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element.",
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                )
+                
+                print(f"🔍 Verified option selector: {verified_selector}")
+                return verified_selector
+            except Exception as e:
+                print(f"❌ Error in verify_option_selector: {e}")
+                return selector_to_verify
+        
+        # Multiple runs for consensus
+        results = []
+        for i in range(best_of):
+            try:
+                print(f"🔍 Run {i+1}/{best_of} for option selector verification...")
+                
+                system_prompt = f"""
+                    ROLE
+                    You are a senior UI/DOM analyst. Verify a proposed Playwright CSS selector for a dropdown option element. If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from the HTML. Output EXACTLY ONE line: the selector string or an empty string.
+
+                    INPUTS
+                    - proposed_selector: {selector_to_verify}
+                    - page_html: HTML of the open dropdown
+                    - preferences: {preferences}
+                    - NOTE: {"The proposed selector is empty - you MUST find a dropdown option from scratch" if not selector_to_verify else "The proposed selector exists and should be validated"}
+
+                    TARGET (WHAT COUNTS)
+                    A single, visible dropdown option element that matches the user's preferences:
+                    - Element is a <div role="option"> or similar dropdown option element
+                    - Element text/content matches the user's preferences
+                    - Element is visible and clickable
+                    - Element is unique within the dropdown
+
+                    FORBIDDEN / EXCLUDE
+                    - Hidden/disabled/off-screen elements (display:none, visibility:hidden, opacity:0, [hidden], [aria-hidden="true"])
+                    - Non-option elements (parent containers, siblings, descendants)
+                    - Brittle selectors: :nth-*, inline style predicates, state-dependent hacks
+                    - Overly generic selectors that match multiple elements
+
+                    PREFERENCES FOR SELECTOR STABILITY
+                    - Prefer stable attributes: #id, [data-*], [data-value], [aria-label], [title]
+                    - Use :has-text() for text-based matching when stable attributes aren't available
+                    - Prefer class-based selectors ending in "-option" for react-select components
+                    - Avoid positional selectors unless absolutely necessary
+
+                    VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                    1) Resolves to EXACTLY ONE element in the dropdown
+                    2) Element has role="option" or similar dropdown option semantics
+                    3) Element is visible & clickable now
+                    4) Element text/content matches the user's preferences
+                    5) Selector is reasonably stable and not overly brittle
+
+                    DECISION RULE
+                    - If ALL checklist items pass, RETURN proposed_selector UNCHANGED
+                    - Otherwise, RECOMPUTE:
+                    a) Locate the open dropdown container
+                    b) Enumerate visible, clickable option elements within it
+                    c) Filter by text/content matching the user's preferences
+                    d) Build the most stable unique selector (id/data/aria + :has-text or class-based)
+                    e) Ensure uniqueness, visibility, and proper role semantics
+
+                    OUTPUT
+                    - Output EXACTLY ONE line with ONLY the selector string (no quotes, no extra text)
+                    - If no qualifying option found, output an empty string
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Validate proposed_selector with the checklist
+                    - If invalid/ambiguous, recompute per procedure
+                    - Final self-check: uniqueness, visibility, semantics, stability
+                    """
+
+                result = generate_text(
+                    "You are an expert at analyzing HTML and finding dropdown options. Return only the selector that will find the option element.",
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                )
+                
+                if result and result.strip():
+                    results.append(result.strip())
+                    print(f"🔍 Run {i+1} result: {result.strip()}")
+                else:
+                    print(f"🔍 Run {i+1} returned empty result")
+                    
+            except Exception as e:
+                print(f"❌ Error in run {i+1}: {e}")
+                continue
+        
+        if not results:
+            print(f"❌ All {best_of} runs failed, returning original selector")
+            return selector_to_verify
+        
+        # Find most common result
+        from collections import Counter
+        result_counts = Counter(results)
+        most_common_result = result_counts.most_common(1)[0]
+        
+        print(f"🔍 Consensus results: {dict(result_counts)}")
+        print(f"🔍 Most common result: {most_common_result[0]} (frequency: {most_common_result[1]}/{best_of})")
+        
+        # If most common result appears more than once and is different from original, use it
+        if most_common_result[1] > 1 and most_common_result[0] != selector_to_verify:
+            print(f"🔍 Using consensus result: {most_common_result[0]}")
+            return most_common_result[0]
+        else:
+            print(f"🔍 No clear consensus, returning last result: {results[-1] if results else selector_to_verify}")
+            return results[-1] if results else selector_to_verify
     
     def _check_select_already_selected(self, element, target_value: str, frame=None) -> bool:
         """
@@ -655,7 +1097,7 @@ class ApplicationFiller:
         except Exception as e:
             print(f"⚠️ Error checking if select already selected: {e}")
             return False
-    
+
     def _is_element_in_form_context(self, element, frame=None) -> bool:
         """
         Check if an element is within the actual job application form context
@@ -669,7 +1111,7 @@ class ApplicationFiller:
             # Strategy 1: Check if element is within a form tag
             try:
                 # Find the closest form ancestor
-                form_ancestor = element.locator('xpath=ancestor::form').first
+                form_ancestor = context.locator('xpath=ancestor::form').first
                 if form_ancestor and form_ancestor.is_visible():
                     return True
             except:
@@ -803,118 +1245,7 @@ class ApplicationFiller:
         except Exception as e:
             print(f"⚠️ Error checking form context: {e}")
             return True  # Default to allowing interaction
-    
-    def _is_system_or_preference_field(self, select_field: SelectApplicationField) -> bool:
-        """
-        Detect system or preference fields that should typically be skipped
-        """
-        field_name = select_field.field_name.lower() if select_field.field_name else ""
-        field_selector = select_field.field_selector.lower() if select_field.field_selector else ""
-        
-        # Keywords that indicate system/preference fields
-        system_keywords = [
-            "theme", "color", "appearance", "display", "view", "sort", 
-            "filter", "search", "preferences", "settings", "config",
-            "notification", "alert", "email_pref", "communication",
-            "privacy", "cookie", "tracking", "analytics", "marketing"
-        ]
-        
-        # Check field content
-        combined_text = f"{field_name} {field_selector}".lower()
-        
-        for keyword in system_keywords:
-            if keyword in combined_text:
-                return True
-        
-        # Check for pagination, sorting, or filtering controls
-        if any(word in combined_text for word in ["per_page", "page_size", "sort_by", "order_by", "filter_by"]):
-            return True
-        
-        # Check for fields that typically don't need user input in job applications
-        non_essential_keywords = [
-            "source", "referral", "utm", "campaign", "channel", "medium",
-            "version", "build", "debug", "test", "demo"
-        ]
-        
-        for keyword in non_essential_keywords:
-            if keyword in combined_text:
-                return True
-        
-        return False
-    
-    # Removed _get_enhanced_option_selectors and _is_valid_option_match methods
-    # These are no longer needed since we use gemini-2.5-flash for intelligent dropdown handling
-    
-    def _get_file_upload_button_selectors(self, file_input_id: str = None, file_input_name: str = None) -> list:
-        """
-        Generate comprehensive list of selectors for file upload buttons
-        """
-        selectors = [
-            # Generic upload buttons
-            'button:has-text("Attach")',
-            'button:has-text("Upload")',
-            'button:has-text("Browse")',
-            'button:has-text("Choose File")',
-            'button:has-text("Select File")',
-            'button:has-text("Add File")',
-            'button:has-text("Choose")',
-            '.btn:has-text("Attach")',
-            '.btn:has-text("Upload")',
-            '.btn:has-text("Browse")',
-            
-            # Class-based selectors
-            '.file-upload button',
-            '.upload-button',
-            '.file-input-button',
-            '.attach-button',
-            '[class*="upload"] button',
-            '[class*="file"] button',
-            '[class*="attach"] button',
-            
-            # Data attribute selectors
-            'button[data-testid*="upload"]',
-            'button[data-testid*="file"]',
-            'button[data-testid*="attach"]',
-            'button[data-testid*="resume"]',
-            'button[data-testid*="cv"]',
-        ]
-        
-        # Add specific selectors based on input attributes
-        if file_input_id:
-            selectors.extend([
-                f'button[data-for="{file_input_id}"]',
-                f'button[for="{file_input_id}"]',
-                f'[data-target="#{file_input_id}"]',
-            ])
-        
-        if file_input_name:
-            selectors.extend([
-                f'button[data-name="{file_input_name}"]',
-                f'button:has-text("{file_input_name}")',
-            ])
-        
-        return selectors
-    
-    def _is_clickable_element(self, element) -> bool:
-        """
-        Check if an element is clickable and visible
-        """
-        try:
-            if not element:
-                return False
-            
-            # Check if element is visible
-            if not element.is_visible():
-                return False
-            
-            # Check if element is enabled
-            if not element.is_enabled():
-                return False
-            
-            return True
-        except:
-            return False
-    
+
     def _is_element_interactive(self, element, frame=None) -> bool:
         """
         Check if an element is interactive (visible, enabled, and in viewport)
@@ -979,144 +1310,6 @@ class ApplicationFiller:
         except Exception as e:
             print(f"⚠️ Error checking element interactivity: {e}")
             return False
-    
-    def _safe_click_element(self, element) -> bool:
-        """
-        Safely click an element with multiple fallback strategies
-        """
-        try:
-            if not element:
-                return False
-            
-            # Strategy 1: Scroll into view and direct click
-            try:
-                element.click(force=True, timeout=5000)
-                print(f"✅ Element clicked successfully")
-                return True
-            except Exception as e:
-                print(f"⚠️ Direct click failed: {e}")
-            
-            # Strategy 2: JavaScript click
-            try:
-                self.page.evaluate("(el) => el.click()", element)
-                print(f"✅ Element clicked with JavaScript")
-                return True
-            except Exception as e:
-                print(f"⚠️ JavaScript click failed: {e}")
-            
-            # Strategy 3: Dispatch click event
-            try:
-                element.dispatch_event("click")
-                print(f"✅ Click event dispatched")
-                return True
-            except Exception as e:
-                print(f"⚠️ Event dispatch failed: {e}")
-            
-            # Strategy 4: Try waiting and retrying
-            try:
-                time.sleep(1)
-                element.click(force=True, timeout=2000)
-                print(f"✅ Element clicked after retry")
-                return True
-            except Exception as e:
-                print(f"⚠️ Retry click failed: {e}")
-            
-            return False
-            
-        except Exception as e:
-            print(f"❌ Safe click failed: {e}")
-            return False
-    
-    def click_and_type_in_field(self, field: TextApplicationField, text: str, frame=None) -> bool:
-        """Click on a field and type text using Playwright in page or iframe context"""
-        try:
-            # Use id= selector engine for IDs with special characters like []
-            if field.field_selector.startswith('#'):
-                if frame:
-                    element = frame.locator(f'id={field.field_selector[1:]}').first
-                else:
-                    element = self.page.locator(f'id={field.field_selector[1:]}').first
-            else:
-                if frame:
-                    element = frame.locator(field.field_selector)
-                else:
-                    element = self.page.locator(field.field_selector)
-            
-            if not element:
-                print(f"⚠️ Element not found with selector: {field.field_selector}")
-                return False
-            
-            # Check if element is interactive before attempting to interact
-            if not self._is_element_interactive(element, frame):
-                context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping non-interactive text field in {context_str}: {field.field_name}")
-                return True  # Return True to continue with other fields
-            
-            # Check if element is within form context before interacting
-            if not self._is_element_in_form_context(element, frame):
-                context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping text field outside form context in {context_str}: {field.field_name}")
-                return True
-            
-            # Try multiple approaches to interact with the field
-            success = False
-            
-            # Approach 1: Focus and fill
-            try:
-                element.focus()
-                time.sleep(0.3)
-                element.fill(text if text else '')
-                time.sleep(0.5)
-                context_str = "iframe" if frame else "page"
-                print(f"✅ Successfully typed '{text}' in {context_str} field using fill method")
-                success = True
-            except Exception as e:
-                print(f"⚠️ Fill method failed: {e}")
-            
-            # Approach 2: Click and type if fill failed
-            if not success:
-                try:
-                    element.click(force=True, timeout=5000)
-                    time.sleep(0.3)
-                    element.fill('')
-                    time.sleep(0.2)
-                    element.type(text, delay=50)
-                    time.sleep(0.5)
-                    context_str = "iframe" if frame else "page"
-                    print(f"✅ Successfully typed '{text}' in {context_str} field using click and type")
-                    success = True
-                except Exception as e:
-                    print(f"⚠️ Click and type method failed: {e}")
-            
-            # Approach 3: JavaScript approach if both failed
-            if not success:
-                try:
-                    js_code = (
-                        "(element, value) => {"
-                        "element.focus();"
-                        "element.value = '';"
-                        "element.value = value;"
-                        "element.dispatchEvent(new Event('input', { bubbles: true }));"
-                        "element.dispatchEvent(new Event('change', { bubbles: true }));"
-                        "}"
-                    )
-                    if frame:
-                        frame.evaluate(js_code, element, text)
-                    else:
-                        self.page.evaluate(js_code, element, text)
-                    time.sleep(0.5)
-                    context_str = "iframe" if frame else "page"
-                    print(f"✅ Successfully typed '{text}' in {context_str} field using JavaScript")
-                    success = True
-                except Exception as e:
-                    print(f"⚠️ JavaScript method failed: {e}")
-            
-            return success
-            
-        except Exception as e:
-            context_str = "iframe" if frame else "page"
-            print(f"❌ Error clicking and typing in {context_str} field: {e}")
-            return False
 
     def click_radio_button(self, radio_button: RadioApplicationField, frame=None) -> bool:
         """Click on a radio button in page or iframe context"""
@@ -1176,7 +1369,7 @@ class ApplicationFiller:
             # Check if element is interactive before attempting to click
             if not self._is_element_interactive(element, frame):
                 context_str = "iframe" if frame else "page"
-                print(f"⏭️ Skipping non-interactive checkbox in {context_str}: {checkbox.field_name}")
+                print(f"⏭️ Skipping non-interactive checkbox in {context_str}: {checkbox.field_selector}")
                 return True  # Return True to continue with other fields
                 
             checkbox_value: bool = checkbox.field_value
@@ -1246,7 +1439,7 @@ class ApplicationFiller:
 
     def find_submit_button_with_gpt(self, frame: Dict[str, Any] = None, iframe_context: Dict[str, Any] = None) -> SubmitButtonApplicationField:
         """
-        Use gemini-2.5-flash to contextually find submit buttons on the page or in iframe
+        Use gpt-5-mini to contextually find submit buttons on the page or in iframe
         
         Args:
             iframe_context: Iframe context if searching within an iframe
@@ -1255,26 +1448,19 @@ class ApplicationFiller:
             SubmitButtonApplicationField with submit button information and action
         """
         try:
-            print("🤖 Using gemini-2.5-flash to find submit button contextually...")
+            print("🤖 Using gpt-5-mini to find submit button contextually...")
             
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
             
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Use smart screenshot that handles iframes
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
+            screenshot, context_info = self._take_smart_screenshot(frame, iframe_context)
             if screenshot is None:
                 print(f"❌ Could not take screenshot, using fallback analysis")
                 return SubmitButtonApplicationField(field_type=FieldType.SUBMIT, field_selector=None, field_is_visible=False, field_in_form=False, field_required=False)
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            )
-            
             prompt = f"""
             
                 1.	TASK
@@ -1293,14 +1479,14 @@ class ApplicationFiller:
             )
             If no suitable element exists, set field_selector = None and all booleans to False.
                 3.	SELECTION RULES
-            • Allowed element types: , , or any tag with role=“button”.
+            • Allowed element types: , , or any tag with role="button".
             • Text cues (case-insensitive): submit, continue, next, apply, send, save, finish, complete.
-            • Attribute cues: type=“submit”; class/id containing a text cue; data-action*=“submit”; onclick that submits a form or advances the process.
+            • Attribute cues: type="submit"; class/id containing a text cue; data-action*="submit"; onclick that submits a form or advances the process.
             • Preference hierarchy:
 
                 1.	Prefer elements that are descendants of the primary .
                 2.	If multiple candidates exist within that form, choose the one nearest the end of the form's content flow.
-                3.	If ties remain, prefer elements with explicit type=“submit” or a text cue from the list.
+                3.	If ties remain, prefer elements with explicit type="submit" or a text cue from the list.
 
                 4.	FIELD VALUE GUIDANCE
             • field_selector   — stable, concise CSS selector (id if present, otherwise a specific path).
@@ -1364,21 +1550,15 @@ class ApplicationFiller:
             {page_content}
             """
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying submit buttons for job application forms. Return only valid JSON.",
-                    response_mime_type="application/json",
-                    response_schema=SubmitButtonApplicationField
-                )
+            result = generate_model(
+                prompt,
+                model_object_type=SubmitButtonApplicationField,
+                system_prompt="You are an expert at analyzing HTML and identifying submit buttons for job application forms. Return only valid JSON.",
+                image=screenshot,
+                model="gpt-5-mini"
             )
             
-            result = response.parsed
-            
-            print(f"🤖 gemini-2.5-flash found submit button: {result}")
+            print(f"🤖 gpt-5-mini found submit button: {result}")
             
             return result
             
@@ -1516,7 +1696,7 @@ class ApplicationFiller:
   
     def check_form_submission_with_gpt(self, initial_screenshot: bytes, frame: Dict[str, Any] = None, iframe_context: Dict[str, Any] = None) -> ApplicationStateResponse:
         """
-        Use gemini-2.5-flash to analyze if the form was successfully submitted
+        Use gpt-5-mini to analyze if the form was successfully submitted
         
         Args:
             frame: Frame to analyze
@@ -1528,27 +1708,18 @@ class ApplicationFiller:
             # For now, use page content analysis instead of image analysis
             # In a real implementation, you could use Gemini 2.5 Pro API
             
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return ApplicationStateResponse(submitted=False, completed=False, verification_required=False, more_forms=False, error_in_submission=False, reason="Screenshot failed")
-
-            screenshot_part1 = genai.types.Part.from_bytes(
-                data=initial_screenshot,
-                mime_type="image/png"
-            )
-            
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
+                
+            time.sleep(5)
+            screenshot, _ = self._take_smart_screenshot(frame, iframe_context)
             
             prompt = f"""
                 Analyse the web page below and output the best result.
 
-                You are given the initial screenshot of the page. Use this in contrast to the change in the HTML to determine the best result.
+                You are given the screenshot of the page. Use this in contrast to the change in the HTML to determine the best result.
                 You are also given the HTML of the page. Use the HTML to determine the best result.
                 
                 {{
@@ -1565,19 +1736,13 @@ class ApplicationFiller:
                 The HTML of the page: {page_content}
                 """
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part1,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing job application pages. Return only valid JSON.",
-                    response_mime_type="application/json",
-                    response_schema=ApplicationStateResponse
-                )
+            result = generate_model(
+                prompt,
+                model_object_type=ApplicationStateResponse,
+                system_prompt="You are an expert at analyzing job application pages. Return only valid JSON.",
+                image=screenshot,
+                model="gpt-5-mini"
             )
-            
-            result: ApplicationStateResponse = response.parsed
             
             # Parse JSON response
             try:
@@ -1593,7 +1758,7 @@ class ApplicationFiller:
             print(f"❌ Error in Gemini submission analysis: {e}")
             return ApplicationStateResponse(submitted=False, completed=False, verification_required=False, more_forms=False, error_in_submission=False)
 
-    def find_all_text_input_fields(self, frame=None, iframe_context=None) -> List[TextApplicationField]:
+    def find_all_text_input_fields(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> List[TextApplicationField]:
         """
         Find all text input fields in page or iframe context
         
@@ -1601,81 +1766,146 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            from google import genai
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Get page content from frame or main page
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
-            
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return []
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            )
-            
-            # Use gemini-2.5-flash to analyze the page and identify form fields
-            prompt = f"""
-            Analyze this HTML and identify all the text input fields.
-            Also fill in the values for the input using the preferences.
-            For each input you need to fill in the value of the input.
-            Ensure that the input is not used for a dropdown or a radio button or a checkbox.
-            The input should be contextually used to enter a value.
-            Some text inputs are used for a dropdown or a radio button or a checkbox, do not include them.
-            
-            You are also given a screenshot of the page. Use the screenshot to help you identify the fields.
-            If there is a modal or dialog, only focus on the fields that are visible in the modal and not grayed out.
-            
-            For a text input the possible values are a string
-            
-            Return a JSON object with ApplicationField objects.
-            
-            CRITICAL GUIDELINES:
-            1. Find all the form inputs related to the job application.
-            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
-            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
-            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
-            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
-            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
-            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
-                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
-                - Do NOT include fields that are positioned off-screen or have zero dimensions
-                - Do NOT include fields that are disabled or not enabled
-                - Do NOT include fields from future form steps that aren't visible yet
-                - Only include fields that a user can actually see and interact with on the current page
-            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
+            # Use gpt-5-mini to analyze the page and identify form fields
+            system_prompt = f"""
+            ROLE
+            You are a senior UI/DOM form analyst. Extract ONLY genuine text-entry fields from a job application experience and return strict JSON for Python Playwright. Also populate each field's value using the provided preferences.
+
+            INPUTS
+            - preferences: {self.preferences}
+            - html: {page_content}
+            - screenshot: current UI state
+
+            REASONING PROTOCOL (DO NOT REVEAL)
+            1) Determine the active scope: if a visible modal/dialog is open (role='dialog' or [aria-modal='true']), restrict to that modal; otherwise use the page form(s).
+            2) Enumerate candidate controls in DOM order.
+            3) Filter to text-entry controls only; exclude selects, radios, checkboxes, file inputs, pseudo-dropdowns, and hidden/disabled/off-screen/future-step content.
+            4) For each remaining control, derive a minimal, stable selector and map a value from preferences.
+            5) Self-check: uniqueness, visibility, scope, and correct control type.
+            6) Output ONLY the JSON array.
+
+            OBJECTIVE
+            Identify every VISIBLE, INTERACTIVE text-entry field used to type information and fill it with values from preferences.
+
+            ELIGIBLE CONTROLS
+            - <input> types: text, email, tel, url, search, number, password, date, datetime-local, time
+            - <textarea>
+            Notes:
+            - <input list="..."> (with <datalist>) is allowed (still text entry).
+            - Contenteditable widgets are EXCLUDED unless they have a stable input/textarea-equivalent role and are clearly used for text entry (generally avoid).
+
+            INELIGIBLE / EXCLUDE
+            - <select>, React-Select controls, menus, options
+            - <input type='checkbox' | 'radio' | 'file' | 'range' | 'color' | 'hidden'>
+            - Pseudo-dropdowns/autocomplete pickers that are primarily selection UIs:
+            - input[role='combobox'] that controls a listbox popup and behaves as a selector
+            - inputs inside React-Select (e.g., .select__control input)
+            - Elements that are disabled, hidden, off-screen, zero-size, aria-hidden='true', or in non-active steps/tabs/accordions
+            - Anything outside the job application form scope
+            - Cross-document selectors (iframes in the selector path). If fields are inside an iframe, return a selector that works *within that iframe context* (no iframe prefix).
+
+            SCOPE & VISIBILITY RULES
+            - Only include fields inside the job application form (a <form> ancestor clearly tied to applying).
+            - If a visible modal/dialog is open, treat it as the only active scope; ignore background page fields.
+            - Exclude future-step or collapsed sections unless explicitly expanded/active (e.g., class contains 'open' or 'active').
+
+            SELECTOR RULES (Playwright-compatible CSS)
+            - Target the ACTUAL control element (<input> or <textarea>) directly.
+            - Prefer stable attributes and scoping: name, id, data-*, aria-*, autocomplete, and clear form/field containers.
+            - Avoid brittle patterns: :nth-*, positional indices, transient state selectors ([aria-expanded], inline styles), overly generic roots (html body ...).
+            - Do NOT include iframe nodes in the selector string.
+
+            GOOD SELECTORS (examples)
+            input[name='first_name']
+            input#email
+            input[type='email']
+            textarea[name='cover_letter']
+            form#application-form input[name='phone']
+            form[aria-label='Job application'] input[data-qa='city']
+            form#apply-modal-form input#address_line1
+            form.ApplicationForm input[autocomplete='postal-code']
+            form#application-form section.step-current input[name='expected_salary']
+
+            BAD SELECTORS (and why)
+            input[type='checkbox']                 # not text entry
+            input[type='radio']                    # not text entry
+            select[name='country']                 # dropdown, not text entry
+            div.select__control input              # part of React-Select, selection UI
+            input[disabled]                        # not interactive
+            [style*='display:none'] input          # hidden
+            iframe#grnhse_iframe input[name='x']   # crosses iframe in selector
+            html body input                        # overly generic
+            input:nth-of-type(2)                   # positional, brittle
+
+            PREFERENCES → VALUE MAPPING (best-effort; DO NOT HALLUCINATE)
+            - Infer field intent from name/id/label/placeholder/aria-label and nearby text in the screenshot.
+            - Common mappings (case-insensitive substring or regex on field identifiers):
+            - first_name, given_name → preferences['first_name']
+            - last_name, family_name, surname → preferences['last_name']
+            - full_name, name → preferences['full_name'] or first_name + ' ' + last_name (if both present)
+            - email, email_address → preferences['email']
+            - phone, phone_number, mobile → preferences['phone']
+            - address, address1, street → preferences['address_line1']
+            - address2, apartment, unit → preferences.get('address_line2', '')
+            - city, town → preferences['city']
+            - state, province, region → preferences['state']
+            - postal, postcode, zip → preferences['postal_code']
+            - country → preferences['country']
+            - linkedin → preferences['linkedin']
+            - github → preferences['github']
+            - website, url, portfolio → preferences['website']
+            - cover_letter, motivation, summary → preferences['cover_letter']
+            - salary, expected_salary → preferences['expected_salary']
+            - dob, date_of_birth, birthday → preferences['date_of_birth']
+            - If no suitable preference exists, set field_value to "" (empty string).
+            - Do not invent formats; apply minimal normalization only when obvious (e.g., trim spaces).
+
+            OUTPUT SCHEMA (STRICT JSON ARRAY)
+            Return ONLY a JSON array of objects. Each object MUST have:
+            - "field_selector": minimal, stable CSS selector for the <input>/<textarea>
+            - "field_name": the name attribute or best-effort visible label (from HTML/screenshot)
+            - "field_type": one of "text", "email", "tel", "url", "search", "number", "password", "date", "datetime-local", "time", "textarea"
+            - "field_is_visible": true only if visible and interactive now
+            - "field_in_form": true only if inside the application form (or active modal form)
+            - "field_value": the value from preferences or "" if unavailable
+
+            ORDERING
+            - Preserve top-to-bottom DOM order within the active scope.
+
+            VALIDATION & SELF-CHECK (DO NOT OUTPUT)
+            - Each selector resolves to exactly one eligible control of the correct type.
+            - No item is hidden/disabled/off-screen or outside the active application scope.
+            - No dropdowns/checkboxes/radios/files/react-select inputs.
+            - No iframe traversal in selectors.
+            - If no qualifying fields, output [].
+
+            FINAL OUTPUT REQUIREMENT
+            - Output ONLY the JSON array per the schema above. No extra text.
             """
+
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
-                    response_mime_type="application/json",
-                    response_schema=TextApplicationFieldResponse
-                )
-            )
-            
-            all_fields = response.parsed.fields
+            all_fields = generate_model(
+                "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                model_object_type=TextApplicationFieldResponse,
+                system_prompt=system_prompt,
+                model="gpt-5-mini"
+            ).fields
             
             all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
             # Parse the JSON response
             text_input_fields: List[TextApplicationField] = [field for field in all_fields if field.field_type == FieldType.TEXT]
             
+            # verified_text_input_fields = self.verify_text_input_fields(text_input_fields, frame, iframe_context, spinner)
+            
             context_str = "iframe" if frame else "page"
-            print(f"✅ gemini-2.5-flash found {len(text_input_fields)} text input fields in {context_str}")
+            dprint(f"✅ gpt-5-mini found {len(text_input_fields)} text input fields in {context_str}")
             
             return text_input_fields
             
@@ -1683,7 +1913,7 @@ class ApplicationFiller:
             print(f"❌ Error in find_all_text_input_fields: {e}")
             return []
 
-    def find_all_radio_fields(self, frame=None, iframe_context=None) -> List[RadioApplicationField]:
+    def find_all_radio_fields(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> List[RadioApplicationField]:
         """
         Find all radio fields in page or iframe context
         
@@ -1691,69 +1921,111 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Get page content from frame or main page
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
-            
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return []
+                
+            # Use gpt-5-mini to analyze the page and identify form fields
+            system_prompt = f"""
+            ROLE
+            You are a senior UI/DOM form analyst. Identify radio-button fields for a job application and return ONLY the radio options that should be selected (true) as strict JSON for Python Playwright. Populate selections using the provided preferences and current UI state.
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            )
-            
-            # Use gemini-2.5-flash to analyze the page and identify form fields
-            prompt = f"""
-            Analyze this HTML and identify all the radio fields.
-            Also fill in the values for the input using the preferences.
-            For each input you need to fill in the value of the input.
-            
-            You are also given a screenshot of the page. Use the screenshot to help you identify the fields.
-            If there is a modal or dialog, only focus on the fields that are visible in the modal and not grayed out.
-            
-            Only return a radio field whose value should be true
-            
-            Return a JSON object with ApplicationField objects.
-            
-            CRITICAL GUIDELINES:
-            1. Find all the form inputs related to the job application.
-            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
-            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
-            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
-            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
-            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
-            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
-                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
-                - Do NOT include fields that are positioned off-screen or have zero dimensions
-                - Do NOT include fields that are disabled or not enabled
-                - Do NOT include fields from future form steps that aren't visible yet
-                - Only include fields that a user can actually see and interact with on the current page
-            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
+            INPUTS
+            - preferences: {self.preferences}
+            - html: {page_content}
+
+            REASONING PROTOCOL (DO NOT REVEAL)
+            1) Determine the active scope: if a visible modal/dialog is open (role='dialog' or [aria-modal='true']), restrict to that modal; otherwise use the page form(s).
+            2) Enumerate radio groups by shared name attribute (input[type='radio'][name]).
+            3) For each group, identify the single option that should be selected based on preferences and the visible label/value.
+            4) Keep only visible, enabled, in-scope options; exclude hidden/disabled/off-screen/future-step content.
+            5) Produce a minimal, stable selector for the chosen radio input.
+            6) Self-check: at most one selection per group; correct control type; uniqueness; scope.
+            7) Output ONLY the JSON array.
+
+            OBJECTIVE
+            Return the subset of radio inputs that should be selected now (true). Do not return unchecked options or entire groups—only the specific option to set true.
+
+            ELIGIBLE CONTROLS
+            - <input type="radio"> elements that belong to the job-application form and are currently visible & interactive.
+
+            INELIGIBLE / EXCLUDE
+            - checkboxes, selects, text inputs, file/range/color/hidden, React-Select internals
+            - any hidden, disabled, off-screen, zero-size, aria-hidden='true', or in non-active steps/tabs/accordions
+            - anything outside the job-application form scope
+            - cross-document selectors (iframes in the selector path). If radios are inside an iframe, return a selector that works *within that iframe context* (no iframe prefix).
+
+            SCOPE & VISIBILITY RULES
+            - Only include fields inside the job application form (a <form> ancestor clearly tied to applying).
+            - If a visible modal/dialog is open, treat it as the only active scope; ignore background page fields.
+            - Exclude future-step or collapsed sections unless explicitly expanded/active (e.g., class contains 'open' or 'active').
+
+            SELECTOR RULES (Playwright-compatible CSS)
+            - Target the ACTUAL radio input element directly: input[type='radio'][name=...][value=...] whenever possible.
+            - Prefer stable attributes and scoping: name, id, value, data-*, aria-*, and clear form/field containers.
+            - Avoid brittle patterns: :nth-*, positional indices, transient-state selectors ([aria-expanded], inline styles), overly generic roots (html body ...).
+            - Do NOT include iframe nodes in the selector string.
+
+            GOOD SELECTORS (examples)
+            input[type='radio'][name='work_authorization'][value='yes']
+            form#application-form input[type='radio'][name='willing_to_relocate'][value='true']
+            form[aria-label='Job application'] input[type='radio'][name='sponsorship_required'][value='no']
+            #apply-modal.open form#apply-modal-form input[type='radio'][name='eu_citizen'][value='1']
+
+            BAD SELECTORS (and why)
+            label:has-text('Yes')                          # targets label, not the input
+            input[type='checkbox'][name='relocate']        # not a radio
+            [style*='display:none'] input[type='radio']    # hidden
+            iframe#grnhse_iframe input[type='radio'][name='x']  # crosses iframe in selector
+            html body input[type='radio']                  # overly generic
+            input[type='radio']:nth-of-type(2)             # positional, brittle
+
+            PREFERENCES → OPTION SELECTION (DO NOT HALLUCINATE)
+            - Determine each group's intent from name/id/fieldset legend/label/aria-label and nearby text in the screenshot.
+            - Build a canonical label for each option (visible label text, aria-label, or value attribute).
+            - Map preferences to groups using case-insensitive substring/regex on likely keys. Examples:
+            - work_authorization / work_auth / can_work / right_to_work → yes/no
+            - sponsorship_required / need_sponsorship / visa_sponsorship → yes/no
+            - willing_to_relocate / relocate / relocation → yes/no
+            - remote_ok / open_to_remote / onsite_only → yes/no
+            - eu_citizen / uk_citizen / us_citizen → yes/no
+            - Normalize "truthy/yes" synonyms: yes, y, true, 1, accept, authorized, eligible, allow
+            - Normalize "false/no" synonyms: no, n, false, 0, deny, not authorized, ineligible
+            - For non-binary groups (multiple options), pick the option whose canonical text best matches the preference string (exact/substring/regex). If ambiguous or no suitable preference exists, SKIP the group (do not guess).
+            - Never select more than one option per name group.
+
+            OUTPUT SCHEMA (STRICT JSON ARRAY)
+            Return ONLY a JSON array of objects. Each object MUST have:
+            - "field_selector": minimal, stable CSS selector for the chosen <input type='radio'> option
+            - "field_name": the radio group name (the input[name])
+            - "field_type": "radio"
+            - "field_is_visible": true only if visible and interactive now
+            - "field_in_form": true only if inside the application form (or active modal form)
+            - "field_value": true
+
+            ORDERING
+            - Preserve top-to-bottom DOM order of the chosen options within the active scope.
+
+            VALIDATION & SELF-CHECK (DO NOT OUTPUT)
+            - Each selector resolves to exactly one <input type='radio'>.
+            - Exactly one selected option per radio group name; others omitted.
+            - No item is hidden/disabled/off-screen or outside the active application scope.
+            - No iframe traversal in selectors.
+            - If no qualifying selections, output [].
+
+            FINAL OUTPUT REQUIREMENT
+            - Output ONLY the JSON array per the schema above. No extra text.
             """
+
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
-                    response_mime_type="application/json",
-                    response_schema=RadioApplicationFieldResponse
-                )
-            )
-            
-            all_fields = response.parsed.fields
+            all_fields = generate_model(
+                "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                model_object_type=RadioApplicationFieldResponse,
+                system_prompt=system_prompt,
+                model="gpt-5-mini"
+            ).fields
             
             all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
@@ -1761,16 +2033,16 @@ class ApplicationFiller:
             
             # Parse the JSON response
             radio_fields: List[RadioApplicationField] = [field for field in all_fields if field.field_type == FieldType.RADIO]
+            verified_radio_fields = self.verify_radio_fields(radio_fields, frame, iframe_context, spinner)
+            dprint(f"✅ gpt-5-mini found {len(radio_fields)} radio fields in {context_str}")
             
-            print(f"✅ gemini-2.5-flash found {len(radio_fields)} radio fields in {context_str}")
-            
-            return radio_fields
+            return verified_radio_fields
             
         except Exception as e:
             print(f"❌ Error in find_all_radio_fields: {e}")
             return []
 
-    def find_all_checkbox_fields(self, frame=None, iframe_context=None) -> List[CheckboxApplicationField]:
+    def find_all_checkbox_fields(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> List[CheckboxApplicationField]:
         """
         Find all checkbox fields in page or iframe context
         
@@ -1778,86 +2050,407 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Get page content from frame or main page
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
             
-            # Use smart screenshot that handles iframes
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return []
+            # Use gpt-5-mini to analyze the page and identify form fields
+            system_prompt = f"""
+                ROLE
+                You are a senior UI/DOM form analyst. Identify ONLY checkbox controls for a job application and return strict JSON for Python Playwright. 
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            )
+                INPUTS
+                - preferences (dict-like): {self.preferences}
+                - html: {page_content}
+                
+                For each checkbox, set field_value **using preferences only**.
+
+                REASONING PROTOCOL (DO NOT REVEAL)
+                1) Determine active scope: if a visible modal/dialog is open (role='dialog' or [aria-modal='true']), restrict to that; otherwise use the page form(s).
+                2) Enumerate candidate inputs in DOM order.
+                3) Keep ONLY input[type='checkbox'] that are visible, enabled, and inside the job-application form scope.
+                4) Derive a minimal, stable selector for each checkbox.
+                5) Compute field_value **from preferences only**:
+                - Extract candidate text for the checkbox: name, id, value, label text, aria-label, and fieldset legend (all lowercased, snake_cased, punctuation stripped).
+                - Normalize preferences: lowercased, snake_cased keys; normalize boolean-like values:
+                    truthy → yes,y,true,1,on,accept,agree,consent,opt_in,subscribe,enabled
+                    falsy  → no,n,false,0,off,decline,disagree,opt_out,unsubscribe,disabled
+                - Matching priority (first hit wins):
+                    a) Exact key match to checkbox name/id/value
+                    b) Exact key match to normalized label/aria-label/legend
+                    c) Substring/regex match of preference keys within the concatenated candidate text
+                - If multiple preference keys match with conflicting booleans:
+                    • Prefer exact match over substring; if still tied, prefer name/id/value over label/aria; if still tied, set false.
+                - If **no** preference key matches, set field_value = false. Do **not** infer from label semantics or requirements.
+                6) Self-check: selector resolves to exactly one input[type='checkbox']; is visible; in active scope; not crossing iframes.
+                7) Output ONLY the JSON array.
+
+                OBJECTIVE
+                Return all VISIBLE, INTERACTIVE checkboxes relevant to the application, each with an explicit boolean field_value derived **solely from preferences**.
+
+                ELIGIBLE CONTROLS
+                - <input type="checkbox"> elements within the job-application form and currently visible & interactive.
+                - Checkbox groups (same name, different value): include one object per actual checkbox input; match each to preferences by value/label text; otherwise false.
+
+                INELIGIBLE / EXCLUDE
+                - Radios, selects, text inputs, file/range/color/hidden, React-Select internals, custom toggles without a backing checkbox input
+                - Hidden/disabled/off-screen/zero-size/aria-hidden='true'/future-step or inactive tab content
+                - Anything outside the job-application form scope
+                - Cross-document selectors (no iframe prefixes). If inside an iframe, return selectors that work within that iframe context only.
+
+                SCOPE & VISIBILITY RULES
+                - Only include fields inside a <form> clearly tied to applying.
+                - If a visible modal/dialog is open, treat it as the only active scope; ignore background page fields.
+                - Exclude collapsed/latent steps unless visibly active (e.g., class contains 'open' or 'active').
+
+                SELECTOR RULES (Playwright-compatible CSS)
+                - Target the ACTUAL checkbox input directly: input[type='checkbox'][name=...] (and [value=...] if needed).
+                - Prefer stable attributes/scoping: name, id, value, data-*, aria-*, and clear form/field containers.
+                - Avoid brittle patterns: :nth-*, positional indices, transient-state selectors ([aria-expanded], inline styles), overly generic roots (html body ...).
+                - Do NOT include iframe nodes in the selector string.
+
+                GOOD SELECTORS (examples)
+                input[type='checkbox'][name='terms']
+                input#subscribe_newsletter
+                form#application-form input[type='checkbox'][name='gdpr_consent']
+                form[aria-label='Job application'] input[type='checkbox'][data-qa='privacy_policy']
+                #apply-modal.open form#apply-modal-form input[type='checkbox'][name='share_with_recruiters']
+                form.ApplicationForm input[type='checkbox'][name='skills'][value='python']
+
+                BAD SELECTORS (and why)
+                label:has-text('I agree')                         # label, not the input
+                input[type='radio'][name='agree']                 # wrong control type
+                [style*='display:none'] input[type='checkbox']    # hidden
+                iframe#grnhse_iframe input[type='checkbox'][name='x']  # crosses iframe in selector
+                html body input[type='checkbox']                  # overly generic
+                input[type='checkbox']:nth-of-type(3)             # positional, brittle
+                div.toggle                                        # custom UI, not the form input
+
+                OUTPUT SCHEMA (STRICT JSON ARRAY)
+                Return ONLY a JSON array of objects. Each object MUST have:
+                - "field_selector": minimal, stable CSS selector for the checkbox input
+                - "field_name": the name attribute or best-effort visible label (from HTML)
+                - "field_type": "checkbox"
+                - "field_is_visible": true only if visible and interactive now
+                - "field_in_form": true only if inside the application form (or active modal form)
+                - "field_value": true or false  # from preferences-only logic above (use preferences to determine the value)
+                    Example:
+                        preferences:
+                            - "accept_privacy_policy": true
+                            - "gdpr_consent": false
+                        output:
+                            Checkbox 1
+                            checkbox label: "I agree to the privacy policy" (from HTML)
+                            - "field_selector": "input[type='checkbox'][name='accept_privacy_policy']"
+                            - "field_name": "accept_privacy_policy"
+                            - "field_type": "checkbox"
+                            - "field_is_visible": true
+                            - "field_in_form": true
+                            - "field_value": true
+                            
+                            Checkbox 2
+                            checkbox label: "I consent to the GDPR" (from HTML)
+                            - "field_selector": "input[type='checkbox'][name='gdpr_consent']"
+                            - "field_name": "gdpr_consent"
+                            - "field_type": "checkbox"
+                            - "field_is_visible": true
+                            - "field_in_form": true
+                            - "field_value": false
+
+                ORDERING
+                - Preserve top-to-bottom DOM order within the active scope.
+
+                VALIDATION & SELF-CHECK (DO NOT OUTPUT)
+                - Each selector resolves to exactly one input[type='checkbox'].
+                - No item is hidden/disabled/off-screen or outside the active application scope.
+                - No labels/wrappers/custom UI in place of the checkbox input.
+                - No iframe traversal in selectors.
+                - If no qualifying checkboxes, output [].
+
+                FINAL OUTPUT REQUIREMENT
+                - Output ONLY the JSON array per the schema above. No extra text.
+                """
+
             
-            # Use gemini-2.5-flash to analyze the page and identify form fields
-            prompt = f"""
-            Analyze this HTML and identify all the checkbox fields.
-            Also fill in the values for the input using the preferences.
-            For each input you need to fill in the value of the input.
-            
-            You are also given a screenshot of the page. Use the screenshot to help you identify the fields.
-            If there is a modal or dialog, only focus on the fields that are visible in the modal and not grayed out.
-            
-            For a checkbox input the possible field_value must be a boolean (true/false)
-            
-            Return a JSON object with ApplicationField objects.
-            
-            CRITICAL GUIDELINES:
-            1. Find all the form inputs related to the job application.
-            2. Use proper CSS selectors that target the ACTUAL form elements (input, select, textarea, etc.).
-            3. DO NOT include iframe selectors like "iframe#grnhse_iframe" - only target the form elements themselves.
-            4. If form elements are inside an iframe, use selectors that would work within that iframe context.
-            5. Examples of good selectors: "input[name='name']", "select[id='city']", "input[type='email']"
-            6. Examples of bad selectors: "iframe#grnhse_iframe", "iframe iframe input[name='name']"
-            7. VERY IMPORTANT - Only include INTERACTIVE and VISIBLE fields:
-                - Do NOT include fields that are hidden by CSS (display: none, visibility: hidden, opacity: 0)
-                - Do NOT include fields that are positioned off-screen or have zero dimensions
-                - Do NOT include fields that are disabled or not enabled
-                - Do NOT include fields from future form steps that aren't visible yet
-                - Only include fields that a user can actually see and interact with on the current page
-            8. For each field, set field_is_visible=true and field_in_form=true only if the field is actually visible and interactive
-            
-            Preferences: {self.preferences}
-            HTML of the page: {page_content}
-            """
-            
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
-                    response_mime_type="application/json",
-                    response_schema=CheckboxApplicationFieldResponse
-                )
-            )
-            
-            all_fields = response.parsed.fields
+            all_fields = generate_model(
+                "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                model_object_type=CheckboxApplicationFieldResponse,
+                system_prompt=system_prompt,
+                model="gpt-5-mini"
+            ).fields
             
             all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+            
+            print(all_fields)
             
             context_str = "iframe" if frame else "page"
             # Parse the JSON response
             checkbox_fields: List[CheckboxApplicationField] = [field for field in all_fields if field.field_type == FieldType.CHECKBOX]
+            verified_checkbox_fields = self.verify_checkbox_fields(checkbox_fields, frame, iframe_context, spinner)
+            dprint(f"✅ gpt-5-mini found {len(checkbox_fields)} checkbox fields in {context_str}")
             
-            print(f"✅ gemini-2.5-flash found {len(checkbox_fields)} checkbox fields in {context_str}")
-            
-            return checkbox_fields
+            return verified_checkbox_fields
             
         except Exception as e:
             print(f"❌ Error in find_all_checkbox_fields: {e}")
             return []
 
-    def find_all_select_fields(self, frame=None, iframe_context=None) -> List[SelectApplicationField]:
+    def verify_select_fields(self, select_fields: List[SelectApplicationField], frame=None, iframe_context=None, spinner:Yaspin=None, best_of: int = 3) -> List[SelectApplicationField]:
+        """
+        Verify the select fields are valid using best_of parameter for consensus
+        """
+        try:
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
+            
+            if best_of <= 1:
+                # Single run - use original logic
+                system_prompt = f"""
+                    ROLE
+                    You are a senior HTML/DOM form analyst. Verify a proposed list of SELECT dropdown fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                    INPUTS
+                    - html: {page_content}
+                    - proposed_selector: {json.dumps([self._serialize_field_for_json(field) for field in select_fields])}
+                    - NOTE: {"The proposed selectors list is empty - you MUST find all SELECT dropdown fields from scratch" if not select_fields else "The proposed selectors exist and should be validated"}
+
+                    TARGET SCHEMA (ApplicationField)
+                    Each object MUST have:
+                    - "field_selector": minimal, stable CSS selector for the dropdown control
+                    - "field_name": name attribute or best-effort visible label
+                    - "field_type": "select"
+                    - "field_is_visible": true only if visible & interactive now
+                    - "field_in_form": true only if inside the application form (or active modal form)
+                    - "field_options": array of visible options if available, else []
+
+                    WHAT QUALIFIES AS A DROPDOWN
+                    - Native <select> with <option> children  → selector targets the <select> element itself.
+                    - React-Select–style dropdowns           → selector targets the clickable control container (e.g., div.select__control), NOT menus/options.
+
+                    ACTIVE SCOPE & VISIBILITY
+                    - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                    - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                    - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                    - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                    FORBIDDEN (NEVER VALID)
+                    - Selectors that include iframe nodes (e.g., iframe#... ...)
+                    - Menus/transient nodes: .select__menu, [role='listbox'], .select__option
+                    - Labels/spans instead of the control: label[for=...], span.field-label
+                    - Options themselves: option[value=...]
+                    - Overly generic roots: html body select, html body div.select__control
+                    - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                    - Hidden/disabled elements
+                    - Pseudo-dropdowns that are really text inputs/autocomplete without a stable clickable control (e.g., bare input[role='combobox'] with no stable select__control container)
+
+                    VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                    1) Selector resolves to EXACTLY ONE element in the active scope.
+                    2) Element is a valid dropdown control:
+                    - Native: tagName == 'SELECT'
+                    - React-Select: clickable control container (e.g., .select__control), NOT menu/option/listbox
+                    3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                    4) Element is inside the job-application form (or active modal form).
+                    5) No iframe traversal in the selector.
+                    6) field_type == "select"; field_is_visible == true; field_in_form == true.
+                    7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                    8) If native options are readily available, field_options lists them; otherwise [].
+
+                    DECISION RULE
+                    - If ALL proposed items pass EVERY validation and no qualifying dropdowns are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                    - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                    a) Re-detect all qualifying dropdowns from html/screenshot per the rules above.
+                    b) Build minimal, stable selectors (native <select> or React-Select control container).
+                    c) Order by top-to-bottom DOM order within the active scope.
+                    d) Exclude anything forbidden.
+
+                    OUTPUT
+                    - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                    - If nothing qualifies, output [].
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Silently validate proposed_fields_json against the checklist.
+                    - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                    - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                    """
+                
+                all_fields = generate_model(
+                    "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    model_object_type=SelectApplicationFieldResponse,
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                ).fields
+                
+                all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+                if debug_mode:
+                    spinner.write(f"✅ verified {len(all_fields)} fields")
+                
+                # Filter out fields that are not visible
+                context_str = "iframe" if frame else "page"
+                
+                # Parse the JSON response
+                select_fields: List[SelectApplicationField] = [field for field in all_fields if field.field_type == FieldType.SELECT]
+                
+                context_str = "iframe" if frame else "page"
+                if debug_mode:
+                    spinner.write(f"✅ gpt-5-mini found {len(select_fields)} select fields in {context_str}")
+                
+                return select_fields
+            
+            # Multiple runs for consensus
+            results = []
+            for i in range(best_of):
+                try:
+                    if spinner:
+                        spinner.write(f"🔍 Run {i+1}/{best_of} for select fields verification...")
+                    else:
+                        print(f"🔍 Run {i+1}/{best_of} for select fields verification...")
+                    
+                    system_prompt = f"""
+                        ROLE
+                        You are a senior HTML/DOM form analyst. Verify a proposed list of SELECT dropdown fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                        INPUTS
+                        - html: {page_content}
+                        - proposed_selector: {json.dumps([self._serialize_field_for_json(field) for field in select_fields])}
+                        - NOTE: {"The proposed selectors list is empty - you MUST find all SELECT dropdown fields from scratch" if not select_fields else "The proposed selectors exist and should be validated"}
+
+                        TARGET SCHEMA (ApplicationField)
+                        Each object MUST have:
+                        - "field_selector": minimal, stable CSS selector for the dropdown control
+                        - "field_name": name attribute or best-effort visible label
+                        - "field_type": "select"
+                        - "field_is_visible": true only if visible & interactive now
+                        - "field_in_form": true only if inside the application form (or active modal form)
+                        - "field_options": array of visible options if available, else []
+
+                        WHAT QUALIFIES AS A DROPDOWN
+                        - Native <select> with <option> children  → selector targets the <select> element itself.
+                        - React-Select–style dropdowns           → selector targets the clickable control container (e.g., div.select__control), NOT menus/options.
+
+                        ACTIVE SCOPE & VISIBILITY
+                        - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                        - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                        - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                        - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                        FORBIDDEN (NEVER VALID)
+                        - Selectors that include iframe nodes (e.g., iframe#... ...)
+                        - Menus/transient nodes: .select__menu, [role='listbox'], .select__option
+                        - Labels/spans instead of the control: label[for=...], span.field-label
+                        - Options themselves: option[value=...]
+                        - Overly generic roots: html body select, html body div.select__control
+                        - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                        - Hidden/disabled elements
+                        - Pseudo-dropdowns that are really text inputs/autocomplete without a stable clickable control (e.g., bare input[role='combobox'] with no stable select__control container)
+
+                        VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                        1) Selector resolves to EXACTLY ONE element in the active scope.
+                        2) Element is a valid dropdown control:
+                        - Native: tagName == 'SELECT'
+                        - React-Select: clickable control container (e.g., .select__control), NOT menu/option/listbox
+                        3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                        4) Element is inside the job-application form (or active modal form).
+                        5) No iframe traversal in the selector.
+                        6) field_type == "select"; field_is_visible == true; field_in_form == true.
+                        7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                        8) If native options are readily available, field_options lists them; otherwise [].
+
+                        DECISION RULE
+                        - If ALL proposed items pass EVERY validation and no qualifying dropdowns are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                        - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                        a) Re-detect all qualifying dropdowns from html/screenshot per the rules above.
+                        b) Build minimal, stable selectors (native <select> or React-Select control container).
+                        c) Order by top-to-bottom DOM order within the active scope.
+                        d) Exclude anything forbidden.
+
+                        OUTPUT
+                        - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                        - If nothing qualifies, output [].
+
+                        REASONING PROTOCOL (DO NOT REVEAL)
+                        - Silently validate proposed_fields_json against the checklist.
+                        - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                        - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                        """
+                    
+                    result = generate_model(
+                        "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                        model_object_type=SelectApplicationFieldResponse,
+                        system_prompt=system_prompt,
+                        model="gpt-5-mini"
+                    ).fields
+                    
+                    if result:
+                        results.append(result)
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} found {len(result)} fields")
+                        else:
+                            print(f"🔍 Run {i+1} found {len(result)} fields")
+                    else:
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} returned empty result")
+                        else:
+                            print(f"🔍 Run {i+1} returned empty result")
+                        
+                except Exception as e:
+                    if spinner:
+                        spinner.write(f"❌ Error in run {i+1}: {e}")
+                    else:
+                        print(f"❌ Error in run {i+1}: {e}")
+                    continue
+            
+            if not results:
+                if spinner:
+                    spinner.write(f"❌ All {best_of} runs failed, returning original fields")
+                else:
+                    print(f"❌ All {best_of} runs failed, returning original fields")
+                return select_fields
+            
+            # Find most common result by comparing field selectors
+            from collections import Counter
+            selector_counts = Counter()
+            
+            for result in results:
+                for field in result:
+                    if field.field_is_visible and field.field_in_form and field.field_type == FieldType.SELECT:
+                        selector_counts[field.field_selector] += 1
+            
+            # Get the most common selectors
+            most_common_selectors = selector_counts.most_common()
+            
+            if spinner:
+                spinner.write(f"🔍 Consensus results: {dict(selector_counts)}")
+            else:
+                print(f"🔍 Consensus results: {dict(selector_counts)}")
+            
+            # If we have consensus on most selectors, use the most common result
+            if most_common_selectors and most_common_selectors[0][1] > 1:
+                # Find the result with the most common selectors
+                best_result = max(results, key=lambda r: sum(selector_counts.get(f.field_selector, 0) for f in r if f.field_is_visible and f.field_in_form and f.field_type == FieldType.SELECT))
+                
+                best_fields = [field for field in best_result if field.field_is_visible and field.field_in_form and field.field_type == FieldType.SELECT]
+                
+                if spinner:
+                    spinner.write(f"🔍 Using consensus result with {len(best_fields)} fields")
+                else:
+                    print(f"🔍 Using consensus result with {len(best_fields)} fields")
+                
+                return best_fields
+            else:
+                if spinner:
+                    spinner.write(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                else:
+                    print(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                return results[-1] if results else select_fields
+        except Exception as e:
+            print(f"❌ Error in verify_select_fields: {e}")
+            return []
+
+    def find_all_select_fields(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> List[SelectApplicationField]:
         """
         Find all select fields in page or iframe context
         
@@ -1865,103 +2458,150 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Get page content from frame or main page
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
-                
-            # Use smart screenshot that handles iframes
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return []
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            )
-            
-            # Use gemini-2.5-flash to analyze the page and identify form fields
-            prompt = f"""
-                You are an expert HTML form analyzer. Your task is to extract ONLY SELECT dropdown input fields from the given HTML of a job application form and return them in strict JSON format.
-                Your output should be suitable for python playwright.
-                
-                You are also given a screenshot of the page. Use the screenshot to help you identify the fields.
-                If there is a modal or dialog, only focus on the fields that are visible in the modal and not grayed out.
-                
-                Follow these instructions precisely:
+            # Use gpt-5-mini to analyze the page and identify form fields
+            system_prompt = f"""
+            ROLE
+            You are a senior HTML/DOM form analyst. Your job is to return ONLY SELECT-style dropdown fields from a job application experience as strict JSON usable by Python Playwright.
 
-                1 GOAL
-                - Detect all dropdown fields that let a user choose one or multiple options.
-                - Detect both:
-                - Native <select> dropdowns with <option> tags.
-                - React Select dropdowns rendered as a clickable <div> (usually with class*="select__control") that opens a dropdown menu.
+            INPUTS
+            - preferences: {self.preferences}
+            - html: {page_content}
 
-                2 SELECTION RULES
-                - Include only dropdown fields that are:
-                - Inside the job application form.
-                - Visible and interactive for the user (not hidden, disabled, or off-screen).
-                - Currently displayed on the page (ignore future-step fields not yet visible).
-                - For native selects: Target the <select> element directly using a unique, minimal CSS selector.
-                Examples of GOOD field_selector:
-                    ✅ "select[name='country']"
-                    ✅ "select#job_type"
-                    ✅ "form#application-form select[name='department']"
-                - For React Select dropdowns: Target the main clickable container of the component.
-                Examples of GOOD field_selector:
-                    ✅ "div.select__control"
-                    ✅ "div[class*='select__control']"
-                    ✅ "form#job-application div.select__control"
-                - Forbidden field_selector examples (never use these):
-                    ❌ "iframe#grnhse_iframe select[name='country']"                            (iframe references are not allowed)
-                    ❌ "body iframe iframe div.select__control"                                 (cross-document selectors)
-                    ❌ "div.select__control[aria-labelledby="question_32214839002-label"]"      (aria-labelledby is not a select dropdown)
-                    ❌ "html body div"                                                          (too generic, does not specifically target the field)
-                    ❌ "div.select__menu"                                                       (menu list, not the interactive control element)
-                    ❌ "span" or "label"                                                        (not the actual interactive field)
-                    ❌ "#question_32214839002-label ~ div.select-shell div.select__control"     (not the actual interactive field)
-                    ❌ "#question_32214840002-label + div.select-shell div.select__control"     (not the actual interactive field)
+            REASONING PROTOCOL (DO NOT REVEAL)
+            - First, silently plan: identify the active scope (modal vs page), enumerate candidate elements, filter by visibility/eligibility, then choose minimal stable selectors.
+            - Perform a quick self-check against the rules and forbidden patterns.
+            - OUTPUT ONLY the final JSON array. No commentary, no thoughts, no explanations.
 
-                3 OUTPUT FORMAT
-                - field_selector → Minimal, stable CSS selector directly targeting the dropdown control (never include iframes or overly generic selectors).
-                - field_name → Name attribute or visible label for the field.
-                - field_type → Always "select".
-                - field_is_visible → true only if visible and interactive.
-                - field_in_form → true only if part of the job application form.
-                - field_value → Leave empty.
-                - field_options → List visible options if available, otherwise [].
+            OBJECTIVE
+            Extract every visible, interactive dropdown that lets a user choose one or multiple options.
+            Supported types:
+            1) Native <select> with <option>
+            2) React-Select–style components whose clickable control is a stable container (commonly a div with class*="select__control").
+            Ignore pseudo-dropdowns that are actually text inputs/autocomplete widgets without a stable clickable control.
 
-                4 CRITICAL CONSTRAINTS
-                - Accuracy is mandatory: Do not guess fields or selectors that don't exist.
-                - No hidden fields: Skip elements with display:none, visibility:hidden, zero size, or off-screen positioning.
-                - No iframes: Never include "iframe#..." or cross-document selectors.
-                - No other input types: Only return select dropdown fields, ignore text, checkbox, radio, file upload, etc.
+            SCOPE & VISIBILITY RULES
+            - Only fields inside the job-application form (i.e., a <form> ancestor clearly tied to applying).
+            - Only currently visible and interactive (not hidden, disabled, off-screen, or zero-size).
+            - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT THE MODAL AS THE ACTIVE SCOPE and ignore background fields.
+            - Ignore future-step or collapsed sections not currently expanded/active.
+            - Never cross iframes. Do not return selectors that include iframe boundaries.
 
-                Input Data:
-                - Preferences: {self.preferences}
-                - HTML of the page: {page_content}
+            NATIVE <select> RULES
+            - Target the <select> element directly with a minimal, stable CSS selector.
+            - Prefer stable attributes and scoping: name, id, data-*, or a clear form/field container.
+            GOOD (native)
+            select[name='country']
+            select#job_type
+            form#application-form select[name='department']
+            form[action='/apply'] select[name='education_level']
+            form[aria-label='Job application'] select[data-qa='availability']
+            form#apply-modal-form select#notice_period
+            form.ApplicationForm select[name='work_authorization']
+            form#application-form fieldset.location select[name='city']
+            form#application-form section.step-current select[name='seniority']
+            form#application-form select[name='salary_currency']
+            form#application-form select[multiple][name='skills']
+            form#application-form .benefits select[name='benefit_selection']
+            BAD (native) — and why
+            select:nth-of-type(2)                          # positional, brittle
+            form#application-form select[style*='display:none']  # hidden
+            select[disabled]                               # not interactive
+            .sidebar select[name='profile_location']       # outside application form
+            iframe#grnhse_iframe select[name='country']    # crosses iframe
+            html body select                               # generic/unstable
+            label[for='country']                           # not the control
+            option[value='gb']                             # not the control
+            select[aria-hidden='true']                     # hidden
+            form#application-form [role='listbox']         # popup semantics, not the control
 
-                Expected behavior:
-                - A clean, strictly valid JSON array with only select dropdowns, each fully described according to the schema above.
-                - No extra commentary or explanation in the output—just valid JSON.
-                """
-            
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
-                    response_mime_type="application/json",
-                    response_schema=SelectApplicationFieldResponse
-                )
-            )
-            
-            all_fields = response.parsed.fields
+            REACT-SELECT (OR SIMILAR) RULES
+            - Target the clickable control container (e.g., .select__control), NOT the menu list or transient option nodes.
+            - Scope to the application form/field container to disambiguate multiples.
+            GOOD (react-select)
+            div.select__control
+            div[class*='select__control']
+            form#job-application div.select__control
+            form#application-form .experience .select__control
+            form#application-form [data-testid='exp-select'].select__control
+            #apply-modal.open form#apply-modal-form .select__control[data-testid='job-type']
+            form#application-form .job-type .select-shell .select__control
+            form.ApplicationForm [data-field='department'] .select__control
+            form#application-form .rs-container > .select__control
+            form#application-form .field[data-field='employment_type'] .select__control
+            form#application-form section.step-current .select__control
+            form#application-form [aria-label='Country'] ~ .select-shell .select__control   # only if structure is stable and this is the clickable control
+            BAD (react-select) — and why
+            div.select__menu                           # transient popup
+            div[role='listbox']                        # popup list, not the control
+            .select__option                            # transient option
+            #react-select-3-input                       # dynamic IDs
+            html body div.select__control              # generic, no form scope
+            .select__control[aria-expanded='true']     # state-dependent
+            .select__control:has(+ .select__menu)      # portalized menus break this
+            div.select__control[aria-labelledby='question_322...']  # ARIA coupling, brittle
+            #question_322...-label ~ .select-shell .select__control # label adjacency, brittle
+            body iframe iframe div.select__control     # crosses documents
+            div.select__menu[style*='left:-9999px']    # off-screen portal
+
+            MODAL/DIALOG SCOPING
+            - If a visible modal/dialog is open, only return fields from the modal's form; ignore the background.
+            GOOD (modal)
+            #apply-modal.open form#apply-modal-form select[name='notice_period']
+            #apply-modal.open form#apply-modal-form .select__control[data-testid='job-type']
+            div[role='dialog'][aria-modal='true'] form select[name='availability']
+            BAD (modal)
+            form#application-form select[name='notice_period']   # background while modal is active
+            [aria-hidden='true'] select                          # hidden behind modal
+
+            HIDDEN/FUTURE-STEP EXCLUSIONS
+            - Exclude nodes with display:none, visibility:hidden, hidden attribute, aria-hidden='true', off-screen positioning, or zero size.
+            - Exclude collapsed accordions/tabs unless visibly active/expanded (e.g., class contains 'open' or 'active').
+            BAD
+            form#application-form .future-step select[name='seniority']         # future step
+            form#application-form .tab-panel:not(.active) select[name='x']      # inactive tab
+
+            FORBIDDEN SELECTORS (NEVER USE)
+            - Any selector that includes iframes/cross-document traversal
+            - Menus/options/transient nodes: .select__menu, [role='listbox'], .select__option
+            - Labels/spans instead of the control (e.g., label[for=...], span.field-label)
+            - Overly generic paths (e.g., html body div, html body select)
+            - Positional or transient-state selectors (:nth-*, [aria-expanded='true'], etc.)
+            - Hidden/off-screen/disabled nodes ([hidden], [disabled], [style*='left:-9999px'], [aria-hidden='true'])
+
+            OUTPUT SCHEMA (STRICT JSON ARRAY)
+            For each dropdown, return an object with exactly:
+            - "field_selector": minimal, stable CSS selector for the control
+            - "field_name": the name attribute or best-effort visible label (from HTML/screenshot)
+            - "field_type": "select"
+            - "field_is_visible": true if and only if interactive and visible now
+            - "field_in_form": true if and only if inside the application form (or active modal form)
+            - "field_value": "" (empty string)
+            - "field_options": array of visible options if available, else []
+
+            ORDERING
+            - Preserve top-to-bottom DOM order within the active scope.
+
+            VALIDATION & SELF-CHECK (DO NOT OUTPUT)
+            - Each selector resolves to exactly one control element of the correct type.
+            - No item is hidden/disabled/off-screen or outside the active application scope.
+            - No item targets menus/options/labels/iframed content.
+            - If no qualifying dropdowns, output [].
+
+            FINAL OUTPUT REQUIREMENT
+            - Output ONLY the JSON array per the schema above. No extra text.
+            """
+            all_fields = generate_model(
+                "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                model_object_type=SelectApplicationFieldResponse,
+                system_prompt=system_prompt,
+                model="gpt-5-mini"
+            ).fields
             
             all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
             
@@ -1971,17 +2611,245 @@ class ApplicationFiller:
             # Parse the JSON response
             select_fields: List[SelectApplicationField] = [field for field in all_fields if field.field_type == FieldType.SELECT]
             
-            context_str = "iframe" if frame else "page"
-            print(f"✅ gemini-2.5-flash found {len(select_fields)} select fields in {context_str}")
+            verified_select_fields = self.verify_select_fields(select_fields, frame, iframe_context, spinner)
             
-            return select_fields
+            context_str = "iframe" if frame else "page"
+            dprint(f"✅ gpt-5-mini found {len(verified_select_fields)} select fields in {context_str}")
+            
+            return verified_select_fields
             
         except Exception as e:
             print(f"❌ Error in find_and_handle_all_select_fields: {e}")
             traceback.print_exc()
             return []
 
-    def find_upload_file_button(self, frame=None, iframe_context=None) -> UploadApplicationField:
+    def verify_upload_file_button(self, upload_field: UploadApplicationField, frame=None, iframe_context=None, spinner:Yaspin=None, best_of: int = 3) -> UploadApplicationField:
+        """
+        Verify the upload file button is valid using best_of parameter for consensus
+        """
+        try:
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
+            
+            if best_of <= 1:
+                # Single run - use original logic
+                system_prompt = f"""
+                ROLE
+                You are a senior HTML/DOM analyst. Verify a proposed Playwright CSS selector for the file-upload trigger (resume/CV/cover letter). If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from html/screenshot. Output EXACTLY ONE line: the selector string or an empty string.
+
+                INPUTS
+                - html: {page_content}
+                - proposed_selector: {upload_field.field_selector}
+                - NOTE: {"The proposed selector is empty - you MUST find a file upload button from scratch" if not upload_field.field_selector else "The proposed selector exists and should be validated"}
+
+                TARGET
+                A single selector for a user-visible control that OPENS the OS file picker:
+                - Element type must be <button>, <a>, or <div acting as a button> (e.g., role='button', click handler).
+                - NEVER target <input> (even input[type='file'] is forbidden).
+
+                ACTIVE SCOPE & VISIBILITY
+                - If a visible modal/dialog exists (role="dialog" or [aria-modal="true"]), it is the ONLY active scope; ignore background.
+                - Include only elements that are visible & interactive now (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], aria-disabled="true"]).
+                - Do NOT cross iframe boundaries in the selector. If the control is inside an iframe, write the selector as if already inside that iframe's DOM (no iframe prefix).
+
+                FORBIDDEN (NEVER VALID)
+                - Any selector that targets <input> (including input[type='file'])
+                - Selectors that include iframe nodes or cross-document paths
+                - Overly generic roots (e.g., html body button, body a)
+                - Positional/transient-state hacks: :nth-*, [aria-expanded], inline style predicates
+                - Hidden/disabled elements
+                - Non-upload actions: remove/replace/delete/download/view/preview/cancel/close/submit/apply/next/continue/save/settings/preferences
+
+                UPLOAD SEMANTIC SIGNALS (positive examples; case-insensitive)
+                - Text/label/aria/title includes: upload, attach, add file, choose file, browse, select file, import, add resume, upload CV, attach cover letter
+                - Iconography/aria consistent with upload (e.g., button:has(svg[aria-label*='upload']))
+
+                VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                1) Resolves to EXACTLY ONE element in active scope.
+                2) Element is <button>, <a>, or <div> with button-like semantics (role='button' or clearly clickable).
+                3) Element is visible & enabled now.
+                4) Selector has NO iframe prefixes.
+                5) Selector does NOT target an <input>.
+                6) Element's accessible name/text/attributes suggest file upload (positive signals) and do not match forbidden actions.
+                7) Selector is reasonably stable (id/data-*/aria/clear container + :has-text or attribute). Not overly generic or positional.
+
+                DECISION RULE
+                - If ALL checklist items pass AND no stronger/more primary upload trigger is present in the same scope, RETURN proposed_selector UNCHANGED.
+                - Otherwise, RECOMPUTE:
+                a) Enumerate candidate controls per upload semantic signals among visible <button>/<a>/<div role='button'>.
+                b) Exclude forbidden/negative actions and wrappers/containers that are not the actual clickable trigger.
+                c) Prefer the primary trigger (e.g., "Upload/Attach/Choose file", "Upload resume/CV"), then build the most stable selector:
+                    - Prefer #id, [data-*], [aria-label], [title], [data-testid], [data-qa].
+                    - Otherwise: nearest stable uploader container + button with :has-text(/upload|attach|choose|browse|select file|resume|cv/i).
+                d) Ensure uniqueness and visibility; no iframe prefixes; not an <input>.
+                e) If multiple equally valid candidates remain, pick the first in top-to-bottom DOM order.
+
+                OUTPUT
+                - Output EXACTLY ONE line containing ONLY the selector string (no quotes, no extra text).
+                - If no qualifying control exists in the active scope, output an empty string.
+
+                REASONING PROTOCOL (DO NOT REVEAL)
+                - Validate proposed_selector with the checklist.
+                - If invalid/ambiguous, recompute per the procedure.
+                - Final self-check before output: uniqueness, visibility, correct element type, upload semantics, no forbidden patterns.
+                """
+
+                
+                upload_field = generate_model(
+                    "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    UploadApplicationField,
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                )
+                
+                if debug_mode:
+                    spinner.write(f"✅ verified upload file button")
+                
+                return upload_field
+            
+            # Multiple runs for consensus
+            results = []
+            for i in range(best_of):
+                try:
+                    if spinner:
+                        spinner.write(f"🔍 Run {i+1}/{best_of} for upload file button verification...")
+                    else:
+                        print(f"🔍 Run {i+1}/{best_of} for upload file button verification...")
+                    
+                    system_prompt = f"""
+                    ROLE
+                    You are a senior HTML/DOM analyst. Verify a proposed Playwright CSS selector for the file-upload trigger (resume/CV/cover letter). If it is fully valid, return it UNCHANGED. If it fails any check, IGNORE it and RECOMPUTE the correct selector from html/screenshot. Output EXACTLY ONE line: the selector string or an empty string.
+
+                    INPUTS
+                    - html: {page_content}
+                    - proposed_selector: {upload_field.field_selector}
+                    - NOTE: {"The proposed selector is empty - you MUST find a file upload button from scratch" if not upload_field.field_selector else "The proposed selector exists and should be validated"}
+
+                    TARGET
+                    A single selector for a user-visible control that OPENS the OS file picker:
+                    - Element type must be <button>, <a>, or <div acting as a button> (e.g., role='button', click handler).
+                    - NEVER target <input> (even input[type='file'] is forbidden).
+
+                    ACTIVE SCOPE & VISIBILITY
+                    - If a visible modal/dialog exists (role="dialog" or [aria-modal="true"]), it is the ONLY active scope; ignore background.
+                    - Include only elements that are visible & interactive now (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], aria-disabled="true"]).
+                    - Do NOT cross iframe boundaries in the selector. If the control is inside an iframe, write the selector as if already inside that iframe's DOM (no iframe prefix).
+
+                    FORBIDDEN (NEVER VALID)
+                    - Any selector that targets <input> (including input[type='file'])
+                    - Selectors that include iframe nodes or cross-document paths
+                    - Overly generic roots (e.g., html body button, body a)
+                    - Positional/transient-state hacks: :nth-*, [aria-expanded], inline style predicates
+                    - Hidden/disabled elements
+                    - Non-upload actions: remove/replace/delete/download/view/preview/cancel/close/submit/apply/next/continue/save/settings/preferences
+
+                    UPLOAD SEMANTIC SIGNALS (positive examples; case-insensitive)
+                    - Text/label/aria/title includes: upload, attach, add file, choose file, browse, select file, import, add resume, upload CV, attach cover letter
+                    - Iconography/aria consistent with upload (e.g., button:has(svg[aria-label*='upload']))
+
+                    VALIDATION CHECKLIST (APPLY TO proposed_selector)
+                    1) Resolves to EXACTLY ONE element in active scope.
+                    2) Element is <button>, <a>, or <div> with button-like semantics (role='button' or clearly clickable).
+                    3) Element is visible & enabled now.
+                    4) Selector has NO iframe prefixes.
+                    5) Selector does NOT target an <input>.
+                    6) Element's accessible name/text/attributes suggest file upload (positive signals) and do not match forbidden actions.
+                    7) Selector is reasonably stable (id/data-*/aria/clear container + :has-text or attribute). Not overly generic or positional.
+
+                    DECISION RULE
+                    - If ALL checklist items pass AND no stronger/more primary upload trigger is present in the same scope, RETURN proposed_selector UNCHANGED.
+                    - Otherwise, RECOMPUTE:
+                    a) Enumerate candidate controls per upload semantic signals among visible <button>/<a>/<div role='button'>.
+                    b) Exclude forbidden/negative actions and wrappers/containers that are not the actual clickable trigger.
+                    c) Prefer the primary trigger (e.g., "Upload/Attach/Choose file", "Upload resume/CV"), then build the most stable selector:
+                        - Prefer #id, [data-*], [aria-label], [title], [data-testid], [data-qa].
+                        - Otherwise: nearest stable uploader container + button with :has-text(/upload|attach|choose|browse|select file|resume|cv/i).
+                    d) Ensure uniqueness and visibility; no iframe prefixes; not an <input>.
+                    e) If multiple equally valid candidates remain, pick the first in top-to-bottom DOM order.
+
+                    OUTPUT
+                    - Output EXACTLY ONE line containing ONLY the selector string (no quotes, no extra text).
+                    - If no qualifying control exists in the active scope, output an empty string.
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Validate proposed_selector with the checklist.
+                    - If invalid/ambiguous, recompute per the procedure.
+                    - Final self-check before output: uniqueness, visibility, correct element type, upload semantics, no forbidden patterns.
+                    """
+
+                    result = generate_model(
+                        "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                        UploadApplicationField,
+                        system_prompt=system_prompt,
+                        model="gpt-5-mini"
+                    )
+                    
+                    if result:
+                        results.append(result)
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} found upload button")
+                        else:
+                            print(f"🔍 Run {i+1} found upload button")
+                    else:
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} returned empty result")
+                        else:
+                            print(f"🔍 Run {i+1} returned empty result")
+                        
+                except Exception as e:
+                    if spinner:
+                        spinner.write(f"❌ Error in run {i+1}: {e}")
+                    else:
+                        print(f"❌ Error in run {i+1}: {e}")
+                    continue
+            
+            if not results:
+                if spinner:
+                    spinner.write(f"❌ All {best_of} runs failed, returning original field")
+                else:
+                    print(f"❌ All {best_of} runs failed, returning original field")
+                return upload_field
+            
+            # Find most common result by comparing field selectors
+            from collections import Counter
+            selector_counts = Counter()
+            
+            for result in results:
+                if result and hasattr(result, 'field_selector'):
+                    selector_counts[result.field_selector] += 1
+            
+            # Get the most common selectors
+            most_common_selectors = selector_counts.most_common()
+            
+            if spinner:
+                spinner.write(f"🔍 Consensus results: {dict(selector_counts)}")
+            else:
+                print(f"🔍 Consensus results: {dict(selector_counts)}")
+            
+            # If we have consensus on the selector, use the most common result
+            if most_common_selectors and most_common_selectors[0][1] > 1:
+                # Find the result with the most common selector
+                best_result = max(results, key=lambda r: selector_counts.get(r.field_selector, 0) if r and hasattr(r, 'field_selector') else 0)
+                
+                if spinner:
+                    spinner.write(f"🔍 Using consensus result: {best_result.field_selector}")
+                else:
+                    print(f"🔍 Using consensus result: {best_result.field_selector}")
+                
+                return best_result
+            else:
+                if spinner:
+                    spinner.write(f"🔍 No clear consensus, returning last result")
+                else:
+                    print(f"🔍 No clear consensus, returning last result")
+                return results[-1] if results else upload_field
+        except Exception as e:
+            print(f"❌ Error in verify_upload_file_button: {e}")
+            return None
+
+    def find_upload_file_button(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> UploadApplicationField:
         """
         Find upload file button in page or iframe context
         
@@ -1989,97 +2857,886 @@ class ApplicationFiller:
             frame: Optional iframe frame context. If None, uses main page.
         """
         try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             # Get page content from frame or main page
             if frame:
                 page_content = frame.content()
             else:
                 page_content = self.page.content()
             
-            # Use smart screenshot that handles iframes
-            screenshot, context_info = self._take_screenshot_with_highlighted_elements(frame, iframe_context)
-            if screenshot is None:
-                print(f"❌ Could not take screenshot, using fallback analysis")
-                return None
+            # Use gpt-5-mini to analyze the page and identify form fields
+            system_prompt = f"""
+            ROLE
+            You are a senior front-end/DOM analyst. Return EXACTLY ONE Playwright-compatible selector for the user-visible control that opens a file picker to upload a resume/CV/cover letter. The control is a clickable <button>, <a>, or <div> acting as a button. Never return an <input> selector.
 
-            screenshot_part = genai.types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
+            INPUTS
+            - preferences: {self.preferences}
+            - html: {page_content}
+
+            REASONING PROTOCOL (DO NOT REVEAL)
+            1) Determine active scope: if a visible modal/dialog is open (role='dialog' or [aria-modal='true']), restrict to that; otherwise use the page.
+            2) Enumerate candidate controls: visible, enabled <button>, <a>, or <div role='button'|button-like) whose text/label/title/aria suggests file upload (upload, attach, add file, choose/browse/select file, import resume/CV/cover letter).
+            3) Exclude negatives: remove/replace/delete/download/view/preview/cancel/close/submit/apply/next/continue/save/settings/preferences.
+            4) Prefer the primary upload trigger that opens the OS file chooser (not a submit button, not a wrapper/container, not a hidden proxy).
+            5) Build a unique, stable selector (id/data-* preferred; otherwise scoped container + :has-text(...) or attribute match).
+            6) Self-check: selector resolves to exactly one visible element in the active scope; no iframe prefixes; not an <input>.
+
+            OBJECTIVE
+            Return a robust selector that, when clicked, initiates the file selection flow for resume/CV/cover letter upload.
+
+            SCOPE & VISIBILITY
+            - Include only elements currently visible and interactive (exclude display:none, visibility:hidden, opacity:0, aria-hidden='true', off-screen/zero-size, disabled).
+            - If a modal/dialog is visible, ignore background page controls.
+            - Do NOT cross iframes in the selector. If the control lives inside an iframe, write the selector as if already inside that iframe's DOM (no iframe prefix).
+
+            SELECTOR RULES (Playwright CSS)
+            - Target the actual clickable control (<button>, <a>, or <div> with role='button'/onClick).
+            - Prefer stable attributes: #id, [data-*], [aria-label], [title], [data-testid], [data-qa].
+            - May use :has-text("...") or :has-text(/.../i) to disambiguate.
+            - Avoid brittle patterns: :nth-*, overly generic roots (html body ...), transient state selectors ([aria-expanded], inline style predicates).
+
+            ALLOWED EXAMPLES (do not output verbatim)
+            button[aria-label='Upload resume']
+            button#resumeUpload
+            div.upload-btn[role='button']
+            a[data-testid='fileUploader']
+            div[class*='upload'][role='button']
+            button[type='button'][data-action='upload']
+            .resume-section button:not([disabled])
+            button:has(svg[aria-label='Upload'])
+            a[aria-label='Attach file']
+            div[role='button'][data-qa='attachment']
+            section.cv-uploader button:has-text(/upload|attach|choose|browse/i)
+
+            FORBIDDEN EXAMPLES (and why)
+            input[type='file']                               # input, not allowed
+            iframe#grnhse_iframe button[type='file']         # crosses iframe boundary
+            div                                              # hopelessly generic
+            body button                                      # too broad
+            button:nth-child(3)                              # positional/brittle
+            div[aria-labelledby='upload-label-resume'] .button-container button  # wrapper, not the control
+            .modal[style*='display:none'] button             # hidden
+            form:first-of-type button[type='submit']         # submit, not upload
+            a[href='#']                                      # generic anchor without semantics
+
+            """
+
+            
+            upload_field = generate_model(
+                "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                UploadApplicationField,
+                system_prompt=system_prompt,
+                model="gpt-5-mini"
             )
             
-            # Use gemini-2.5-flash to analyze the page and identify form fields
-            prompt = f"""
-                ##########  CONTEXT  ##########
-                You are a senior front-end engineer.  
-                Your task: scan the supplied HTML and return **exactly one** CSS selector that matches the user-visible control that lets an applicant upload a file (resume, CV, cover letter, etc.).
-
-                The upload control may be a <button>, <a>, or <div> acting as a button.  
-                **Never** return an <input> selector.
-
-                You are also given a screenshot of the page. Use the screenshot to help you identify the fields.
-                If there is a modal or dialog, only focus on the fields that are visible in the modal and not grayed out.
-
-                ##########  CONSTRAINTS  ##########
-                1. Target the real form element — not wrappers or generic containers.  
-                2. Ignore every <input>, even if it is type="file".  
-                3. **Do not** prepend iframe selectors (e.g. `iframe#grnhse_iframe …`).  
-                • If the control lives inside an iframe, write the selector **as if you are already inside** that iframe's DOM.  
-                4. Exclude controls that are hidden (display:none, aria-hidden="true", etc.) or that belong to steps not yet visible.  
-                5. Use robust attribute / class patterns; avoid brittle nth-child or positional selectors unless unavoidable.  
-
-                ##########  GOOD FIELD SELECTOR EXAMPLES  ##########
-                button[aria-label='Upload resume']
-                button#resumeUpload
-                div.upload-btn[role='button']
-                a[data-testid='fileUploader']
-                div[class*='upload'][role='button']
-                button[type='button'][data-action='upload']
-                .resume-section button:not([disabled])
-                button:has(svg[aria-label='Upload'])
-                a[aria-label='Attach file']
-                div[role='button'][data-qa='attachment']
-
-                ##########  BAD FIELD SELECTOR EXAMPLES  ##########
-                input[type='file']                          # input, not button/link/div  
-                iframe#grnhse_iframe button[type='file']    # crosses iframe boundary  
-                div                                         # hopelessly generic  
-                body button                                 # far too broad  
-                button:nth-child(3)                         # brittle index-based  
-                div[aria-labelledby='upload-label-resume'] .button-container button  # wrapper, not actual control  
-                .modal[style*='display:none'] button        # hidden element  
-                form:first-of-type button[type='submit']    # submit button, not upload  
-                a[href='#']                                 # generic anchor  
-                locator("button[type='button'][class='btn btn--pill']") # generic locator
-
-                ##########  DATA  ##########
-                User-specific preferences:
-                {self.preferences}
-
-                HTML to analyse
-                {page_content}
-                """
-            
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    screenshot_part,
-                    prompt],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
-                    response_mime_type="application/json",
-                    response_schema=UploadApplicationField
-                )
-            )
-            
-            upload_field = response.parsed
+            verified_upload_field = self.verify_upload_file_button(upload_field, frame, iframe_context, spinner)
             
             # Parse the JSON response
-            return upload_field
+            return verified_upload_field
             
         except Exception as e:
             print(f"❌ Error in find_upload_file_button: {e}")
             return None
+
+    def verify_checkbox_fields(self, checkbox_fields: List[CheckboxApplicationField], frame=None, iframe_context=None, spinner:Yaspin=None, best_of: int = 3) -> List[CheckboxApplicationField]:
+        """
+        Verify the checkbox fields are valid using best_of parameter for consensus
+        """
+        try:
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
+            
+            if best_of <= 1:
+                # Single run - use original logic
+                system_prompt = f"""
+                    ROLE
+                    You are a senior HTML/DOM form analyst. Verify a proposed list of CHECKBOX fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                    INPUTS
+                    - preferences: {self.preferences}
+                    - html: {page_content}
+                    - proposed_checkboxes: {json.dumps([self._serialize_field_for_json(field) for field in checkbox_fields])}
+                    - NOTE: {"The proposed checkboxes list is empty - you MUST find all CHECKBOX fields from scratch" if not checkbox_fields else "The proposed checkboxes exist and should be validated"}
+
+                    TARGET SCHEMA (ApplicationField)
+                    Each object MUST have:
+                    - "field_selector": minimal, stable CSS selector for the checkbox control
+                    - "field_name": name attribute or best-effort visible label
+                    - "field_type": "checkbox"
+                    - "field_is_visible": true only if visible & interactive now
+                    - "field_in_form": true only if inside the application form (or active modal form)
+                    - "field_checked": false (default unchecked state)
+
+                    WHAT QUALIFIES AS A CHECKBOX
+                    - Native <input type="checkbox"> elements
+                    - Custom checkbox implementations with role="checkbox" and proper ARIA attributes
+                    - Toggle switches and other binary choice controls that behave like checkboxes
+
+                    ACTIVE SCOPE & VISIBILITY
+                    - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                    - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                    - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                    - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                    FORBIDDEN (NEVER VALID)
+                    - Selectors that include iframe nodes (e.g., iframe#... ...)
+                    - Labels/spans instead of the control: label[for=...], span.field-label
+                    - Radio buttons: input[type="radio"]
+                    - Text inputs: input[type="text"], input[type="email"], etc.
+                    - Overly generic roots: html body input, html body div
+                    - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                    - Hidden/disabled elements
+                    - Non-checkbox controls: buttons, links, selects, textareas
+
+                    VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                    1) Selector resolves to EXACTLY ONE element in the active scope.
+                    2) Element is a valid checkbox control:
+                    - Native: tagName == 'INPUT' and type == 'checkbox'
+                    - Custom: has role="checkbox" or equivalent checkbox semantics
+                    3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                    4) Element is inside the job-application form (or active modal form).
+                    5) No iframe traversal in the selector.
+                    6) field_type == "checkbox"; field_is_visible == true; field_in_form == true.
+                    7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+
+                    DECISION RULE
+                    - If ALL proposed items pass EVERY validation and no qualifying checkboxes are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                    - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                    a) Re-detect all qualifying checkboxes from html/screenshot per the rules above.
+                    b) Build minimal, stable selectors (native <input type="checkbox"> or custom checkbox with role="checkbox").
+                    c) Order by top-to-bottom DOM order within the active scope.
+                    d) Exclude anything forbidden.
+                            
+                OUTPUT SCHEMA (STRICT JSON ARRAY)
+                Return ONLY a JSON array of objects. Each object MUST have:
+                - "field_selector": minimal, stable CSS selector for the checkbox input
+                - "field_name": the name attribute or best-effort visible label (from HTML)
+                - "field_type": "checkbox"
+                - "field_is_visible": true only if visible and interactive now
+                - "field_in_form": true only if inside the application form (or active modal form)
+                - "field_value": true or false  # from preferences-only logic above (use preferences to determine the value)
+                    Example:
+                        preferences:
+                            - "accept_privacy_policy": true
+                            - "gdpr_consent": false
+                        output:
+                            Checkbox 1
+                            checkbox label: "I agree to the privacy policy" (from HTML)
+                            - "field_selector": "input[type='checkbox'][name='accept_privacy_policy']"
+                            - "field_name": "accept_privacy_policy"
+                            - "field_type": "checkbox"
+                            - "field_is_visible": true
+                            - "field_in_form": true
+                            - "field_value": true
+                            
+                            Checkbox 2
+                            checkbox label: "I consent to the GDPR" (from HTML)
+                            - "field_selector": "input[type='checkbox'][name='gdpr_consent']"
+                            - "field_name": "gdpr_consent"
+                            - "field_type": "checkbox"
+                            - "field_is_visible": true
+                            - "field_in_form": true
+                            - "field_value": false
+
+                    OUTPUT
+                    - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                    - If nothing qualifies, output [].
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Silently validate proposed_fields_json against the checklist.
+                    - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                    - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                    """
+                
+                all_fields = generate_model(
+                    "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    model_object_type=CheckboxApplicationFieldResponse,
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                ).fields
+                
+                all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+                if debug_mode:
+                    spinner.write(f"✅ verified {len(all_fields)} fields")
+                
+                # Filter out fields that are not visible
+                context_str = "iframe" if frame else "page"
+                
+                # Parse the JSON response
+                checkbox_fields: List[CheckboxApplicationField] = [field for field in all_fields if field.field_type == FieldType.CHECKBOX]
+                
+                context_str = "iframe" if frame else "page"
+                if debug_mode:
+                    spinner.write(f"✅ gpt-5-mini found {len(checkbox_fields)} checkbox fields in {context_str}")
+                
+                return checkbox_fields
+            
+            # Multiple runs for consensus
+            results = []
+            for i in range(best_of):
+                try:
+                    if spinner:
+                        spinner.write(f"🔍 Run {i+1}/{best_of} for checkbox fields verification...")
+                    else:
+                        print(f"🔍 Run {i+1}/{best_of} for checkbox fields verification...")
+                    
+                    system_prompt = f"""
+                        ROLE
+                        You are a senior HTML/DOM form analyst. Verify a proposed list of CHECKBOX fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                        INPUTS
+                        - html: {page_content}
+                        - preferences: {self.preferences}
+                        - proposed_selector: {json.dumps([self._serialize_field_for_json(field) for field in checkbox_fields])}
+
+                        TARGET SCHEMA (ApplicationField)
+                        Each object MUST have:
+                        - "field_selector": minimal, stable CSS selector for the checkbox control
+                        - "field_name": name attribute or best-effort visible label
+                        - "field_type": "checkbox"
+                        - "field_is_visible": true only if visible & interactive now
+                        - "field_in_form": true only if inside the application form (or active modal form)
+                        - "field_checked": false (default unchecked state)
+
+                        WHAT QUALIFIES AS A CHECKBOX
+                        - Native <input type="checkbox"> elements
+                        - Custom checkbox implementations with role="checkbox" and proper ARIA attributes
+                        - Toggle switches and other binary choice controls that behave like checkboxes
+
+                        ACTIVE SCOPE & VISIBILITY
+                        - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                        - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                        - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                        - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                        FORBIDDEN (NEVER VALID)
+                        - Selectors that include iframe nodes (e.g., iframe#... ...)
+                        - Labels/spans instead of the control: label[for=...], span.field-label
+                        - Radio buttons: input[type="radio"]
+                        - Text inputs: input[type="text"], input[type="email"], etc.
+                        - Overly generic roots: html body input, html body div
+                        - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                        - Hidden/disabled elements
+                        - Non-checkbox controls: buttons, links, selects, textareas
+
+                        VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                        1) Selector resolves to EXACTLY ONE element in the active scope.
+                        2) Element is a valid checkbox control:
+                        - Native: tagName == 'INPUT' and type == 'checkbox'
+                        - Custom: has role="checkbox" or equivalent checkbox semantics
+                        3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                        4) Element is inside the job-application form (or active modal form).
+                        5) No iframe traversal in the selector.
+                        6) field_type == "checkbox"; field_is_visible == true; field_in_form == true.
+                        7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+
+                        DECISION RULE
+                        - If ALL proposed items pass EVERY validation and no qualifying checkboxes are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                        - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                        a) Re-detect all qualifying checkboxes from html/screenshot per the rules above.
+                        b) Build minimal, stable selectors (native <input type="checkbox"> or custom checkbox with role="checkbox").
+                        c) Order by top-to-bottom DOM order within the active scope.
+                        d) Exclude anything forbidden.
+
+                        OUTPUT
+                        - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                        - If nothing qualifies, output [].
+
+                        REASONING PROTOCOL (DO NOT REVEAL)
+                        - Silently validate proposed_fields_json against the checklist.
+                        - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                        - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                        """
+                    
+                    result = generate_model(
+                        "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                        model_object_type=CheckboxApplicationFieldResponse,
+                        system_prompt=system_prompt,
+                        model="gpt-5-mini"
+                    ).fields
+                    
+                    if result:
+                        results.append(result)
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} found {len(result)} fields")
+                        else:
+                            print(f"🔍 Run {i+1} found {len(result)} fields")
+                    else:
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} returned empty result")
+                        else:
+                            print(f"🔍 Run {i+1} returned empty result")
+                        
+                except Exception as e:
+                    if spinner:
+                        spinner.write(f"❌ Error in run {i+1}: {e}")
+                    else:
+                        print(f"❌ Error in run {i+1}: {e}")
+                    continue
+            
+            if not results:
+                if spinner:
+                    spinner.write(f"❌ All {best_of} runs failed, returning original fields")
+                else:
+                    print(f"❌ All {best_of} runs failed, returning original fields")
+                return checkbox_fields
+            
+            # Find most common result by comparing field selectors
+            from collections import Counter
+            selector_counts = Counter()
+            
+            for result in results:
+                for field in result:
+                    if field.field_is_visible and field.field_in_form and field.field_type == FieldType.CHECKBOX:
+                        selector_counts[field.field_selector] += 1
+            
+            # Get the most common selectors
+            most_common_selectors = selector_counts.most_common()
+            
+            if spinner:
+                spinner.write(f"🔍 Consensus results: {dict(selector_counts)}")
+            else:
+                print(f"🔍 Consensus results: {dict(selector_counts)}")
+            
+            # If we have consensus on most selectors, use the most common result
+            if most_common_selectors and most_common_selectors[0][1] > 1:
+                # Find the result with the most common selectors
+                best_result = max(results, key=lambda r: sum(selector_counts.get(f.field_selector, 0) for f in r if f.field_is_visible and f.field_in_form and f.field_type == FieldType.CHECKBOX))
+                
+                best_fields = [field for field in best_result if field.field_is_visible and field.field_in_form and field.field_type == FieldType.CHECKBOX]
+                
+                if spinner:
+                    spinner.write(f"🔍 Using consensus result with {len(best_fields)} fields")
+                else:
+                    print(f"🔍 Using consensus result with {len(best_fields)} fields")
+                
+                return best_fields
+            else:
+                if spinner:
+                    spinner.write(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                else:
+                    print(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                return results[-1] if results else checkbox_fields
+        except Exception as e:
+            print(f"❌ Error in verify_checkbox_fields: {e}")
+            return []
+
+    def verify_radio_fields(self, radio_fields: List[RadioApplicationField], frame=None, iframe_context=None, spinner:Yaspin=None, best_of: int = 3) -> List[RadioApplicationField]:
+        """
+        Verify the radio fields are valid using best_of parameter for consensus
+        """
+        try:
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
+            
+            if best_of <= 1:
+                # Single run - use original logic
+                system_prompt = f"""
+                    ROLE
+                    You are a senior HTML/DOM form analyst. Verify a proposed list of RADIO fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                    INPUTS
+                    - html: {page_content}
+                    - preferences: {self.preferences}
+                    - proposed_radio_fields: {json.dumps([self._serialize_field_for_json(field) for field in radio_fields])}
+                    - NOTE: {"The proposed radio fields list is empty - you MUST find all RADIO fields from scratch" if not radio_fields else "The proposed radio fields exist and should be validated"}
+
+                    WHAT QUALIFIES AS A RADIO BUTTON
+                    - Native <input type="radio"> elements
+                    - Custom radio implementations with role="radio" and proper ARIA attributes
+                    - Radio button groups that allow single selection from multiple options
+
+                    ACTIVE SCOPE & VISIBILITY
+                    - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                    - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                    - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                    - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                    FORBIDDEN (NEVER VALID)
+                    - Selectors that include iframe nodes (e.g., iframe#... ...)
+                    - Labels/spans instead of the control: label[for=...], span.field-label
+                    - Checkboxes: input[type="checkbox"]
+                    - Text inputs: input[type="text"], input[type="email"], etc.
+                    - Overly generic roots: html body input, html body div
+                    - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                    - Hidden/disabled elements
+                    - Non-radio controls: buttons, links, selects, textareas
+
+                    VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                    1) Selector resolves to EXACTLY ONE element in the active scope.
+                    2) Element is a valid radio control:
+                    - Native: tagName == 'INPUT' and type == 'radio'
+                    - Custom: has role="radio" or equivalent radio semantics
+                    3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                    4) Element is inside the job-application form (or active modal form).
+                    5) No iframe traversal in the selector.
+                    6) field_type == "radio"; field_is_visible == true; field_in_form == true.
+                    7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                    8) field_value is boolean; field_group_name is string; field_options is array.
+
+                    DECISION RULE
+                    - If ALL proposed items pass EVERY validation and no qualifying radio buttons are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                    - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                    a) Re-detect all qualifying radio buttons from html/screenshot per the rules above.
+                    b) Build minimal, stable selectors (native <input type="radio"> or custom radio with role="radio").
+                    c) Order by top-to-bottom DOM order within the active scope.
+                    d) Exclude anything forbidden.
+
+                    OUTPUT
+                    - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                    - If nothing qualifies, output [].
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Silently validate proposed_fields_json against the checklist.
+                    - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                    - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                    """
+                
+                all_fields = generate_model(
+                    "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    model_object_type=RadioApplicationFieldResponse,
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                ).fields
+                
+                all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+                if debug_mode:
+                    spinner.write(f"✅ verified {len(all_fields)} fields")
+                
+                # Filter out fields that are not visible
+                context_str = "iframe" if frame else "page"
+                
+                # Parse the JSON response
+                radio_fields: List[RadioApplicationField] = [field for field in all_fields if field.field_type == FieldType.RADIO]
+                
+                context_str = "iframe" if frame else "page"
+                if debug_mode:
+                    spinner.write(f"✅ gpt-5-mini found {len(radio_fields)} radio fields in {context_str}")
+                
+                return radio_fields
+            
+            # Multiple runs for consensus
+            results = []
+            for i in range(best_of):
+                try:
+                    if spinner:
+                        spinner.write(f"🔍 Run {i+1}/{best_of} for radio fields verification...")
+                    else:
+                        print(f"🔍 Run {i+1}/{best_of} for radio fields verification...")
+                    
+                    system_prompt = f"""
+                        ROLE
+                        You are a senior HTML/DOM form analyst. Verify a proposed list of RADIO fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                        INPUTS
+                        - html: {page_content}
+                        - preferences: {self.preferences}
+                        - proposed_radio_fields: {json.dumps([self._serialize_field_for_json(field) for field in radio_fields])}
+
+                        TARGET SCHEMA (ApplicationField)
+                        Each object MUST have:
+                        - "field_selector": minimal, stable CSS selector for the radio control
+                        - "field_name": name attribute or best-effort visible label
+                        - "field_type": "radio"
+                        - "field_is_visible": true only if visible & interactive now
+                        - "field_in_form": true only if inside the application form (or active modal form)
+                        - "field_group_name": name attribute value for radio group identification
+                        - "field_options": array of visible options if available, else []
+
+                        WHAT QUALIFIES AS A RADIO BUTTON
+                        - Native <input type="radio"> elements
+                        - Custom radio implementations with role="radio" and proper ARIA attributes
+                        - Radio button groups that allow single selection from multiple options
+
+                        ACTIVE SCOPE & VISIBILITY
+                        - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                        - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                        - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                        - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                        FORBIDDEN (NEVER VALID)
+                        - Selectors that include iframe nodes (e.g., iframe#... ...)
+                        - Labels/spans instead of the control: label[for=...], span.field-label
+                        - Checkboxes: input[type="checkbox"]
+                        - Text inputs: input[type="text"], input[type="email"], etc.
+                        - Overly generic roots: html body input, html body div
+                        - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                        - Hidden/disabled elements
+                        - Non-radio controls: buttons, links, selects, textareas
+
+                        VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                        1) Selector resolves to EXACTLY ONE element in the active scope.
+                        2) Element is a valid radio control:
+                        - Native: tagName == 'INPUT' and type == 'radio'
+                        - Custom: has role="radio" or equivalent radio semantics
+                        3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                        4) Element is inside the job-application form (or active modal form).
+                        5) No iframe traversal in the selector.
+                        6) field_type == "radio"; field_is_visible == true; field_in_form == true.
+                        7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                        8) field_value is boolean; field_group_name is string; field_options is array.
+
+                        DECISION RULE
+                        - If ALL proposed items pass EVERY validation and no qualifying radio buttons are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                        - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                        a) Re-detect all qualifying radio buttons from html/screenshot per the rules above.
+                        b) Build minimal, stable selectors (native <input type="radio"> or custom radio with role="radio").
+                        c) Order by top-to-bottom DOM order within the active scope.
+                        d) Exclude anything forbidden.
+
+                        OUTPUT
+                        - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                        - If nothing qualifies, output [].
+
+                        REASONING PROTOCOL (DO NOT REVEAL)
+                        - Silently validate proposed_fields_json against the checklist.
+                        - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                        - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                        """
+                    
+                    result = generate_model(
+                        "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                        model_object_type=RadioApplicationFieldResponse,
+                        system_prompt=system_prompt,
+                        model="gpt-5-mini"
+                    ).fields
+                    
+                    if result:
+                        results.append(result)
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} found {len(result)} fields")
+                        else:
+                            print(f"🔍 Run {i+1} found {len(result)} fields")
+                    else:
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} returned empty result")
+                        else:
+                            print(f"🔍 Run {i+1} returned empty result")
+                        
+                except Exception as e:
+                    if spinner:
+                        spinner.write(f"❌ Error in run {i+1}: {e}")
+                    else:
+                        print(f"❌ Error in run {i+1}: {e}")
+                    continue
+            
+            if not results:
+                if spinner:
+                    spinner.write(f"❌ All {best_of} runs failed, returning original fields")
+                else:
+                    print(f"❌ All {best_of} runs failed, returning original fields")
+                return radio_fields
+            
+            # Find most common result by comparing field selectors
+            from collections import Counter
+            selector_counts = Counter()
+            
+            for result in results:
+                for field in result:
+                    if field.field_is_visible and field.field_in_form and field.field_type == FieldType.RADIO:
+                        selector_counts[field.field_selector] += 1
+            
+            # Get the most common selectors
+            most_common_selectors = selector_counts.most_common()
+            
+            if spinner:
+                spinner.write(f"🔍 Consensus results: {dict(selector_counts)}")
+            else:
+                print(f"🔍 Consensus results: {dict(selector_counts)}")
+            
+            # If we have consensus on most selectors, use the most common result
+            if most_common_selectors and most_common_selectors[0][1] > 1:
+                # Find the result with the most common selectors
+                best_result = max(results, key=lambda r: sum(selector_counts.get(f.field_selector, 0) for f in r if f.field_is_visible and f.field_in_form and f.field_type == FieldType.RADIO))
+                
+                best_fields = [field for field in best_result if field.field_is_visible and field.field_in_form and field.field_type == FieldType.RADIO]
+                
+                if spinner:
+                    spinner.write(f"🔍 Using consensus result with {len(best_fields)} fields")
+                else:
+                    print(f"🔍 Using consensus result with {len(best_fields)} fields")
+                
+                return best_fields
+            else:
+                if spinner:
+                    spinner.write(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                else:
+                    print(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                return results[-1] if results else radio_fields
+        except Exception as e:
+            print(f"❌ Error in verify_radio_fields: {e}")
+            return []
+
+    def verify_text_input_fields(self, text_fields: List[TextApplicationField], frame=None, iframe_context=None, spinner:Yaspin=None, best_of: int = 3) -> List[TextApplicationField]:
+        """
+        Verify the text input fields are valid using best_of parameter for consensus
+        """
+        try:
+            if frame:
+                page_content = frame.content()
+            else:
+                page_content = self.page.content()
+            
+            if best_of <= 1:
+                # Single run - use original logic
+                system_prompt = f"""
+                    ROLE
+                    You are a senior HTML/DOM form analyst. Verify a proposed list of TEXT INPUT fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                    INPUTS
+                    - html: {page_content}
+                    - preferences: {self.preferences}
+                    - proposed_text_fields: {json.dumps([self._serialize_field_for_json(field) for field in text_fields])}
+                    - NOTE: {"The proposed text input fields list is empty - you MUST find all TEXT INPUT fields from scratch" if not text_fields else "The proposed text input fields exist and should be validated"}
+
+
+                    TARGET SCHEMA (ApplicationField)
+                    Each object MUST have:
+                    - "field_selector": minimal, stable CSS selector for the text input control
+                    - "field_name": name attribute or best-effort visible label
+                    - "field_type": "text"
+                    - "field_is_visible": true only if visible & interactive now
+                    - "field_in_form": true only if inside the application form (or active modal form)
+                    - "field_value": "" (empty string for text inputs)
+                    - "field_max_length": maximum character limit if available, else null
+                    - "field_pattern": input pattern if available, else null
+                    - "field_placeholder": placeholder text if available, else null
+
+                    WHAT QUALIFIES AS A TEXT INPUT
+                    - Native <input> types: text, email, tel, url, search, number, password, date, datetime-local, time
+                    - <textarea> elements
+                    - Contenteditable widgets with stable input/textarea-equivalent role (avoid unless clearly used for text entry)
+
+                    ACTIVE SCOPE & VISIBILITY
+                    - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                    - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                    - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                    - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                    FORBIDDEN (NEVER VALID)
+                    - Selectors that include iframe nodes (e.g., iframe#... ...)
+                    - Labels/spans instead of the control: label[for=...], span.field-label
+                    - Checkboxes: input[type="checkbox"]
+                    - Radio buttons: input[type="radio"]
+                    - File inputs: input[type="file"]
+                    - Select dropdowns: <select> elements
+                    - Overly generic roots: html body input, html body textarea
+                    - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                    - Hidden/disabled elements
+                    - Non-text controls: buttons, links, selects
+
+                    VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                    1) Selector resolves to EXACTLY ONE element in the active scope.
+                    2) Element is a valid text input control:
+                    - Native: tagName == 'INPUT' with appropriate type OR tagName == 'TEXTAREA'
+                    - Custom: has role equivalent to text input or textarea
+                    3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                    4) Element is inside the job-application form (or active modal form).
+                    5) No iframe traversal in the selector.
+                    6) field_type == "text"; field_is_visible == true; field_in_form == true.
+                    7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                    8) field_value is string; field_max_length, field_pattern, field_placeholder are appropriate types.
+
+                    DECISION RULE
+                    - If ALL proposed items pass EVERY validation and no qualifying text inputs are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                    - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                    a) Re-detect all qualifying text inputs from html/screenshot per the rules above.
+                    b) Build minimal, stable selectors (native <input> or <textarea>).
+                    c) Order by top-to-bottom DOM order within the active scope.
+                    d) Exclude anything forbidden.
+
+                    OUTPUT
+                    - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                    - If nothing qualifies, output [].
+
+                    REASONING PROTOCOL (DO NOT REVEAL)
+                    - Silently validate proposed_fields_json against the checklist.
+                    - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                    - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                    """
+                
+                all_fields = generate_model(
+                    "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                    model_object_type=TextApplicationFieldResponse,
+                    system_prompt=system_prompt,
+                    model="gpt-5-mini"
+                ).fields
+                
+                all_fields = [field for field in all_fields if field.field_is_visible and field.field_in_form]
+                if debug_mode:
+                    spinner.write(f"✅ verified {len(all_fields)} fields")
+                
+                # Filter out fields that are not visible
+                context_str = "iframe" if frame else "page"
+                
+                # Parse the JSON response
+                text_fields: List[TextApplicationField] = [field for field in all_fields if field.field_type == FieldType.TEXT]
+                
+                context_str = "iframe" if frame else "page"
+                if debug_mode:
+                    spinner.write(f"✅ gpt-5-mini found {len(text_fields)} text input fields in {context_str}")
+                
+                return text_fields
+            
+            # Multiple runs for consensus
+            results = []
+            for i in range(best_of):
+                try:
+                    if spinner:
+                        spinner.write(f"🔍 Run {i+1}/{best_of} for text input fields verification...")
+                    else:
+                        print(f"🔍 Run {i+1}/{best_of} for text input fields verification...")
+                    
+                    system_prompt = f"""
+                        ROLE
+                        You are a senior HTML/DOM form analyst. Verify a proposed list of TEXT INPUT fields against the actual page. If every item is valid, return the input list UNCHANGED. If any item fails, discard the list and RECOMPUTE the correct list from the HTML/screenshot. Output ONLY the final JSON array.
+
+                        INPUTS
+                        - html: {page_content}
+                        - preferences: {self.preferences}
+                        - proposed_text_fields: {json.dumps([self._serialize_field_for_json(field) for field in text_fields])}
+
+                        TARGET SCHEMA (ApplicationField)
+                        Each object MUST have:
+                        - "field_selector": minimal, stable CSS selector for the text input control
+                        - "field_name": name attribute or best-effort visible label
+                        - "field_type": "text"
+                        - "field_is_visible": true only if visible & interactive now
+                        - "field_in_form": true only if inside the application form (or active modal form)
+                        - "field_value": "" (empty string for text inputs)
+                        - "field_max_length": maximum character limit if available, else null
+                        - "field_pattern": input pattern if available, else null
+                        - "field_placeholder": placeholder text if available, else null
+
+                        WHAT QUALIFIES AS A TEXT INPUT
+                        - Native <input> types: text, email, tel, url, search, number, password, date, datetime-local, time
+                        - <textarea> elements
+                        - Contenteditable widgets with stable input/textarea-equivalent role (avoid unless clearly used for text entry)
+
+                        ACTIVE SCOPE & VISIBILITY
+                        - If a visible modal/dialog is open (role="dialog" or [aria-modal="true"]), TREAT IT AS THE ONLY ACTIVE SCOPE; ignore background fields.
+                        - Include ONLY elements that are visible & interactive (not display:none, visibility:hidden, opacity:0, off-screen/zero-size, [hidden], [aria-hidden="true"], [disabled], or aria-disabled="true"]).
+                        - Include ONLY elements that belong to the job-application form (a relevant <form> ancestor).
+                        - Do NOT cross iframe boundaries in selectors. If a field is inside an iframe, write the selector as if already inside that iframe DOM (no iframe prefix).
+
+                        FORBIDDEN (NEVER VALID)
+                        - Selectors that include iframe nodes (e.g., iframe#... ...)
+                        - Labels/spans instead of the control: label[for=...], span.field-label
+                        - Checkboxes: input[type="checkbox"]
+                        - Radio buttons: input[type="radio"]
+                        - File inputs: input[type="file"]
+                        - Select dropdowns: <select> elements
+                        - Overly generic roots: html body input, html body textarea
+                        - Positional/transient-state selectors: :nth-*, [aria-expanded=...], inline style predicates, off-screen portals
+                        - Hidden/disabled elements
+                        - Non-text controls: buttons, links, selects
+
+                        VALIDATION CHECKLIST (APPLY TO EACH proposed item)
+                        1) Selector resolves to EXACTLY ONE element in the active scope.
+                        2) Element is a valid text input control:
+                        - Native: tagName == 'INPUT' with appropriate type OR tagName == 'TEXTAREA'
+                        - Custom: has role equivalent to text input or textarea
+                        3) Element is visible & interactive now; not hidden/disabled/off-screen/future-step.
+                        4) Element is inside the job-application form (or active modal form).
+                        5) No iframe traversal in the selector.
+                        6) field_type == "text"; field_is_visible == true; field_in_form == true.
+                        7) field_selector is minimal & stable (prefer id/name/data-*; avoid positional/state-based hacks).
+                        8) field_value is string; field_max_length, field_pattern, field_placeholder are appropriate types.
+
+                        DECISION RULE
+                        - If ALL proposed items pass EVERY validation and no qualifying text inputs are missing, RETURN THE proposed_fields_json UNCHANGED (identical order and text).
+                        - Otherwise, DISCARD proposed_fields_json and RECOMPUTE:
+                        a) Re-detect all qualifying text inputs from html/screenshot per the rules above.
+                        b) Build minimal, stable selectors (native <input> or <textarea>).
+                        c) Populate field_name (best-effort), field_type="text", field_is_visible=true, field_in_form=true, field_value="", and other properties when available.
+                        d) Order by top-to-bottom DOM order within the active scope.
+                        e) Exclude anything forbidden.
+
+                        OUTPUT
+                        - Output ONLY the final JSON array of ApplicationField objects. NO extra text.
+                        - If nothing qualifies, output [].
+
+                        REASONING PROTOCOL (DO NOT REVEAL)
+                        - Silently validate proposed_fields_json against the checklist.
+                        - If any failure or missing field is detected, redo detection from scratch and produce a corrected list.
+                        - Self-check the final array before output: uniqueness, visibility, scope, correct control type, forbidden patterns absent, no iframe traversal.
+                        """
+                    
+                    result = generate_model(
+                        "You are an expert at analyzing HTML and identifying form inputs. Return only valid JSON with CSS selectors.",
+                        model_object_type=TextApplicationFieldResponse,
+                        system_prompt=system_prompt,
+                        model="gpt-5-mini"
+                    ).fields
+                    
+                    if result:
+                        results.append(result)
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} found {len(result)} fields")
+                        else:
+                            print(f"🔍 Run {i+1} found {len(result)} fields")
+                    else:
+                        if spinner:
+                            spinner.write(f"🔍 Run {i+1} returned empty result")
+                        else:
+                            print(f"🔍 Run {i+1} returned empty result")
+                        
+                except Exception as e:
+                    if spinner:
+                        spinner.write(f"❌ Error in run {i+1}: {e}")
+                    else:
+                        print(f"❌ Error in run {i+1}: {e}")
+                    continue
+            
+            if not results:
+                if spinner:
+                    spinner.write(f"❌ All {best_of} runs failed, returning original fields")
+                else:
+                    print(f"❌ All {best_of} runs failed, returning original fields")
+                return text_fields
+            
+            # Find most common result by comparing field selectors
+            from collections import Counter
+            selector_counts = Counter()
+            
+            for result in results:
+                for field in result:
+                    if field.field_is_visible and field.field_in_form and field.field_type == FieldType.TEXT:
+                        selector_counts[field.field_selector] += 1
+            
+            # Get the most common selectors
+            most_common_selectors = selector_counts.most_common()
+            
+            if spinner:
+                spinner.write(f"🔍 Consensus results: {dict(selector_counts)}")
+            else:
+                print(f"🔍 Consensus results: {dict(selector_counts)}")
+            
+            # If we have consensus on most selectors, use the most common result
+            if most_common_selectors and most_common_selectors[0][1] > 1:
+                # Find the result with the most common selectors
+                best_result = max(results, key=lambda r: sum(selector_counts.get(f.field_selector, 0) for f in r if f.field_is_visible and f.field_in_form and f.field_type == FieldType.TEXT))
+                
+                best_fields = [field for field in best_result if field.field_is_visible and field.field_in_form and field.field_type == FieldType.TEXT]
+                
+                if spinner:
+                    spinner.write(f"🔍 Using consensus result with {len(best_fields)} fields")
+                else:
+                    print(f"🔍 Using consensus result with {len(best_fields)} fields")
+                
+                return best_fields
+            else:
+                if spinner:
+                    spinner.write(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                else:
+                    print(f"🔍 No clear consensus, returning last result with {len(results[-1]) if results else 0} fields")
+                return results[-1] if results else text_fields
+        except Exception as e:
+            print(f"❌ Error in verify_text_input_fields: {e}")
+            return []
 
     def _get_file_path_for_field(self, field_name_lower: str) -> str:
         """Get the appropriate file path based on field name"""
@@ -2103,864 +3760,132 @@ class ApplicationFiller:
         
         return file_path
 
-    def _take_smart_screenshot(self, frame=None, iframe_context=None):
+    def _take_smart_screenshot(self, frame=None, iframe_context=None, spinner: Yaspin=None):
         """
-        Take a screenshot that includes iframe content if the form is in an iframe
-        
-        Args:
-            frame: Optional iframe frame context. If None, uses main page.
-            iframe_context: Optional iframe context dict with 'iframe' element info.
-            
+        Take a screenshot using Chrome DevTools (CDP). No page.screenshot() and no new tabs.
+        - Default: full-page capture of the main document.
+        - If an iframe is provided, capture the iframe's VISIBLE region (clip) on the main page.
+
         Returns:
-            Screenshot bytes and context info
+            (screenshot_bytes: bytes, context_str: str)
         """
-        try:
-            # First priority: if we have iframe_context with iframe element, use it
-            if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
-                print(f"📸 Opening iframe URL in new tab for screenshot")
-                iframe_element = iframe_context['iframe']
-                iframe_url = iframe_element.get_attribute('src')
-                
-                if not iframe_url:
-                    print("⚠️ Iframe has no src URL, falling back to main page")
-                    screenshot = self.page.screenshot(type="png", full_page=True)
-                    context_str = "main page (no iframe src)"
-                else:
-                    # Make URL absolute if it's relative
-                    if not iframe_url.startswith(('http://', 'https://')):
-                        current_url = self.page.url
-                        if iframe_url.startswith('/'):
-                            # Absolute path from domain
-                            parsed = urlparse(current_url)
-                            iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
-                        else:
-                            # Relative path
-                            iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
-                    
-                    print(f"🔗 Opening iframe URL")
-                    
-                    # Store current page context
-                    original_page = self.page
-                    original_context = self.page.context
-                    
-                    try:
-                        # Open iframe URL in new tab
-                        new_page = original_context.new_page()
-                        new_page.goto(iframe_url, wait_until='networkidle')
-                        
-                        # Take screenshot of the iframe content
-                        screenshot = new_page.screenshot(type="png", full_page=True)
-                        context_str = "iframe_content"
-                        
-                        print(f"✅ Successfully captured iframe content screenshot")
-                        
-                    finally:
-                        # Always close the new tab and restore original page context
-                        try:
-                            new_page.close()
-                        except Exception as close_error:
-                            print(f"⚠️ Warning: Could not close iframe tab: {close_error}")
-                        
-                        # Restore original page context
-                        self.page = original_page
-                        
-            # Second priority: if we have a frame with screenshot method, try to get iframe URL
+        import base64
+        import math
+
+        def _cdp_session(p):
+            return p.context.new_cdp_session(p)
+
+        def _cdp_fullpage_png(p) -> bytes:
+            cdp = _cdp_session(p)
+            metrics = cdp.send("Page.getLayoutMetrics")
+            cs = metrics["contentSize"]  # dict: x, y, width, height
+            w = max(1, int(math.ceil(cs.get("width", 1))))
+            h = max(1, int(math.ceil(cs.get("height", 1))))
+
+            # Keep within safe texture limits
+            max_dim = 16384
+            scale = 1.0
+            if max(w, h) > max_dim:
+                scale = max_dim / float(max(w, h))
+
+            data_b64 = cdp.send("Page.captureScreenshot", {
+                "format": "png",
+                "fromSurface": True,
+                "captureBeyondViewport": True,
+                "clip": {"x": 0, "y": 0, "width": w, "height": h, "scale": scale},
+            })["data"]
+            return base64.b64decode(data_b64)
+
+        def _cdp_clip_png(p, x, y, width, height, scale=1.0) -> bytes:
+            cdp = _cdp_session(p)
+            data_b64 = cdp.send("Page.captureScreenshot", {
+                "format": "png",
+                "fromSurface": True,
+                "captureBeyondViewport": True,
+                "clip": {"x": float(x), "y": float(y), "width": float(width), "height": float(height), "scale": float(scale)},
+            })["data"]
+            return base64.b64decode(data_b64)
+
+        def _try_iframe_clip() -> tuple | None:
+            """
+            If we can identify an iframe element, return (x, y, w, h) in document coords.
+            Returns None if not found or not visible.
+            """
+            # 1) Prefer explicit iframe element in iframe_context
+            if iframe_context and isinstance(iframe_context, dict) and "iframe" in iframe_context:
+                el = iframe_context["iframe"]
+            # 2) Else, if a frame handle is provided, map it to its <iframe> element
             elif frame:
-                # print(f"📸 Attempting to open iframe URL in new tab for better screenshot")
-                
-                # Try to find the iframe element that contains this frame
-                iframe_element = None
+                el = None
                 try:
-                    # Get all iframes on the page
-                    iframes = self.page.query_selector_all('iframe')
-                    for iframe in iframes:
+                    for cand in self.page.query_selector_all("iframe"):
                         try:
-                            if iframe.content_frame() == frame:
-                                iframe_element = iframe
+                            if cand.content_frame() == frame:
+                                el = cand
                                 break
-                        except:
+                        except Exception:
                             continue
-                except:
-                    pass
-                
-                if iframe_element:
-                    iframe_url = iframe_element.get_attribute('src')
-                    if iframe_url:
-                        # Make URL absolute if it's relative
-                        if not iframe_url.startswith(('http://', 'https://')):
-                            current_url = self.page.url
-                            if iframe_url.startswith('/'):
-                                # Absolute path from domain
-                                parsed = urlparse(current_url)
-                                iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
-                            else:
-                                # Relative path
-                                iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
-                        
-                        print(f"🔗 Opening iframe URL")
-                        
-                        # Store current page context
-                        original_page = self.page
-                        original_context = self.page.context
-                        
-                        try:
-                            # Open iframe URL in new tab
-                            new_page = original_context.new_page()
-                            new_page.goto(iframe_url, wait_until='networkidle')
-                            
-                            # Take screenshot of the iframe content
-                            screenshot = new_page.screenshot(type="png", full_page=True)
-                            context_str = "iframe_content"
-                            
-                            print(f"✅ Successfully captured iframe content screenshot")
-                            
-                        finally:
-                            # Always close the new tab and restore original page context
-                            try:
-                                new_page.close()
-                            except Exception as close_error:
-                                print(f"⚠️ Warning: Could not close iframe tab: {close_error}")
-                            
-                            # Restore original page context
-                            self.page = original_page
-                            print(f"🔄 Restored original page context")
-                    else:
-                        # Fallback to frame screenshot
-                        print(f"⚠️ Iframe has no src URL, using frame screenshot")
-                        screenshot = frame.screenshot(type="png", full_page=True)
-                        context_str = "iframe_frame"
-                else:
-                    # Fallback to frame screenshot
-                    print(f"⚠️ Could not find iframe element, using frame screenshot")
-                    screenshot = frame.screenshot(type="png", full_page=True)
-                    context_str = "iframe_frame"
-                    
-            # Third priority: if frame is a dict with 'frame' key
-            elif frame and isinstance(frame, dict) and 'frame' in frame:
-                print(f"📸 Taking screenshot of iframe content (extracted from dict)")
-                actual_frame = frame['frame']
-                if hasattr(actual_frame, 'screenshot'):
-                    screenshot = actual_frame.screenshot(type="png", full_page=True)
-                    context_str = "iframe"
-                else:
-                    raise Exception(f"Frame object does not have screenshot method: {type(actual_frame)}")
+                except Exception:
+                    el = None
+                if el is None:
+                    return None
             else:
-                # Take screenshot of main page
-                print(f"📸 Taking screenshot of main page")
-                screenshot = self.page.screenshot(type="png", full_page=True)
-                context_str = "main page"
-            
-            # Save screenshot to file with context info
-            filename = f"screenshot_{context_str.replace(' ', '_')}.png"
+                return None
+
+            try:
+                # Ensure it's rendered and get a bounding box
+                el.scroll_into_view_if_needed()
+                bbox = el.bounding_box()
+                if not bbox:
+                    return None
+
+                # Translate viewport coords -> document coords
+                scroll = self.page.evaluate("""() => ({x: window.scrollX || 0, y: window.scrollY || 0})""")
+                x_doc = bbox["x"] + scroll["x"]
+                y_doc = bbox["y"] + scroll["y"]
+                return (x_doc, y_doc, bbox["width"], bbox["height"])
+            except Exception:
+                return None
+
+        try:
+            # If we can identify an iframe element, capture its visible region only.
+            clip_rect = _try_iframe_clip()
+            if clip_rect:
+                if spinner and 'debug_mode' in globals() and debug_mode:
+                    spinner.write("📸 Capturing iframe VISIBLE region via CDP (no new tab).")
+                x, y, w, h = clip_rect
+                screenshot = _cdp_clip_png(self.page, x, y, w, h)
+                context_str = "iframe_region"
+            else:
+                # Default: full page capture
+                if spinner and 'debug_mode' in globals() and debug_mode:
+                    spinner.write("📸 Capturing MAIN PAGE full document via CDP.")
+                screenshot = _cdp_fullpage_png(self.page)
+                context_str = "main_page_full"
+
+            # Persist (optional)
+            filename = f"screenshot_{context_str}.png"
             with open(filename, "wb") as f:
                 f.write(screenshot)
-            
+
             return screenshot, context_str
-            
+
         except Exception as e:
-            print(f"❌ Error taking screenshot: {e}")
-            # Fallback to main page screenshot
+            dprint(f"❌ CDP capture error: {e}")
+            # Last-resort: viewport-only CDP capture
             try:
-                screenshot = self.page.screenshot(type="png", full_page=True)
+                cdp = self.page.context.new_cdp_session(self.page)
+                data_b64 = cdp.send("Page.captureScreenshot", {"format": "png"})["data"]
+                screenshot = base64.b64decode(data_b64)
                 with open("screenshot_fallback.png", "wb") as f:
                     f.write(screenshot)
-                print(f"💾 Fallback screenshot saved: screenshot_fallback.png")
-                return screenshot, "main page (fallback)"
+                dprint("💾 Fallback viewport screenshot saved: screenshot_fallback.png")
+                return screenshot, "viewport_fallback"
             except Exception as fallback_error:
-                print(f"❌ Critical error: Could not take any screenshot: {fallback_error}")
+                dprint(f"❌ Critical error: Could not take any screenshot via CDP: {fallback_error}")
                 return None, "error"
-
-    def _take_screenshot_with_highlighted_elements(self, frame=None, iframe_context=None, highlight_selectors=None):
-        """
-        Take a screenshot with highlighted elements for debugging purposes
-        
-        Args:
-            frame: Optional iframe frame context. If None, uses main page.
-            iframe_context: Optional iframe context dict with 'iframe' element info.
-            highlight_selectors: List of CSS selectors to highlight. If None, highlights ALL elements.
-            
-        Returns:
-            Screenshot bytes and context info
-        """
-        try:
-            # Determine which page context to use
-            target_page = None
-            target_frame = None
-            
-            if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
-                # Use iframe URL approach for better quality
-                print(f"🎯 Opening iframe URL in new tab for highlighted screenshot")
-                iframe_element = iframe_context['iframe']
-                iframe_url = iframe_element.get_attribute('src')
-                
-                if iframe_url:
-                    # Make URL absolute if it's relative
-                    if not iframe_url.startswith(('http://', 'https://')):
-                        current_url = self.page.url
-                        if iframe_url.startswith('/'):
-                            parsed = urlparse(current_url)
-                            iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
-                        else:
-                            iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
-                    
-                    # Store current page context
-                    original_page = self.page
-                    original_context = self.page.context
-                    
-                    try:
-                        # Open iframe URL in new tab
-                        new_page = original_context.new_page()
-                        new_page.goto(iframe_url, wait_until='networkidle')
-                        target_page = new_page
-                        context_str = "iframe_content"
-                    except Exception as e:
-                        print(f"⚠️ Could not open iframe URL: {e}, falling back to frame")
-                        target_frame = frame
-                        context_str = "iframe_frame"
-                else:
-                    target_frame = frame
-                    context_str = "iframe_frame"
-                    
-            elif frame:
-                target_frame = frame
-                context_str = "iframe_frame"
-            else:
-                target_page = self.page
-                context_str = "main_page"
-            
-            # Default selectors to highlight if none provided
-            if highlight_selectors is None:
-                # Highlight ALL elements on the page with more specific selectors
-                highlight_selectors = [
-                    'input', 'select', 'textarea', 'button', 'a', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                    'label', 'form', 'fieldset', 'legend', 'option', 'optgroup', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th'
-                ]
-            
-            # Add highlighting styles to the page
-            if target_page:
-                print(f"🎯 Taking highlighted screenshot of page")
-                # Add CSS for highlighting with stronger properties
-                highlight_css = """
-                <style id="element-highlighting">
-                .highlighted-element {
-                    outline: 4px solid #ff0000 !important;
-                    outline-offset: 3px !important;
-                    background-color: rgba(255, 0, 0, 0.2) !important;
-                    position: relative !important;
-                    z-index: 999999 !important;
-                    box-shadow: 0 0 10px rgba(255, 0, 0, 0.8) !important;
-                }
-                .highlighted-element::after {
-                    content: attr(data-selector);
-                    position: absolute;
-                    top: -30px;
-                    left: 0;
-                    background: #ff0000;
-                    color: white;
-                    padding: 4px 8px;
-                    font-size: 12px;
-                    font-family: monospace;
-                    border-radius: 4px;
-                    white-space: nowrap;
-                    z-index: 1000000 !important;
-                    font-weight: bold;
-                    border: 2px solid white;
-                }
-                </style>
-                """
-                # Apply highlighting immediately using evaluate with arguments (avoid f-string brace issues)
-                highlighted_count = target_page.evaluate(
-                    """
-                    (args) => {
-                        const { highlightCss, selectors } = args;
-                        // Add CSS
-                        if (!document.getElementById('element-highlighting')) {
-                            const style = document.createElement('style');
-                            style.id = 'element-highlighting';
-                            style.textContent = highlightCss;
-                            document.head.appendChild(style);
-                        }
-                        // Add label CSS once
-                        if (!document.getElementById('highlight-label-style')) {
-                            const lblStyle = document.createElement('style');
-                            lblStyle.id = 'highlight-label-style';
-                            lblStyle.textContent = `
-                                .highlight-label {
-                                position: absolute;
-                                background: #ff0000;
-                                color: #ffffff;
-                                padding: 2px 6px;
-                                font-size: 11px;
-                                font-family: monospace;
-                                border-radius: 3px;
-                                border: 2px solid #ffffff;
-                                z-index: 1000001 !important;
-                                pointer-events: none;
-                                max-width: 420px;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                                white-space: nowrap;
-                                }
-                                `;
-                            document.head.appendChild(lblStyle);
-                        }
-                        
-                        // Highlight elements
-                        let totalHighlighted = 0;
-                        const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
-                        const getUniqueSelector = (element) => {
-                            if (!element || element.nodeType !== 1) return '';
-                            if (element.id) return '#' + cssEscape(element.id);
-                            const parts = [];
-                            let el = element;
-                            while (el && el.nodeType === 1 && parts.length < 6) {
-                                let selector = el.tagName.toLowerCase();
-                                if (el.classList && el.classList.length > 0) {
-                                    const className = Array.from(el.classList)[0];
-                                    if (className) selector += '.' + cssEscape(className);
-                                }
-                                let siblingIndex = 1;
-                                let prev = el.previousElementSibling;
-                                while (prev) {
-                                    if (prev.tagName === el.tagName) siblingIndex++;
-                                    prev = prev.previousElementSibling;
-                                }
-                                selector += ':nth-of-type(' + siblingIndex + ')';
-                                parts.unshift(selector);
-                                if (el.id) { parts[0] = '#' + cssEscape(el.id); break; }
-                                el = el.parentElement;
-                                if (!el || el === document.body) break;
-                            }
-                            return parts.join(' > ');
-                        };
-                        selectors.forEach((selector) => {
-                            try {
-                                const elements = document.querySelectorAll(selector);
-                                elements.forEach((el) => {
-                                    el.classList.add('highlighted-element');
-                                    const uniqueSelector = getUniqueSelector(el);
-                                    el.setAttribute('data-selector', uniqueSelector || selector);
-                                    totalHighlighted++;
-                                });
-                            } catch (e) {
-                                console.log('Could not highlight selector:', selector, e);
-                            }
-                        });
-                        // Remove any existing labels before placing new ones
-                        document.querySelectorAll('.highlight-label').forEach(n => n.remove());
-                        // Place non-overlapping labels
-                        const placed = [];
-                        const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
-                        allHighlighted.forEach((el) => {
-                            const uniqueSelector = el.getAttribute('data-selector') || '';
-                            const rect = el.getBoundingClientRect();
-                            const label = document.createElement('div');
-                            label.className = 'highlight-label';
-                            label.textContent = uniqueSelector;
-                            // Initial position above element
-                            let left = rect.left + window.scrollX;
-                            let top = rect.top + window.scrollY - 22;
-                            // Clamp within page width
-                            const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
-                            label.style.left = left + 'px';
-                            label.style.top = top + 'px';
-                            document.body.appendChild(label);
-                            let lr = label.getBoundingClientRect();
-                            let moved = true;
-                            let guard = 0;
-                            while (moved && guard < 20) {
-                                moved = false;
-                                for (const r of placed) {
-                                    const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
-                                    if (overlaps) {
-                                        top = r.bottom + 2;
-                                        label.style.top = top + 'px';
-                                        lr = label.getBoundingClientRect();
-                                        moved = true;
-                                    }
-                                }
-                                guard++;
-                            }
-                            // Clamp horizontally if needed (after layout)
-                            if (lr.right > pageWidth) {
-                                const newLeft = Math.max(0, pageWidth - lr.width - 4);
-                                label.style.left = newLeft + 'px';
-                                lr = label.getBoundingClientRect();
-                            }
-                            placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
-                        });
-                        
-                        const highlightedElements = document.querySelectorAll('.highlighted-element');
-                        return {
-                            totalHighlighted: totalHighlighted,
-                            highlightedClassCount: highlightedElements.length,
-                            bodyChildren: document.body.children.length
-                        };
-                    }
-                    """,
-                    {"highlightCss": highlight_css, "selectors": highlight_selectors},
-                )
-                
-                print(f"🎯 Highlighting applied: {highlighted_count}")
-                
-                # Wait a moment for highlighting to apply
-                target_page.wait_for_timeout(1000)
-                
-                # Verify highlighting is still there before taking screenshot
-                verification = target_page.evaluate("""
-                    () => {
-                        const highlighted = document.querySelectorAll('.highlighted-element');
-                        const style = document.getElementById('element-highlighting');
-                        return {
-                            highlightedCount: highlighted.length,
-                            styleExists: !!style,
-                            bodyChildren: document.body.children.length
-                        };
-                    }
-                """)
-                print(f"🔍 Pre-screenshot verification: {verification}")
-                
-                # Take screenshot
-                screenshot = target_page.screenshot(type="png", full_page=True)
-                
-                # Clean up highlighting
-                target_page.evaluate("""
-                    () => {
-                        const highlighted = document.querySelectorAll('.highlighted-element');
-                        highlighted.forEach((el) => {
-                            el.classList.remove('highlighted-element');
-                            el.removeAttribute('data-selector');
-                        });
-                        document.querySelectorAll('.highlight-label').forEach(n => n.remove());
-                        const style = document.getElementById('element-highlighting');
-                        if (style) style.remove();
-                    }
-                """)
-                
-            elif target_frame:
-                print(f"🎯 Taking highlighted screenshot of frame")
-                # For frames, we need to inject the highlighting into the frame context
-                # but also ensure it's visible when taking a screenshot of the main page
-                
-                # First, get the iframe element's position and dimensions (Frame itself has no bounding_box)
-                iframe_element_for_box = None
-                try:
-                    if iframe_context and isinstance(iframe_context, dict) and 'iframe' in iframe_context:
-                        iframe_element_for_box = iframe_context.get('iframe')
-                    if not iframe_element_for_box:
-                        # Try to locate the iframe element by matching content_frame()
-                        page_iframes = self.page.query_selector_all('iframe')
-                        for _iframe_el in page_iframes:
-                            try:
-                                if _iframe_el.content_frame() == target_frame:
-                                    iframe_element_for_box = _iframe_el
-                                    break
-                            except Exception:
-                                continue
-                except Exception:
-                    iframe_element_for_box = None
-
-                frame_box = None
-                try:
-                    if iframe_element_for_box:
-                        frame_box = iframe_element_for_box.bounding_box()
-                except Exception:
-                    frame_box = None
-                if not frame_box:
-                    print("⚠️ Could not get frame bounding box, falling back to main page screenshot")
-                    screenshot = self.page.screenshot(type="png", full_page=True)
-                    context_str = "main_page_fallback"
-                else:
-                    print(f"📍 Frame position: x={frame_box['x']}, y={frame_box['y']}, width={frame_box['width']}, height={frame_box['height']}")
-                    
-                    # Prepare CSS strings to avoid quoting issues in JS
-                    frame_highlight_css = (
-                        ".highlighted-element {\n"
-                        "  outline: 3px solid #ff0000 !important;\n"
-                        "  outline-offset: 2px !important;\n"
-                        "  background-color: rgba(255, 0, 0, 0.1) !important;\n"
-                        "  position: relative !important;\n"
-                        "  z-index: 10000 !important;\n"
-                        "}\n"
-                        ".highlighted-element::after { content: none !important; }\n"
-                    )
-                    label_css = (
-                        ".highlight-label {\n"
-                        "  position: absolute;\n"
-                        "  background: #ff0000;\n"
-                        "  color: #ffffff;\n"
-                        "  padding: 2px 6px;\n"
-                        "  font-size: 11px;\n"
-                        "  font-family: monospace;\n"
-                        "  border-radius: 3px;\n"
-                        "  border: 2px solid #ffffff;\n"
-                        "  z-index: 10001 !important;\n"
-                        "  pointer-events: none;\n"
-                        "  max-width: 420px;\n"
-                        "  overflow: hidden;\n"
-                        "  text-overflow: ellipsis;\n"
-                        "  white-space: nowrap;\n"
-                        "}\n"
-                    )
-
-                    # Try preferred method: open iframe src in a new tab and highlight there
-                    try:
-                        iframe_url = None
-                        if iframe_element_for_box:
-                            iframe_url = iframe_element_for_box.get_attribute('src')
-                        if iframe_url:
-                            if not iframe_url.startswith(('http://', 'https://')):
-                                current_url = self.page.url
-                                if iframe_url.startswith('/'):
-                                    parsed = urlparse(current_url)
-                                    iframe_url = f"{parsed.scheme}://{parsed.netloc}{iframe_url}"
-                                else:
-                                    iframe_url = f"{current_url.rstrip('/')}/{iframe_url}"
-
-                            new_page = self.page.context.new_page()
-                            new_page.goto(iframe_url, wait_until='networkidle')
-
-                            # Inject highlighting and labels on the iframe page
-                            new_page.evaluate(
-                                """
-                                (args) => {
-                                    const { selectors, highlightCss, labelCss } = args;
-                                    if (!document.getElementById('element-highlighting')) {
-                                        const style = document.createElement('style');
-                                        style.id = 'element-highlighting';
-                                        style.textContent = highlightCss;
-                                        document.head.appendChild(style);
-                                    }
-                                    if (!document.getElementById('highlight-label-style')) {
-                                        const lblStyle = document.createElement('style');
-                                        lblStyle.id = 'highlight-label-style';
-                                        lblStyle.textContent = labelCss;
-                                        document.head.appendChild(lblStyle);
-                                    }
-                                    let totalHighlighted = 0;
-                                    const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
-                                    const getUniqueSelector = (element) => {
-                                        if (!element || element.nodeType !== 1) return '';
-                                        if (element.id) return '#' + cssEscape(element.id);
-                                        const parts = [];
-                                        let el = element;
-                                        while (el && el.nodeType === 1 && parts.length < 6) {
-                                            let selector = el.tagName.toLowerCase();
-                                            if (el.classList && el.classList.length > 0) {
-                                                const className = Array.from(el.classList)[0];
-                                                if (className) selector += '.' + cssEscape(className);
-                                            }
-                                            let siblingIndex = 1;
-                                            let prev = el.previousElementSibling;
-                                            while (prev) {
-                                                if (prev.tagName === el.tagName) siblingIndex++;
-                                                prev = prev.previousElementSibling;
-                                            }
-                                            selector += ':nth-of-type(' + siblingIndex + ')';
-                                            parts.unshift(selector);
-                                            if (el.id) { parts[0] = '#' + cssEscape(el.id); return parts.join(' > '); }
-                                            el = el.parentElement;
-                                            if (!el || el === document.body) break;
-                                        }
-                                        return parts.join(' > ');
-                                    };
-                                    document.querySelectorAll('.highlight-label').forEach(n => n.remove());
-                                    selectors.forEach((selector) => {
-                                        try {
-                                            const elements = document.querySelectorAll(selector);
-                                            elements.forEach((el) => {
-                                                el.classList.add('highlighted-element');
-                                                const uniqueSelector = getUniqueSelector(el);
-                                                el.setAttribute('data-selector', uniqueSelector || selector);
-                                                totalHighlighted++;
-                                            });
-                                        } catch (e) {
-                                            console.log('Could not highlight selector:', selector, e);
-                                        }
-                                    });
-                                    const placed = [];
-                                    const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
-                                    allHighlighted.forEach((el) => {
-                                        const uniqueSelector = el.getAttribute('data-selector') || '';
-                                        const rect = el.getBoundingClientRect();
-                                        const label = document.createElement('div');
-                                        label.className = 'highlight-label';
-                                        label.textContent = uniqueSelector;
-                                        let left = rect.left + window.scrollX;
-                                        let top = rect.top + window.scrollY - 20;
-                                        const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
-                                        label.style.left = left + 'px';
-                                        label.style.top = top + 'px';
-                                        document.body.appendChild(label);
-                                        let lr = label.getBoundingClientRect();
-                                        let moved = true;
-                                        let guard = 0;
-                                        while (moved && guard < 20) {
-                                            moved = false;
-                                            for (const r of placed) {
-                                                const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
-                                                if (overlaps) {
-                                                    top = r.bottom + 2;
-                                                    label.style.top = top + 'px';
-                                                    lr = label.getBoundingClientRect();
-                                                    moved = true;
-                                                }
-                                            }
-                                            guard++;
-                                        }
-                                        if (lr.right > pageWidth) {
-                                            const newLeft = Math.max(0, pageWidth - lr.width - 4);
-                                            label.style.left = newLeft + 'px';
-                                            lr = label.getBoundingClientRect();
-                                        }
-                                        placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
-                                    });
-                                    return true;
-                                }
-                                """,
-                                {"selectors": highlight_selectors, "highlightCss": frame_highlight_css, "labelCss": label_css},
-                            )
-                            new_page.wait_for_timeout(500)
-                            screenshot = new_page.screenshot(type="png", full_page=True)
-                            # Clean up on the new page
-                            new_page.evaluate("() => { document.querySelectorAll('.highlight-label').forEach(n => n.remove()); const st = document.getElementById('element-highlighting'); if (st) st.remove(); }")
-                            try:
-                                new_page.close()
-                            except Exception:
-                                pass
-                            context_str = "iframe_content_highlighted"
-                        else:
-                            raise Exception("No iframe src")
-                    except Exception:
-                        # Fallback: highlight inside frame and overlay frame bounds on main page
-                        target_frame.evaluate(
-                            """
-                            (args) => {
-                                const { selectors, highlightCss, labelCss } = args;
-                                // Add CSS for highlighting
-                                if (!document.getElementById('element-highlighting')) {
-                                    const style = document.createElement('style');
-                                    style.id = 'element-highlighting';
-                                    style.textContent = highlightCss;
-                                    document.head.appendChild(style);
-                                }
-                                // Add label CSS once
-                                if (!document.getElementById('highlight-label-style')) {
-                                    const lblStyle = document.createElement('style');
-                                    lblStyle.id = 'highlight-label-style';
-                                    lblStyle.textContent = labelCss;
-                                    document.head.appendChild(lblStyle);
-                                }
-                                
-                                // Highlight elements
-                                let totalHighlighted = 0;
-                                const cssEscape = (str) => (window.CSS && CSS.escape) ? CSS.escape(str) : String(str).replace(/([^a-zA-Z0-9_-])/g, '\\$1');
-                                const getUniqueSelector = (element) => {
-                                    if (!element || element.nodeType !== 1) return '';
-                                    if (element.id) return '#' + cssEscape(element.id);
-                                    const parts = [];
-                                    let el = element;
-                                    while (el && el.nodeType === 1 && parts.length < 6) {
-                                        let selector = el.tagName.toLowerCase();
-                                        if (el.classList && el.classList.length > 0) {
-                                            const className = Array.from(el.classList)[0];
-                                            if (className) selector += '.' + cssEscape(className);
-                                        }
-                                        let siblingIndex = 1;
-                                        let prev = el.previousElementSibling;
-                                        while (prev) {
-                                            if (prev.tagName === el.tagName) siblingIndex++;
-                                            prev = prev.previousElementSibling;
-                                        }
-                                        selector += ':nth-of-type(' + siblingIndex + ')';
-                                        parts.unshift(selector);
-                                        if (el.id) { parts[0] = '#' + cssEscape(el.id); break; }
-                                        el = el.parentElement;
-                                        if (!el || el === document.body) break;
-                                    }
-                                    return parts.join(' > ');
-                                };
-                                selectors.forEach((selector) => {
-                                    try {
-                                        const elements = document.querySelectorAll(selector);
-                                        elements.forEach((el) => {
-                                            el.classList.add('highlighted-element');
-                                            const uniqueSelector = getUniqueSelector(el);
-                                            el.setAttribute('data-selector', uniqueSelector || selector);
-                                            totalHighlighted++;
-                                        });
-                                    } catch (e) {
-                                        console.log('Could not highlight selector:', selector, e);
-                                    }
-                                });
-                                // Remove any existing labels before placing new ones
-                                document.querySelectorAll('.highlight-label').forEach(n => n.remove());
-                                // Place non-overlapping labels in frame context
-                                const placed = [];
-                                const allHighlighted = Array.from(document.querySelectorAll('.highlighted-element'));
-                                allHighlighted.forEach((el) => {
-                                    const uniqueSelector = el.getAttribute('data-selector') || '';
-                                    const rect = el.getBoundingClientRect();
-                                    const label = document.createElement('div');
-                                    label.className = 'highlight-label';
-                                    label.textContent = uniqueSelector;
-                                    let left = rect.left + window.scrollX;
-                                    let top = rect.top + window.scrollY - 20;
-                                    const pageWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
-                                    label.style.left = left + 'px';
-                                    label.style.top = top + 'px';
-                                    document.body.appendChild(label);
-                                    let lr = label.getBoundingClientRect();
-                                    let moved = true;
-                                    let guard = 0;
-                                    while (moved && guard < 20) {
-                                        moved = false;
-                                        for (const r of placed) {
-                                            const overlaps = !(lr.right < r.left || lr.left > r.right || lr.bottom < r.top || lr.top > r.bottom);
-                                            if (overlaps) {
-                                                top = r.bottom + 2;
-                                                label.style.top = top + 'px';
-                                                lr = label.getBoundingClientRect();
-                                                moved = true;
-                                            }
-                                        }
-                                        guard++;
-                                    }
-                                    if (lr.right > pageWidth) {
-                                        const newLeft = Math.max(0, pageWidth - lr.width - 4);
-                                        label.style.left = newLeft + 'px';
-                                        lr = label.getBoundingClientRect();
-                                    }
-                                    placed.push({ left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom });
-                                });
-                                
-                                console.log('Total elements highlighted in frame: ' + totalHighlighted);
-                                return totalHighlighted;
-                            }
-                            """,
-                            {"selectors": highlight_selectors, "highlightCss": frame_highlight_css, "labelCss": label_css},
-                        )
-                    
-                    # Wait a moment for highlighting to apply
-                    self.page.wait_for_timeout(500)
-                    
-                    # Also add a visible border around the frame itself on the main page
-                    # so we can see where the frame is located
-                    self.page.evaluate(f"""
-                        () => {{
-                            // Remove any existing frame highlight
-                            const existing = document.getElementById('frame-highlight');
-                            if (existing) existing.remove();
-                            
-                            // Add frame highlight
-                            const frameHighlight = document.createElement('div');
-                            frameHighlight.id = 'frame-highlight';
-                            frameHighlight.style.cssText = `
-                                position: absolute;
-                                left: {frame_box['x']}px;
-                                top: {frame_box['y']}px;
-                                width: {frame_box['width']}px;
-                                height: {frame_box['height']}px;
-                                border: 4px solid #00ff00 !important;
-                                background-color: rgba(0, 255, 0, 0.1) !important;
-                                pointer-events: none;
-                                z-index: 9999;
-                            `;
-                            
-                            // Add label
-                            frameHighlight.innerHTML = '<div style="position: absolute; top: -30px; left: 0; background: #00ff00; color: black; padding: 4px 8px; font-weight: bold; border-radius: 4px;">IFRAME CONTENT</div>';
-                            
-                            document.body.appendChild(frameHighlight);
-                        }}
-                    """)
-                    
-                    # Wait for frame highlight to be added
-                    self.page.wait_for_timeout(200)
-                    
-                    # Take screenshot of the main page (which now includes both the frame highlight and the highlighted elements inside the frame)
-                    screenshot = self.page.screenshot(type="png", full_page=True)
-                    
-                    # Clean up the frame highlight on the main page
-                    self.page.evaluate("""
-                        () => {
-                            const frameHighlight = document.getElementById('frame-highlight');
-                            if (frameHighlight) frameHighlight.remove();
-                        }
-                    """)
-                    
-                    # Clean up highlighting in the frame
-                    target_frame.evaluate("""
-                        () => {
-                            const highlighted = document.querySelectorAll('.highlighted-element');
-                            highlighted.forEach((el) => {
-                                el.classList.remove('highlighted-element');
-                                el.removeAttribute('data-selector');
-                            });
-                            document.querySelectorAll('.highlight-label').forEach(n => n.remove());
-                            
-                            const style = document.getElementById('element-highlighting');
-                            if (style) style.remove();
-                        }
-                    """)
-                    
-                    context_str = "iframe_frame_highlighted"
-            
-            # Save highlighted screenshot to file
-            filename = f"highlighted_screenshot_{context_str.replace(' ', '_')}.png"
-            with open(filename, "wb") as f:
-                f.write(screenshot)
-            
-            print(f"✅ Highlighted screenshot saved: {filename}")
-            
-            # Clean up if we opened a new page
-            if target_page and target_page != self.page:
-                try:
-                    target_page.close()
-                except Exception as close_error:
-                    print(f"⚠️ Warning: Could not close highlighted screenshot tab: {close_error}")
-                # Restore original page context
-                self.page = original_page
-            
-            return screenshot, context_str
-            
-        except Exception as e:
-            print(f"❌ Error taking highlighted screenshot: {e}")
-            traceback.print_exc()
-            # Fallback to regular screenshot
-            try:
-                return self._take_smart_screenshot(frame, iframe_context)
-            except Exception as fallback_error:
-                print(f"❌ Critical error: Could not take any screenshot: {fallback_error}")
-                return None, "error"
-
-    def take_debug_screenshot(self, frame=None, iframe_context=None, custom_selectors=None):
-        """
-        Public method to take a screenshot with highlighted elements for debugging
-        
-        Args:
-            frame: Optional iframe frame context. If None, uses main page.
-            iframe_context: Optional iframe context dict with 'iframe' element info.
-            custom_selectors: Optional list of custom CSS selectors to highlight.
-            
-        Returns:
-            Tuple of (screenshot_bytes, context_info, filename)
-        """
-        if custom_selectors:
-            print(f"🎯 Taking debug screenshot with custom selectors: {custom_selectors}")
-        else:
-            print(f"🎯 Taking debug screenshot with ALL elements highlighted")
-        
-        screenshot, context_info = self._take_screenshot_with_highlighted_elements(
-            frame, iframe_context, custom_selectors
-        )
-        
-        if screenshot:
-            filename = f"highlighted_screenshot_{context_info.replace(' ', '_')}.png"
-            return screenshot, context_info, filename
-        else:
-            return None, context_info, None
-
-    def find_all_form_inputs(self, frame=None, iframe_context=None) -> Tuple[List[TextApplicationField], List[SelectApplicationField], List[RadioApplicationField], List[CheckboxApplicationField], List[UploadApplicationField]]:
+    
+    def find_all_form_inputs(self, frame=None, iframe_context=None, spinner:Yaspin=None) -> Tuple[List[TextApplicationField], List[SelectApplicationField], List[RadioApplicationField], List[CheckboxApplicationField], List[UploadApplicationField]]:
         """
         Find all types of form inputs on the current page or in iframe using unified field detection
         
@@ -2972,25 +3897,29 @@ class ApplicationFiller:
         """
         try:
             # Use unified field detection functions
-            text_input_fields = self.find_all_text_input_fields(frame, iframe_context)
-            selectors = self.find_all_select_fields(frame, iframe_context)
-            radio_groups = self.find_all_radio_fields(frame, iframe_context)
-            checkboxes = self.find_all_checkbox_fields(frame, iframe_context)
+            text_input_fields = self.find_all_text_input_fields(frame, iframe_context, spinner)
+            spinner.write(f"Found {len(text_input_fields)} text input fields")
+            selectors = self.find_all_select_fields(frame, iframe_context, spinner)
+            spinner.write(f"Found {len(selectors)} select fields")
+            radio_groups = self.find_all_radio_fields(frame, iframe_context, spinner)
+            spinner.write(f"Found {len(radio_groups)} radio groups")
+            checkboxes = self.find_all_checkbox_fields(frame, iframe_context, spinner)
+            spinner.write(f"Found {len(checkboxes)} checkboxes")
             
             # For upload buttons, we need to handle the single return value
-            upload_button = self.find_upload_file_button(frame, iframe_context)
+            upload_button = self.find_upload_file_button(frame, iframe_context, spinner)
             upload_fields = [upload_button] if upload_button is not None else []
             
             total_fields = (len(text_input_fields) + len(selectors) + len(radio_groups) + 
                             len(checkboxes) + len(upload_fields))
             
             context_str = "iframe" if frame else "page"
-            print(f"✅ Unified field detection found {total_fields} total form fields in {context_str}")
-            print(f"  - {len(text_input_fields)} text input fields")
-            print(f"  - {len(selectors)} select dropdowns")
-            print(f"  - {len(radio_groups)} radio button groups")
-            print(f"  - {len(checkboxes)} checkboxes")
-            print(f"  - {len(upload_fields)} upload buttons")
+            dprint(f"✅ Unified field detection found {total_fields} total form fields in {context_str}")
+            dprint(f"  - {len(text_input_fields)} text input fields")
+            dprint(f"  - {len(selectors)} select dropdowns")
+            dprint(f"  - {len(radio_groups)} radio button groups")
+            dprint(f"  - {len(checkboxes)} checkboxes")
+            dprint(f"  - {len(upload_fields)} upload buttons")
             
             # Categorize fields by type
             text_fields = []
@@ -3095,12 +4024,12 @@ class ApplicationFiller:
             
         except Exception as e:
             context_str = "iframe" if frame else "page"
-            print(f"❌ Error finding form fields with unified detection in {context_str}: {e}")
+            dprint(f"❌ Error finding form fields with unified detection in {context_str}: {e}")
             return [], [], [], [], []
 
     def _find_alternative_select_value(self, possible_values: List[str], select_field: SelectApplicationField, preferences: Dict[str, Any]) -> Optional[str]:
         """
-        Use gemini-2.5-flash to find an alternative value from the available options when the original value is not found
+        Find an alternative value from the available options when the original value is not found
         
         Args:
             possible_values: List of available values in the select field
@@ -3111,14 +4040,12 @@ class ApplicationFiller:
             Optional[str]: Alternative value if found, None otherwise
         """
         try:
-            client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
-            
             field_name = select_field.field_name or ""
             page_content = self.page.content()
-            print(f"🤖 Using gemini-2.5-flash to find alternative value for field: {field_name}")
+            print(f"🤖 Using gpt-5-mini to find alternative value for field: {field_name}")
             print(f"   Available values: {possible_values}")
             
-            prompt = f"""
+            system_prompt = f"""
             You are helping to fill out a job application form. A select field has an invalid value that needs to be replaced with one of the available options.
             You are given the html of the page: {page_content}
             
@@ -3144,47 +4071,133 @@ class ApplicationFiller:
             - If field is "employment_type" and user prefers "Full-time" but only "Permanent" is available, return "Permanent"
             """
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert at analyzing form fields and selecting appropriate values. Return only the selected value as a string."
-                )
-            )
+            gemini_model = "gpt-5-mini"
+            response = generate_text("You are an expert at analyzing form fields and selecting appropriate values. Return only the selected value as a string.", system_prompt=system_prompt, model=gemini_model)
             
-            selected_value = response.text.strip()
+            selected_value = response.strip()
             
             if not possible_values:
                 return selected_value
             
             # Verify the selected value is actually in the available options
             if selected_value in possible_values:
-                print(f"✅ gemini-2.5-flash selected: {selected_value}")
+                dprint(f"✅ {gemini_model} selected: {selected_value}")
                 return selected_value
             else:
                 # Try case-insensitive match
                 for value in possible_values:
                     if value.lower() == selected_value.lower():
-                        print(f"✅ gemini-2.5-flash selected (case-insensitive): {value}")
+                        dprint(f"✅ {gemini_model} selected (case-insensitive): {value}")
                         return value
                 
                 # If still no match, use the first valid option
                 for value in possible_values:
                     if value and value.strip() and value.lower() not in ['select', 'choose', 'please select', '--', '']:
-                        print(f"⚠️ gemini-2.5-flash selection '{selected_value}' not found, using fallback: {value}")
+                        dprint(f"⚠️ {gemini_model} selection '{selected_value}' not found, using fallback: {value}")
                         return value
             
             print(f"❌ No suitable alternative value found for {field_name}")
             return None
             
         except Exception as e:
-            print(f"❌ Error in Gemini 2.5 Pro alternative value selection: {e}")
+            dprint(f"❌ Error in {gemini_model} alternative value selection: {e}")
             # Fallback to first valid option
             for value in possible_values:
                 if value and value.strip() and value.lower() not in ['select', 'choose', 'please select', '--', '']:
-                    print(f"🔄 Using fallback value: {value}")
+                    dprint(f"🔄 Using fallback value: {value}")
                     return value
             return None
+
+    def click_and_type_in_field(self, field: TextApplicationField, text: str, frame=None) -> bool:
+        """Click on a field and type text using Playwright in page or iframe context"""
+        try:
+            # Use id= selector engine for IDs with special characters like []
+            if field.field_selector.startswith('#'):
+                if frame:
+                    element = frame.locator(f'id={field.field_selector[1:]}').first
+                else:
+                    element = self.page.locator(f'id={field.field_selector[1:]}').first
+            else:
+                if frame:
+                    element = frame.locator(field.field_selector)
+                else:
+                    element = self.page.locator(field.field_selector)
+            
+            if not element:
+                print(f"⚠️ Element not found with selector: {field.field_selector}")
+                return False
+            
+            # Check if element is interactive before attempting to interact
+            if not self._is_element_interactive(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping non-interactive text field in {context_str}: {field.field_name}")
+                return True  # Return True to continue with other fields
+            
+            # Check if element is within form context before interacting
+            if not self._is_element_in_form_context(element, frame):
+                context_str = "iframe" if frame else "page"
+                print(f"⏭️ Skipping text field outside form context in {context_str}: {field.field_name}")
+                return True
+            
+            # Try multiple approaches to interact with the field
+            success = False
+            
+            # Approach 1: Focus and fill
+            try:
+                element.focus()
+                time.sleep(0.3)
+                element.fill(text if text else '')
+                time.sleep(0.5)
+                context_str = "iframe" if frame else "page"
+                print(f"✅ Successfully typed '{text}' in {context_str} field using fill method")
+                success = True
+            except Exception as e:
+                print(f"⚠️ Fill method failed: {e}")
+            
+            # Approach 2: Click and type if fill failed
+            if not success:
+                try:
+                    element.click(force=True, timeout=5000)
+                    time.sleep(0.3)
+                    element.fill('')
+                    time.sleep(0.2)
+                    element.type(text, delay=50)
+                    time.sleep(0.5)
+                    context_str = "iframe" if frame else "page"
+                    print(f"✅ Successfully typed '{text}' in {context_str} field using click and type")
+                    success = True
+                except Exception as e:
+                    print(f"⚠️ Click and type method failed: {e}")
+            
+            # Approach 3: JavaScript approach if both failed
+            if not success:
+                try:
+                    js_code = (
+                        "(element, value) => {"
+                        "element.focus();"
+                        "element.value = '';"
+                        "element.value = value;"
+                        "element.dispatchEvent(new Event('input', { bubbles: true }));"
+                        "element.dispatchEvent(new Event('change', { bubbles: true }));"
+                        "}"
+                    )
+                    if frame:
+                        frame.evaluate(js_code, element, text)
+                    else:
+                        self.page.evaluate(js_code, element, text)
+                    time.sleep(0.5)
+                    context_str = "iframe" if frame else "page"
+                    print(f"✅ Successfully typed '{text}' in {context_str} field using JavaScript")
+                    success = True
+                except Exception as e:
+                    print(f"⚠️ JavaScript method failed: {e}")
+            
+            return success
+            
+        except Exception as e:
+            context_str = "iframe" if frame else "page"
+            print(f"❌ Error clicking and typing in {context_str} field: {e}")
+            return False
 
 
 # Example usage and testing

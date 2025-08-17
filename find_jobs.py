@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from google import genai
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
 from pydantic import BaseModel
+from bot_utils import start_browser
 from page_detector import PageDetector, PageType
 from typing import Any, Dict, List, TypedDict
 import json as json_module
@@ -64,97 +65,18 @@ class FindJobsBot:
         
         self.max_jobs_to_find = 5
         
-    def start_browser(self):
+    def start_browser(self) -> bool:
         """Start the Playwright browser using your default Chrome profile"""
         try:
-            # Ensure we're not in an asyncio context
-            import asyncio
-            try:
-                asyncio.get_running_loop()
-                print("⚠️ Warning: Running in asyncio context, this may cause issues")
-            except RuntimeError:
-                pass  # No asyncio loop running, which is good
-            
-            self.playwright = sync_playwright().start()
-            
-            # Try to connect to existing Chrome instance first
-            try:
-                print("🔗 Attempting to connect to existing Chrome instance...")
-                self.browser = self.playwright.chromium.connect_over_cdp("http://localhost:9222")
-                pages = self.browser.pages
-                if pages:
-                    self.page = pages[0]
-                else:
-                    self.page = self.browser.new_page()
-                print("✅ Connected to existing Chrome instance")
-                
-                # Initialize page detector
-                self.page_detector = PageDetector(self.page)
-                return True
-                
-            except Exception as connect_error:
-                print(f"⚠️ Could not connect to existing Chrome: {connect_error}")
-                print("🚀 Launching new Chrome instance...")
-            
-            # If connection fails, launch a new instance with a unique profile
-            import uuid
-            unique_id = str(uuid.uuid4())[:8]
-            chrome_user_data_dir = os.path.expanduser(f"~/Library/Application Support/Google/Chrome/Automation_{unique_id}")
-            
-            # Create automation profile directory if it doesn't exist
-            os.makedirs(chrome_user_data_dir, exist_ok=True)
-            
-            # Launch Chrome browser with unique automation profile
-            self.browser = self.playwright.chromium.launch_persistent_context(
-                user_data_dir=chrome_user_data_dir,
-                headless=self.headless,
-                args=[
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-features=VizDisplayCompositor'
-                ],
-                channel="chrome"  # Use your installed Chrome
-            )
-            
-            # Get the first page or create a new one
-            pages = self.browser.pages
-            if pages:
-                self.page = pages[0]
-            else:
-                self.page = self.browser.new_page()
-            
-            # Initialize page detector
+            browser, context, page = start_browser()
+            self.browser = browser
+            self.context = context
+            self.page = page
             self.page_detector = PageDetector(self.page)
-            
-            print("✅ Playwright browser started with separate automation profile")
             return True
-            
         except Exception as e:
-            print(f"❌ Failed to start Playwright browser: {e}")
-            # Try alternative approach without persistent context
-            try:
-                print("🔄 Trying alternative browser launch method...")
-                self.browser = self.playwright.chromium.launch(
-                    headless=self.headless,
-                    args=[
-                        '--no-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-blink-features=AutomationControlled'
-                    ]
-                )
-                self.context = self.browser.new_context()
-                self.page = self.context.new_page()
-                
-                # Initialize page detector
-                self.page_detector = PageDetector(self.page)
-                
-                print("✅ Playwright browser started with alternative method")
-                return True
-                
-            except Exception as e2:
-                print(f"❌ Alternative method also failed: {e2}")
-                return False
+            print(f"❌ Failed to start browser: {e}")
+            return False
     
     def stop_browser(self):
         """Stop the Playwright browser"""

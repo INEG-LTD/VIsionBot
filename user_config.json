@@ -1,47 +1,44 @@
 {
-  "first_name": "chris",
-  "last_name": "ineg",
+  "first_name": "christopher",
+  "last_name": "inegbedion",
   "email": "eromoseleinegbe@gmail.com",
-  "phone": "07365260995",
+  "phone": 7365260995,
   "age": 23,
   "gender": "Male",
-  "nationality": "British",
-  "address": "36 Slade Baker Way",
-  "city": "Bristol",
-  "state": "England",
-  "country": "United Kingdom",
-  "postcode": "BS161QT",
+  "nationality": "british",
+  "address": "36 slade baker way",
+  "city": "bristol",
+  "state": "england",
+  "country": "united kingdom",
+  "postcode": "bs161qt",
   "job_titles": [
-    "ios engineer"
+    "ios developer"
   ],
   "locations": [
-    "Remote",
-    "London",
-    "UK"
+    "bristol",
+    "london"
   ],
   "salary_min": 50000,
   "salary_max": 100000,
   "currency": "GBP",
-  "employment_types": [
-    "Full time"
-  ],
+  "employment_types": "Full-time",
   "required_skills": [
-    "Swift",
-    "Git",
-    "Python"
+    "swift",
+    "swiftui",
+    "uikit",
+    "git",
+    "figma",
+    "tvos"
   ],
-  "experience_levels": [
-    "Mid-level"
-  ],
-  "remote_flexibility": [
-    "Remote"
-  ],
+  "experience_levels": "Mid-level",
+  "remote_flexibility": "Remote",
   "resume_path": "",
   "cover_letter_path": "",
   "photo_path": "",
-  "max_jobs_to_find": 10,
+  "max_jobs_to_find": 5,
   "max_applications_per_day": 10,
   "min_job_match_score": 70,
+  "accept_privacy_notice": true,
   "auto_apply": false,
   "headless": false
 }

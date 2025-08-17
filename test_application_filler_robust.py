@@ -76,7 +76,7 @@ def test_application_filler_robust():
     print("=" * 60)
     
     # Initialize browser bot
-    bot = FindJobsBot(headless=False, preferences=preferences)
+    bot = ApplicationFiller(headless=False, preferences=preferences)
     
     try:
         # Start browser and navigate to job page with retries
