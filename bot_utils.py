@@ -3,7 +3,6 @@ from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
 import uuid
 import os
 import time
-from rich import print as rprint
 
 debug_mode = True
 

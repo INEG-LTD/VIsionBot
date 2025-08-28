@@ -178,6 +178,15 @@ def main():
     elif choice == "3":
         print("Apply directly to job (With job form) - Paste a job link and auto-fill the form")
         
+        apply_method = inquirer.select(
+            message="Would you like to take over the browser?",
+            choices=[
+                Choice(value="1", name="Yes - I want the bot to take over the browser and fill out the form"),
+                Choice(value="2", name="No - I just want to paste the URL and let the bot fill out the form"),
+            ],
+            default="2"
+        ).execute()
+        
         test_url = "https://www.sumup.com/careers/positions/london-england-united-kingdom/ios/senior-ios-engineer-global-bank/8048304002/?gh_jid=8048304002&gh_src=jn5gvww32us"
         url = inquirer.text(
             message="Please enter the URL of the job you want to apply to",

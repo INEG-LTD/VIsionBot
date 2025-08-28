@@ -9,14 +9,18 @@ from bot_utils import dprint
 client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
 client_gpt = OpenAI(api_key="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")
 
-def generate_text_gemini(prompt: str, system_prompt: str = "", image = None, model: str = "gemini-2.5-flash") -> str:
+def generate_text_gemini(prompt: str, system_prompt: str = "", image = None, multi_image = None, model: str = "gemini-2.5-flash") -> str:
     contents = [prompt]
     if image:
         # Handle both bytes and genai.types.Part objects
         if isinstance(image, bytes):
             image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
         contents.append(image)
-    
+    if multi_image and len(multi_image) > 0:
+        for image in multi_image:
+            if isinstance(image, bytes):
+                image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
+            contents.append(image)
     response = client.models.generate_content(
         model=model,
         contents=contents,
@@ -30,6 +34,7 @@ def generate_text_gpt_with_cost(
     prompt: str,
     system_prompt: str = "",
     image: bytes | str | None = None,
+    multi_image: list[bytes] = None,
     image_detail: str = "low",
     model: str = "gpt-5-mini",
     reasoning_level: str = "low",
@@ -50,6 +55,12 @@ def generate_text_gpt_with_cost(
         messages.append({"role": "developer", "content": system_prompt})
 
     content_parts = [{"type": "input_text", "text": prompt}]
+
+    if multi_image and len(multi_image) > 0:
+        for image in multi_image:
+            b64 = base64.b64encode(image).decode("ascii")
+            data_url = f"data:image/jpeg;base64,{b64}"
+            content_parts.append({"type": "input_image", "image_url": data_url, "detail": image_detail})
 
     if image is not None:
         if isinstance(image, (bytes, bytearray)):
@@ -118,14 +129,31 @@ def generate_text_gpt_with_cost(
         "total_tokens": _get(usage, "total_tokens"),
     }
 
-def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
-    return generate_text_gpt_with_cost(prompt, system_prompt, image, image_detail, model, reasoning_level)[0]
+def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
+    return generate_text_gpt_with_cost(
+        prompt=prompt, 
+        system_prompt=system_prompt, 
+        image=image, 
+        multi_image=multi_image, 
+        image_detail=image_detail, 
+        model=model, reasoning_level=reasoning_level)[0]
 
-def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
+def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
     if model.startswith("gpt"):
-        return generate_text_gpt(prompt, system_prompt, image, image_detail, reasoning_level, model)
+        return generate_text_gpt(
+            prompt=prompt, 
+            system_prompt=system_prompt, 
+            image=image, 
+            multi_image=multi_image, 
+            image_detail=image_detail, 
+            reasoning_level=reasoning_level, model=model)
     elif model.startswith("gemini"):
-        return generate_text_gemini(prompt, system_prompt, image, model)
+        return generate_text_gemini(
+            prompt=prompt, 
+            system_prompt=system_prompt, 
+            image=image, 
+            multi_image=multi_image, 
+            model=model)
     else:
         raise ValueError(f"Invalid model: {model}")
 
@@ -134,6 +162,7 @@ def generate_model_gpt_with_cost(
     model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
     image: Union[bytes, str, None] = None,
+    multi_image: list[bytes] = None,
     image_detail: str = "low",
     model: str = "gpt-5-mini",
     reasoning_level: str = "low",
@@ -155,6 +184,12 @@ def generate_model_gpt_with_cost(
         messages.append({"role": "developer", "content": system_prompt})
 
     parts = [{"type": "input_text", "text": prompt}]
+
+    if multi_image and len(multi_image) > 0:
+        for image in multi_image:
+            b64 = base64.b64encode(image).decode("ascii")
+            data_url = f"data:image/jpeg;base64,{b64}"
+            parts.append({"type": "input_image", "image_url": data_url, "detail": image_detail})
 
     if image is not None:
         if isinstance(image, (bytes, bytearray)):
@@ -240,13 +275,19 @@ def generate_model_gpt_with_cost(
         "total_tokens": _get(usage, "total_tokens"),
     }
 
-def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image = None, model: str = "gemini-2.5-flash") -> BaseModel:
+def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image = None, multi_image = None, thinking_level: str = "none", model: str = "gemini-2.5-flash") -> BaseModel:
     contents = [prompt]
     if image:
         # Handle both bytes and genai.types.Part objects
         if isinstance(image, bytes):
             image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
         contents.append(image)
+    if multi_image and len(multi_image) > 0:
+        for image in multi_image:
+            if isinstance(image, bytes):
+                image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
+            contents.append(image)
+    thinking_config=genai.types.ThinkingConfig(thinking_budget=0) if thinking_level == "none" else genai.types.ThinkingConfig(thinking_budget=100)
     
     response = client.models.generate_content(
         model=model,
@@ -255,17 +296,39 @@ def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseMode
             system_instruction=system_prompt,
             response_mime_type="application/json",
             response_schema=model_object_type,
+            thinking_config=thinking_config
         )
     )
     return response.parsed
 
-def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
-    return generate_model_gpt_with_cost(prompt, model_object_type, system_prompt, image, image_detail, model, reasoning_level)[0]
+def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
+    return generate_model_gpt_with_cost(
+        prompt, 
+        model_object_type=model_object_type, 
+        system_prompt=system_prompt, 
+        image=image, 
+        multi_image=multi_image, 
+        image_detail=image_detail, 
+        model=model, 
+        reasoning_level=reasoning_level)[0]
 
-def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
+def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
     if model.startswith("gpt"):
-        return generate_model_gpt(prompt, model_object_type, system_prompt, image, image_detail, reasoning_level, model)
+        return generate_model_gpt(
+            prompt=prompt, 
+            model_object_type=model_object_type, 
+            system_prompt=system_prompt, 
+            image=image, 
+            multi_image=multi_image, 
+            image_detail=image_detail, reasoning_level=reasoning_level, model=model)
     elif model.startswith("gemini"):
-        return generate_model_gemini(prompt, model_object_type, system_prompt, image, model)
+        return generate_model_gemini(
+            prompt=prompt, 
+            model_object_type=model_object_type, 
+            system_prompt=system_prompt, 
+            image=image, 
+            multi_image=multi_image, 
+            thinking_level=reasoning_level, 
+            model=model)
     else:
         raise ValueError(f"Invalid model: {model}")
