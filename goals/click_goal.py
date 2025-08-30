@@ -1,0 +1,325 @@
+"""
+Click Goal - Monitors click interactions to verify correct elements are clicked.
+"""
+from typing import Any, Dict, Optional, Tuple
+
+from pydantic import BaseModel, Field
+
+from ai_utils import generate_model
+from .base import BaseGoal, GoalResult, GoalStatus, EvaluationTiming, GoalContext, InteractionType
+from .element_analyzer import ElementAnalyzer
+
+
+class ElementMatchEvaluation(BaseModel):
+    """Result of evaluating if a clicked element matches the target description"""
+    is_match: bool = Field(description="Whether the clicked element matches the target")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the match assessment")
+    reasoning: str = Field(description="Explanation of why this match determination was made")
+
+
+class ClickGoal(BaseGoal):
+    """
+    Goal for clicking a specific element.
+    
+    This goal monitors click interactions and determines if the correct
+    element was clicked based on the user's description.
+    """
+    
+    # ClickGoal should be evaluated BEFORE interaction since clicking might navigate away
+    EVALUATION_TIMING = EvaluationTiming.BEFORE
+    
+    def __init__(self, description: str, target_description: str, **kwargs):
+        super().__init__(description, **kwargs)
+        self.target_description = target_description.lower().strip()
+        self.planned_click_coordinates: Optional[Tuple[int, int]] = None
+        self.planned_element_info: Optional[Dict[str, Any]] = None
+        self.actual_click_coordinates: Optional[Tuple[int, int]] = None
+        self.actual_element_info: Optional[Dict[str, Any]] = None
+        self.click_attempted = False
+        self.click_successful = False
+        self.element_analyzer: Optional[ElementAnalyzer] = None
+    
+    def on_monitoring_start(self) -> None:
+        """Initialize element analyzer when monitoring starts"""
+        # Element analyzer will be set by the goal monitor when page is available
+        pass
+    
+    def set_element_analyzer(self, analyzer: ElementAnalyzer) -> None:
+        """Set the element analyzer (called by goal monitor)"""
+        self.element_analyzer = analyzer
+    
+    def record_planned_click(self, x: int, y: int, element_info: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Record the coordinates and element info for a planned click.
+        This should be called BEFORE the click happens.
+        """
+        self.planned_click_coordinates = (x, y)
+        self.planned_element_info = element_info
+        print(f"[ClickGoal] Recorded planned click at ({x}, {y})")
+    
+    def on_interaction(self, interaction) -> None:
+        """Track click interactions"""
+        if interaction.interaction_type == InteractionType.CLICK:
+            self.click_attempted = True
+            self.actual_click_coordinates = interaction.coordinates
+            self.actual_element_info = interaction.target_element_info
+            self.click_successful = interaction.success
+            print(f"[ClickGoal] Recorded actual click at {interaction.coordinates}")
+    
+    def evaluate(self, context: GoalContext) -> GoalResult:
+        """
+        Evaluate if the correct element was/will be clicked.
+        
+        For ClickGoal with BEFORE timing, this evaluates the planned click.
+        For post-interaction evaluation, this evaluates the completed click.
+        """
+        # Check if we have planned interaction data (pre-interaction evaluation)
+        planned_interaction = getattr(context, 'planned_interaction', None)
+        if planned_interaction and planned_interaction.get('interaction_type') == InteractionType.CLICK:
+            return self._evaluate_planned_click(context, planned_interaction)
+        
+        # Fallback to post-interaction evaluation
+        if not self.click_attempted:
+            return GoalResult(
+                status=GoalStatus.PENDING,
+                confidence=1.0,
+                reasoning="No click interaction has been attempted yet",
+                next_actions=["Wait for click interaction"]
+            )
+        
+        if not self.click_successful:
+            return GoalResult(
+                status=GoalStatus.FAILED,
+                confidence=0.9,
+                reasoning="Click interaction failed to execute",
+                evidence={"error": "Click execution failed"}
+            )
+        
+        # Analyze the clicked element
+        if not self.actual_element_info and self.actual_click_coordinates and self.element_analyzer:
+            x, y = self.actual_click_coordinates
+            self.actual_element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
+        
+        if not self.actual_element_info:
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.3,
+                reasoning="Could not analyze the clicked element",
+                evidence={"coordinates": self.actual_click_coordinates}
+            )
+        
+        # Get AI description of the clicked element
+        try:
+            if self.element_analyzer and context.current_state.screenshot:
+                element_description = self.element_analyzer.get_element_description_with_ai(
+                    self.actual_element_info,
+                    context.current_state.screenshot,
+                    *self.actual_click_coordinates
+                )
+            else:
+                # Fallback description
+                element_description = self._create_fallback_description(self.actual_element_info)
+            
+            # Compare with target using AI
+            match_result = self._evaluate_element_match(element_description, self.target_description)
+            
+            if match_result["is_match"]:
+                return GoalResult(
+                    status=GoalStatus.ACHIEVED,
+                    confidence=match_result["confidence"],
+                    reasoning=f"Successfully clicked '{element_description}' which matches target '{self.target_description}'",
+                    evidence={
+                        "clicked_element": element_description,
+                        "target_element": self.target_description,
+                        "coordinates": self.actual_click_coordinates,
+                        "element_info": self.actual_element_info,
+                        "match_reasoning": match_result["reasoning"]
+                    }
+                )
+            else:
+                return GoalResult(
+                    status=GoalStatus.FAILED,
+                    confidence=match_result["confidence"],
+                    reasoning=f"Clicked '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}",
+                    evidence={
+                        "clicked_element": element_description,
+                        "target_element": self.target_description,
+                        "coordinates": self.actual_click_coordinates,
+                        "element_info": self.actual_element_info,
+                        "match_reasoning": match_result["reasoning"]
+                    }
+                )
+            
+        except Exception as e:
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.2,
+                reasoning=f"Error evaluating click goal: {e}",
+                evidence={"error": str(e)}
+            )
+    
+    def _evaluate_planned_click(self, context: GoalContext, planned_interaction: Dict[str, Any]) -> GoalResult:
+        """
+        Evaluate a planned click interaction before it happens.
+        """
+        coordinates = planned_interaction.get('coordinates')
+        if not coordinates:
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.1,
+                reasoning="No coordinates provided for planned click"
+            )
+        
+        x, y = coordinates
+        print(f"[ClickGoal] Evaluating planned click at ({x}, {y})")
+        
+        # Analyze the element that's about to be clicked
+        if not self.element_analyzer:
+            print("[ClickGoal] No element analyzer available for pre-click evaluation")
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.1,
+                reasoning="No element analyzer available for pre-click evaluation"
+            )
+        
+        try:
+            # Get element info at the click coordinates
+            element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
+            
+            if not element_info or element_info.get("error"):
+                print(f"[ClickGoal] Could not analyze element at ({x}, {y}) before click")
+                return GoalResult(
+                    status=GoalStatus.UNKNOWN,
+                    confidence=0.2,
+                    reasoning=f"Could not analyze element at ({x}, {y}) before click"
+                )
+            
+            # Get AI description of the element about to be clicked
+            screenshot = planned_interaction.get('screenshot')
+            if screenshot:
+                element_description = self.element_analyzer.get_element_description_with_ai(
+                    element_info, screenshot, x, y
+                )
+            else:
+                print("[ClickGoal] No screenshot available for pre-click evaluation")
+                element_description = self._create_fallback_description(element_info)
+            
+            print(f"[ClickGoal] About to click: '{element_description}'")
+            
+            # Compare with target using AI
+            match_result = self._evaluate_element_match(element_description, self.target_description)
+            
+            if match_result["is_match"]:
+                print(f"[ClickGoal] About to click: '{element_description}' which matches target '{self.target_description}'")
+                return GoalResult(
+                    status=GoalStatus.ACHIEVED,
+                    confidence=match_result["confidence"],
+                    reasoning=f"About to click '{element_description}' which matches target '{self.target_description}' - {match_result['reasoning']}",
+                    evidence={
+                        "target_element": element_description,
+                        "expected_target": self.target_description,
+                        "coordinates": (x, y),
+                        "element_info": element_info,
+                        "match_reasoning": match_result["reasoning"],
+                        "evaluation_timing": "pre_interaction"
+                    }
+                )
+            else:
+                print(f"[ClickGoal] About to click: '{element_description}' but target was '{self.target_description}'")
+                return GoalResult(
+                    status=GoalStatus.FAILED,
+                    confidence=match_result["confidence"],
+                    reasoning=f"About to click '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}",
+                    evidence={
+                        "target_element": element_description,
+                        "expected_target": self.target_description,
+                        "coordinates": (x, y),
+                        "element_info": element_info,
+                        "match_reasoning": match_result["reasoning"],
+                        "evaluation_timing": "pre_interaction"
+                    }
+                )
+            
+        except Exception as e:
+            print(f"[ClickGoal] Error in pre-click evaluation: {e}")
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.1,
+                reasoning=f"Error in pre-click evaluation: {e}",
+                evidence={"error": str(e), "coordinates": (x, y)}
+            )
+    
+    def _create_fallback_description(self, element_info: Dict[str, Any]) -> str:
+        """Create a basic description when AI is not available"""
+        element_type = element_info.get('elementType', 'element')
+        text = element_info.get('text', '')[:50]
+        print(f"[GoalFramework] Element description with fallback: {element_type} containing '{text}'")
+        if text:
+            return f"{element_type} containing '{text}'"
+        else:
+            print(f"[GoalFramework] Element description with fallback: {element_type}")
+            return element_type
+    
+    def _evaluate_element_match(self, actual_description: str, target_description: str) -> Dict[str, Any]:
+        """
+        Use AI to determine if the clicked element matches the target description.
+        
+        Returns dict with is_match, confidence, and reasoning.
+        """
+        try:
+            print(f"[GoalFramework] Evaluating element match: {actual_description} vs {target_description}")
+            system_prompt = f"""
+            You are evaluating whether a clicked UI element matches the user's intent.
+            
+            User wanted to click: "{target_description}"
+            Actually clicked: "{actual_description}"
+            
+            Determine if these match semantically. Consider:
+            - Synonyms and similar terms (e.g., "button" vs "btn", "link" vs "anchor")
+            - Partial matches (e.g., "first link" could match "navigation link")
+            - Context and intent (e.g., "submit" could match "submit button" or "send button")
+            
+            Provide your evaluation with confidence and reasoning.
+            """
+            
+            result = generate_model(
+                prompt="Evaluate if the clicked element matches the target description.",
+                model_object_type=ElementMatchEvaluation,
+                system_prompt=system_prompt,
+                model="gemini-2.5-flash-lite",
+                reasoning_level="none"
+            )
+            print(f"[GoalFramework] Element match evaluation: {result}")
+            # Return as dict for compatibility
+            return result.model_dump()
+                
+        except Exception:
+            print("AI evaluation failed, falling back to simple matching")
+            return self._simple_string_match(actual_description, target_description)
+    
+    def _simple_string_match(self, actual: str, target: str) -> Dict[str, Any]:
+        """Simple fallback matching when AI is not available"""
+        actual_lower = actual.lower()
+        target_lower = target.lower()
+        
+        # Exact match
+        if actual_lower == target_lower:
+            return {"is_match": True, "confidence": 1.0, "reasoning": "Exact match"}
+        
+        # Substring match
+        if target_lower in actual_lower or actual_lower in target_lower:
+            return {"is_match": True, "confidence": 0.8, "reasoning": "Substring match"}
+        
+        # Word overlap
+        actual_words = set(actual_lower.split())
+        target_words = set(target_lower.split())
+        overlap = actual_words & target_words
+        
+        if overlap and len(overlap) >= len(target_words) * 0.5:
+            return {
+                "is_match": True, 
+                "confidence": 0.6, 
+                "reasoning": f"Word overlap: {overlap}"
+            }
+        
+        return {"is_match": False, "confidence": 0.9, "reasoning": "No significant match found"}

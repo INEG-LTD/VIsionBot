@@ -24,14 +24,12 @@ import json
 from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Literal, Union
 import re
 from PIL import Image, ImageDraw  # type: ignore
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from playwright.sync_api import Page
 from ai_utils import generate_model, generate_text
 from cookie_handler import CookieHandler
 from text_utils import TextUtils
 from form_utils import FormUtils
-from navigation_utils import NavigationUtils
-from plan_utils import PlanUtils
 import time
 import math
 # ---------------------------------------------------------------------------
@@ -67,7 +65,7 @@ class DetectedItem(BaseModel):
     surrounding_context: str = Field(default="", description="Context surrounding the item. Things like the text, links, images etc. around the item.")
     in_dialog: bool = Field(default=False, description="Whether this item is in a dialog/modal")
     is_behind_modal: bool = Field(default=False, description="Whether this item is behind a modal. If there is a modal/dialog open, this item is behind the modal/dialog.")
-    viewport_data: ViewportMeta = Field(description="Viewport data of the item")
+    # Removed duplicate: viewport_data: ViewportMeta
     
     @field_validator("box_2d")
     @classmethod
@@ -144,6 +142,36 @@ class StopWhen(BaseModel):
     require_url_change: bool = False                         # ensure we actually navigated
     min_strong_signals: int = 1                              # require ≥N “strong” hits when specified
 
+    def is_effectively_empty(self) -> bool:
+        return not any([
+            bool(self.headings),
+            bool(self.url_contains),
+            bool(self.title_contains),
+            bool(self.body_contains),
+            bool(self.aria_active_tab),
+            bool(self.hostname_in),
+            bool(self.path_contains),
+        ])
+
+    @model_validator(mode="after")
+    def _fallback_when_empty(self):
+        """
+        If the StopWhen is completely empty (LLM didn’t provide any filters),
+        default to a change-based detector: require_url_change and at least 1 strong signal.
+        This prevents silent no-op goals.
+        """
+        try:
+            if self.is_effectively_empty():
+                if not self.require_url_change:
+                    self.require_url_change = True
+                if not isinstance(self.min_strong_signals, int) or self.min_strong_signals < 1:
+                    self.min_strong_signals = 1
+                if self.match_mode not in ("any", "all"):
+                    self.match_mode = "any"
+        except Exception:
+            pass
+        return self
+
 
 
 class CompletionPolicy(BaseModel):
@@ -173,15 +201,116 @@ class CompletionPolicy(BaseModel):
 class GoalKind(str, Enum):
     PAGE_REACHED = "page_reached"               # e.g., reach Sprint 5 page
     SUBMISSION_CONFIRMED = "submission_confirmed"
+    LIST_ITEM_OPENED = "list_item_opened"
     FORM_COMPLETED = "form_completed"
     LOGIN_COMPLETED = "login_completed"
+    ELEMENT_VISIBLE = "element_visible"
+    ELEMENT_GONE = "element_gone"
+    LIST_COUNT = "list_count"
+    FILTER_APPLIED = "filter_applied"
+    FIELD_VALUE_SET = "field_value_set"
+    UPLOAD_ATTACHED = "upload_attached"
+    NEW_TAB_OPENED = "new_tab_opened"
+    REPEAT_UNTIL = "repeat_until"
     ANY_OF = "any_of"                           # meta-goal: any child goal suffices
     ALL_OF = "all_of"                           # meta-goal: all child goals required
+    SURFACE_GONE = "surface_gone"
 
 
 class GoalBase(BaseModel):
     type: GoalKind
+    
+class ListLocator(BaseModel):
+    """How to find the list container."""
+    region: Optional[SectionIn] = None           # header|content|sidebar|modal|...
+    heading_contains: List[str] = Field(default_factory=list)  # text in heading immediately above the list
+    aria_label_contains: List[str] = Field(default_factory=list)
+    container_kind: Literal["auto","ul","ol","table","grid","feed"] = "auto"
+    min_items: int = 3                           # must look like a real list
 
+class ItemSpec(BaseModel):
+    """
+    How to pick an item inside the chosen list container.
+    If 'nth' or 'position' are provided, index selection is used.
+    Otherwise, we use content-based selection with these filters.
+    """
+    # Index-based (kept)
+    position: Literal["first", "last"] = "first"
+    nth: Optional[int] = None
+
+    # Content-based
+    text_any: List[str] = Field(default_factory=list)   # pass if ANY token appears in item label
+    text_all: List[str] = Field(default_factory=list)   # pass if ALL tokens appear
+    regex: Optional[str] = None                         # JS RegExp source (case-insensitive)
+    url_contains: List[str] = Field(default_factory=list)
+    domain_in: List[str] = Field(default_factory=list)  # e.g., ["nytimes.com","openai.com"]
+
+    # General constraints
+    exclude_text: List[str] = Field(default_factory=lambda: ["sponsored","ad","promotion"])
+    require_link: bool = True
+    require_visible: bool = True
+
+    # Tie breaking when multiple match
+    tie_breaker: Literal["first", "last", "highest_score"] = "highest_score"
+
+    # Optional semantic selection: only used if provided
+    semantic_query: Optional[str] = None                # short phrase to describe the target item
+    top_k_semantic: int = 12                            # candidates to send to LLM if semantic_query set
+
+class ListItemOpenedGoal(GoalBase):
+    type: Literal[GoalKind.LIST_ITEM_OPENED] = Field(default=GoalKind.LIST_ITEM_OPENED)
+    locator: ListLocator = Field(default_factory=ListLocator)
+    item: ItemSpec = Field(default_factory=ItemSpec)
+    require_url_change: bool = True              # opening should navigate (set False if you only want focus/selection)
+
+# ----------- Inserted: Helper model & new goal classes -----------
+class ElementMatch(BaseModel):
+    text_any: List[str] = Field(default_factory=list)
+    role_any: List[str] = Field(default_factory=list)  # e.g. "button","link","heading"
+    near_heading: List[str] = Field(default_factory=list)
+    region: Optional[SectionIn] = None  # narrow to header/content/sidebar/modal
+
+class ElementVisibleGoal(GoalBase):
+    type: Literal[GoalKind.ELEMENT_VISIBLE] = Field(default=GoalKind.ELEMENT_VISIBLE)
+    match: ElementMatch
+    min_count: int = 1
+
+class ElementGoneGoal(GoalBase):
+    type: Literal[GoalKind.ELEMENT_GONE] = Field(default=GoalKind.ELEMENT_GONE)
+    match: ElementMatch
+
+class ListCountGoal(GoalBase):
+    type: Literal[GoalKind.LIST_COUNT] = Field(default=GoalKind.LIST_COUNT)
+    locator: ListLocator = Field(default_factory=ListLocator)
+    min_items: int = 20
+
+class FilterAppliedGoal(GoalBase):
+    type: Literal[GoalKind.FILTER_APPLIED] = Field(default=GoalKind.FILTER_APPLIED)
+    chips_any: List[str] = Field(default_factory=list)
+    facets_all: List[str] = Field(default_factory=list)
+    url_params_contains: Dict[str, str] = Field(default_factory=dict)
+
+class FieldValueSetGoal(GoalBase):
+    type: Literal[GoalKind.FIELD_VALUE_SET] = Field(default=GoalKind.FIELD_VALUE_SET)
+    label_any: List[str]
+    want_value: str
+    exact: bool = True
+
+class UploadAttachedGoal(GoalBase):
+    type: Literal[GoalKind.UPLOAD_ATTACHED] = Field(default=GoalKind.UPLOAD_ATTACHED)
+    label_any: List[str] = Field(default_factory=lambda: ["resume","cv","attachment","cover letter"]) 
+    require_preview_label: bool = True
+
+class NewTabOpenedGoal(GoalBase):
+    type: Literal[GoalKind.NEW_TAB_OPENED] = Field(default=GoalKind.NEW_TAB_OPENED)
+    url_contains: List[str] = Field(default_factory=list)
+    title_contains: List[str] = Field(default_factory=list)
+
+class RepeatUntilGoal(GoalBase):
+    type: Literal[GoalKind.REPEAT_UNTIL] = Field(default=GoalKind.REPEAT_UNTIL)
+    goal: "Goal"
+    max_iters: int = 10
+    sleep_ms: int = 300
 
 class PageReachedGoal(GoalBase):
     type: Literal[GoalKind.PAGE_REACHED] = Field(default=GoalKind.PAGE_REACHED)
@@ -214,13 +343,41 @@ class AllOfGoal(GoalBase):
     type: Literal[GoalKind.ALL_OF] = Field(default=GoalKind.ALL_OF)
     goals: List["Goal"] = Field(default_factory=list)
 
+# ----------- Inserted: SurfaceSignature and SurfaceGoneGoal -----------
+class SurfaceSignature(BaseModel):
+    # Geometry & visual prominence
+    rect: Dict[str, float]                     # {top,left,bottom,right,width,height}
+    area_ratio: float = 0.0                    # element area / viewport area
+    z: float = 0.0
+    # Heuristics
+    is_modal: bool = False
+    is_banner: bool = False                    # fixed to top/bottom and wide
+    # Content fingerprints (loose match)
+    text_tokens: List[str] = Field(default_factory=list)
+    button_texts: List[str] = Field(default_factory=list)
+
+class SurfaceGoneGoal(GoalBase):
+    type: Literal[GoalKind.SURFACE_GONE] = Field(default=GoalKind.SURFACE_GONE)
+    signature: SurfaceSignature
+    require_scroll_unlock: bool = True         # body overflow lock should clear for modals
+
 
 Goal = Annotated[
     Union[
         PageReachedGoal,
         SubmissionConfirmedGoal,
+        ListItemOpenedGoal,
         FormCompletedGoal,
         LoginCompletedGoal,
+        ElementVisibleGoal,
+        ElementGoneGoal,
+        ListCountGoal,
+        FilterAppliedGoal,
+        FieldValueSetGoal,
+        UploadAttachedGoal,
+        NewTabOpenedGoal,
+        SurfaceGoneGoal,
+        RepeatUntilGoal,
         AnyOfGoal,
         AllOfGoal,
     ],
@@ -299,7 +456,7 @@ class Auth(BaseModel):
     otp: Optional[str] = None
     extra: Dict[str, str] = Field(default_factory=dict)  # anything site-specific
 
-class UXHints(BaseModel):
+class RunSpec(BaseModel):
     """Top-level hints & policies passed to your executor."""
     model_config = ConfigDict(extra="ignore")
 
@@ -317,9 +474,7 @@ class UXHints(BaseModel):
     auth: Optional[Auth] = None
 
     def normalized_goals(self) -> List[Goal]:
-        if self.goals:
-            return self.goals
-        return [self.goal] if self.goal is not None else []
+        return list(self.goals or [])
 
 
 
@@ -338,6 +493,326 @@ class GoalResult(BaseModel):
 
 
 class GoalEvaluatorMixin:
+    def _visible_match_js(self):
+        # Small helper to reuse in element-visible/gone
+        return """
+        (match) => {
+          const norm = s => (s||'').toLowerCase();
+          const wantTxt = (match && match.text_any || []).map(norm);
+          const wantRoles = (match && match.role_any || []).map(norm);
+          const nearHeads = (match && match.near_heading || []).map(norm);
+          const wantRegion = match && match.region && match.region.toLowerCase();
+          const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+            return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+          const txt = el => (el && (el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim();
+          const sectionOf = el => (
+            (el.closest('header') && 'header') || (el.closest('footer') && 'footer') ||
+            (el.closest('nav,[role="navigation"]') && 'navigation') ||
+            (el.closest('aside,[role="complementary"]') && 'sidebar') ||
+            (el.closest('dialog,[role="dialog"],[role="alertdialog"]') && 'modal') ||
+            (el.closest('main,[role="main"]') && 'content') || 'content');
+          const headingAbove = el => {
+            let n=el; const top=el.getBoundingClientRect().top; let best='';
+            while(n && n!==document.body){
+              const prev=n.previousElementSibling; if(!prev){ n=n.parentElement; continue; }
+              const heads=prev.querySelectorAll('h1,h2,h3,h4');
+              for(const h of heads){ if(!vis(h)) continue; const d=top-h.getBoundingClientRect().bottom; if(d>=0 && d<=250){ const t=txt(h); if(t && t.length>best.length) best=t; } }
+              n=prev;
+            }
+            return best.toLowerCase();
+          };
+          const roleSel = [];
+          if(!wantRoles.length || wantRoles.includes('button')) roleSel.push('button,[role="button"],input[type="button"],input[type="submit"]');
+          if(!wantRoles.length || wantRoles.includes('link')) roleSel.push('a[href]');
+          if(!wantRoles.length || wantRoles.includes('heading')) roleSel.push('h1,h2,h3,h4,h5,h6');
+          const nodes = Array.from(document.querySelectorAll(roleSel.join(',')));
+          let hits=0; const examples=[];
+          for(const el of nodes){
+            if(!vis(el)) continue;
+            if(wantRegion){ if(sectionOf(el)!==wantRegion) continue; }
+            const t = txt(el).toLowerCase();
+            if(wantTxt.length && !wantTxt.some(w=>t.includes(w))) continue;
+            if(nearHeads.length){ const h=headingAbove(el); if(!nearHeads.some(w=>h.includes(w))) continue; }
+            hits++; if(examples.length<5) examples.push(t.slice(0,120));
+          }
+          return {count:hits, examples};
+        }
+        """
+
+    def evaluate_element_visible(self, g: "ElementVisibleGoal") -> "GoalResult":
+        try:
+            data = self.page.evaluate(self._visible_match_js(), g.match.model_dump())
+            cnt = int(data.get("count") or 0)
+            ok = cnt >= int(getattr(g, "min_count", 1) or 1)
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET,
+                              score=1.0 if ok else min(0.9, cnt/ max(1,g.min_count)),
+                              reason=f"{cnt} matching elements visible (need ≥{g.min_count})")
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"element_visible error: {e}")
+
+    def _gone_strict_js(self):
+        return """
+        (match) => {
+          const norm = s => (s||'').toLowerCase();
+          const wantTxt = (match && match.text_any || []).map(norm);
+          const wantRoles = (match && match.role_any || []).map(norm);
+          const wantRegion = match && match.region && match.region.toLowerCase();
+
+          const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+            if (s.visibility==='hidden' || s.display==='none' || parseFloat(s.opacity||'1')<0.03) return false;
+            if (s.pointerEvents==='none') return false;
+            return r.width>0 && r.height>0 && r.bottom>0 && r.right>0 && r.top < (innerHeight||document.documentElement.clientHeight) && r.left < (innerWidth||document.documentElement.clientWidth);
+          };
+          const hiddenByAncestor = el => {
+            for(let n=el;n && n!==document.body;n=n.parentElement){ const s=getComputedStyle(n);
+              if (s.visibility==='hidden' || s.display==='none' || s.pointerEvents==='none') return true;
+              if (s.clipPath && s.clipPath!=='none') return true;
+            }
+            return false;
+          };
+          const sectionOf = el => (
+            (el.closest('header') && 'header') || (el.closest('footer') && 'footer') ||
+            (el.closest('nav,[role="navigation"]') && 'navigation') ||
+            (el.closest('aside,[role="complementary"]') && 'sidebar') ||
+            (el.closest('dialog,[role="dialog"],[role="alertdialog"]') && 'modal') ||
+            (el.closest('main,[role="main"]') && 'content') || 'content');
+
+          const roleSel=[];
+          if(!wantRoles.length || wantRoles.includes('button')) roleSel.push('button,[role="button"],input[type="button"],input[type="submit"]');
+          if(!wantRoles.length || wantRoles.includes('link')) roleSel.push('a[href]');
+          if(!wantRoles.length || wantRoles.includes('heading')) roleSel.push('h1,h2,h3,h4,h5,h6');
+          const nodes = Array.from(document.querySelectorAll(roleSel.join(',')));
+
+          const matchesText = (el) => {
+            if(!wantTxt.length) return true;
+            const t = (el.innerText||el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+            return wantTxt.some(w=>t.includes(w));
+          };
+
+          const hitTest = (el) => {
+            // Check if center point is clickable and whether el (or its ancestor) owns it
+            const r = el.getBoundingClientRect();
+            const cx = Math.floor(r.left + r.width/2);
+            const cy = Math.floor(r.top + r.height/2);
+            const topAt = document.elementFromPoint(cx, cy);
+            if(!topAt) return false;
+            return el===topAt || el.contains(topAt) || topAt.contains(el);
+          };
+
+          const cand = [];
+          for(const el of nodes){
+            if(!matchesText(el)) continue;
+            const region = sectionOf(el);
+            if(wantRegion && wantRegion!==region) continue;
+            const v = vis(el);
+            const ancHidden = hiddenByAncestor(el);
+            const clickableHit = v && !ancHidden && hitTest(el);
+            cand.push({v, ancHidden, clickableHit});
+          }
+          const stillVisible = cand.filter(c=>c.v && !c.ancHidden).length;
+          const stillInteractive = cand.filter(c=>c.clickableHit).length;
+          return {stillVisible, stillInteractive};
+        }
+        """;
+
+    def evaluate_element_gone(self, g: "ElementGoneGoal") -> "GoalResult":
+        try:
+            data = self.page.evaluate(self._gone_strict_js(), g.match.model_dump())
+            vis = int(data.get("stillVisible") or 0)
+            hit = int(data.get("stillInteractive") or 0)
+            ok = (vis == 0) and (hit == 0)
+            score = 1.0 if ok else (0.0 if hit>0 else 0.2)  # if only non-interactive remnants remain, give tiny score
+            reason = f"visible={vis}, interactiveHit={hit}"
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET, score=score, reason=reason)
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"element_gone error: {e}")
+
+    def evaluate_list_count(self, g: "ListCountGoal") -> "GoalResult":
+        try:
+            data = self.page.evaluate("""
+            (locator) => {
+              const norm = s => (s||'').toLowerCase();
+              const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+                return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+              const txt = el => (el && (el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim();
+              const headingAbove = el => { let n=el; const top=el.getBoundingClientRect().top; let best='';
+                while(n && n!==document.body){ const prev=n.previousElementSibling; if(!prev){ n=n.parentElement; continue; }
+                  const heads=prev.querySelectorAll('h1,h2,h3,h4'); for(const h of heads){ if(!vis(h)) continue; const d=top-h.getBoundingClientRect().bottom; if(d>=0 && d<=250){ const t=txt(h); if(t && t.length>best.length) best=t; } } n=prev; }
+                return best.toLowerCase(); };
+              const sectionOf = el => ((el.closest('header')&&'header')||(el.closest('footer')&&'footer')||
+                (el.closest('nav,[role="navigation"]')&&'navigation')||(el.closest('aside,[role="complementary"]')&&'sidebar')||
+                (el.closest('dialog,[role="dialog"],[role="alertdialog"]')&&'modal')||(el.closest('main,[role="main"]')&&'content')||'content');
+
+              const kinds=(locator && locator.container_kind)||'auto';
+              const wantRegion=locator && locator.region && locator.region.toLowerCase();
+              const wantHead=(locator && (locator.heading_contains||[])).map(norm);
+              const wantAria=(locator && (locator.aria_label_contains||[])).map(norm);
+              const containers=new Set();
+              document.querySelectorAll('ul,ol,[role="list"],[role="feed"],table,[role="grid"]').forEach(c=>containers.add(c));
+              document.querySelectorAll('main,[role="main"],body').forEach(root=>{
+                const kids=Array.from(root.querySelectorAll('*')).filter(e=>e.children && e.children.length>3);
+                for(const k of kids){ const ch=Array.from(k.children).filter(e=>vis(e)); const withLinks = ch.filter(c=>c.querySelector('a[href]'));
+                  if(withLinks.length>=3) containers.add(k); }
+              });
+              const cands=[];
+              containers.forEach(c=>{
+                if(!vis(c)) return;
+                if(kinds!=='auto'){
+                  if(kinds==='ul' && c.tagName!=='UL') return;
+                  if(kinds==='ol' && c.tagName!=='OL') return;
+                  if(kinds==='table' && c.tagName!=='TABLE') return;
+                  if(kinds==='grid' && !c.matches('table,[role="grid"]')) return;
+                  if(kinds==='feed' && !c.matches('[role="feed"],[role="list"]')) return;
+                }
+                const region=sectionOf(c);
+                if(wantRegion && region!==wantRegion) return;
+                const head=headingAbove(c);
+                const aria=norm(c.getAttribute('aria-label')||'');
+                const smallRows = c.tagName==='TABLE' ? Array.from(c.querySelectorAll('tr')) : Array.from(c.children);
+                const items = smallRows.filter(e=>vis(e));
+                const score=(wantHead.length && wantHead.some(h=>head.includes(h))?2:0) + (wantAria.length && wantAria.some(h=>aria.includes(h))?1:0);
+                cands.push({container:c, count:items.length, head, region, score});
+              });
+              if(!cands.length) return {count:0, reason:'no containers'};
+              cands.sort((a,b)=> (b.score - a.score) || (b.count - a.count));
+              return {count:cands[0].count, head:cands[0].head, region:cands[0].region};
+            }
+            """, g.locator.model_dump())
+            n = int(data.get("count") or 0)
+            ok = n >= int(g.min_items)
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET,
+                              score=1.0 if ok else min(0.95, n/max(1,g.min_items)),
+                              reason=f"{n} items visible (need ≥{g.min_items})")
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"list_count error: {e}")
+
+    def evaluate_filter_applied(self, g: "FilterAppliedGoal") -> "GoalResult":
+        try:
+            data = self.page.evaluate("""
+            ({chips_any, facets_all, url_params_contains}) => {
+              const norm = s => (s||'').toLowerCase();
+              const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+                return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+              const chipSel = '.chip,.badge,[class*="chip"],[class*="badge"],[aria-pressed="true"],[aria-selected="true"],[role="tab"][aria-selected="true"],[role="button"][aria-pressed="true"]';
+              const chips = Array.from(document.querySelectorAll(chipSel)).filter(vis).map(el => (el.innerText||el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase());
+              const chipsOk = (chips_any||[]).map(norm).every(tok => chips.some(c => c.includes(tok)));
+              const facetsSel = 'input:checked,[aria-checked="true"],[aria-selected="true"]';
+              const selectedLabels = Array.from(document.querySelectorAll(facetsSel)).map(el=>{
+                const id = el.id; const lab = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : el.closest('label');
+                const t = (lab && (lab.innerText||lab.textContent)||'').replace(/\s+/g,' ').trim().toLowerCase();
+                return t;
+              });
+              const facetsOk = (facets_all||[]).map(norm).every(tok => selectedLabels.some(t => t.includes(tok)));
+              const usp = new URLSearchParams(location.search);
+              let paramsOk = true;
+              for (const k in (url_params_contains||{})) { const want = norm(url_params_contains[k]); const got = norm(usp.get(k)); if(!got || !got.includes(want)) { paramsOk=false; break; } }
+              return {chipsOk, facetsOk, paramsOk};
+            }
+            """, {
+                "chips_any": g.chips_any,
+                "facets_all": g.facets_all,
+                "url_params_contains": g.url_params_contains,
+            })
+            ok = bool(data.get("chipsOk", True)) and bool(data.get("facetsOk", True)) and bool(data.get("paramsOk", True))
+            score = 1.0 if ok else 0.0
+            reason = f"chipsOk={data.get('chipsOk')} facetsOk={data.get('facetsOk')} paramsOk={data.get('paramsOk')}"
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET, score=score, reason=reason)
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"filter_applied error: {e}")
+
+    def evaluate_field_value_set(self, g: "FieldValueSetGoal") -> "GoalResult":
+        try:
+            ok = self.page.evaluate("""
+            ({labels, want, exact}) => {
+              const norm = s => (s||'').toLowerCase();
+              const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+                return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+              const controls = [];
+              const labNodes = Array.from(document.querySelectorAll('label,[aria-label]'));
+              for(const l of labNodes){
+                const t = ((l.getAttribute('aria-label') || l.innerText || l.textContent) || '').replace(/\s+/g,' ').trim().toLowerCase();
+                if(!labels.some(w => t.includes(w))) continue;
+                let ctrl = l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input,select,textarea,[contenteditable="true"]');
+                if(!ctrl) continue; if(!vis(ctrl)) continue;
+                controls.push(ctrl);
+              }
+              const wantN = norm(want);
+              for(const el of controls){
+                let v='';
+                if(el.matches('[contenteditable="true"]')) v = (el.innerText||'').trim();
+                else if(el.tagName==='SELECT') v = (el.value || (el.selectedOptions && el.selectedOptions[0] && el.selectedOptions[0].text) || '').trim();
+                else v = (el.value || '').trim();
+                const gotN = norm(v);
+                if(exact ? gotN===wantN : gotN.includes(wantN)) return true;
+              }
+              return false;
+            }
+            """, {"labels": [t.lower() for t in g.label_any], "want": g.want_value, "exact": g.exact})
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET, score=1.0 if ok else 0.0,
+                              reason="field value matched" if ok else "field value not matched")
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"field_value_set error: {e}")
+
+    def evaluate_upload_attached(self, g: "UploadAttachedGoal") -> "GoalResult":
+        try:
+            ok = self.page.evaluate("""
+            ({labels, wantPreview}) => {
+              const norm = s => (s||'').toLowerCase();
+              const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+                return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+              const labNodes = Array.from(document.querySelectorAll('label,[aria-label]'));
+              const files = [];
+              for(const l of labNodes){
+                const t = ((l.getAttribute('aria-label') || l.innerText || l.textContent) || '').replace(/\s+/g,' ').trim().toLowerCase();
+                if(!labels.some(w => t.includes(w))) continue;
+                let input = l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input[type="file"]');
+                if(!input) continue; if(!vis(input)) continue;
+                if(input.files && input.files.length>0) files.push(Array.from(input.files).map(f=>f.name));
+                if(wantPreview){
+                  const area = l.closest('section,div,form') || document.body; const txt = (area.innerText||'').toLowerCase();
+                  if(/uploaded|attached|selected|resume|cv/.test(txt)) return true;
+                }
+              }
+              return files.length>0;
+            }
+            """, {"labels": [t.lower() for t in g.label_any], "wantPreview": g.require_preview_label})
+            return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET, score=1.0 if ok else 0.0,
+                              reason="upload attached" if ok else "no upload detected")
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"upload_attached error: {e}")
+
+    def evaluate_new_tab_opened(self, g: "NewTabOpenedGoal") -> "GoalResult":
+        try:
+            ctx = getattr(self.page, 'context', None)
+            pages = ctx.pages if ctx else []
+            matched = False
+            for p in pages:
+                if p is self.page: 
+                    continue
+                try:
+                    url = (p.url or '').lower(); title = (p.title() or '').lower()
+                except Exception:
+                    url = (p.url or '').lower(); title = ''
+                ok_url = (not g.url_contains) or any(tok.lower() in url for tok in g.url_contains)
+                ok_title = (not g.title_contains) or any(tok.lower() in title for tok in g.title_contains)
+                if ok_url and ok_title:
+                    matched = True; break
+            return GoalResult(status=GoalStatus.MET if matched else GoalStatus.UNMET, score=1.0 if matched else 0.0,
+                              reason="new tab matched" if matched else "no matching new tab")
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"new_tab_opened error: {e}")
+
+    def evaluate_repeat_until(self, g: "RepeatUntilGoal") -> "GoalResult":
+        last = GoalResult(status=GoalStatus.UNMET, score=0.0, reason="not started")
+        for _ in range(int(max(1, g.max_iters))):
+            last = self.evaluate_goal(g.goal)
+            if last.status == GoalStatus.MET:
+                return last
+            try:
+                self.page.wait_for_timeout(int(max(0, g.sleep_ms)))
+            except Exception:
+                pass
+        return last
     """
     Mixin for a class that has:
       - self.page (Playwright Page)
@@ -473,8 +948,393 @@ class GoalEvaluatorMixin:
         return min(score, 1.0)
 
     # ---- Individual goal evaluators --------------------------------
+    def evaluate_list_item_opened(self, g: "ListItemOpenedGoal") -> GoalResult:
+        # --- Track current and previous URLs for URL-change detection ---
+        print(f"[ListItemOpened] init: start={getattr(self,'_goal_start_url',None)} prev={getattr(self,'_lio_last_seen_url',None)} curr={(self.page.url or '').lower()}")
+        
+        curr_url = (self.page.url or "").lower()
+        prev_seen_url = getattr(self, "_lio_last_seen_url", None)
+
+        # If this is the first time we evaluate during this goal, remember where we started
+        try:
+            if not getattr(self, "_goal_start_url", None):
+                setattr(self, "_goal_start_url", curr_url)
+        except Exception:
+            pass
+
+        # Always record the last-seen URL for the next pass (even if we early-return)
+        try:
+            setattr(self, "_lio_last_seen_url", curr_url)
+        except Exception:
+            pass
+
+        # --- Early success: URL changed (detail page) even if a list-like nav exists ---
+        if getattr(g, "require_url_change", False):
+            try:
+                start_url_raw = getattr(self, "_goal_start_url", None)
+                start_norm = (start_url_raw or "").split('#', 1)[0].lower()
+                prev_norm = (prev_seen_url or "").split('#', 1)[0].lower()
+                curr_norm = (curr_url or "").split('#', 1)[0].lower()
+
+                changed_vs_prev = bool(prev_norm) and (prev_norm != curr_norm)
+                changed_vs_start = bool(start_norm) and (start_norm != curr_norm)
+                # Same-origin guard
+                same_origin_ok = True
+                if start_norm:
+                    from urllib.parse import urlparse
+                    try:
+                        s, c = urlparse(start_norm), urlparse(curr_norm)
+                        same_origin_ok = (s.scheme, s.netloc) == (c.scheme, c.netloc)
+                    except Exception:
+                        same_origin_ok = True
+                print(f"[ListItemOpened] early-check: start_raw={start_url_raw} prev_raw={prev_seen_url} curr_raw={curr_url} | start={start_norm} prev={prev_norm} curr={curr_norm} changed_vs_prev={changed_vs_prev} changed_vs_start={changed_vs_start} same_origin_ok={same_origin_ok}")
+                if (changed_vs_prev or changed_vs_start) and same_origin_ok:
+                    print("[ListItemOpened] early-check: URL changed -> MET (skip scanning)")
+                    return GoalResult(status=GoalStatus.MET, score=1.0, reason="navigated to a new page (early URL-change)")
+            except Exception:
+                pass
+        
+        try:
+            data = self.page.evaluate("""
+            (locator, item) => {
+            const norm = s => (s||'').toLowerCase();
+            const txt = el => (el && (el.innerText || el.textContent) || '').replace(/\\s+/g,' ').trim();
+            const vis = el => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none';
+            };
+            const headingAbove = el => {
+                let n = el; const top = el.getBoundingClientRect().top; let best='';
+                while (n && n!==document.body) {
+                const prev = n.previousElementSibling;
+                if (!prev) { n = n.parentElement; continue; }
+                const heads = prev.querySelectorAll('h1,h2,h3,h4'); 
+                for (const h of heads) {
+                    if (!vis(h)) continue;
+                    const d = top - h.getBoundingClientRect().bottom;
+                    if (d>=0 && d<=250) { const t=txt(h); if (t && t.length>best.length) best=t; }
+                }
+                n = prev;
+                }
+                return best;
+            };
+            const sectionOf = el => (
+                (el.closest('header') && 'header') || (el.closest('footer') && 'footer') ||
+                (el.closest('nav,[role="navigation"]') && 'navigation') ||
+                (el.closest('aside,[role="complementary"]') && 'sidebar') ||
+                (el.closest('dialog,[role="dialog"],[role="alertdialog"]') && 'modal') ||
+                (el.closest('main,[role="main"]') && 'content') || 'content'
+            );
+
+            const containers = new Set();
+            document.querySelectorAll('ul,ol,[role="list"],[role="feed"]').forEach(c=>containers.add(c));
+            document.querySelectorAll('table,[role="grid"],[role="rowgroup"]').forEach(c=>containers.add(c));
+
+            // big repeated wrappers fallback
+            document.querySelectorAll('main,[role="main"],body').forEach(root=>{
+                const kids = Array.from(root.querySelectorAll('*')).filter(e=>e.children && e.children.length>3);
+                for (const k of kids) {
+                const ch = Array.from(k.children).filter(e=>vis(e));
+                const withLinks = ch.filter(c=>c.querySelector('a[href]'));
+                if (withLinks.length >= 6) containers.add(k);
+                }
+            });
+
+            const kinds = (locator && locator.container_kind) || 'auto';
+            const minN = (locator && locator.min_items) || 3;
+            const wantRegion = locator && locator.region && locator.region.toLowerCase();
+            const wantHead   = (locator && (locator.heading_contains||[])).map(norm);
+            const wantAria   = (locator && (locator.aria_label_contains||[])).map(norm);
+
+            const cands = [];
+            containers.forEach(c=>{
+                if (!vis(c)) return;
+                if (kinds!=='auto') {
+                if (kinds==='ul' && c.tagName!=='UL') return;
+                if (kinds==='ol' && c.tagName!=='OL') return;
+                if (kinds==='table' && c.tagName!=='TABLE') return;
+                if (kinds==='grid' && !c.matches('table,[role="grid"]')) return;
+                if (kinds==='feed' && !c.matches('[role="feed"],[role="list"]')) return;
+                }
+                const region = sectionOf(c);
+                const head = headingAbove(c);
+                const aria = norm(c.getAttribute('aria-label') || '');
+                let items = [];
+                const rows = c.tagName==='TABLE' ? Array.from(c.querySelectorAll('tr')) : Array.from(c.children);
+                for (const r of rows) {
+                if (!vis(r)) continue;
+                const a = r.querySelector('a[href]') || r.closest('a[href]');
+                const label = a ? txt(a) : txt(r);
+                if (!label) continue;
+                items.push({
+                    label, href: a ? a.href : null,
+                    domain: a ? new URL(a.href, location.href).hostname.toLowerCase() : '',
+                    visible: vis(r),
+                    y: r.getBoundingClientRect().top,
+                    docY: r.getBoundingClientRect().top + (window.scrollY || document.documentElement.scrollTop || 0)
+                });
+                }
+                if (items.length < minN) return;
+                const score = 
+                (wantHead.length && wantHead.some(h=>norm(head).includes(h)) ? 2 : 0) +
+                (wantAria.length && wantAria.some(h=>aria.includes(h)) ? 1 : 0) +
+                (wantRegion && wantRegion===region ? 1 : 0) +
+                Math.min(3, Math.floor(items.length/10));
+                cands.push({container:c, items, head, region, score});
+            });
+
+            if (!cands.length) return {found:null, pool:[], reason:'no list-like containers'};
+
+            cands.sort((a,b)=>b.score-a.score);
+            const best = cands[0];
+
+            // If index-based requested, we return that directly (we'll finalize in Python)
+            const indexMode = (item && (item.nth!=null || item.position==='last'));
+            return {found:null, pool:best.items.slice(0,200), indexMode, head:best.head, region:best.region};
+            }
+            """, g.locator.model_dump(), g.item.model_dump())
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"list scan failed: {e}")
+
+        # --- Scan summary print ---
+        try:
+            pool0 = data.get("pool") or []
+            preview = [{"label": (it.get("label") or "")[:60], "href": it.get("href")} for it in pool0[:3]]
+            print(f"[ListItemOpened] scan: indexMode={data.get('indexMode')} head={data.get('head')} region={data.get('region')} pool_len={len(pool0)} preview={preview}")
+        except Exception:
+            pass
+
+        pool = data.get("pool") or []
+        if not pool:
+            # Fallbacks when list container isn't present anymore (likely navigated to detail)
+            if getattr(g, "require_url_change", False):
+                try:
+                    print(f"[ListItemOpened] empty-pool: start={getattr(self,'_goal_start_url',None)} prev={prev_seen_url} curr={curr_url} last_href={getattr(self,'_last_listitem_href',None)}")
+                except Exception:
+                    pass
+                # 1) Prefer exact match against previously chosen href, if we captured it
+                try:
+                    prev_href = getattr(self, "_last_listitem_href", None)
+                    if prev_href:
+                        met = prev_href.split("#")[0] == curr_url.split("#")[0]
+                        try:
+                            print(f"[ListItemOpened] empty-pool href-match: prev_href={prev_href} curr={curr_url} -> MET={met}")
+                        except Exception:
+                            pass
+                        if met:
+                            return GoalResult(status=GoalStatus.MET, score=1.0, reason="navigated to target item (href match)")
+                except Exception:
+                    pass
+                # 2) Otherwise, accept a clear URL change compared to our last seen (or start) URL
+                try:
+                    start_url_raw = getattr(self, "_goal_start_url", None)
+                    start_norm = (start_url_raw or "").split('#', 1)[0].lower()
+                    prev_norm = (prev_seen_url or "").split('#', 1)[0].lower()
+                    curr_norm = (curr_url or "").split('#', 1)[0].lower()
+                    # URL changed during this goal attempt?
+                    changed_vs_prev = bool(prev_norm) and (prev_norm != curr_norm)
+                    changed_vs_start = bool(start_norm) and (start_norm != curr_norm)
+                    # Same-origin guard: avoid counting new-tab or cross-origin redirects as success unless required
+                    same_origin_ok = True
+                    if start_norm:
+                        from urllib.parse import urlparse
+                        try:
+                            s, c = urlparse(start_norm), urlparse(curr_norm)
+                            same_origin_ok = (s.scheme, s.netloc) == (c.scheme, c.netloc)
+                        except Exception:
+                            same_origin_ok = True
+                    try:
+                        print(f"[ListItemOpened] empty-pool change-check: start_raw={start_url_raw} prev_raw={prev_seen_url} curr_raw={curr_url} | start={start_norm} prev={prev_norm} curr={curr_norm} changed_vs_prev={changed_vs_prev} changed_vs_start={changed_vs_start} same_origin_ok={same_origin_ok}")
+                    except Exception:
+                        pass
+                    if (changed_vs_prev or changed_vs_start) and same_origin_ok:
+                        try:
+                            print("[ListItemOpened] empty-pool change-check: URL changed -> MET")
+                        except Exception:
+                            pass
+                        return GoalResult(status=GoalStatus.MET, score=1.0, reason="navigated to a new page (URL changed)")
+                except Exception:
+                    pass
+            try:
+                print("[ListItemOpened] empty-pool: UNMET (no items & no URL change)")
+            except Exception:
+                pass
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason="no items in chosen list")
+        # Always persist last-seen URL for next evaluation pass
+        try:
+            setattr(self, "_lio_last_seen_url", curr_url)
+        except Exception:
+            pass
+
+        # --- Index mode? (kept behavior) ---
+        it = g.item
+        if it.nth is not None or it.position == "last":
+            idx = (max(0, min(len(pool)-1, (it.nth or 1)-1)) if it.nth is not None else len(pool)-1)
+            chosen = pool[idx]
+        else:
+            # --- Content scoring ---
+            import re as _re
+            def _score(p):
+                s = 0
+                label = (p.get("label") or "").lower()
+                href  = (p.get("href") or "").lower()
+                dom   = (p.get("domain") or "").lower()
+
+                # visibility / link constraints
+                if it.require_visible and not p.get("visible"): return -1e9
+                if it.require_link and not href: return -1e9
+
+                # excludes
+                if any(x.lower() in label for x in (it.exclude_text or [])): return -1e9
+
+                # text_any
+                if it.text_any:
+                    if any(t.lower() in label for t in it.text_any): s += 3
+                    else: s -= 1  # soft penalty if absent
+
+                # text_all
+                if it.text_all:
+                    if all(t.lower() in label for t in it.text_all): s += 5
+                    else: return -1e9  # hard fail
+
+                # regex
+                if it.regex:
+                    try:
+                        if _re.search(it.regex, label, _re.I): s += 5
+                        else: return -1e9
+                    except Exception:
+                        pass
+
+                # url/domain filters
+                if it.url_contains and any(u.lower() in href for u in it.url_contains): s += 3
+                if it.domain_in and dom in [d.lower() for d in it.domain_in]: s += 3
+
+                # position bias: items higher on the page get a tiny boost
+                try:
+                    y = float(p.get("y") or 0.0)
+                    s += max(0.0, 1.0 - min(1.0, y/2000.0))
+                except Exception:
+                    pass
+                return s
+
+            scored = [(p, _score(p)) for p in pool]
+            # filter out hard fails
+            scored = [(p, sc) for (p, sc) in scored if sc>-1e9]
+            if not scored:
+                return GoalResult(status=GoalStatus.UNMET, score=0.0, reason="no item matches content filters")
+
+            # Optional semantic re-rank (small, controlled use)
+            chosen = None
+            if it.semantic_query:
+                # Preselect top-K by cheap score, then ask the LLM which label best matches the query.
+                scored.sort(key=lambda x: x[1], reverse=True)
+                top = scored[: max(3, min(it.top_k_semantic, len(scored)))]
+                labels = [p["label"] for p,_ in top]
+                try:
+                    pick = self.generate_text(
+                        system_prompt=(
+                            "Pick the SINGLE best label that satisfies the user's intent. "
+                            "Return EXACTLY the label text; no extra words."
+                        ),
+                        prompt=f"Intent: {it.semantic_query}\nChoices:\n" + "\n".join(f"- {t}" for t in labels),
+                        model="gpt-5-nano",
+                        reasoning_level="low",
+                    )
+                    pick = str(pick).strip()
+                    for p,_ in top:
+                        if p["label"] == pick:
+                            chosen = p; break
+                except Exception:
+                    chosen = None
+
+            if not chosen:
+                # Fallback tie-breaking
+                if it.tie_breaker == "first":
+                    chosen = max(scored, key=lambda x: x[1])[0]  # still pick highest score; first if equal
+                elif it.tie_breaker == "last":
+                    chosen = min(scored, key=lambda x: x[1])[0]
+                else:
+                    chosen = max(scored, key=lambda x: x[1])[0]
+
+        # --- Chosen item summary print ---
+        try:
+            print(f"[ListItemOpened] chosen: label={(chosen.get('label') or '')[:80]} href={chosen.get('href')} y={chosen.get('y')} docY={chosen.get('docY')}")
+        except Exception:
+            pass
+
+        print(f"[ListItemOpened] start={getattr(self,'_goal_start_url',None)} prev={prev_seen_url} curr={curr_url}")
+        # --- Persist chosen item for fallback completion detection ---
+        # Persist likely target so that subsequent evaluations (after list disappears) can verify success
+        try:
+            setattr(self, "_last_listitem_href", (chosen.get("href") or "").lower() or None)
+            setattr(self, "_last_listitem_label", chosen.get("label") or None)
+        except Exception:
+            pass
+
+        # --- Completion check ---
+        href = (chosen.get("href") or "").lower()
+        if g.require_url_change:
+            url = (self.page.url or "").lower()
+            met = href and (href.split("#")[0] == url.split("#")[0])
+            try:
+                print(f"[ListItemOpened] check-require-url-change: href={href} url={url} met={met}")
+            except Exception:
+                pass
+            try:
+                setattr(self, "_lio_last_seen_url", curr_url)
+            except Exception:
+                pass
+            return GoalResult(status=GoalStatus.MET if met else GoalStatus.UNMET,
+                            score=1.0 if met else 0.0,
+                            reason="navigated to target item" if met else "not at target yet")
+        else:
+            # Focus/selection variant
+            try:
+                docY = float(chosen.get("docY") or 0.0)
+                scrolled_near = bool(self.page.evaluate(
+                    "(absY) => Math.abs(((window.scrollY || document.documentElement.scrollTop || 0)) - absY) < 40",
+                    docY
+                ))
+            except Exception:
+                scrolled_near = False
+            try:
+                print(f"[ListItemOpened] check-focus: docY={docY} scrolled_near={scrolled_near}")
+            except Exception:
+                pass
+            try:
+                setattr(self, "_lio_last_seen_url", curr_url)
+            except Exception:
+                pass
+            return GoalResult(status=GoalStatus.MET if scrolled_near else GoalStatus.UNMET,
+                            score=1.0 if scrolled_near else 0.0,
+                            reason="target item focused" if scrolled_near else "target item not focused")
+            
+    def _stopwhen_is_empty(self, sw: StopWhen) -> bool:
+        try:
+            return not any([
+                bool(getattr(sw, 'url_contains', None)),
+                bool(getattr(sw, 'title_contains', None)),
+                bool(getattr(sw, 'headings', None)),
+                bool(getattr(sw, 'body_contains', None)),
+                bool(getattr(sw, 'hostname_in', None)),
+                bool(getattr(sw, 'path_contains', None)),
+                bool(getattr(sw, 'aria_active_tab', None)),
+                bool(getattr(sw, 'zero_required_fields_remaining', False)),
+            ])
+        except Exception:
+            return False
+        
     def evaluate_page_reached(self, g: PageReachedGoal) -> GoalResult:
-        met = self._goal_stop_check(g.stop_when)
+        sw = g.stop_when
+        if hasattr(self, "_stopwhen_is_empty"):
+            if self._stopwhen_is_empty(sw):
+                try:
+                    print("[PageReached Debug] Empty StopWhen received from inference; using change-detector fallback (require_url_change/min_strong_signals).")
+                except Exception:
+                    pass
+        met = self._goal_stop_check(sw)
         return GoalResult(status=GoalStatus.MET if met else GoalStatus.UNMET,
                           score=1.0 if met else 0.0,
                           reason="StopWhen matched" if met else "StopWhen not matched")
@@ -497,7 +1357,7 @@ class GoalEvaluatorMixin:
                         "workday.com", "smartrecruiters.com", "icims.com", "jobvite.com",
                         "ashbyhq.com", "bamboohr.com", "oraclecloud.com", "successfactors.com")
 
-    def _form_status_js():
+    def _form_status_js(self):
         return FormUtils.form_status_js()
 
     def _collect_form_status_across_contexts(self):
@@ -554,7 +1414,7 @@ class GoalEvaluatorMixin:
         until we switch into that frame and fill it.
         """
         try:
-            status = self._collect_form_status_across_contexts(self)
+            status = self._collect_form_status_across_contexts()
         except Exception as e:
             return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"form status error: {e}")
 
@@ -606,6 +1466,243 @@ class GoalEvaluatorMixin:
                           score=1.0 if met else 0.0,
                           reason=f"logout_hit={logout_hit}, login_form={info['hasLoginForm']}")
 
+    def _detect_prominent_surface_js(self):
+        return """
+        () => {
+          const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+            return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+          const area = el => { const r=el.getBoundingClientRect(); return Math.max(0, r.width*r.height); };
+          const z = el => parseFloat(getComputedStyle(el).zIndex||'0')||0;
+          const vw = (innerWidth||document.documentElement.clientWidth), vh=(innerHeight||document.documentElement.clientHeight);
+
+          const cands = new Set();
+          document.querySelectorAll('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]').forEach(e=>cands.add(e));
+          document.querySelectorAll('div,section,aside').forEach(e=>{
+            const s=getComputedStyle(e);
+            if(s.position==='fixed' && vis(e)){
+              const r=e.getBoundingClientRect();
+              const edge = Math.min(r.top, vh - r.bottom, r.left, vw - r.right);
+              const tallEnough = r.height >= Math.max(48, 0.06 * vh);
+              const wideEnough = r.width >= 0.5 * vw;
+              const nearEdge = edge <= 8; // pinned to an edge
+              const covers = (wideEnough && tallEnough && nearEdge) || (r.width >= 0.4 * vw && r.height >= 0.12 * vh);
+              if(covers) cands.add(e);
+            }
+          });
+
+          let best=null, bestScore=-1;
+          cands.forEach(e=>{
+            if(!vis(e)) return;
+            const r=e.getBoundingClientRect();
+            const score = (area(e)/(vw*vh)) * 3 + z(e)*0.001 + (e.hasAttribute('open')?0.2:0) + (r.top<=8||vh-r.bottom<=8?0.3:0);
+            if(score>bestScore){ best=e; bestScore=score; }
+          });
+          if(!best) return null;
+
+          const buttons = Array.from(best.querySelectorAll('button,[role="button"],a[href],input[type="submit"],input[type="button"]'))
+            .filter(vis)
+            .map(b=>({ text:(b.innerText||b.value||'').replace(/\s+/g,' ').trim(),
+                      rect: b.getBoundingClientRect() }));
+          const br = best.getBoundingClientRect();
+          return { kind: best.tagName.toLowerCase(), role: best.getAttribute('role')||'',
+                   rect: {top:br.top,left:br.left,bottom:br.bottom,right:br.right,width:br.width,height:br.height},
+                   z: z(best), area: area(best), buttons };
+        }
+        """;
+
+    def _list_prominent_surfaces_js(self):
+        return """
+        () => {
+          const vw=(innerWidth||document.documentElement.clientWidth), vh=(innerHeight||document.documentElement.clientHeight);
+          const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+            return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+          const area = el => { const r=el.getBoundingClientRect(); return Math.max(0, r.width*r.height); };
+          const z = el => parseFloat(getComputedStyle(el).zIndex||'0')||0;
+          const text = el => (el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim().toLowerCase();
+          const tokenize = s => Array.from(new Set(s.split(/[^a-z0-9]+/i).filter(t=>t && t.length>2))).slice(0,40);
+          const nearEdge = r => Math.min(r.top, vh - r.bottom, r.left, vw - r.right) <= 8;
+          const isBannerShape = r => (r.width >= 0.5*vw && r.height >= Math.max(48, 0.06*vh));
+          const isBanner = el => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+            const pos = s.position; const nearTop = r.top<=8, nearBottom = (vh - r.bottom)<=8;
+            if(pos==='fixed' || pos==='sticky') return (nearTop||nearBottom) && isBannerShape(r);
+            if(pos==='absolute') return isBannerShape(r) && nearEdge(r) && z(el) >= 10; // large overlay near edge
+            return false;
+          };
+          const isModal = el => !!(el.closest('dialog') || el.getAttribute('role')==='dialog' || el.getAttribute('role')==='alertdialog' || el.getAttribute('aria-modal')==='true');
+
+          const looksLikeCookie = el => {
+            const cls = (el.className||'').toString().toLowerCase();
+            const id = (el.id||'').toLowerCase();
+            const t = text(el);
+            return /(cookie|consent|gdpr|privacy|preferences)/.test(cls+" "+id+" "+t);
+          };
+
+          const cands=new Set();
+          // dialogs
+          document.querySelectorAll('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]').forEach(e=>{ if(vis(e)) cands.add(e); });
+          // obvious overlays
+          document.querySelectorAll('div,section,aside').forEach(e=>{ const s=getComputedStyle(e); if(!vis(e)) return; if(s.position==='fixed'||s.position==='sticky'||s.position==='absolute'){ if(isBanner(e) || looksLikeCookie(e)) cands.add(e); } });
+
+          const out=[];
+          cands.forEach(e=>{
+            if(!vis(e)) return;
+            const r=e.getBoundingClientRect();
+            const btns = Array.from(e.querySelectorAll('button,[role="button"],a[href],input[type=button],input[type=submit]')).filter(vis)
+                           .map(b=> (b.innerText||b.value||'').replace(/\\s+/g,' ').trim().toLowerCase()).slice(0,12);
+            out.push({
+              rect:{top:r.top,left:r.left,bottom:r.bottom,right:r.right,width:r.width,height:r.height},
+              area_ratio: area(e)/(vw*vh),
+              z: z(e),
+              is_modal: isModal(e),
+              is_banner: isBanner(e),
+              text_tokens: tokenize(text(e)).slice(0,40),
+              button_texts: Array.from(new Set(btns)),
+            });
+          });
+
+          // Body-level lock (modal backdrops often disable scroll)
+          const bodyLocked = (()=>{ 
+            const b=getComputedStyle(document.body);
+            const h=getComputedStyle(document.documentElement);
+            const anyHidden = [b.overflow,b.overflowY].some(v => (v||'').includes('hidden'));
+            const anyHiddenHtml = [h.overflow,h.overflowY].some(v => (v||'').includes('hidden'));
+            const classFlags = (document.body.className + ' ' + document.documentElement.className).toLowerCase();
+            return anyHidden || anyHiddenHtml || /modal-open|no-scroll|scroll[- ]?lock/.test(classFlags);
+          })();
+          return {surfaces: out, bodyLocked};
+        }
+        """;
+
+    def _iou(self, a: Dict[str, float], b: Dict[str, float]) -> float:
+        ax1, ay1, ax2, ay2 = a.get('left',0.0), a.get('top',0.0), a.get('right',0.0), a.get('bottom',0.0)
+        bx1, by1, bx2, by2 = b.get('left',0.0), b.get('top',0.0), b.get('right',0.0), b.get('bottom',0.0)
+        inter_w = max(0.0, min(ax2,bx2) - max(ax1,bx1))
+        inter_h = max(0.0, min(ay2,by2) - max(ay1,by1))
+        inter   = inter_w * inter_h
+        area_a  = max(0.0, (ax2-ax1) * (ay2-ay1))
+        area_b  = max(0.0, (bx2-bx1) * (by2-by1))
+        denom = area_a + area_b - inter
+        return (inter/denom) if denom>0 else 0.0
+
+    def _tok_sim(self, a: List[str], b: List[str]) -> float:
+        if not a and not b: return 1.0
+        sa, sb = set(a or []), set(b or [])
+        if not sa or not sb: return 0.0
+        inter = len(sa & sb)
+        union = len(sa | sb)
+        return inter/union if union else 0.0
+
+    def evaluate_surface_gone(self, g: "SurfaceGoneGoal") -> "GoalResult":
+        try:
+            data = self.page.evaluate(self._list_prominent_surfaces_js())
+        except Exception as e:
+            return GoalResult(status=GoalStatus.UNMET, score=0.0, reason=f"surface list error: {e}")
+
+        want = g.signature.model_dump()
+
+        def _is_placeholder(sig: Dict[str, Any]) -> bool:
+            try:
+                r = sig.get("rect", {}) or {}
+                return (float(sig.get("area_ratio", 0.0)) <= 0.0) or \
+                    (float(r.get("width", 0.0)) <= 0.0) or \
+                    (float(r.get("height", 0.0)) <= 0.0)
+            except Exception:
+                return True
+
+        if _is_placeholder(want):
+            snap = getattr(self, "_last_surface_signature", None)
+            if isinstance(snap, dict) and not _is_placeholder(snap):
+                want = snap
+            else:
+                return GoalResult(status=GoalStatus.UNMET, score=0.0, reason="no prior surface signature to compare")
+
+        surfaces = data.get('surfaces') or []
+        body_locked = bool(data.get('bodyLocked'))
+
+        # Helper
+        def _area(r: Dict[str, float]) -> float:
+            try:
+                return max(0.0, (float(r.get('right',0))-float(r.get('left',0))) * (float(r.get('bottom',0))-float(r.get('top',0))))
+            except Exception:
+                return 0.0
+
+        want_area = _area(want.get('rect', {}))
+        want_is_modal = bool(want.get('is_modal'))
+        want_is_banner = bool(want.get('is_banner'))
+
+        # Adaptive thresholds
+        iou_thr = 0.35 if want_is_modal else (0.30 if want_is_banner else 0.40)
+        sim_thr = 0.45 if (want_is_modal or want_is_banner) else 0.50
+
+        # Score candidates and decide if any sufficiently match
+        scored = []
+        best_iou, best_sim, still_present = 0.0, 0.0, False
+        for s in surfaces:
+            # type consistency: if signature says banner/modal, prefer same type
+            if want_is_modal and not s.get('is_modal'):  # require modal when we expect modal
+                pass  # keep, but penalize via score
+            if want_is_banner and not s.get('is_banner'):
+                pass
+
+            iou = self._iou(s.get('rect',{}), want.get('rect',{}))
+            sim = max(
+                self._tok_sim(s.get('text_tokens',[]), want.get('text_tokens',[])),
+                self._tok_sim(s.get('button_texts',[]), want.get('button_texts',[])),
+            )
+            if iou>best_iou: best_iou=iou
+            if sim>best_sim: best_sim=sim
+
+            # penalize type mismatch
+            type_penalty = 0.15 if ((want_is_modal and not s.get('is_modal')) or (want_is_banner and not s.get('is_banner'))) else 0.0
+            combined = max(0.0, 0.6*iou + 0.4*sim - type_penalty)
+
+            scored.append({
+                'iou': iou,
+                'sim': sim,
+                'combined': combined,
+                'is_modal': bool(s.get('is_modal')),
+                'is_banner': bool(s.get('is_banner')),
+                'area_ratio': float(s.get('area_ratio') or 0.0),
+                'rect': s.get('rect', {}),
+            })
+
+        # Determine presence: either strong combined score, or (iou & sim) both above adaptive thresholds
+        for cand in scored:
+            if (cand['combined'] >= 0.50) or (cand['iou'] >= iou_thr and cand['sim'] >= sim_thr):
+                still_present = True
+                break
+
+        ok_surface = not still_present
+        ok_unlock = (not g.require_scroll_unlock) or (not body_locked)
+        ok = ok_surface and ok_unlock
+
+        score = 1.0 if ok else (0.0 if still_present else (0.6 if not ok_unlock else 0.0))
+        reason = f"surfaceGone={ok_surface}, scrollUnlock={ok_unlock}, bestIoU={best_iou:.2f}, bestSim={best_sim:.2f}, bodyLocked={body_locked}"
+
+        # Debug: print top 3 by combined score
+        try:
+            top3 = sorted(scored, key=lambda d: d['combined'], reverse=True)[:3]
+            print("[SurfaceGone Debug] want:", {k: want.get(k) for k in ('is_modal','is_banner','rect','text_tokens','button_texts')})
+            print("[SurfaceGone Debug] candidates:")
+            for i, c in enumerate(top3):
+                print(f"  #{i+1} combined={c['combined']:.2f} iou={c['iou']:.2f} sim={c['sim']:.2f} modal={c['is_modal']} banner={c['is_banner']} area_ratio={c['area_ratio']:.3f}")
+            print("[SurfaceGone Debug] ok_surface:", ok_surface, "ok_unlock:", ok_unlock)
+        except Exception:
+            pass
+
+        try:
+            setattr(self, "_last_surface_signature", None)
+        except Exception:
+            pass
+
+        return GoalResult(status=GoalStatus.MET if ok else GoalStatus.UNMET, score=score, reason=reason)
+
+    def detect_prominent_surface(self) -> Optional[Dict[str, Any]]:
+        try:
+            return self.page.evaluate(self._detect_prominent_surface_js())
+        except Exception:
+            return None
+
     # ---- Dispatcher & composition ----------------------------------
     def evaluate_goal(self, goal: Goal) -> GoalResult:
         t = goal.type
@@ -617,6 +1714,26 @@ class GoalEvaluatorMixin:
             return self.evaluate_form_completed(goal)        # type: ignore
         if t == GoalKind.LOGIN_COMPLETED:
             return self.evaluate_login_completed(goal)       # type: ignore
+        if t == GoalKind.LIST_ITEM_OPENED:
+            return self.evaluate_list_item_opened(goal)      # type: ignore
+        if t == GoalKind.ELEMENT_VISIBLE:
+            return self.evaluate_element_visible(goal)       # type: ignore
+        if t == GoalKind.ELEMENT_GONE:
+            return self.evaluate_element_gone(goal)          # type: ignore
+        if t == GoalKind.LIST_COUNT:
+            return self.evaluate_list_count(goal)            # type: ignore
+        if t == GoalKind.FILTER_APPLIED:
+            return self.evaluate_filter_applied(goal)        # type: ignore
+        if t == GoalKind.FIELD_VALUE_SET:
+            return self.evaluate_field_value_set(goal)       # type: ignore
+        if t == GoalKind.UPLOAD_ATTACHED:
+            return self.evaluate_upload_attached(goal)       # type: ignore
+        if t == GoalKind.NEW_TAB_OPENED:
+            return self.evaluate_new_tab_opened(goal)        # type: ignore
+        if t == GoalKind.SURFACE_GONE:
+            return self.evaluate_surface_gone(goal)         # type: ignore
+        if t == GoalKind.REPEAT_UNTIL:
+            return self.evaluate_repeat_until(goal)          # type: ignore
         if t == GoalKind.ANY_OF:
             best = GoalResult(status=GoalStatus.UNMET, score=0.0)
             for g in goal.goals:
@@ -799,6 +1916,22 @@ class VisionCoordinator(GoalEvaluatorMixin):
     def _guess_cta_preferences(self, low: str) -> List[str]:
         prefs = TextUtils.guess_cta_preferences(low)
         return self._dedupe(prefs)
+    
+    def _pick_best_surface(self, scan: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Heuristic: choose the most prominent surface by area_ratio, then z-index."""
+        try:
+            if not scan:
+                return None
+            surfaces = scan.get("surfaces") if isinstance(scan, dict) else None
+            if not surfaces:
+                return None
+            return sorted(
+                surfaces,
+                key=lambda s: (float(s.get("area_ratio", 0.0)), float(s.get("z", 0.0))),
+                reverse=True
+            )[0]
+        except Exception:
+            return None
 
     # ---------- StopWhen inference ----------
     DOMAIN_RX = re.compile(r"\b([a-z0-9.-]+\.[a-z]{2,})(?:/[\w\-./?%&=]*)?\b", re.I)
@@ -1026,6 +2159,12 @@ class VisionCoordinator(GoalEvaluatorMixin):
         return prof, dct
 
     # ---------- main: infer_hints_for_subprompt ----------
+    def _looks_like_first_list_item(self, low: str) -> bool:
+        return any(p in low for p in [
+            "first item", "top item", "first link", "top link",
+            "first result", "top result", "top story", "first story"
+        ])
+
     def infer_hints_for_subprompt(
         self,
         subprompt: str,
@@ -1036,7 +2175,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
         assets: Assets | None = None,
         base_policies: Policies | None = None,
         use_ai_stopwhen_fallback: bool = True,
-    ) -> UXHints:
+    ) -> RunSpec:
         s = (subprompt or "").strip()
         low = s.lower()
 
@@ -1059,6 +2198,97 @@ class VisionCoordinator(GoalEvaluatorMixin):
         if wants_login: goals.append(LoginCompletedGoal())
         if wants_submit:
             goals.append(SubmissionConfirmedGoal(policy=CompletionPolicy(intent=s[:128])))
+        wants_first_item = self._looks_like_first_list_item(low)
+        
+        # NEW: list-item intent detection (index or content)
+        def _extract_quoted_terms(s: str) -> List[str]:
+            return [m.strip() for m in re.findall(r"[\"“”'‘’]([^\"“”'‘’]{2,80})[\"“”'‘’]", s or "") if m.strip()]
+        quoted = _extract_quoted_terms(subprompt)
+
+        # --- NEW: map common phrasings → new goals ---
+        # ElementVisibleGoal: "show/see/find <'text'> [button/link/heading]"
+        role_any: List[str] = []
+        if any(tok in low for tok in [" button", "button "]):
+            role_any.append("button")
+        if any(tok in low for tok in [" link", "link "]):
+            role_any.append("link")
+        if any(tok in low for tok in [" heading", "title", "header"]):
+            role_any.append("heading")
+        if (any(k in low for k in ["show", "see", "visible", "find"]) and quoted):
+            goals.append(ElementVisibleGoal(
+                match=ElementMatch(text_any=quoted, role_any=role_any or []),
+                min_count=1,
+            ))
+
+        # Overlay dismiss intent → prefer SurfaceGoneGoal with runtime-bound signature, fallback to ElementGoneGoal
+        if any(k in low for k in ["close", "dismiss", "hide", "remove"]) and \
+           any(k in low for k in ["modal", "dialog", "banner", "cookie", "toast", "popup", "pop-up", "consent", "overlay"]):
+            # Broad terms so it works across sites; if user quoted specifics, include those too
+            gone_terms = [t for t in ["modal", "dialog", "banner", "cookie", "toast", "popup", "overlay", "consent"] if t in low]
+            if not gone_terms and quoted:
+                gone_terms = quoted
+
+            # Placeholder signature; planner/executor should bind real signature from DOM (see detect_prominent_surface/_list_prominent_surfaces_js)
+            placeholder_sig = SurfaceSignature(
+                rect={"top":0.0, "left":0.0, "bottom":0.0, "right":0.0, "width":0.0, "height":0.0},
+                area_ratio=0.0, z=0.0, is_modal=False, is_banner=False,
+                text_tokens=[], button_texts=[]
+            )
+
+            goals.append(AnyOfGoal(goals=[
+                SurfaceGoneGoal(signature=placeholder_sig, require_scroll_unlock=True),
+                ElementGoneGoal(match=ElementMatch(text_any=gone_terms))
+            ]))
+
+        # ListCountGoal: "load/show at least N results/items" (works well with infinite scroll)
+        min_items = None
+        m_at_least = re.search(r"(at least|min(?:imum)?)\s+(\d{1,4})", low)
+        m_plain_n = re.search(r"\b(\d{1,4})\b(?=\s+(?:results|items|rows|jobs))", low)
+        if m_at_least:
+            min_items = int(m_at_least.group(2))
+        elif m_plain_n:
+            min_items = int(m_plain_n.group(1))
+        if min_items and min_items > 0:
+            goals.append(ListCountGoal(locator=ListLocator(region=SectionIn.CONTENT.value, container_kind="auto"), min_items=min_items))
+
+        # FilterAppliedGoal: "filter by 'X' and 'Y'" / "only show 'Remote' + 'iOS'"
+        if ("filter by" in low or "only show" in low or "include" in low) and quoted:
+            goals.append(FilterAppliedGoal(chips_any=[q.lower() for q in quoted], facets_all=[q.lower() for q in quoted]))
+
+        # FieldValueSetGoal: "set/type/enter/fill '<label>' to/with '<value>'"
+        m_set = re.search(r"(?:set|type|enter|fill)\s*[\"'“”‘’]?(.+?)[\"'“”‘’]?\s*(?:to|with|=)\s*[\"'“”‘’]?(.+?)[\"'“”‘’]?$", s, re.I)
+        if m_set:
+            label = m_set.group(1).strip()
+            val = m_set.group(2).strip()
+            if label and val:
+                goals.append(FieldValueSetGoal(label_any=[label], want_value=val, exact=True))
+
+        # UploadAttachedGoal: "attach/upload/choose file/select file ... resume/cv/cover letter"
+        if any(k in low for k in ["attach", "upload", "choose file", "select file"]) and \
+           any(k in low for k in ["resume", "cv", "cover letter", "attachment", "file"]):
+            goals.append(UploadAttachedGoal())
+
+        # NewTabOpenedGoal: "open in a new tab"
+        if "new tab" in low:
+            goals.append(NewTabOpenedGoal(title_contains=[q.lower() for q in quoted] if quoted else []))
+
+        # RepeatUntilGoal: "until we have N results/items" → wrap the most recent list goal
+        m_until = re.search(r"until\s+(?:we\s+)?(?:have\s+)?(\d{1,4})\s+(?:results|items|rows|jobs)", low)
+        if m_until and goals:
+            try:
+                inner = goals[-1]
+                goals[-1] = RepeatUntilGoal(goal=inner, max_iters=15, sleep_ms=300)
+            except Exception:
+                pass
+        
+        if wants_first_item:
+            # Minimal locator; you can enrich with section/heading from page synthesis if you’d like
+            list_goal = ListItemOpenedGoal(
+                locator=ListLocator(region=SectionIn.CONTENT.value, container_kind="auto", min_items=3),
+                item=ItemSpec(position="first", text_any=quoted, exclude_text=["job","sponsored","promotion"], require_link=True, require_visible=True),
+                require_url_change=True
+            )
+            goals = [list_goal]  # single clear goal
 
         if not goals:
             goals = [PageReachedGoal(stop_when=sw)]
@@ -1141,7 +2371,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
 
         if self._is_navigation_intent(s):
                 sw = self._guess_stopwhen_for_navigation(s)
-                return UXHints(
+                return RunSpec(
                     goals=[PageReachedGoal(stop_when=sw)],
                     goal_progress=ProgressPolicy(  # safe defaults for nav
                         fill_only="none",
@@ -1158,7 +2388,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
                     ],
                 )
 
-        return UXHints(
+        return RunSpec(
             goals=goals,
             goal_progress=progress,
             policies=policies,
@@ -1226,7 +2456,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
             
             return result
     
-    def _merge_preferences(self, base: Dict[str, Any], hints: UXHints) -> Dict[str, Any]:
+    def _merge_preferences(self, base: Dict[str, Any], hints: RunSpec) -> Dict[str, Any]:
         base = dict(base or {})
         # keep structured so the planner can see it
         base.setdefault("profile", {})
@@ -1242,7 +2472,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
         return base
 
 
-    def _active_adapter_for_url(self, url: str, hints: UXHints) -> Optional[Adapter]:
+    def _active_adapter_for_url(self, url: str, hints: RunSpec) -> Optional[Adapter]:
         for ad in hints.adapters or []:
             if any(sub in url for sub in ad.detect.url_contains):
                 return ad
@@ -1273,7 +2503,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
 
 
 
-    def _snapshot_from_hints(self, h: UXHints, active: Optional[Adapter]) -> str:
+    def _snapshot_from_hints(self, h: RunSpec, active: Optional[Adapter]) -> str:
         gp = h.goal_progress or ProgressPolicy()
         stop = "—"
         first_goal = h.goals[0] if h.goals else None
@@ -1314,7 +2544,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
         )
 
 
-    def _build_hard_constraints(self, meta_instructions: str, hints: UXHints, active: Optional[Adapter]) -> str:
+    def _build_hard_constraints(self, meta_instructions: str, hints: RunSpec, active: Optional[Adapter]) -> str:
         """Combine user meta_instructions + policy bans + adapter submit buttons."""
         lines = []
 
@@ -1475,25 +2705,32 @@ class VisionCoordinator(GoalEvaluatorMixin):
     prompt: str,
     meta_instructions: str = "",
     attempts: int = 30,
-    hints: UXHints | Dict[str, Any] | None = None,   # NEW
+    hints: RunSpec | Dict[str, Any] | None = None,   # NEW
 ):
         """
         Executes a compressed phrase using ONE-PASS detection+selection+planning per viewport.
-        - NEW: accepts `hints` (UXHints) to specify goals/stop conditions, profile values, assets, policies, adapters, synonyms.
+        - NEW: accepts `hints` (RunSpec) to specify goals/stop conditions, profile values, assets, policies, adapters, synonyms.
         - Merges hints into HARD CONSTRAINTS and into preferences for value sourcing.
         - Continues to reset state on navigation and enforces constraints with verifier + local filters.
         """
         from pydantic import ValidationError
+        
+        # Capture start URL for this run if not already set
+        try:
+            if not getattr(self, "_goal_start_url", None):
+                setattr(self, "_goal_start_url", (self.page.url or "").lower())
+        except Exception:
+            pass
 
         # Normalize hints
         if hints is None:
-            hints = UXHints()
+            hints = RunSpec()
         elif isinstance(hints, dict):
             try:
-                hints = UXHints.model_validate(hints)
+                hints = RunSpec.model_validate(hints)
             except ValidationError as e:
                 print(f"[hints] validation failed, proceeding with defaults: {e}")
-                hints = UXHints()
+                hints = RunSpec()
 
         # ---- Config ----
         ONEPASS_RETRIES = 4
@@ -1509,99 +2746,93 @@ class VisionCoordinator(GoalEvaluatorMixin):
         def _active_adapter() -> Optional[Adapter]:
             return self._active_adapter_for_url(self.page.url, hints)
 
-        def _unified_system_prompt(
-            target_prompt, meta: ViewportMeta, preferences, do_not_touch, hard_constraints, hint_snapshot
-        ):
-            active = _active_adapter()
-            gp = hints.goal_progress or ProgressPolicy()
-
-            adapter_stepper = ""
-            if active and active.hints.stepper_labels:
-                adapter_stepper = f"\n- Stepper labels (adapter): {', '.join(active.hints.stepper_labels)}"
-
-            first_goal = hints.goals[0] if hints.goals else None
-            stop_when = self._humanize_stop_conditions(first_goal.stop_when) if first_goal and hasattr(first_goal, 'stop_when') else "—"
+        def _unified_system_prompt(user_prompt: str,
+                                        viewport_meta: dict,
+                                        goal: Goal | None,
+                                        uxhints: RunSpec | None) -> str:
+            goal_json = goal.model_dump() if goal else {}
+            policy_json = (uxhints.policies.model_dump() if (uxhints and uxhints.policies) else {})
+            stopwhen_json = {}
+            # Try to extract a StopWhen if present inside a PageReachedGoal or similar
+            if goal and getattr(goal, "type", None) == "page_reached":
+                stopwhen_json = getattr(goal, "stop_when", {}).model_dump() if hasattr(goal, "stop_when") else {}
 
             return f"""
-                    ROLE
-                    You are a STRICT, DETERMINISTIC UI Vision+Planner. In ONE PASS on the provided screenshot you must:
-                    (A) Detect prominent UI items,
-                    (B) Select only items relevant to the user's intent,
-                    (C) Output an ordered plan of steps to achieve the intent.
+                        You are a vision model that must detect UI targets and produce a precise action plan.
+                        Use ONLY the viewport screenshot and the GOAL/POLICIES below to decide *what to look for* and *where*.
 
-                    PRIORITY OF INSTRUCTIONS (highest → lowest)
-                    1) HARD CONSTRAINTS (below)  ← MUST be followed exactly
-                    2) target_prompt
-                    3) preferences/hints
-                    4) general rules below
+                        ### INPUT INTENT
+                        - user_prompt: {user_prompt}
 
-                    INPUTS
-                    - target_prompt: {target_prompt}
-                    - preferences: {preferences}
-                    - meta: {meta.as_dict()}
-                    - do_not_touch (boxes): {do_not_touch or []}
+                        ### GOAL (structured, generic; do not assume any site)
+                        {goal_json}
 
-                    HARD CONSTRAINTS (MUST FOLLOW EXACTLY):
-                    \"\"\"{hard_constraints}\"\"\"
+                        ### POLICIES (safety/biases; do not violate)
+                        {policy_json}
 
-                    GOAL & STOP CONDITIONS
-                    - Consider the task completed when: {stop_when}.
-                    - If completed, return empty steps.
+                        ### NAVIGATION HINTS (optional)
+                        {stopwhen_json}
 
-                    HINTS SNAPSHOT
-                    {hint_snapshot}{adapter_stepper}
+                        ### VIEWPORT META
+                        {viewport_meta}
 
-                    SCOPE (PROMINENT VIEW)
-                    1) If a blocking modal exists, scope to the top-most modal only.
-                    2) Otherwise, main document; exclude hidden/disabled/off-viewport/inert/aria-hidden/obscured elements.
+                        ### DETECTION PRINCIPLES (apply in this order)
+                        1) Determine the **prominent surface** to search:
+                        - If a visible dialog/modal/sheet/overlay exists, search **inside it only**; ignore greyed/behind content.
+                        - Else search the main **content** region; avoid header/footer/navigation unless GOAL suggests otherwise.
+                        - Prefer the surface with the highest z-index or strongest visual prominence.
 
-                    DETECTION REQUIREMENTS
-                    - Detect ALL prominent interactive/visual elements.
-                    - Each item MUST include:
-                    - description; viewport_data (copy meta)
-                    - box_2d [ymin,xmin,ymax,xmax] normalized 0–1000 (ints)
-                    - section_in one of ["header","footer","sidebar","content","modal","navigation","other"]
-                    - confidence 0.0–1.0
-                    - triggers_file_input (bool)
-                    - item_type (button, link, input, text, image, icon, checkbox, radio, select, combobox, tab, switch, slider)
-                    - input_type ("text","email","password","upload","radio","checkbox","select","not an input")
-                    - value "" if no current value
-                    - clickable (bool)
-                    - surrounding_context
-                    - in_dialog (bool)
-                    - is_behind_modal (bool)
+                        2) Generate **candidates** and score them using a consistent rubric:
+                        - +Text relevance: includes any GOAL text hints (exact/near, case-insensitive).
+                        - +Role/affordance: matches desired role (button/link/heading/input), looks interactive, enabled & visible.
+                        - +Visibility: non-zero size, on top (not occluded), readable contrast.
+                        - +Spatial cues: near relevant headings/labels; in requested region (header/footer/sidebar/modal/content).
+                        - +List goals: container looks list-like (ul/ol/table/grid/feed/repeated siblings) and item matches {{"text_any","text_all","regex","url_contains","domain_in"}}.
+                        - +Navigation/Page goals: headings/title/url substrings close to StopWhen.
+                        - −Penalize: disabled/behind overlay/irrelevant roles/“manage/settings”-like detours **unless** goal requires them.
 
-                    SELECTION (RELEVANCE)
-                    - Match via visible labels/placeholder/aria-label/title/value + nearby headings.
-                    - Prefer CTAs in hints.goal_progress.prefer_cta_text: {', '.join(gp.prefer_cta_text) or '—'}
-                    - EXCLUDE do_not_touch overlaps (IoU>0.25) or identical elements.
-                    - Treat adapter submit buttons as high-risk unless explicitly allowed by constraints.
+                        3) **Multi-context awareness**:
+                        - If candidate is inside a visible iframe, annotate `in_iframe=true`.
+                        - If target is off-screen, set `needs_scroll=true` and include a `scroll` step BEFORE clicking.
+                        - If inside a shadow root, annotate `shadow_host=true` with host box.
 
-                    PLANNING
-                    - Use indices into detection_result.items; x,y fallback allowed.
-                    - If off-screen, add a scroll then a wait before interaction.
-                    - Filling policy: {gp.fill_only} fields.
-                    - VALUE SOURCING ORDER:
-                    1) preferences.profile exact field or synonyms (preferences.dictionary)
-                    2) If missing and policies.synthesis.strategy == "safe_defaults" or "model_generate", synthesize within max_chars; else leave blank.
-                    - Uploads: match inputs using upload_policy.match_by; try assets in upload_policy.prefer order.
-                    - Login: allowed={gp.login_allowed}. If login page visible and auth provided, perform necessary login steps safely.
-                    - If destructive/ambiguous and not allowed by constraints, STOP (empty steps).
+                        4) **Choose and justify**:
+                        - Keep TOP 3 candidates with scores and reasons. Pick the best one for the action plan.
+                        - Provide `confidence` ∈ [0,1] and short `reason`.
 
-                    QUALITY & SAFETY
-                    - Only visible, enabled, unobscured items.
-                    - If ANY HARD CONSTRAINT conflicts with an otherwise-valid action, DO NOT ACT. Return empty steps.
+                        ### OUTPUT (STRICT JSON per schema you were given)
+                        Return a `ModelPlan`:
+                        - detection_result: list of detected items (top surface + top 3 candidates). Each item must include:
+                        - description, item_type, clickable flag, box_2d (0–1000 normalized), section_in, confidence,
+                        - any flags: in_dialog, is_behind_modal, in_iframe, shadow_host (if applicable)
+                        - steps: a minimal sequence to achieve the GOAL (e.g., optional scroll → click/move/type/press), with target by index
+                        - reason, confidence
 
-                    RETURN FORMAT (STRICT JSON → ModelPlan)
-                    - detection_result: DetectionResult
-                    - steps: List[Step]
-                    - reason: must include "constraints: OK" or "constraints: VIOLATED → <which>"
-                    - confidence: 0.0–1.0
+                        Coordinate contract: click at the CENTER of the target; coordinates are CSS px in the **visible viewport**.
+                        Do NOT submit forms or navigate unless the GOAL explicitly requires it.
+                        If uncertain, pick the highest-scoring candidate and include strong alternates with reasons.
+                        """
 
-                    CRITICAL
-                    - Output ONLY valid JSON conforming to the schema. No prose outside JSON.
-                    """.strip()
-
+        def _select_primary_goal(subprompt: str, uxhints: RunSpec | None) -> Optional[Goal]:
+            """Pick the single most specific goal to condition the detector with.
+            Preference order:
+            1) Any non-navigation goal (e.g., form/list/element/login/...)
+            2) Otherwise fall back to the first goal (often PageReachedGoal)
+            """
+            if not uxhints:
+                return None
+            try:
+                gs: List[Goal] = uxhints.normalized_goals()
+            except Exception:
+                gs = (uxhints.goals or [])
+            if not gs:
+                return None
+            # Prefer a goal that is not a generic page_reached navigation goal
+            for g in gs:
+                if getattr(g, "type", None) not in ("page_reached",):
+                    return g
+            return gs[0]
+        
         def _compile_meta_rules(hard_constraints: str, active: Optional[Adapter]):
             """Local filters that never execute forbidden actions (belt & braces).
 
@@ -1841,7 +3072,7 @@ class VisionCoordinator(GoalEvaluatorMixin):
                 continue
 
             runs += 1
-            cookie_handler.handle_cookies_with_dom()
+            # cookie_handler.handle_cookies_with_dom()
 
             # Scroll setup
             print("Scrolling to top")
@@ -1916,23 +3147,41 @@ class VisionCoordinator(GoalEvaluatorMixin):
                         continue  # restart inner loop with advanced y
 
 
-                do_not_touch = _flatten_ignore(elements_to_ignore) if elements_to_ignore else []
                 active_adapter = _active_adapter()
                 # Merge preferences with hints (profile/assets/auth/dictionary/policies)
-                eff_prefs = self._merge_preferences(getattr(self, "preferences", {}) or {}, hints)
-                hint_snapshot = self._snapshot_from_hints(hints, active_adapter)
                 hard_constraints = self._build_hard_constraints(meta_instructions, hints, active_adapter)
 
+                # Reset last surface signature for this run and give overlays a moment to appear
+                self._last_surface_signature = None
+                try:
+                    self.page.wait_for_timeout(50)
+                except Exception:
+                    pass
+                
+                primary_goal = _select_primary_goal(prompt, hints)
                 system_prompt = _unified_system_prompt(
-                    target_prompt=prompt,
-                    meta=meta,
-                    preferences=eff_prefs,
-                    do_not_touch=do_not_touch,
-                    hard_constraints=hard_constraints,
-                    hint_snapshot=hint_snapshot,
+                    user_prompt=prompt,
+                    viewport_meta=(meta.model_dump() if hasattr(meta, "model_dump") else getattr(meta, "__dict__", meta)),
+                    goal=primary_goal,
+                    uxhints=hints,
                 )
                 user_prompt = "Plan now. Return ONLY the JSON for ModelPlan.\n\nBANS:\n" + (hard_constraints or "")
 
+                # Prime a pre-click surface signature for SURFACE_GONE verification
+                try:
+                    _scan = self.page.evaluate(self._list_prominent_surfaces_js())
+                    self._last_surface_signature = self._pick_best_surface(_scan)
+                    if not self._last_surface_signature:
+                        # Retry once after a short settle (animations/late banners)
+                        try:
+                            self.page.wait_for_timeout(120)
+                            _scan = self.page.evaluate(self._list_prominent_surfaces_js())
+                            self._last_surface_signature = self._pick_best_surface(_scan)
+                        except Exception:
+                            pass
+                except Exception:
+                    self._last_surface_signature = None
+                
                 # Generate plan
                 plan = None
                 for r in range(ONEPASS_RETRIES):
@@ -2089,17 +3338,17 @@ class VisionCoordinator(GoalEvaluatorMixin):
         self,
         prompt: Optional[str] = None,
         *,
-        subprompt_hints: Optional[Mapping[str, Union[UXHints, Dict[str, Any]]]] = None,
+        subprompt_hints: Optional[Mapping[str, Union[RunSpec, Dict[str, Any]]]] = None,
         strict: bool = False,
     ):
         """
         Execute a prompt broken into sub-prompts, OR execute an explicit list of
-        sub-prompts with supplied UXHints.
+        sub-prompts with supplied RunSpec.
 
         Args:
             prompt: Optional full instruction to decompose. If omitted/blank, we use
                     the keys of `subprompt_hints` (in insertion order) as sub-prompts.
-            subprompt_hints: Optional mapping {sub-prompt -> UXHints | dict}. If a
+            subprompt_hints: Optional mapping {sub-prompt -> RunSpec | dict}. If a
                     hint is not provided for a sub-prompt (when `prompt` is used),
                     we'll infer one unless `strict=True`.
             strict: If True, require a manual hint for every sub-prompt (when
@@ -2107,16 +3356,16 @@ class VisionCoordinator(GoalEvaluatorMixin):
                     MUST come from `subprompt_hints`.
         """
         # Build manual hints map (canonicalized)
-        manual_map: Dict[str, UXHints] = {}
+        manual_map: Dict[str, RunSpec] = {}
         if subprompt_hints:
             for k, v in subprompt_hints.items():
                 if isinstance(v, dict):
                     try:
-                        v = UXHints.model_validate(v)
+                        v = RunSpec.model_validate(v)
                     except ValidationError as e:
-                        raise ValueError(f"Invalid UXHints for '{k}': {e}") from e
-                elif not isinstance(v, UXHints):
-                    raise TypeError(f"Hint for '{k}' must be UXHints or dict, got {type(v).__name__}")
+                        raise ValueError(f"Invalid RunSpec for '{k}': {e}") from e
+                elif not isinstance(v, RunSpec):
+                    raise TypeError(f"Hint for '{k}' must be RunSpec or dict, got {type(v).__name__}")
                 manual_map[self._canon(k)] = v
 
         # Decide sub-prompts source
@@ -2148,10 +3397,10 @@ class VisionCoordinator(GoalEvaluatorMixin):
                 hints = self.infer_hints_for_subprompt(sp, profile=None, dictionary=None)
                 print(f"Using INFERRED hints for '{sp}'.")
 
-            # Safety: if anything snuck in as a dict, validate to UXHints
+            # Safety: if anything snuck in as a dict, validate to RunSpec
             if isinstance(hints, dict):
                 try:
-                    hints = UXHints.model_validate(hints)
+                    hints = RunSpec.model_validate(hints)
                 except ValidationError as e:
                     raise ValueError(f"Invalid hints for '{sp}': {e}") from e
 
@@ -2396,6 +3645,12 @@ class VisionCoordinator(GoalEvaluatorMixin):
                     print(f"🎯 Final coordinates: ({x}, {y})")
 
             if a == "click":
+                # Snapshot the URL *before* a potential navigation so evaluators can detect change
+                try:
+                    setattr(self, "_lio_last_seen_url", (self.page.url or "").lower())
+                except Exception:
+                    pass
+                
                 self.page.mouse.click(x, y, button=step.button or "left")
                 if target_item is None:
                     continue
