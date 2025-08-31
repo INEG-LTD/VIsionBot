@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from playwright.sync_api import Page
 from pydantic import BaseModel, Field
 
 
@@ -93,6 +94,8 @@ class GoalContext:
     session_duration: float = 0.0
     # For pre-interaction evaluation
     planned_interaction: Optional[Dict[str, Any]] = None
+    # Browser access for advanced goals (like navigation preview)
+    page_reference: Optional[Page] = None  # Playwright Page object
 
 
 class GoalResult(BaseModel):

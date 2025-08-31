@@ -251,7 +251,8 @@ class GoalMonitor:
             all_interactions=self.interaction_history.copy(),
             url_history=self.url_history.copy(),
             page_changes=self.state_history.copy(),
-            session_duration=time.time() - self.session_start_time
+            session_duration=time.time() - self.session_start_time,
+            page_reference=self.page  # Provide page access for advanced goals
         )
     
     def get_status_summary(self) -> Dict[str, Any]:

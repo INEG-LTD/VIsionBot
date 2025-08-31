@@ -14,89 +14,97 @@ class ElementAnalyzer:
     def __init__(self, page: Page):
         self.page = page
     
-    def analyze_element_at_coordinates(self, x: int, y: int) -> Dict[str, Any]:
+    def analyze_element_at_coordinates(self, x: int, y: int) -> dict:
         """
-        Analyze what element exists at the given coordinates.
-        
-        Returns comprehensive information about the target element.
+        Returns:
+        {
+            tagName, elementType, text, innerText, attributes, isClickable,
+            bounds: { x, y, width, height },
+            style: { display, visibility, opacity, cursor },
+            parentContext, xpath
+        }
         """
         try:
-            element_info = self.page.evaluate("""
-            (coords) => {
-                const x = coords.x;
-                const y = coords.y;
-                const element = document.elementFromPoint(x, y);
-                if (!element) return null;
-                
-                const rect = element.getBoundingClientRect();
-                const style = getComputedStyle(element);
-                
-                // Get text content
-                const text = element.textContent?.trim() || '';
-                const innerText = element.innerText?.trim() || '';
-                
-                // Get attributes
-                const attributes = {};
-                for (const attr of element.attributes) {
-                    attributes[attr.name] = attr.value;
-                }
-                
-                // Get parent context
-                const parent = element.parentElement;
-                const parentText = parent ? parent.textContent?.trim().slice(0, 200) : '';
-                
-                // Determine element type
-                const tagName = element.tagName.toLowerCase();
-                const role = element.getAttribute('role') || '';
-                const type = element.getAttribute('type') || '';
-                
-                let elementType = tagName;
-                if (tagName === 'input') {
-                    elementType = `${tagName}[${type || 'text'}]`;
-                } else if (role) {
-                    elementType = `${tagName}[role=${role}]`;
-                }
-                
-                // Check if clickable
-                const isClickable = (
-                    tagName === 'button' ||
-                    tagName === 'a' ||
-                    (tagName === 'input' && ['button', 'submit'].includes(type)) ||
-                    role === 'button' ||
-                    style.cursor === 'pointer' ||
-                    element.onclick !== null
-                );
-                
-                return {
-                    tagName,
-                    elementType,
-                    text,
-                    innerText,
-                    attributes,
-                    isClickable,
-                    bounds: {
-                        x: rect.x,
-                        y: rect.y,
-                        width: rect.width,
-                        height: rect.height
-                    },
-                    style: {
-                        display: style.display,
-                        visibility: style.visibility,
-                        opacity: style.opacity,
-                        cursor: style.cursor
-                    },
-                    parentContext: parentText,
-                    xpath: null // We'll calculate this if needed
-                };
-            }
-            """, {"x": x, "y": y})
-            
-            return element_info or {}
-            
+            return self.page.evaluate(
+                """({ x: pageX, y: pageY }) => {
+                    // Convert page → client coords for elementFromPoint
+                    const cx = pageX - window.scrollX;
+                    const cy = pageY - window.scrollY;
+
+                    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+                    if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) return null;
+
+                    const element = document.elementFromPoint(cx, cy);
+                    if (!element) return null;
+
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+
+                    // Texts
+                    const text = (element.textContent || '').trim();
+                    const innerText = element.innerText ? element.innerText.trim() : '';
+
+                    // Attributes
+                    const attributes = {};
+                    for (const attr of element.attributes) {
+                        attributes[attr.name] = attr.value;
+                    }
+
+                    // Parent context (trimmed & shortened)
+                    const parent = element.parentElement;
+                    const parentText = parent ? (parent.textContent || '').trim().slice(0, 200) : '';
+
+                    // Element typing
+                    const tagName = element.tagName.toLowerCase();
+                    const role = element.getAttribute('role') || '';
+                    const type = element.getAttribute('type') || '';
+
+                    let elementType = tagName;
+                    if (tagName === 'input') {
+                        elementType = `${tagName}[${type || 'text'}]`;
+                    } else if (role) {
+                        elementType = `${tagName}[role=${role}]`;
+                    }
+
+                    // Clickable heuristic (kept simple to match your shape)
+                    const isClickable =
+                        tagName === 'button' ||
+                        tagName === 'a' ||
+                        (tagName === 'input' && ['button','submit','checkbox','radio'].includes(type)) ||
+                        role === 'button' || role === 'link' ||
+                        style.cursor === 'pointer' ||
+                        typeof element.onclick === 'function' ||
+                        element.hasAttribute('tabindex');
+
+                    return {
+                        tagName,
+                        elementType,
+                        text,
+                        innerText,
+                        attributes,
+                        isClickable,
+                        bounds: {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height
+                        },
+                        style: {
+                            display: style.display,
+                            visibility: style.visibility,
+                            opacity: style.opacity,
+                            cursor: style.cursor
+                        },
+                        parentContext: parentText,
+                        xpath: null // We'll calculate this if needed
+                    };
+                }""",
+                {"x": x, "y": y},  # pass page coords
+            ) or {}
         except Exception as e:
             print(f"[ElementAnalyzer] Error in analyze_element_at_coordinates: {e}")
             return {"error": "Failed to analyze element"}
+
     
     def get_element_description_with_ai(self, element_info: Dict[str, Any], screenshot: bytes, x: int, y: int) -> str:
         """
@@ -112,6 +120,8 @@ class ElementAnalyzer:
             - Clickable: {element_info.get('isClickable', False)}
             - Attributes: {str(element_info.get('attributes', {}))[:200]}
             """
+            
+            print(f"[ElementAnalyzer] Element summary: {element_summary}")
             
             system_prompt = f"""
             You are analyzing a UI element to provide a natural description.

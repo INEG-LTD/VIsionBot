@@ -1,30 +1,30 @@
 # playground/test_goals.py
+"""
+Simple test suite for the VisionBot using the playground app.
+"""
 from __future__ import annotations
-import os, time, multiprocessing, tempfile, textwrap, argparse
-from playwright.sync_api import sync_playwright
+import time
+import multiprocessing
+import tempfile
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 
-# Import your bot
+# Add project root to path
 import sys
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from pydantic import BaseModel
-from typing import Optional
-sys.path.append(str(Path(__file__).resolve().parents[1]))  # project root on sys.path
-from vision_bot import Goal, GoalKind, ItemSpec, ListItemOpenedGoal, VisionCoordinator, RunSpec, Assets, UploadPolicy, Auth
+from vision_bot_simplified import VisionBot
 
-class RunTest(BaseModel):
-    url: str
-    prompt: str
-    hints: Optional[RunSpec] = None
 
-# Start the Flask server inside this process (subprocess-safe)
 def _run_server():
-    from app import create_app  # local import so sys.path is right when spawned
+    """Start the Flask server in a background process"""
+    from app import create_app
     app = create_app()
     app.run(host="127.0.0.1", port=5001, debug=False, use_reloader=False)
 
-def _ensure_resume(tmpdir: Path) -> Path:
-    """Create a tiny fake PDF so the upload test has something to attach."""
+
+def _create_test_resume(tmpdir: Path) -> Path:
+    """Create a simple test PDF resume"""
     pdf = tmpdir / "resume.pdf"
     if not pdf.exists():
         pdf.write_bytes(
@@ -37,140 +37,191 @@ def _ensure_resume(tmpdir: Path) -> Path:
         )
     return pdf
 
-from typing import Optional
 
-def run_tests(base_url: str = "http://127.0.0.1:5001", *, only: Optional[str] = None, match: Optional[str] = None, headless: bool = False):
-    # Launch browser at DPR 1.0 (your VisionCoordinator enforces this)
+def run_tests(base_url: str = "http://127.0.0.1:5001", headless: bool = False, only: str = None, match: str = None):
+    """Run the test suite using VisionBot"""
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800}, device_scale_factor=1)
-        page = ctx.new_page()
-
-        # seed preferences (used by infer + planner)
-        vc = VisionCoordinator(
-            page,
-            model="gemini-2.5-flash-lite",
-            reasoning_level="none",
-            image_detail="low",
-            preferences={
-                "username": "standard_user",
-                "password": "secret_sauce",
-                "name": "John Doe",
-                "email": "john.doe@example.com",
-                "phone": "1234567890",
-            }
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            device_scale_factor=1
         )
-
+        page = context.new_page()
+        
+        # Initialize the simplified VisionBot
+        bot = VisionBot(
+            page=page,
+            model_name="gemini-2.5-flash-lite",
+            max_attempts=5
+        )
+        
+        # Create test resume
         tmpdir = Path(tempfile.gettempdir())
-        resume_path = str(_ensure_resume(tmpdir))
-
+        resume_path = _create_test_resume(tmpdir)
+        
+        # Define test cases
         tests = [
-            # ELEMENT_VISIBLE
-            RunTest(url=f"{base_url}/", prompt="show the 'Pricing' button"),
-            # ELEMENT_GONE
-            RunTest(url=f"{base_url}/modal", prompt="close the cookie banner"),
-            # LIST_COUNT (infinite reveal)
-            RunTest(url=f"{base_url}/infinite?total=150&chunk=25", prompt="load at least 100 results"),
-            # LIST_ITEM_OPENED by index
-            RunTest(url=f"{base_url}/list?n=30&prefix=Story", prompt="open the first item in the list", hints=RunSpec(
-                goals=[
-                    ListItemOpenedGoal(item=ItemSpec(position="first"), require_url_change=True)
-                    ])),
-            # LIST_ITEM_OPENED by content
-            RunTest(url=f"{base_url}/list?n=40&prefix=Story", prompt="open the item that contains 'Story 17'"),
-            # FILTER_APPLIED (chips appear as you check)
-            RunTest(url=f"{base_url}/filters", prompt="filter by 'Remote' and 'iOS'"),
-            # FIELD_VALUE_SET
-            RunTest(url=f"{base_url}/form", prompt="set 'Location' to 'London'"),
-            # FORM_COMPLETED + SUBMISSION_CONFIRMED (submit allowed by wording)
-            RunTest(url=f"{base_url}/form", prompt="fill the required fields and submit the application"),
-            # UPLOAD_ATTACHED (we supply assets via hints)
-            RunTest(url=f"{base_url}/upload", prompt="upload my resume",
-                 hints=RunSpec(
-                     assets=Assets(
-                         resume_path=resume_path,
-                         upload_policy=UploadPolicy(allow_pdf=True, allow_docx=True, allow_images=True, max_mb=10)
-                     )
-                 )),
-            # LOGIN_COMPLETED (we supply auth via hints)
-            RunTest(url=f"{base_url}/login", prompt="log in with my credentials",
-                 hints=RunSpec(auth=Auth(username="standard_user", password="secret_sauce"))),
-            # NEW_TAB_OPENED
-            RunTest(url=f"{base_url}/newtab", prompt="open 'Docs' in a new tab"),
-            # REPEAT_UNTIL (wraps the previous list-count intent)
-            RunTest(url=f"{base_url}/infinite?total=120&chunk=20", prompt="load results until we have 120 items"),
+            {
+                "name": "Click Pricing Button",
+                "url": f"{base_url}/",
+                "goal": "Click the 'Pricing' button",
+                "description": "Test basic element clicking"
+            },
+            {
+                "name": "Close Cookie Banner",
+                "url": f"{base_url}/modal",
+                "goal": "Close the cookie banner",
+                "description": "Test modal interaction"
+            },
+            {
+                "name": "Load Infinite Results",
+                "url": f"{base_url}/infinite?total=100&chunk=20",
+                "goal": "Load at least 80 results by scrolling",
+                "description": "Test infinite scrolling"
+            },
+            {
+                "name": "Open List Item",
+                "url": f"{base_url}/list?n=30&prefix=Story",
+                "goal": "Open the first item in the list",
+                "description": "Test list item interaction"
+            },
+            {
+                "name": "Apply Filters",
+                "url": f"{base_url}/filters",
+                "goal": "Filter by 'Remote' and 'iOS'",
+                "description": "Test filter application"
+            },
+            {
+                "name": "Fill Form Field",
+                "url": f"{base_url}/form",
+                "goal": "Set 'Location' field to 'London'",
+                "description": "Test form field filling"
+            },
+            {
+                "name": "Complete Form",
+                "url": f"{base_url}/form",
+                "goal": "Fill all required fields and submit the application",
+                "description": "Test complete form submission"
+            },
+            {
+                "name": "Upload Resume",
+                "url": f"{base_url}/upload",
+                "goal": f"Upload the resume file from {resume_path}",
+                "description": "Test file upload functionality"
+            },
+            {
+                "name": "Login",
+                "url": f"{base_url}/login",
+                "goal": "Log in with username 'standard_user' and password 'secret_sauce'",
+                "description": "Test login functionality"
+            },
+            {
+                "name": "Open New Tab",
+                "url": f"{base_url}/newtab",
+                "goal": "Open 'Docs' in a new tab",
+                "description": "Test new tab functionality"
+            }
         ]
-
-        # --- Selection filters -------------------------------------------------
-        # --only supports comma-separated 1-based indices and ranges, e.g. "3" or "1,4-6"
+        
+        # Filter tests based on --only and --match flags
         if only:
-            idxs = set()
+            filtered_tests = []
             for token in only.split(","):
                 token = token.strip()
-                if not token:
-                    continue
                 if "-" in token:
-                    a, b = token.split("-", 1)
+                    # Handle ranges like "1-3"
                     try:
-                        a_i, b_i = int(a), int(b)
+                        start, end = map(int, token.split("-"))
+                        start, end = min(start, end), max(start, end)
+                        filtered_tests.extend(tests[start-1:end])
                     except ValueError:
-                        continue
-                    lo, hi = (a_i, b_i) if a_i <= b_i else (b_i, a_i)
-                    idxs.update(range(lo, hi + 1))
+                        print(f"⚠️ Invalid range: {token}")
                 else:
+                    # Handle single index
                     try:
-                        idxs.add(int(token))
+                        idx = int(token) - 1  # Convert to 0-based
+                        if 0 <= idx < len(tests):
+                            filtered_tests.append(tests[idx])
+                        else:
+                            print(f"⚠️ Test index {token} out of range (1-{len(tests)})")
                     except ValueError:
-                        pass
-            original = tests
-            tests = [original[i - 1] for i in sorted(idxs) if 1 <= i <= len(original)]
-
-        # --match filters by substring in prompt or url (case-insensitive)
-        if match:
-            m = match.lower()
-            tests = [t for t in tests if m in t.prompt.lower() or m in t.url.lower()]
-
-        if not tests:
-            print("No tests selected. Adjust --only / --match filters.")
-            ctx.close(); browser.close()
-            return
-        # ----------------------------------------------------------------------
-
-        for i, t in enumerate(tests, 1):
-            print("\n" + "="*80)
-            print(f"TEST {i}: {t.prompt}  →  {t.url}")
-            page.goto(t.url, wait_until="domcontentloaded")
-            time.sleep(0.6)
-            if t.hints:
-                # vc.run(prompt=t.prompt, subprompt_hints=None, strict=False)  # let your infer work too
-                # when hints are present, pass them as manual hints for the whole prompt:
-                vc._exec_compressed_phrase(
-                    prompt=t.prompt,
-                    meta_instructions="Avoid destructive or final actions unless explicitly instructed.",
-                    attempts=40,
-                    hints=t.hints,
-                )
+                        print(f"⚠️ Invalid test index: {token}")
+            
+            if filtered_tests:
+                tests = filtered_tests
+                print(f"🔍 Running {len(tests)} selected tests: {only}")
             else:
-                vc.run(prompt=t.prompt)
+                print("❌ No valid tests selected with --only flag")
+                return
+        
+        if match:
+            match_lower = match.lower()
+            tests = [t for t in tests if 
+                    match_lower in t['name'].lower() or 
+                    match_lower in t['goal'].lower() or 
+                    match_lower in t['url'].lower()]
+            
+            if tests:
+                print(f"🔍 Running {len(tests)} tests matching '{match}'")
+            else:
+                print(f"❌ No tests match '{match}'")
+                return
+        
+        print(f"🚀 Running {len(tests)} tests with VisionBot...")
+        
+        for i, test in enumerate(tests, 1):
+            print(f"\n{'='*80}")
+            print(f"TEST {i}/{len(tests)}: {test['name']}")
+            print(f"URL: {test['url']}")
+            print(f"Goal: {test['goal']}")
+            print(f"Description: {test['description']}")
+            print(f"{'='*80}")
+            
+            try:
+                # Navigate to test page
+                page.goto(test['url'], wait_until="domcontentloaded")
+                time.sleep(0.5)  # Let page settle
+                
+                # Attempt to achieve the goal
+                print(f"🎯 Attempting: {test['goal']}")
+                success = bot.achieve_goal(test['goal'])
+                
+                if success:
+                    print(f"✅ SUCCESS: {test['name']}")
+                else:
+                    print(f"❌ FAILED: {test['name']}")
+                
+                # Brief pause between tests
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"💥 ERROR in {test['name']}: {e}")
+                continue
+        
+        print(f"\n🎉 Test suite completed!")
+        context.close()
+        browser.close()
 
-        print("\nAll tests dispatched. Manually verify the pages if needed.")
-        ctx.close(); browser.close()
 
 if __name__ == "__main__":
-    # CLI flags: --only, --match, --headless
-    parser = argparse.ArgumentParser(description="Run playground UI-goal tests.")
-    parser.add_argument("--only", help="Comma-separated 1-based indices or ranges (e.g., 3 or 1,4-6).", default=None)
-    parser.add_argument("--match", help="Substring to select tests by prompt or URL (case-insensitive).", default=None)
-    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run VisionBot tests on the playground app")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    parser.add_argument("--only", help="Run specific tests by index or range (e.g., '3' or '1-3' or '1,3,5')")
+    parser.add_argument("--match", help="Run tests matching text in name, goal, or URL (case-insensitive)")
     args = parser.parse_args()
-
-    # Run the Flask server in a background process
-    os.environ.setdefault("FLASK_ENV", "production")
-    srv = multiprocessing.Process(target=_run_server, daemon=True)
-    srv.start()
-    time.sleep(1.0)  # small warmup
-
+    
+    # Start Flask server in background
+    print("🌐 Starting Flask server...")
+    server = multiprocessing.Process(target=_run_server, daemon=True)
+    server.start()
+    time.sleep(2.0)  # Wait for server to start
+    
     try:
-        run_tests(only=args.only, match=args.match, headless=args.headless)
+        run_tests(headless=args.headless, only=args.only, match=args.match)
     finally:
-        srv.terminate()
+        print("🛑 Stopping Flask server...")
+        server.terminate()
+        server.join(timeout=5)

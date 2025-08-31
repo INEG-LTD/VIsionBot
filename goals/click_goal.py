@@ -197,6 +197,7 @@ class ClickGoal(BaseGoal):
             # Get AI description of the element about to be clicked
             screenshot = planned_interaction.get('screenshot')
             if screenshot:
+                print("[ClickGoal] Getting element description with AI")
                 element_description = self.element_analyzer.get_element_description_with_ai(
                     element_info, screenshot, x, y
                 )
@@ -289,7 +290,7 @@ class ClickGoal(BaseGoal):
                 model="gemini-2.5-flash-lite",
                 reasoning_level="none"
             )
-            print(f"[GoalFramework] Element match evaluation: {result}")
+            
             # Return as dict for compatibility
             return result.model_dump()
                 
