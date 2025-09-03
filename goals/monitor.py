@@ -24,6 +24,7 @@ class GoalMonitor:
     
     def __init__(self, page: Page):
         self.page = page
+        self.user_prompt = ""
         self.active_goals: List[BaseGoal] = []
         self.interaction_history: List[Interaction] = []
         self.state_history: List[BrowserState] = []
@@ -33,6 +34,10 @@ class GoalMonitor:
         
         # Initialize with current state
         self._capture_initial_state()
+    
+    def set_user_prompt(self, user_prompt: str) -> None:
+        """Set the user prompt"""
+        self.user_prompt = user_prompt
     
     def add_goal(self, goal: BaseGoal) -> None:
         """Add a goal to be monitored"""
@@ -102,6 +107,29 @@ class GoalMonitor:
         
         return pre_interaction_results
     
+    def check_for_retry_requests(self) -> List[BaseGoal]:
+        """
+        Check if any goals have requested a retry.
+        
+        Returns:
+            List of goals that have requested retries
+        """
+        retry_goals = []
+        for goal in self.active_goals:
+            if goal.retry_requested:
+                retry_goals.append(goal)
+        return retry_goals
+    
+    def reset_retry_requests(self) -> None:
+        """Reset retry requests for all goals"""
+        for goal in self.active_goals:
+            goal.reset_retry_state()
+    
+    def clear_all_goals(self) -> None:
+        """Clear all active goals"""
+        for goal in self.active_goals.copy():
+            self.remove_goal(goal)
+    
     def record_interaction(self, interaction_type: InteractionType, **kwargs) -> None:
         """
         Record an interaction that has occurred.
@@ -152,6 +180,11 @@ class GoalMonitor:
                     result = goal.evaluate(context)
                     goal._last_evaluation = result
                     print(f"[GoalMonitor] Post-interaction evaluation: {goal} -> {result.status}")
+                    
+                    # Check if this goal requested a retry during evaluation
+                    if goal.retry_requested:
+                        print(f"[GoalMonitor] Goal {goal} requested retry during post-interaction evaluation")
+                        
                 except Exception as e:
                     print(f"[GoalMonitor] Error in post-interaction evaluation for {goal}: {e}")
     
@@ -174,6 +207,11 @@ class GoalMonitor:
                         result = goal.evaluate(context)
                         goal._last_evaluation = result
                         results[str(goal)] = result
+                        
+                        # Check if this goal requested a retry during evaluation
+                        if goal.retry_requested:
+                            print(f"[GoalMonitor] Goal {goal} requested retry during continuous evaluation")
+                            
                     except Exception as e:
                         error_result = GoalResult(
                             status=GoalStatus.UNKNOWN,

@@ -1,8 +1,6 @@
 # playground/app.py
 from __future__ import annotations
 from flask import Flask, request, redirect, url_for, render_template_string
-import random
-import string
 
 def create_app():
     app = Flask(__name__)
@@ -30,8 +28,14 @@ def create_app():
         .hidden { display:none !important; }
         .field { margin:12px 0; }
         label { display:block; font-weight:600; margin-bottom:6px; }
-        input[type="text"], input[type="email"], input[type="password"], select { width:360px; max-width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:8px; }
+        input[type="text"], input[type="email"], input[type="password"], input[type="date"], input[type="time"], input[type="datetime-local"], select { width:360px; max-width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:8px; }
         .row { display:flex; gap:18px; flex-wrap:wrap; }
+        .custom-select { position:relative; width:360px; max-width:100%; }
+        .custom-select-trigger { padding:8px 10px; border:1px solid #ccc; border-radius:8px; background:white; cursor:pointer; display:flex; justify-content:space-between; align-items:center; }
+        .custom-select-trigger:after { content:'▼'; font-size:12px; }
+        .custom-select-options { position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #ccc; border-top:none; border-radius:0 0 8px 8px; max-height:200px; overflow-y:auto; z-index:100; }
+        .custom-option { padding:8px 10px; cursor:pointer; }
+        .custom-option:hover { background:#f0f0f0; }
       </style>
     </head>
     <body>
@@ -166,8 +170,61 @@ def create_app():
               <option>Web Engineer</option>
             </select>
           </div>
+          <div class="field">
+            <label for="experience">Experience Level</label>
+            <div class="custom-select" id="experience" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+              <div class="custom-select-trigger">Choose experience level</div>
+              <div class="custom-select-options hidden">
+                <div class="custom-option" data-value="junior">Junior (0-2 years)</div>
+                <div class="custom-option" data-value="mid">Mid-level (2-5 years)</div>
+                <div class="custom-option" data-value="senior">Senior (5+ years)</div>
+                <div class="custom-option" data-value="lead">Lead/Principal</div>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="start-date">Start Date</label>
+            <input id="start-date" name="start-date" type="date" />
+          </div>
+          <div class="field">
+            <label for="interview-time">Preferred Interview Time</label>
+            <input id="interview-time" name="interview-time" type="time" />
+          </div>
+          <div class="field">
+            <label for="appointment">Schedule Appointment</label>
+            <input id="appointment" name="appointment" type="datetime-local" />
+          </div>
           <button class="btn btn-primary" type="submit">Submit Application</button>
         </form>
+        <script>
+          // Custom select functionality
+          const customSelect = document.getElementById('experience');
+          const trigger = customSelect.querySelector('.custom-select-trigger');
+          const options = customSelect.querySelector('.custom-select-options');
+          
+          trigger.addEventListener('click', function() {
+            const isOpen = customSelect.getAttribute('aria-expanded') === 'true';
+            customSelect.setAttribute('aria-expanded', !isOpen);
+            options.classList.toggle('hidden');
+          });
+          
+          options.addEventListener('click', function(e) {
+            if (e.target.classList.contains('custom-option')) {
+              trigger.textContent = e.target.textContent;
+              trigger.setAttribute('data-value', e.target.getAttribute('data-value'));
+              customSelect.setAttribute('aria-expanded', 'false');
+              options.classList.add('hidden');
+            }
+          });
+          
+          // Close dropdown when clicking outside
+          document.addEventListener('click', function(e) {
+            if (!customSelect.contains(e.target)) {
+              customSelect.setAttribute('aria-expanded', 'false');
+              options.classList.add('hidden');
+            }
+          });
+        </script>
         """
         return render_template_string(BASE, title="Application Form", body=body)
 

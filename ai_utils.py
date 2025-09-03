@@ -90,7 +90,7 @@ def generate_text_gpt_with_cost(
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         "gpt-4o": {"input": 5.00, "output": 15.00},  #  [oai_citation:1‡OpenAI Platform](https://platform.openai.com/docs/models/chatgpt-4o-latest?utm_source=chatgpt.com)
         "gpt-5-mini": {"input": 0.25, "output": 2.00},
-        "gpt-5-mini": {"input": 0.05, "output": 0.40},
+        "gpt-5-nano": {"input": 0.05, "output": 0.40},
     }
 
     usage = getattr(response, "usage", None)
@@ -223,7 +223,7 @@ def generate_model_gpt_with_cost(
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         "gpt-4o": {"input": 5.00, "output": 15.00},
         "gpt-5-mini": {"input": 0.25, "output": 2.00},
-        "gpt-5-mini": {"input": 0.05, "output": 0.40},
+        "gpt-5-nano": {"input": 0.05, "output": 0.40},
         # Add any other models you use here.
     }
 
@@ -276,7 +276,7 @@ def generate_model_gpt_with_cost(
     }
 
 def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image = None, multi_image = None, thinking_level: str = "none", model: str = "gemini-2.5-flash") -> BaseModel:
-    contents = [prompt]
+    contents = []
     if image:
         # Handle both bytes and genai.types.Part objects
         if isinstance(image, bytes):
@@ -287,6 +287,7 @@ def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseMode
             if isinstance(image, bytes):
                 image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
             contents.append(image)
+    contents.append(prompt)
     thinking_config=genai.types.ThinkingConfig(thinking_budget=0) if thinking_level == "none" else genai.types.ThinkingConfig(thinking_budget=100)
     
     response = client.models.generate_content(

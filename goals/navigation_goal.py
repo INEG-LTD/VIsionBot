@@ -103,17 +103,41 @@ class NavigationGoal(BaseGoal):
                         }
                     )
                 else:
+                    # Request retry if we haven't exceeded max retries
+                    if self.can_retry():
+                        retry_reason = f"Navigation target doesn't match intent: {preview_analysis['reasoning']}"
+                        if self.request_retry(retry_reason):
+                            return GoalResult(
+                                status=GoalStatus.PENDING,
+                                confidence=preview_analysis["confidence"],
+                                reasoning=f"Navigation target doesn't match intent, requesting retry: {preview_analysis['reasoning']}",
+                                evidence={
+                                    "target_url": target_url,
+                                    "navigation_intent": self.navigation_intent,
+                                    "page_summary": preview_analysis["page_summary"],
+                                    "preview_analysis": preview_analysis,
+                                    "evaluation_timing": "pre_interaction_url_preview",
+                                    "strategy": "direct_url_preview",
+                                    "retry_requested": True,
+                                    "retry_count": self.retry_count
+                                },
+                                next_actions=["Retry plan generation to find correct navigation target"]
+                            )
+                    
+                    # Max retries exceeded, fail the goal
                     return GoalResult(
                         status=GoalStatus.FAILED,
                         confidence=preview_analysis["confidence"],
-                        reasoning=f"Pre-click URL preview shows target does not match intent: {preview_analysis['reasoning']}",
+                        reasoning=f"Pre-click URL preview shows target does not match intent: {preview_analysis['reasoning']}. Max retries exceeded.",
                         evidence={
                             "target_url": target_url,
                             "navigation_intent": self.navigation_intent,
                             "page_summary": preview_analysis["page_summary"],
                             "preview_analysis": preview_analysis,
                             "evaluation_timing": "pre_interaction_url_preview",
-                            "strategy": "direct_url_preview"
+                            "strategy": "direct_url_preview",
+                            "retry_count": self.retry_count,
+                            "max_retries_exceeded": True
                         }
                     )
         
@@ -489,3 +513,72 @@ class NavigationGoal(BaseGoal):
                     "expected_text_contains": self.target_page_text
                 }
             )
+    
+    def get_description(self, context: GoalContext) -> str:
+        """
+        Generate a detailed description of what this navigation goal is looking for.
+        
+        The description should include:
+        - Goal statement and navigation intent
+        - Target criteria (URL patterns, page content)
+        - Current page context
+        - Preview analysis results (if available)
+        - Navigation history and status
+        
+        Format should be:
+        ```
+        Navigation goal: [description]
+        Navigation intent: [intent]
+        Target URL should contain: [criteria]
+        Target page should contain: [criteria]
+        Current page: [url]
+        Preview analysis results: (if available)
+          ✅ Preview confirmed target matches intent
+          📄 Page summary: [summary]
+          🎯 Confidence: [confidence]
+          💭 Reasoning: [reasoning]
+        Navigation history: [status]
+        ```
+        """
+        description_parts = []
+        
+        # Main goal description
+        description_parts.append(f"Navigation goal: {self.description}")
+        description_parts.append(f"Navigation intent: {self.navigation_intent}")
+        
+        # Add target criteria if specified
+        if self.target_url_contains:
+            description_parts.append(f"Target URL should contain: {', '.join(self.target_url_contains)}")
+        
+        if self.target_page_text:
+            description_parts.append(f"Target page should contain: {', '.join(self.target_page_text)}")
+        
+        # Add current page context
+        current_url = context.current_state.url
+        description_parts.append(f"Current page: {current_url}")
+        
+        # Add preview results if available
+        if self.preview_results:
+            description_parts.append("Preview analysis results:")
+            if self.preview_results.get("matches_intent"):
+                description_parts.append("  ✅ Preview confirmed target matches intent")
+                description_parts.append(f"  📄 Page summary: {self.preview_results.get('page_summary', 'N/A')}")
+            else:
+                description_parts.append("  ❌ Preview shows target does not match intent")
+                description_parts.append(f"  📄 Page summary: {self.preview_results.get('page_summary', 'N/A')}")
+            description_parts.append(f"  🎯 Confidence: {self.preview_results.get('confidence', 0):.2f}")
+            description_parts.append(f"  💭 Reasoning: {self.preview_results.get('reasoning', 'N/A')}")
+        
+        # Add URL history context
+        if len(context.url_history) > 1:
+            description_parts.append(f"Navigation history: {len(context.url_history)} pages visited")
+            if len(context.url_history) >= 2:
+                previous_url = context.url_history[-2]
+                if previous_url != current_url:
+                    description_parts.append(f"  Previous page: {previous_url}")
+                    description_parts.append(f"  Current page: {current_url}")
+                    description_parts.append("  ✅ Navigation has occurred")
+                else:
+                    description_parts.append("  ⏳ No navigation detected yet")
+        
+        return "\n".join(description_parts)

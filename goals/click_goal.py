@@ -137,16 +137,39 @@ class ClickGoal(BaseGoal):
                     }
                 )
             else:
+                # Request retry if we haven't exceeded max retries
+                if self.can_retry():
+                    retry_reason = f"Wrong element clicked: '{element_description}' instead of '{self.target_description}'"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=match_result["confidence"],
+                            reasoning=f"Wrong element clicked, requesting retry: {match_result['reasoning']}",
+                            evidence={
+                                "clicked_element": element_description,
+                                "target_element": self.target_description,
+                                "coordinates": self.actual_click_coordinates,
+                                "element_info": self.actual_element_info,
+                                "match_reasoning": match_result["reasoning"],
+                                "retry_requested": True,
+                                "retry_count": self.retry_count
+                            },
+                            next_actions=["Retry plan generation to find correct element"]
+                        )
+                
+                # Max retries exceeded, fail the goal
                 return GoalResult(
                     status=GoalStatus.FAILED,
                     confidence=match_result["confidence"],
-                    reasoning=f"Clicked '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}",
+                    reasoning=f"Clicked '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}. Max retries exceeded.",
                     evidence={
                         "clicked_element": element_description,
                         "target_element": self.target_description,
                         "coordinates": self.actual_click_coordinates,
                         "element_info": self.actual_element_info,
-                        "match_reasoning": match_result["reasoning"]
+                        "match_reasoning": match_result["reasoning"],
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
                     }
                 )
             
@@ -208,7 +231,7 @@ class ClickGoal(BaseGoal):
             print(f"[ClickGoal] About to click: '{element_description}'")
             
             # Compare with target using AI
-            match_result = self._evaluate_element_match(element_description, self.target_description)
+            match_result = self._evaluate_element_match(element_description, element_info, self.target_description)
             
             if match_result["is_match"]:
                 print(f"[ClickGoal] About to click: '{element_description}' which matches target '{self.target_description}'")
@@ -227,17 +250,42 @@ class ClickGoal(BaseGoal):
                 )
             else:
                 print(f"[ClickGoal] About to click: '{element_description}' but target was '{self.target_description}'")
+                
+                # Request retry if we haven't exceeded max retries
+                if self.can_retry():
+                    retry_reason = f"Wrong element detected: '{element_description}' instead of '{self.target_description}'"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=match_result["confidence"],
+                            reasoning=f"Wrong element detected, requesting retry: {match_result['reasoning']}",
+                            evidence={
+                                "target_element": element_description,
+                                "expected_target": self.target_description,
+                                "coordinates": (x, y),
+                                "element_info": element_info,
+                                "match_reasoning": match_result["reasoning"],
+                                "evaluation_timing": "pre_interaction",
+                                "retry_requested": True,
+                                "retry_count": self.retry_count
+                            },
+                            next_actions=["Retry plan generation to find correct element"]
+                        )
+                
+                # Max retries exceeded, fail the goal
                 return GoalResult(
                     status=GoalStatus.FAILED,
                     confidence=match_result["confidence"],
-                    reasoning=f"About to click '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}",
+                    reasoning=f"About to click '{element_description}' but target was '{self.target_description}' - {match_result['reasoning']}. Max retries exceeded.",
                     evidence={
                         "target_element": element_description,
                         "expected_target": self.target_description,
                         "coordinates": (x, y),
                         "element_info": element_info,
                         "match_reasoning": match_result["reasoning"],
-                        "evaluation_timing": "pre_interaction"
+                        "evaluation_timing": "pre_interaction",
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
                     }
                 )
             
@@ -261,7 +309,7 @@ class ClickGoal(BaseGoal):
             print(f"[GoalFramework] Element description with fallback: {element_type}")
             return element_type
     
-    def _evaluate_element_match(self, actual_description: str, target_description: str) -> Dict[str, Any]:
+    def _evaluate_element_match(self, actual_description: str, actual_element_info: Dict[str, Any], target_description: str) -> Dict[str, Any]:
         """
         Use AI to determine if the clicked element matches the target description.
         
@@ -274,6 +322,7 @@ class ClickGoal(BaseGoal):
             
             User wanted to click: "{target_description}"
             Actually clicked: "{actual_description}"
+            Actually clicked element info: "{actual_element_info}"
             
             Determine if these match semantically. Consider:
             - Synonyms and similar terms (e.g., "button" vs "btn", "link" vs "anchor")
@@ -324,3 +373,51 @@ class ClickGoal(BaseGoal):
             }
         
         return {"is_match": False, "confidence": 0.9, "reasoning": "No significant match found"}
+    
+    def get_description(self, context: GoalContext) -> str:
+        """
+        Generate a detailed description of what this click goal is looking for.
+        
+        The description should include:
+        - Goal statement and target description
+        - Current click status (attempted, successful, failed)
+        - Planned vs actual click information
+        - Element descriptions for context
+        
+        Format should be:
+        ```
+        Click goal: [description]
+        Target: [target_description]
+        Status: [current_status]
+        Actually clicked: [element_description] (if attempted)
+        Planned click coordinates: (x, y) (if planned)
+        Planned to click: [element_description] (if planned)
+        ```
+        """
+        description_parts = []
+        
+        # Main goal description
+        description_parts.append(f"Click goal: {self.description}")
+        description_parts.append(f"Target: {self.target_description}")
+        
+        # Add status information if available
+        if self.click_attempted:
+            if self.click_successful:
+                description_parts.append("Status: Click has been attempted and executed successfully")
+                if self.actual_element_info:
+                    element_desc = self._create_fallback_description(self.actual_element_info)
+                    description_parts.append(f"Actually clicked: {element_desc}")
+            else:
+                description_parts.append("Status: Click was attempted but failed to execute")
+        else:
+            description_parts.append("Status: No click interaction attempted yet")
+        
+        # Add planned click info if available
+        if self.planned_click_coordinates:
+            x, y = self.planned_click_coordinates
+            description_parts.append(f"Planned click coordinates: ({x}, {y})")
+            if self.planned_element_info:
+                element_desc = self._create_fallback_description(self.planned_element_info)
+                description_parts.append(f"Planned to click: {element_desc}")
+        
+        return "\n".join(description_parts)
