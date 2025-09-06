@@ -13,7 +13,10 @@ from .base import (
     Interaction,
     GoalContext,
     GoalResult,
-    BaseGoal
+    BaseGoal,
+    ConditionalGoal,
+    Condition,
+    ConditionType
 )
 
 from .monitor import GoalMonitor
@@ -23,6 +26,9 @@ from .element_analyzer import ElementAnalyzer
 from .click_goal import ClickGoal
 from .navigation_goal import NavigationGoal
 from .form_goal import FormFillGoal
+from .if_goal import IfGoal
+from .press_goal import PressGoal
+from .scroll_goal import ScrollGoal
 
 __all__ = [
     # Base types
@@ -34,6 +40,9 @@ __all__ = [
     "GoalContext",
     "GoalResult",
     "BaseGoal",
+    "ConditionalGoal",
+    "Condition",
+    "ConditionType",
     
     # Framework components
     "GoalMonitor",
@@ -43,4 +52,7 @@ __all__ = [
     "ClickGoal",
     "NavigationGoal", 
     "FormFillGoal",
+    "IfGoal",
+    "PressGoal",
+    "ScrollGoal",
 ]

@@ -26,10 +26,18 @@ class ElementAnalyzer:
         """
         try:
             return self.page.evaluate(
-                """({ x: pageX, y: pageY }) => {
-                    // Convert page → client coords for elementFromPoint
-                    const cx = pageX - window.scrollX;
-                    const cy = pageY - window.scrollY;
+                """({ x, y }) => {
+                    // Check if coordinates are already client coordinates (viewport-relative)
+                    let cx, cy;
+                    if (x >= 0 && x <= window.innerWidth && y >= 0 && y <= window.innerHeight) {
+                        // Coordinates are already client coordinates (from viewport-relative detection)
+                        cx = x;
+                        cy = y;
+                    } else {
+                        // Convert page coordinates to client coordinates
+                        cx = x - window.scrollX;
+                        cy = y - window.scrollY;
+                    }
 
                     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
                     if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) return null;
@@ -99,7 +107,7 @@ class ElementAnalyzer:
                         xpath: null // We'll calculate this if needed
                     };
                 }""",
-                {"x": x, "y": y},  # pass page coords
+                {"x": x, "y": y},  # pass coordinates
             ) or {}
         except Exception as e:
             print(f"[ElementAnalyzer] Error in analyze_element_at_coordinates: {e}")

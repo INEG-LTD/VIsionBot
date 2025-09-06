@@ -33,8 +33,8 @@ class PageUtils:
                 ss_pixel_w=int(self.page.evaluate("window.innerWidth")),
                 ss_pixel_h=int(self.page.evaluate("window.innerHeight")),
                 css_scale=self.page.evaluate("window.devicePixelRatio"),
-                doc_width=int(self.page.evaluate("document.documentElement.clientWidth")),
-                doc_height=int(self.page.evaluate("document.documentElement.clientHeight"))
+                doc_width=int(self.page.evaluate("document.body.scrollWidth")),
+                doc_height=int(self.page.evaluate("document.body.scrollHeight"))
             )
         except Exception as e:
             print(f"⚠️ Error getting page info: {e}")

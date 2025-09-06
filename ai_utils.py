@@ -1,11 +1,9 @@
 from typing import Any, Optional, Tuple, Type, Union
 from google import genai
 from openai import OpenAI
-import os
 
 from pydantic import BaseModel
 
-from bot_utils import dprint
 client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
 client_gpt = OpenAI(api_key="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")
 
@@ -119,7 +117,7 @@ def generate_text_gpt_with_cost(
         except Exception:
             output_text = ""
 
-    dprint(f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {_get(usage, 'total_tokens')}")
+    print(f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {_get(usage, 'total_tokens')}")
 
     # Return the text AND the cost, plus raw usage for transparency
     return output_text, cost_usd, {
@@ -266,7 +264,7 @@ def generate_model_gpt_with_cost(
         else:
             parsed = text
 
-    dprint(f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {_get(usage, 'total_tokens')}")
+    print(f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {_get(usage, 'total_tokens')}")
 
     return parsed, cost_usd, {
         "model": model,

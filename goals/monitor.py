@@ -105,6 +105,72 @@ class GoalMonitor:
                         except Exception as e:
                             print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
         
+        elif interaction_type == InteractionType.PRESS:
+            keys_to_press = kwargs.get('keys_to_press')
+            if keys_to_press:
+                # Create planned interaction data
+                planned_interaction_data = {
+                    'interaction_type': interaction_type,
+                    'keys_to_press': keys_to_press,
+                    **kwargs
+                }
+                
+                # Evaluate goals that want BEFORE or BOTH timing
+                for goal in self.active_goals:
+                    if goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                        try:
+                            # Create context with planned interaction data
+                            context = self._build_goal_context()
+                            context.planned_interaction = planned_interaction_data
+                            
+                            # Evaluate the goal
+                            result = goal.evaluate(context)
+                            pre_interaction_results[str(goal)] = result
+                            goal._last_evaluation = result
+                            print(f"[GoalMonitor] Pre-interaction evaluation: {goal} -> {result.status}")
+                            
+                            # If goal is achieved before interaction, note it
+                            if result.status == GoalStatus.ACHIEVED:
+                                print(f"[GoalMonitor] Goal achieved before interaction: {goal}")
+                                
+                        except Exception as e:
+                            print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
+        
+        elif interaction_type == InteractionType.SCROLL:
+            target_x = kwargs.get('target_x')
+            target_y = kwargs.get('target_y')
+            scroll_direction = kwargs.get('scroll_direction')
+            if target_x is not None and target_y is not None and scroll_direction:
+                # Create planned interaction data
+                planned_interaction_data = {
+                    'interaction_type': interaction_type,
+                    'target_x': target_x,
+                    'target_y': target_y,
+                    'scroll_direction': scroll_direction,
+                    **kwargs
+                }
+                
+                # Evaluate goals that want BEFORE or BOTH timing
+                for goal in self.active_goals:
+                    if goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                        try:
+                            # Create context with planned interaction data
+                            context = self._build_goal_context()
+                            context.planned_interaction = planned_interaction_data
+                            
+                            # Evaluate the goal
+                            result = goal.evaluate(context)
+                            pre_interaction_results[str(goal)] = result
+                            goal._last_evaluation = result
+                            print(f"[GoalMonitor] Pre-interaction evaluation: {goal} -> {result.status}")
+                            
+                            # If goal is achieved before interaction, note it
+                            if result.status == GoalStatus.ACHIEVED:
+                                print(f"[GoalMonitor] Goal achieved before interaction: {goal}")
+                                
+                        except Exception as e:
+                            print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
+        
         return pre_interaction_results
     
     def check_for_retry_requests(self) -> List[BaseGoal]:
@@ -143,6 +209,11 @@ class GoalMonitor:
             coordinates=kwargs.get('coordinates'),
             target_element_info=kwargs.get('target_element_info'),
             text_input=kwargs.get('text_input'),
+            keys_pressed=kwargs.get('keys_pressed'),
+            scroll_direction=kwargs.get('scroll_direction'),
+            scroll_axis=kwargs.get('scroll_axis'),
+            target_x=kwargs.get('target_x'),
+            target_y=kwargs.get('target_y'),
             before_state=before_state,
             success=kwargs.get('success', True),
             error_message=kwargs.get('error_message')

@@ -15,6 +15,8 @@ class ActionType(str, Enum):
     TYPE = "type"
     SCROLL = "scroll"
     WAIT = "wait"
+    PRESS = "press"
+    STOP = "stop"
     HANDLE_SELECT = "handle_select"
     HANDLE_UPLOAD = "handle_upload"
     HANDLE_DATETIME = "handle_datetime"
@@ -31,6 +33,7 @@ class PageSection(str, Enum):
 
 class DetectedElement(BaseModel):
     """A UI element detected in the screenshot"""
+    element_label: Optional[str] = Field(default=None, description="The label of the element")
     description: str = Field(description="What this element is (e.g., 'Submit button', 'Email input')")
     element_type: str = Field(description="Type: button, input, link, text, select, upload, date, etc.")
     is_clickable: bool = Field(description="Can this element be clicked?")
@@ -56,6 +59,7 @@ class ActionStep(BaseModel):
     text_to_type: Optional[str] = Field(default=None, description="Text to type (for TYPE action)")
     wait_time_ms: Optional[int] = Field(default=500, description="Time to wait in milliseconds (for WAIT action)")
     scroll_direction: Optional[str] = Field(default="down", description="Scroll direction: up/down")
+    keys_to_press: Optional[str] = Field(default=None, description="Keys to press (for PRESS action, e.g., 'enter', 'ctrl+c', 'tab')")
     select_option_text: Optional[str] = Field(default=None, description="Text of option to select (for HANDLE_SELECT)")
     datetime_value: Optional[str] = Field(default=None, description="Date/time value to set (for HANDLE_DATETIME)")
 

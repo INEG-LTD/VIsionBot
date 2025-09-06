@@ -7,7 +7,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 from playwright.sync_api import Page
 from pydantic import BaseModel, Field
@@ -30,6 +30,7 @@ class InteractionType(str, Enum):
     CLICK = "click"
     TYPE = "type"
     SCROLL = "scroll"
+    PRESS = "press"
     NAVIGATION = "navigation"
     PAGE_LOAD = "page_load"
     ELEMENT_APPEAR = "element_appear"
@@ -72,6 +73,11 @@ class Interaction:
     coordinates: Optional[tuple[int, int]] = None
     target_element_info: Optional[Dict[str, Any]] = None
     text_input: Optional[str] = None
+    keys_pressed: Optional[str] = None
+    scroll_direction: Optional[str] = None
+    scroll_axis: Optional[str] = None
+    target_x: Optional[int] = None
+    target_y: Optional[int] = None
     before_state: Optional[BrowserState] = None
     after_state: Optional[BrowserState] = None
     success: bool = True
@@ -122,7 +128,7 @@ class BaseGoal(ABC):
     # Subclasses should override this to specify when they want to be evaluated
     EVALUATION_TIMING: EvaluationTiming = EvaluationTiming.AFTER
     
-    def __init__(self, description: str, max_retries: int = 3, **kwargs):
+    def __init__(self, description: str, max_retries: int = 3, needs_detection: bool = True, **kwargs):
         self.description = description
         self.created_at = time.time()
         self.kwargs = kwargs
@@ -131,6 +137,8 @@ class BaseGoal(ABC):
         self.max_retries = max_retries
         self.retry_count = 0
         self.retry_requested = False
+        self.retry_reason = ""
+        self.needs_detection = needs_detection
     
     @abstractmethod
     def evaluate(self, context: GoalContext) -> GoalResult:
@@ -228,12 +236,14 @@ class BaseGoal(ABC):
         
         self.retry_count += 1
         self.retry_requested = True
+        self.retry_reason = reason
         print(f"[{self.__class__.__name__}] Retry requested (attempt {self.retry_count}/{self.max_retries}): {reason}")
         return True
     
     def reset_retry_state(self) -> None:
         """Reset retry state (called after successful retry)"""
         self.retry_requested = False
+        self.retry_reason = ""
         print(f"[{self.__class__.__name__}] Retry state reset")
     
     def can_retry(self) -> bool:
@@ -351,3 +361,176 @@ class BaseGoal(ABC):
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}('{self.description}')"
+
+
+# =============================================================================
+# Conditional Goal System
+# =============================================================================
+
+class ConditionType(str, Enum):
+    """Types of conditions that can be evaluated"""
+    ENVIRONMENT_STATE = "environment_state"    # Test page state, elements, etc.
+    COMPUTATIONAL = "computational"            # Mathematical, date/time, logic
+    USER_DEFINED = "user_defined"             # Custom conditions defined by user
+
+
+@dataclass
+class Condition:
+    """Represents a condition to be evaluated"""
+    condition_type: ConditionType
+    description: str
+    evaluator: Callable[[GoalContext], bool]
+    confidence_threshold: float = 0.8
+
+
+class ConditionalGoal(BaseGoal):
+    """
+    Abstract base class for goals that evaluate conditions and run different sub-goals.
+    
+    ConditionalGoals can evaluate various types of conditions and execute different
+    sub-goals based on the result. This allows for complex branching logic in goal execution.
+    """
+    
+    def __init__(self, description: str, condition: Condition, 
+                 success_goal: BaseGoal, fail_goal: BaseGoal, 
+                 max_retries: int = 3, **kwargs):
+        super().__init__(description, max_retries, **kwargs)
+        self.condition = condition
+        self.success_goal = success_goal
+        self.fail_goal = fail_goal
+        self._last_condition_result: Optional[bool] = None
+        self._current_sub_goal: Optional[BaseGoal] = None
+    
+    def evaluate(self, context: GoalContext) -> GoalResult:
+        """
+        Evaluate the condition once and then delegate to the appropriate sub-goal.
+        """
+        try:
+            # Evaluate the condition once
+            condition_result = self.condition.evaluator(context)
+            self._last_condition_result = condition_result
+            
+            print("🔍 DEBUG: ConditionalGoal evaluation:")
+            print(f"   📋 Condition: {self.condition.description}")
+            print(f"   🎯 Condition result: {condition_result}")
+            
+            # Determine which sub-goal to use
+            active_goal = self.success_goal if condition_result else self.fail_goal
+            self._current_sub_goal = active_goal
+            
+            print(f"   🎯 Selected sub-goal: {active_goal.__class__.__name__} - '{active_goal.description}'")
+            
+            # If the sub-goal is achieved, the conditional goal is also achieved
+            return GoalResult(
+                status=GoalStatus.ACHIEVED,
+                confidence=1,
+                reasoning=f"Conditional goal completed: {self.condition.description} → {active_goal.description}",
+                evidence={
+                    "condition_type": self.condition.condition_type.value,
+                    "condition_result": condition_result,
+                    "active_goal": active_goal.description,
+                }
+            )
+            
+        except Exception as e:
+            return GoalResult(
+                status=GoalStatus.FAILED,
+                confidence=0.0,
+                reasoning=f"Error evaluating conditional goal: {str(e)}",
+                evidence={"error": str(e), "condition_type": self.condition.condition_type.value}
+            )
+    
+    def get_description(self, context: GoalContext) -> str:
+        """Generate description including condition and sub-goal status"""
+        condition_status = "TRUE" if self._last_condition_result else "FALSE" if self._last_condition_result is not None else "UNEVALUATED"
+        
+        base_desc = f"""
+Goal Type: Conditional Goal
+Condition: {self.condition.description}
+Condition Type: {self.condition.condition_type.value}
+Condition Status: {condition_status}
+"""
+        
+        if self._current_sub_goal:
+            sub_desc = self._current_sub_goal.get_description(context)
+            base_desc += f"\nActive Sub-Goal:\n{sub_desc}"
+        else:
+            base_desc += "\nSub-Goals:\n"
+            base_desc += f"Success Goal: {self.success_goal.description}\n"
+            base_desc += f"Fail Goal: {self.fail_goal.description}"
+        
+        return base_desc.strip()
+    
+    def start_monitoring(self) -> None:
+        """Start monitoring both sub-goals"""
+        super().start_monitoring()
+        self.success_goal.start_monitoring()
+        self.fail_goal.start_monitoring()
+    
+    def stop_monitoring(self) -> None:
+        """Stop monitoring both sub-goals"""
+        super().stop_monitoring()
+        self.success_goal.stop_monitoring()
+        self.fail_goal.stop_monitoring()
+    
+    def on_interaction(self, interaction: Interaction) -> None:
+        """Forward interactions to both sub-goals"""
+        super().on_interaction(interaction)
+        self.success_goal.on_interaction(interaction)
+        self.fail_goal.on_interaction(interaction)
+    
+    def on_state_change(self, old_state: BrowserState, new_state: BrowserState) -> None:
+        """Forward state changes to both sub-goals"""
+        super().on_state_change(old_state, new_state)
+        self.success_goal.on_state_change(old_state, new_state)
+        self.fail_goal.on_state_change(old_state, new_state)
+    
+    @property
+    def current_sub_goal(self) -> Optional[BaseGoal]:
+        """Get the currently active sub-goal"""
+        return self._current_sub_goal
+    
+    @property
+    def last_condition_result(self) -> Optional[bool]:
+        """Get the result of the last condition evaluation"""
+        return self._last_condition_result
+
+
+
+
+
+# =============================================================================
+# Condition Factory Functions
+# =============================================================================
+
+def create_environment_condition(description: str, evaluator: Callable[[GoalContext], bool], 
+                                confidence_threshold: float = 0.8) -> Condition:
+    """Create an environment state condition"""
+    return Condition(
+        condition_type=ConditionType.ENVIRONMENT_STATE,
+        description=description,
+        evaluator=evaluator,
+        confidence_threshold=confidence_threshold
+    )
+
+
+def create_computational_condition(description: str, evaluator: Callable[[GoalContext], bool], 
+                                  confidence_threshold: float = 0.8) -> Condition:
+    """Create a computational condition"""
+    return Condition(
+        condition_type=ConditionType.COMPUTATIONAL,
+        description=description,
+        evaluator=evaluator,
+        confidence_threshold=confidence_threshold
+    )
+
+
+def create_user_defined_condition(description: str, evaluator: Callable[[GoalContext], bool], 
+                                 confidence_threshold: float = 0.8) -> Condition:
+    """Create a user-defined condition"""
+    return Condition(
+        condition_type=ConditionType.USER_DEFINED,
+        description=description,
+        evaluator=evaluator,
+        confidence_threshold=confidence_threshold
+    )

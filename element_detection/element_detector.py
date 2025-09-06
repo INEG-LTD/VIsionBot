@@ -4,8 +4,7 @@ Detects UI elements using AI vision models with numbered overlays.
 from typing import List, Dict, Any, Optional
 
 from ai_utils import generate_model
-from models import PageElements, DetectedElement, PageInfo
-from vision_utils import clamp_coordinate
+from models import PageElements, PageInfo
 
 
 class ElementDetector:
@@ -47,9 +46,11 @@ class ElementDetector:
         1. Look at the screenshot and identify which numbered elements are most relevant to achieving the user's goal
         2. Focus on elements that directly help accomplish the goal
         3. Return information about the relevant elements using their exact overlay numbers
+        4. Return at least 3 candidates for the user to choose from
 
         ## Output Schema
         Return a JSON list where each object represents a relevant element with:
+        - "element_label": The label of the element
         - "element_type": Type of UI element ("button", "input", "link", "select", etc.)
         - "description": What this element does in relation to the goal
         - "box_2d": Use the EXACT coordinates I provide below for the overlay number you select
@@ -105,31 +106,3 @@ class ElementDetector:
         except Exception as e:
             print(f"❌ Error detecting elements with overlays: {e}")
             return None
-    
-    def validate_element_coordinates(self, elements: PageElements, page_info: PageInfo) -> PageElements:
-        """Validate and clamp all coordinates in the detected elements"""
-        try:
-            for element in elements.elements:
-                if element.box_2d:
-                    # box_2d is already validated by the pydantic validator
-                    # but we can do additional checks here if needed
-                    y_min, x_min, y_max, x_max = element.box_2d
-                    
-                    # Ensure coordinates are within 0-1000 range (Gemini format)
-                    y_min = clamp_coordinate(y_min, 0, 1000)
-                    x_min = clamp_coordinate(x_min, 0, 1000)
-                    y_max = clamp_coordinate(y_max, 0, 1000)
-                    x_max = clamp_coordinate(x_max, 0, 1000)
-                    
-                    # Ensure min < max
-                    if y_min >= y_max:
-                        y_max = y_min + 1
-                    if x_min >= x_max:
-                        x_max = x_min + 1
-                        
-                    element.box_2d = [y_min, x_min, y_max, x_max]
-            
-        except Exception as e:
-            print(f"⚠️ Error validating element coordinates: {e}")
-        
-        return elements

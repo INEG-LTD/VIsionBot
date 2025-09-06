@@ -5,9 +5,11 @@ import time
 from typing import Tuple, Optional
 
 from playwright.sync_api import Page
-from models import ActionStep, ActionType, PageElements, PageInfo, DetectedElement
+from models import ActionStep, ActionType, PageElements, PageInfo
 from handlers import DateTimeHandler, SelectHandler, UploadHandler
 from utils import SelectorUtils
+from unittest.mock import Mock
+from utils.page_utils import PageUtils
 from vision_utils import validate_and_clamp_coordinates, get_gemini_box_2d_center_pixels
 from goals import GoalMonitor, InteractionType, GoalStatus
 
@@ -15,9 +17,10 @@ from goals import GoalMonitor, InteractionType, GoalStatus
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor):
+    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None):
         self.page = page
         self.goal_monitor = goal_monitor
+        self.page_utils = page_utils
         
         # Initialize specialized handlers
         self.datetime_handler = DateTimeHandler(page, goal_monitor)
@@ -42,6 +45,8 @@ class ActionExecutor:
                     step_success = self._execute_scroll(step)
                 elif step.action == ActionType.WAIT:
                     step_success = self._execute_wait(step)
+                elif step.action == ActionType.PRESS:
+                    step_success = self._execute_press(step)
                 elif step.action == ActionType.HANDLE_SELECT:
                     self.select_handler.handle_select_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
@@ -51,6 +56,8 @@ class ActionExecutor:
                 elif step.action == ActionType.HANDLE_DATETIME:
                     self.datetime_handler.handle_datetime_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
+                elif step.action == ActionType.STOP:
+                    step_success = self._execute_stop(step)
                 else:
                     print(f"⚠️ Unknown action type: {step.action}")
                     continue
@@ -77,7 +84,7 @@ class ActionExecutor:
             raise ValueError("Could not determine click coordinates")
         
         # Validate and clamp coordinates to viewport
-        x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
+        # x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
         
         # Record planned interaction with goal monitor and get pre-interaction evaluations
         pre_evaluations = self.goal_monitor.record_planned_interaction(
@@ -139,7 +146,7 @@ class ActionExecutor:
         x, y = self._get_click_coordinates(step, elements, page_info)
         if x is not None and y is not None:
             # Validate and clamp coordinates to viewport
-            x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
+            # x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
             self.page.mouse.click(x, y)
             time.sleep(0.2)
         
@@ -167,17 +174,157 @@ class ActionExecutor:
         
         return success
 
+    def _get_interpreted_scroll_position(self, direction: str):
+        """Get the interpreted scroll target position from active ScrollGoal"""
+        try:
+            # Find active ScrollGoal
+            from goals import ScrollGoal
+            scroll_goals = [goal for goal in self.goal_monitor.active_goals if isinstance(goal, ScrollGoal)]
+            
+            if not scroll_goals:
+                return None
+            
+            # Use the first ScrollGoal (there should typically be only one)
+            scroll_goal = scroll_goals[0]
+            
+            # Create a basic context for interpretation
+            from goals.base import GoalContext, BrowserState
+            if self.page_utils:
+                page_info = self.page_utils.get_page_info()
+            else:
+                # Fallback if page_utils is not available
+                page_info = Mock()
+                page_info.doc_height = 2000
+                page_info.doc_width = 1200
+                page_info.height = 800
+                page_info.width = 1200
+                page_info.scroll_x = 0
+                page_info.scroll_y = 0
+            
+            # Get current scroll position
+            current_scroll_x = self.page.evaluate("window.pageXOffset || window.scrollX") or 0
+            current_scroll_y = self.page.evaluate("window.pageYOffset || window.scrollY") or 0
+            
+            # Create browser state
+            browser_state = BrowserState(
+                timestamp=0,
+                url=page_info.url,
+                title=page_info.title,
+                page_height=page_info.doc_height,
+                page_width=page_info.doc_width,
+                scroll_x=current_scroll_x,
+                scroll_y=current_scroll_y
+            )
+            
+            print(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
+            
+            # Create goal context
+            context = GoalContext(
+                initial_state=browser_state,
+                current_state=browser_state,
+            )
+            
+            # Get interpreted scroll from ScrollGoal
+            interpretation = scroll_goal.interpret_request(context)
+            if interpretation:
+                print(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
+                return interpretation
+            
+            return None
+            
+        except Exception as e:
+            print(f"[ActionExecutor] Error getting interpreted scroll position: {e}")
+            return None
+
     def _execute_scroll(self, step: ActionStep) -> bool:
         """Execute a scroll action"""
         direction = step.scroll_direction or "down"
-        scroll_amount = 300
+        axis = "vertical"  # Default to vertical
         
-        if direction == "up":
-            scroll_amount = -scroll_amount
+        # Get current scroll position
+        current_scroll_x = self.page.evaluate("window.pageXOffset || window.scrollX") or 0
+        current_scroll_y = self.page.evaluate("window.pageYOffset || window.scrollY") or 0
         
-        print(f"  Scrolling {direction}")
-        self.page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-        return True
+        # Try to get the interpreted scroll position from ScrollGoal
+        interpreted_scroll = self._get_interpreted_scroll_position(direction)
+        if interpreted_scroll:
+            target_x = interpreted_scroll.target_x
+            target_y = interpreted_scroll.target_y
+            axis = interpreted_scroll.axis
+            direction = interpreted_scroll.direction
+            print(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+        else:
+            # Fallback to default scroll behavior
+            if direction == "down":
+                target_x = current_scroll_x
+                target_y = min(current_scroll_y + 300, 9999)  # Default 300px down
+            elif direction == "up":
+                target_x = current_scroll_x
+                target_y = max(current_scroll_y - 300, 0)  # Default 300px up
+            elif direction == "right":
+                target_x = min(current_scroll_x + 300, 9999)  # Default 300px right
+                target_y = current_scroll_y
+                axis = "horizontal"
+            else:  # left
+                target_x = max(current_scroll_x - 300, 0)  # Default 300px left
+                target_y = current_scroll_y
+                axis = "horizontal"
+            print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+        
+        # Record planned interaction with goal monitor and get pre-interaction evaluations
+        pre_evaluations = self.goal_monitor.record_planned_interaction(
+            InteractionType.SCROLL,
+            target_x=target_x,
+            target_y=target_y,
+            scroll_direction=direction,
+            scroll_axis=axis
+        )
+        
+        # Check for retry requests from goals immediately after evaluation
+        retry_goals = self.goal_monitor.check_for_retry_requests()
+        if retry_goals:
+            print("🔄 Goals have requested retry - aborting current plan execution")
+            for goal in retry_goals:
+                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
+            # Return False to indicate plan should be regenerated
+            return False
+        
+        # Check if any goals were achieved before the scroll
+        if any(result.status == GoalStatus.ACHIEVED for result in pre_evaluations.values()):
+            print("🎯 Goal achieved before scroll! Proceeding with scroll to complete the interaction.")
+            for goal_name, result in pre_evaluations.items():
+                if result.status == GoalStatus.ACHIEVED:
+                    print(f"   ✅ {goal_name}: {result.reasoning}")
+        elif any(result.status == GoalStatus.FAILED for result in pre_evaluations.values()):
+            print("⚠️ Goal evaluation suggests this scroll may not achieve the target:")
+            for goal_name, result in pre_evaluations.items():
+                if result.status == GoalStatus.FAILED:
+                    print(f"   ❌ {goal_name}: {result.reasoning}")
+            # Continue with scroll anyway - the user's plan should be executed
+        
+        print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
+        
+        try:
+            self.page.evaluate(f"window.scrollTo({target_x}, {target_y})")
+            success = True
+            error_msg = None
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            print(f"  ❌ Scroll failed: {e}")
+        
+        # Record actual interaction with goal monitor
+        self.goal_monitor.record_interaction(
+            InteractionType.SCROLL,
+            target_x=target_x,
+            target_y=target_y,
+            scroll_direction=direction,
+            scroll_axis=axis,
+            success=success,
+            error_message=error_msg
+        )
+        
+        return success
 
     def _execute_wait(self, step: ActionStep) -> bool:
         """Execute a wait action"""
@@ -185,6 +332,169 @@ class ActionExecutor:
         print(f"  Waiting {wait_time}ms")
         time.sleep(wait_time / 1000)
         return True
+
+    def _execute_press(self, step: ActionStep) -> bool:
+        """Execute a key press action"""
+        if not step.keys_to_press:
+            print("⚠️ No keys specified for PRESS action")
+            return False
+        
+        print(f"  Pressing keys: {step.keys_to_press}")
+        
+        # Record planned interaction with goal monitor
+        pre_evaluations = self.goal_monitor.record_planned_interaction(
+            InteractionType.PRESS,
+            keys_to_press=step.keys_to_press
+        )
+        
+        # Check for retry requests from goals immediately after evaluation
+        retry_goals = self.goal_monitor.check_for_retry_requests()
+        if retry_goals:
+            print("🔄 Goals have requested retry - aborting current plan execution")
+            for goal in retry_goals:
+                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
+            return False
+        
+        # Check if any goals were achieved before the press
+        if any(result.status == GoalStatus.ACHIEVED for result in pre_evaluations.values()):
+            print("🎯 Goal achieved before key press! Proceeding with press to complete the interaction.")
+            for goal_name, result in pre_evaluations.items():
+                if result.status == GoalStatus.ACHIEVED:
+                    print(f"   ✅ {goal_name}: {result.reasoning}")
+        elif any(result.status == GoalStatus.FAILED for result in pre_evaluations.values()):
+            print("⚠️ Goal evaluation suggests this key press may not achieve the target:")
+            for goal_name, result in pre_evaluations.items():
+                if result.status == GoalStatus.FAILED:
+                    print(f"   ❌ {goal_name}: {result.reasoning}")
+        
+        try:
+            # Parse and execute the key combination
+            self._parse_and_press_keys(step.keys_to_press)
+            success = True
+            error_msg = None
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            print(f"  ❌ Key press failed: {e}")
+        
+        # Record actual interaction with goal monitor
+        self.goal_monitor.record_interaction(
+            InteractionType.PRESS,
+            keys_pressed=step.keys_to_press,
+            success=success,
+            error_message=error_msg
+        )
+        
+        return success
+    
+    def _parse_and_press_keys(self, keys_string: str) -> None:
+        """Parse a key string and execute the key press(es)"""
+        # Normalize the key string
+        keys_string = keys_string.lower().strip()
+        
+        # Handle common key combinations
+        if '+' in keys_string:
+            # Handle key combinations like "ctrl+c", "cmd+enter", etc.
+            parts = keys_string.split('+')
+            modifiers = parts[:-1]
+            main_key = parts[-1]
+            
+            # Map common modifier names
+            modifier_map = {
+                'ctrl': 'Control',
+                'control': 'Control',
+                'cmd': 'Meta',
+                'command': 'Meta',
+                'meta': 'Meta',
+                'alt': 'Alt',
+                'option': 'Alt',
+                'shift': 'Shift'
+            }
+            
+            # Map common key names
+            key_map = {
+                'enter': 'Enter',
+                'return': 'Enter',
+                'tab': 'Tab',
+                'space': ' ',
+                'esc': 'Escape',
+                'escape': 'Escape',
+                'backspace': 'Backspace',
+                'delete': 'Delete',
+                'del': 'Delete',
+                'up': 'ArrowUp',
+                'down': 'ArrowDown',
+                'left': 'ArrowLeft',
+                'right': 'ArrowRight',
+                'home': 'Home',
+                'end': 'End',
+                'pageup': 'PageUp',
+                'pagedown': 'PageDown',
+                'f1': 'F1',
+                'f2': 'F2',
+                'f3': 'F3',
+                'f4': 'F4',
+                'f5': 'F5',
+                'f6': 'F6',
+                'f7': 'F7',
+                'f8': 'F8',
+                'f9': 'F9',
+                'f10': 'F10',
+                'f11': 'F11',
+                'f12': 'F12'
+            }
+            
+            # Convert modifiers
+            playwright_modifiers = []
+            for mod in modifiers:
+                playwright_mod = modifier_map.get(mod.strip())
+                if playwright_mod:
+                    playwright_modifiers.append(playwright_mod)
+            
+            # Convert main key
+            playwright_key = key_map.get(main_key.strip(), main_key.strip())
+            
+            # Execute the key combination
+            if playwright_modifiers:
+                self.page.keyboard.press(f"{'+'.join(playwright_modifiers)}+{playwright_key}")
+            else:
+                self.page.keyboard.press(playwright_key)
+        else:
+            # Handle single keys
+            key_map = {
+                'enter': 'Enter',
+                'return': 'Enter',
+                'tab': 'Tab',
+                'space': ' ',
+                'esc': 'Escape',
+                'escape': 'Escape',
+                'backspace': 'Backspace',
+                'delete': 'Delete',
+                'del': 'Delete',
+                'up': 'ArrowUp',
+                'down': 'ArrowDown',
+                'left': 'ArrowLeft',
+                'right': 'ArrowRight',
+                'home': 'Home',
+                'end': 'End',
+                'pageup': 'PageUp',
+                'pagedown': 'PageDown',
+                'f1': 'F1',
+                'f2': 'F2',
+                'f3': 'F3',
+                'f4': 'F4',
+                'f5': 'F5',
+                'f6': 'F6',
+                'f7': 'F7',
+                'f8': 'F8',
+                'f9': 'F9',
+                'f10': 'F10',
+                'f11': 'F11',
+                'f12': 'F12'
+            }
+            
+            playwright_key = key_map.get(keys_string, keys_string)
+            self.page.keyboard.press(playwright_key)
 
     def _get_click_coordinates(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> Tuple[Optional[int], Optional[int]]:
         """Get the coordinates to click based on the step"""
@@ -205,3 +515,8 @@ class ActionExecutor:
                         return center_x, center_y
         
         return None, None
+
+    def _execute_stop(self, step: ActionStep) -> bool:
+        """Execute a stop action - returns True to indicate successful stop"""
+        print("🛑 STOP action executed - terminating automation")
+        return True

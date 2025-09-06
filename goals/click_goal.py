@@ -1,7 +1,7 @@
 """
 Click Goal - Monitors click interactions to verify correct elements are clicked.
 """
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,11 @@ class ClickGoal(BaseGoal):
         self.click_attempted = False
         self.click_successful = False
         self.element_analyzer: Optional[ElementAnalyzer] = None
+        
+        # Track failed attempts to avoid retrying the same coordinates/elements
+        self.failed_coordinates: List[Tuple[int, int]] = []
+        self.failed_element_descriptions: List[str] = []
+        self.failed_reasons: List[str] = []
     
     def on_monitoring_start(self) -> None:
         """Initialize element analyzer when monitoring starts"""
@@ -47,6 +52,37 @@ class ClickGoal(BaseGoal):
     def set_element_analyzer(self, analyzer: ElementAnalyzer) -> None:
         """Set the element analyzer (called by goal monitor)"""
         self.element_analyzer = analyzer
+    
+    def record_failed_attempt(self, coordinates: Tuple[int, int], element_description: str, reason: str) -> None:
+        """Record a failed attempt to avoid retrying the same coordinates/elements"""
+        if coordinates not in self.failed_coordinates:
+            self.failed_coordinates.append(coordinates)
+        if element_description and element_description not in self.failed_element_descriptions:
+            self.failed_element_descriptions.append(element_description)
+        if reason not in self.failed_reasons:
+            self.failed_reasons.append(reason)
+        print(f"[ClickGoal] Recorded failed attempt: coords={coordinates}, element='{element_description}', reason='{reason}'")
+    
+    def get_retry_context(self) -> str:
+        """Get context about failed attempts for retry planning"""
+        if not self.failed_coordinates and not self.failed_element_descriptions and not self.failed_reasons:
+            return ""
+        
+        context_parts = []
+        
+        if self.failed_coordinates:
+            coords_str = ", ".join([f"({x}, {y})" for x, y in self.failed_coordinates])
+            context_parts.append(f"Previously failed coordinates: {coords_str}")
+        
+        if self.failed_element_descriptions:
+            elements_str = ", ".join([f"'{desc}'" for desc in self.failed_element_descriptions])
+            context_parts.append(f"Previously failed elements: {elements_str}")
+        
+        if self.failed_reasons:
+            reasons_str = ", ".join([f"'{reason}'" for reason in self.failed_reasons])
+            context_parts.append(f"Previous failure reasons: {reasons_str}")
+        
+        return " | ".join(context_parts)
     
     def record_planned_click(self, x: int, y: int, element_info: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -101,11 +137,89 @@ class ClickGoal(BaseGoal):
             self.actual_element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
         
         if not self.actual_element_info:
+            # Record this failed attempt
+            self.record_failed_attempt(self.actual_click_coordinates, "", "Could not analyze clicked element")
+            
+            # Request retry if we haven't exceeded max retries
+            if self.can_retry():
+                retry_reason = f"Could not analyze clicked element at {self.actual_click_coordinates} - element analysis failed"
+                if self.request_retry(retry_reason):
+                    return GoalResult(
+                        status=GoalStatus.PENDING,
+                        confidence=0.3,
+                        reasoning="Could not analyze the clicked element, requesting retry",
+                        evidence={
+                            "coordinates": self.actual_click_coordinates,
+                            "retry_requested": True,
+                            "retry_count": self.retry_count,
+                            "retry_context": self.get_retry_context()
+                        },
+                        next_actions=["Retry plan generation to find valid clickable element"]
+                    )
+            
+            # Max retries exceeded, fail the goal
             return GoalResult(
-                status=GoalStatus.UNKNOWN,
+                status=GoalStatus.FAILED,
                 confidence=0.3,
-                reasoning="Could not analyze the clicked element",
-                evidence={"coordinates": self.actual_click_coordinates}
+                reasoning="Could not analyze the clicked element and max retries exceeded",
+                evidence={
+                    "coordinates": self.actual_click_coordinates,
+                    "retry_count": self.retry_count,
+                    "max_retries_exceeded": True
+                }
+            )
+        
+        # Check if the clicked element was actually clickable
+        is_clickable = self.actual_element_info.get('isClickable', False)
+        if not is_clickable:
+            # Get element description for tracking
+            element_description = ""
+            try:
+                if self.element_analyzer and context.current_state.screenshot:
+                    element_description = self.element_analyzer.get_element_description_with_ai(
+                        self.actual_element_info,
+                        context.current_state.screenshot,
+                        *self.actual_click_coordinates
+                    )
+                else:
+                    element_description = self._create_fallback_description(self.actual_element_info)
+            except Exception:
+                element_description = self._create_fallback_description(self.actual_element_info)
+            
+            # Record this failed attempt
+            self.record_failed_attempt(self.actual_click_coordinates, element_description, "Clicked element was not clickable")
+            
+            # Request retry if we haven't exceeded max retries
+            if self.can_retry():
+                retry_reason = f"Clicked element at {self.actual_click_coordinates} was not clickable - need to find clickable element"
+                if self.request_retry(retry_reason):
+                    return GoalResult(
+                        status=GoalStatus.PENDING,
+                        confidence=0.9,
+                        reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable, requesting retry",
+                        evidence={
+                            "coordinates": self.actual_click_coordinates,
+                            "element_info": self.actual_element_info,
+                            "is_clickable": is_clickable,
+                            "retry_requested": True,
+                            "retry_count": self.retry_count,
+                            "retry_context": self.get_retry_context()
+                        },
+                        next_actions=["Retry plan generation to find clickable element"]
+                    )
+            
+            # Max retries exceeded, fail the goal
+            return GoalResult(
+                status=GoalStatus.FAILED,
+                confidence=0.9,
+                reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable and max retries exceeded",
+                evidence={
+                    "coordinates": self.actual_click_coordinates,
+                    "element_info": self.actual_element_info,
+                    "is_clickable": is_clickable,
+                    "retry_count": self.retry_count,
+                    "max_retries_exceeded": True
+                }
             )
         
         # Get AI description of the clicked element
@@ -137,6 +251,9 @@ class ClickGoal(BaseGoal):
                     }
                 )
             else:
+                # Record this failed attempt
+                self.record_failed_attempt(self.actual_click_coordinates, element_description, f"Wrong element clicked: '{element_description}' instead of '{self.target_description}'")
+                
                 # Request retry if we haven't exceeded max retries
                 if self.can_retry():
                     retry_reason = f"Wrong element clicked: '{element_description}' instead of '{self.target_description}'"
@@ -152,7 +269,8 @@ class ClickGoal(BaseGoal):
                                 "element_info": self.actual_element_info,
                                 "match_reasoning": match_result["reasoning"],
                                 "retry_requested": True,
-                                "retry_count": self.retry_count
+                                "retry_count": self.retry_count,
+                                "retry_context": self.get_retry_context()
                             },
                             next_actions=["Retry plan generation to find correct element"]
                         )
@@ -208,13 +326,98 @@ class ClickGoal(BaseGoal):
         try:
             # Get element info at the click coordinates
             element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
+            print(f"[ClickGoal] Element info: {element_info}")
             
             if not element_info or element_info.get("error"):
                 print(f"[ClickGoal] Could not analyze element at ({x}, {y}) before click")
+                
+                # Record this failed attempt
+                error_msg = element_info.get("error") if element_info else "No element found"
+                self.record_failed_attempt((x, y), "", f"Could not analyze element: {error_msg}")
+                
+                # Request retry if we haven't exceeded max retries
+                if self.can_retry():
+                    retry_reason = f"Could not analyze element at ({x}, {y}) - coordinates may be invalid or element not found"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=0.2,
+                            reasoning=f"Could not analyze element at ({x}, {y}), requesting retry to find valid element",
+                            evidence={
+                                "coordinates": (x, y),
+                                "error": error_msg,
+                                "retry_requested": True,
+                                "retry_count": self.retry_count,
+                                "retry_context": self.get_retry_context()
+                            },
+                            next_actions=["Retry plan generation to find valid clickable element"]
+                        )
+                
+                # Max retries exceeded, fail the goal
                 return GoalResult(
-                    status=GoalStatus.UNKNOWN,
+                    status=GoalStatus.FAILED,
                     confidence=0.2,
-                    reasoning=f"Could not analyze element at ({x}, {y}) before click"
+                    reasoning=f"Could not analyze element at ({x}, {y}) and max retries exceeded",
+                    evidence={
+                        "coordinates": (x, y),
+                        "error": element_info.get("error") if element_info else "No element found",
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
+                    }
+                )
+            
+            # Check if element is clickable
+            is_clickable = element_info.get('isClickable', False)
+            if not is_clickable:
+                print(f"[ClickGoal] Element at ({x}, {y}) is not clickable")
+                
+                # Get element description for tracking
+                element_description = ""
+                screenshot = planned_interaction.get('screenshot')
+                if screenshot:
+                    try:
+                        element_description = self.element_analyzer.get_element_description_with_ai(
+                            element_info, screenshot, x, y
+                        )
+                    except Exception:
+                        element_description = self._create_fallback_description(element_info)
+                else:
+                    element_description = self._create_fallback_description(element_info)
+                
+                # Record this failed attempt
+                self.record_failed_attempt((x, y), element_description, "Element is not clickable")
+                
+                # Request retry if we haven't exceeded max retries
+                if self.can_retry():
+                    retry_reason = f"Element at ({x}, {y}) is not clickable - need to find a clickable element"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=0.9,
+                            reasoning=f"Element at ({x}, {y}) is not clickable, requesting retry to find clickable element",
+                            evidence={
+                                "coordinates": (x, y),
+                                "element_info": element_info,
+                                "is_clickable": is_clickable,
+                                "retry_requested": True,
+                                "retry_count": self.retry_count,
+                                "retry_context": self.get_retry_context()
+                            },
+                            next_actions=["Retry plan generation to find clickable element"]
+                        )
+                
+                # Max retries exceeded, fail the goal
+                return GoalResult(
+                    status=GoalStatus.FAILED,
+                    confidence=0.9,
+                    reasoning=f"Element at ({x}, {y}) is not clickable and max retries exceeded",
+                    evidence={
+                        "coordinates": (x, y),
+                        "element_info": element_info,
+                        "is_clickable": is_clickable,
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
+                    }
                 )
             
             # Get AI description of the element about to be clicked
@@ -251,6 +454,9 @@ class ClickGoal(BaseGoal):
             else:
                 print(f"[ClickGoal] About to click: '{element_description}' but target was '{self.target_description}'")
                 
+                # Record this failed attempt
+                self.record_failed_attempt((x, y), element_description, f"Wrong element: '{element_description}' instead of '{self.target_description}'")
+                
                 # Request retry if we haven't exceeded max retries
                 if self.can_retry():
                     retry_reason = f"Wrong element detected: '{element_description}' instead of '{self.target_description}'"
@@ -267,7 +473,8 @@ class ClickGoal(BaseGoal):
                                 "match_reasoning": match_result["reasoning"],
                                 "evaluation_timing": "pre_interaction",
                                 "retry_requested": True,
-                                "retry_count": self.retry_count
+                                "retry_count": self.retry_count,
+                                "retry_context": self.get_retry_context()
                             },
                             next_actions=["Retry plan generation to find correct element"]
                         )
@@ -419,5 +626,10 @@ class ClickGoal(BaseGoal):
             if self.planned_element_info:
                 element_desc = self._create_fallback_description(self.planned_element_info)
                 description_parts.append(f"Planned to click: {element_desc}")
+        
+        # Add retry context if available
+        retry_context = self.get_retry_context()
+        if retry_context:
+            description_parts.append(f"Retry context: {retry_context}")
         
         return "\n".join(description_parts)
