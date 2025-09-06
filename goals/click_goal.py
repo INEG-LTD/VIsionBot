@@ -324,6 +324,41 @@ class ClickGoal(BaseGoal):
             )
         
         try:
+            # If a specific target selector was provided, prefer analyzing that element
+            selector = planned_interaction.get('target_selector')
+            if selector and self.element_analyzer:
+                element_info = self.element_analyzer.analyze_element_by_selector(selector)
+                if element_info:
+                    print(f"[ClickGoal] Element info (by selector): {element_info}")
+                    if element_info.get('isClickable', False):
+                        # Describe and match target
+                        screenshot = planned_interaction.get('screenshot')
+                        if screenshot:
+                            print("[ClickGoal] Getting element description with AI")
+                            element_description = self.element_analyzer.get_element_description_with_ai(
+                                element_info, screenshot, x, y
+                            )
+                        else:
+                            element_description = self._create_fallback_description(element_info)
+                        print(f"[ClickGoal] About to click (by selector): '{element_description}'")
+                        match_result = self._evaluate_element_match(element_description, element_info, self.target_description)
+                        if match_result["is_match"]:
+                            return GoalResult(
+                                status=GoalStatus.ACHIEVED,
+                                confidence=match_result["confidence"],
+                                reasoning=f"About to click '{element_description}' which matches target '{self.target_description}'",
+                                evidence={
+                                    "target_element": element_description,
+                                    "expected_target": self.target_description,
+                                    "coordinates": (x, y),
+                                    "element_info": element_info,
+                                    "match_reasoning": match_result["reasoning"],
+                                    "evaluation_timing": "pre_interaction",
+                                    "target_selector": selector,
+                                }
+                            )
+                    # If not clickable by selector, fall back to coordinate analysis below
+            
             # Get element info at the click coordinates
             element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
             print(f"[ClickGoal] Element info: {element_info}")

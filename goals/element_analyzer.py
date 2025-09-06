@@ -42,8 +42,15 @@ class ElementAnalyzer:
                     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
                     if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) return null;
 
-                    const element = document.elementFromPoint(cx, cy);
+                    let element = document.elementFromPoint(cx, cy);
                     if (!element) return null;
+
+                    // Heuristic: prefer a clickable ancestor (anchors/buttons/etc.) for evaluation
+                    const clickableSelector = 'a,button,[role="link"],[role="button"],input,select,textarea';
+                    const clickableAncestor = element.closest ? element.closest(clickableSelector) : null;
+                    if (clickableAncestor) {
+                        element = clickableAncestor;
+                    }
 
                     const rect = element.getBoundingClientRect();
                     const style = getComputedStyle(element);
@@ -75,14 +82,18 @@ class ElementAnalyzer:
                     }
 
                     // Clickable heuristic (kept simple to match your shape)
-                    const isClickable =
-                        tagName === 'button' ||
-                        tagName === 'a' ||
-                        (tagName === 'input' && ['button','submit','checkbox','radio'].includes(type)) ||
-                        role === 'button' || role === 'link' ||
-                        style.cursor === 'pointer' ||
-                        typeof element.onclick === 'function' ||
-                        element.hasAttribute('tabindex');
+                    function isClickableEl(el, tg, rl, ty, st){
+                        if (!el) return false;
+                        if (tg === 'button' || tg === 'a') return true;
+                        if (tg === 'input' && ['button','submit','checkbox','radio'].includes(ty)) return true;
+                        if (rl === 'button' || rl === 'link') return true;
+                        if (st.cursor === 'pointer') return true;
+                        if (typeof el.onclick === 'function') return true;
+                        if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
+                        return false;
+                    }
+
+                    const isClickable = isClickableEl(element, tagName, role, type, style);
 
                     return {
                         tagName,
@@ -112,6 +123,57 @@ class ElementAnalyzer:
         except Exception as e:
             print(f"[ElementAnalyzer] Error in analyze_element_at_coordinates: {e}")
             return {"error": "Failed to analyze element"}
+
+    def analyze_element_by_selector(self, selector: str) -> dict:
+        """Analyze a specific element identified by a CSS selector.
+
+        Returns same shape as analyze_element_at_coordinates.
+        """
+        try:
+            return self.page.evaluate(
+                """(sel) => {
+                    const element = document.querySelector(sel);
+                    if (!element) return null;
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    const tagName = element.tagName.toLowerCase();
+                    const role = element.getAttribute('role') || '';
+                    const type = element.getAttribute('type') || '';
+                    const text = (element.textContent || '').trim();
+                    const innerText = element.innerText ? element.innerText.trim() : '';
+                    const attributes = {};
+                    for (const attr of element.attributes) {
+                        attributes[attr.name] = attr.value;
+                    }
+                    function isClickableEl(el, tg, rl, ty, st){
+                        if (!el) return false;
+                        if (tg === 'button' || tg === 'a') return true;
+                        if (tg === 'input' && ['button','submit','checkbox','radio'].includes(ty)) return true;
+                        if (rl === 'button' || rl === 'link') return true;
+                        if (st.cursor === 'pointer') return true;
+                        if (typeof el.onclick === 'function') return true;
+                        if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
+                        return false;
+                    }
+                    const isClickable = isClickableEl(element, tagName, role, type, style);
+                    return {
+                        tagName,
+                        elementType: role ? `${tagName}[role=${role}]` : (tagName === 'input' ? `${tagName}[${type || 'text'}]` : tagName),
+                        text,
+                        innerText,
+                        attributes,
+                        isClickable,
+                        bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                        style: { display: style.display, visibility: style.visibility, opacity: style.opacity, cursor: style.cursor },
+                        parentContext: element.parentElement ? (element.parentElement.textContent || '').trim().slice(0,200) : '',
+                        xpath: null
+                    };
+                }""",
+                selector,
+            ) or {}
+        except Exception as e:
+            print(f"[ElementAnalyzer] Error in analyze_element_by_selector: {e}")
+            return {"error": "Failed to analyze element by selector"}
 
     
     def get_element_description_with_ai(self, element_info: Dict[str, Any], screenshot: bytes, x: int, y: int) -> str:

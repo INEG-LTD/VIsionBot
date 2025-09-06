@@ -29,6 +29,8 @@ class OverlayManager:
             // Function to create a numbered overlay
             function createNumberedOverlay(element, index) {{
                 const rect = element.getBoundingClientRect();
+                // Tag the element so we can re-locate it later by overlay index
+                try {{ element.setAttribute('data-automation-overlay-index', String(index)); }} catch (e) {{}}
                 
                 // Create main border
                 const border = document.createElement('div');
@@ -87,7 +89,12 @@ class OverlayManager:
                     type: element.type || '',
                     textContent: element.textContent?.trim().substring(0, 100) || '',
                     className: element.className || '',
-                    id: element.id || ''
+                    id: element.id || '',
+                    placeholder: element.placeholder || '',
+                    role: element.getAttribute('role') || '',
+                    name: element.getAttribute('name') || '',
+                    ariaLabel: element.getAttribute('aria-label') || '',
+                    href: element.getAttribute('href') || ''
                 }};
             }}
             
@@ -172,7 +179,12 @@ class OverlayManager:
                 }}
                 
                 const rect = element.getBoundingClientRect();
+                // Skip if too small
                 if (rect.width < 10 || rect.height < 10) {{
+                    return;
+                }}
+                // Skip if element is completely outside the viewport (no intersection)
+                if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportHeight || rect.left >= viewportWidth) {{
                     return;
                 }}
                 

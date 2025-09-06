@@ -7,18 +7,17 @@ import hashlib
 import os
 import uuid
 import re
-from typing import Optional
+from typing import Optional, List, Dict
 
 from playwright.sync_api import Browser, Page, Playwright
 
 from ai_utils import generate_model
 from models import VisionPlan, PageElements
-from models.core_models import ActionType
+from models.core_models import DetectedElement, PageSection, ActionStep
 from element_detection import OverlayManager, ElementDetector
 from action_executor import ActionExecutor
 from models.core_models import PageInfo
 from utils import PageUtils
-from vision_utils import draw_bounding_boxes
 from goals import GoalMonitor, ClickGoal, GoalStatus, FormFillGoal, NavigationGoal, IfGoal, PressGoal, ScrollGoal, Condition, BaseGoal
 from goals.condition_utils import create_condition_from_text
 
@@ -26,11 +25,27 @@ from goals.condition_utils import create_condition_from_text
 class BrowserVisionBot:
     """Modular vision-based web automation bot"""
 
-    def __init__(self, page: Page=None, model_name: str="gemini-2.0-flash", max_attempts: int = 10):
+    def __init__(
+        self,
+        page: Page = None,
+        model_name: str = "gemini-2.0-flash",
+        max_attempts: int = 10,
+        max_detailed_elements: int = 20,
+        include_detailed_elements: bool = True,
+        two_pass_planning: bool = True,
+        max_coordinate_overlays: int = 60,
+    ):
         self.page = page
         self.model_name = model_name
         self.max_attempts = max_attempts
         self.started = False
+        # Controls for how much element detail to include in planning prompts
+        self.max_detailed_elements = max_detailed_elements
+        self.include_detailed_elements = include_detailed_elements
+        # Two-pass planning: pre-select relevant overlays to shrink prompt
+        self.two_pass_planning = two_pass_planning
+        # Hard cap for how many overlay coordinates to include in prompts
+        self.max_coordinate_overlays = max_coordinate_overlays
         
     def init_browser(self) -> tuple[Playwright, Browser, Page]:
         p = sync_playwright().start()
@@ -161,11 +176,6 @@ class BrowserVisionBot:
             print(f"📋 Generated plan with {len(plan.action_steps)} steps")
             print(f"🤔 Reasoning: {plan.reasoning}")
             
-            # Check if plan contains a STOP action
-            if any(step.action == ActionType.STOP for step in plan.action_steps):
-                print("🛑 Plan contains STOP action - terminating automation")
-                return True
-            
             # Execute the plan
             success = self.action_executor.execute_plan(plan, page_info)
             if success:
@@ -221,47 +231,60 @@ class BrowserVisionBot:
 
 
     def _generate_plan(self, goal_description: str, additional_context: str, screenshot: bytes, page_info: PageInfo) -> Optional[VisionPlan]:
-        """Generate an action plan using numbered element overlays"""
-        
+        """Generate an action plan using numbered element detection"""
+
         # Check if any active goal needs element detection
         needs_detection = any(goal.needs_detection for goal in self.goal_monitor.active_goals) if self.goal_monitor.active_goals else True
-        
+
         if not needs_detection:
             print("🚫 Skipping element detection - goal doesn't require it")
-            # Create empty detected elements for goals that don't need detection
-            detected_elements = PageElements(elements=[])
-        else:
-            # Step 1: Create numbered overlays and get element data
-            element_data = self.overlay_manager.create_numbered_overlays(page_info)
-            
-            if not element_data:
-                print("❌ No interactive elements found for overlays")
-                return None
-            
-            # Step 2: Take screenshot with numbered overlays visible
-            screenshot_with_overlays = self.page.screenshot(full_page=False)
-            
-            # Step 3: Use AI to identify relevant elements
-            detected_elements = self.element_detector.detect_elements_with_overlays(
-                goal_description, additional_context, screenshot_with_overlays, element_data, page_info
-            )
-            
-            # Step 4: Clean up overlays after detection
-            self.overlay_manager.remove_overlays()
-        
-        # Step 5: Save debugging image
-        if detected_elements and detected_elements.elements:
-            bounding_box_image = draw_bounding_boxes(screenshot, detected_elements.elements)
-            with open("bounding_box_image.png", "wb") as f:
-                f.write(bounding_box_image)
-        
-        if not detected_elements:
-            print("❌ No elements detected, cannot create plan")
+            # Create action plan without element detection
+            plan = self._create_plan(goal_description, additional_context, PageElements(elements=[]), page_info, screenshot)
+            return plan
+
+        # Step 1: Number every element
+        print("🔢 Numbering all interactive elements...")
+        element_data = self.overlay_manager.create_numbered_overlays(page_info)
+
+        if not element_data:
+            print("❌ No interactive elements found for overlays")
             return None
-        
-        # Step 6: Create action plan using detected elements
-        plan = self._create_plan(goal_description, additional_context, detected_elements, page_info, screenshot)
-        
+
+        # Step 2: Take screenshot with numbered overlays visible
+        screenshot_with_overlays = self.page.screenshot(full_page=False)
+
+        # Optional pass 2a: pre-select relevant overlays using the detector to reduce prompt size
+        relevant_overlay_indices = None
+        if self.two_pass_planning:
+            try:
+                detected = self.element_detector.detect_elements_with_overlays(
+                    goal_description=goal_description,
+                    additional_context=additional_context,
+                    screenshot=screenshot_with_overlays,
+                    element_data=element_data,
+                    page_info=page_info,
+                )
+                if detected and getattr(detected, 'elements', None):
+                    relevant_overlay_indices = [
+                        e.overlay_number for e in detected.elements if getattr(e, 'overlay_number', None) is not None
+                    ]
+                    # Heuristic refinement for link/navigation intents (e.g., prefer hrefs matching goal)
+                    refined = self._refine_overlays_by_goal(element_data, relevant_overlay_indices, goal_description)
+                    if refined:
+                        relevant_overlay_indices = refined
+                    print(f"🎯 Two-pass: {len(relevant_overlay_indices)} recommended overlays from detector: {relevant_overlay_indices[:10]}{'...' if len(relevant_overlay_indices)>10 else ''}")
+            except Exception as e:
+                print(f"⚠️ Two-pass detection failed, continuing with single-pass: {e}")
+
+        # Step 3: Generate plan with element indices (and optional filtered overlay list)
+        plan = self._create_plan_with_element_indices(
+            goal_description, additional_context, element_data, screenshot_with_overlays, page_info,
+            relevant_overlay_indices=relevant_overlay_indices
+        )
+
+        # Step 4: Clean up overlays after plan generation
+        self.overlay_manager.remove_overlays()
+
         return plan
 
     def _create_plan(self, goal_description: str, additional_context: str, detected_elements: PageElements, page_info: PageInfo, screenshot: bytes) -> Optional[VisionPlan]:
@@ -389,6 +412,482 @@ class BrowserVisionBot:
         except Exception as e:
             print(f"❌ Error creating plan: {e}")
             return None
+
+    def _create_plan_with_element_indices(self, goal_description: str, additional_context: str, element_data: List[Dict], screenshot_with_overlays: bytes, page_info: PageInfo, relevant_overlay_indices: Optional[List[int]] = None) -> Optional[VisionPlan]:
+        """Create an action plan using element indices - clean and simple approach"""
+        print(f"Creating plan with element indices for goal: {goal_description}\n")
+
+        # Get goal descriptions from active goals to provide more context
+        goal_descriptions = []
+        if self.goal_monitor.active_goals:
+            print("📋 Gathering goal descriptions for plan generation...")
+            for goal in self.goal_monitor.active_goals:
+                try:
+                    # Create a basic context for goal description
+                    from goals.base import GoalContext, BrowserState
+                    basic_context = GoalContext(
+                        initial_state=BrowserState(
+                            timestamp=0, url=page_info.url, title=page_info.title,
+                            page_width=page_info.doc_width, page_height=page_info.doc_height,
+                            scroll_x=0, scroll_y=0
+                        ),
+                        current_state=BrowserState(
+                            timestamp=0, url=page_info.url, title=page_info.title,
+                            page_width=page_info.doc_width, page_height=page_info.doc_height,
+                            scroll_x=0, scroll_y=0
+                        ),
+                        page_reference=self.page
+                    )
+
+                    goal_desc = goal.get_description(basic_context)
+                    goal_descriptions.append(goal_desc)
+                    print(f"   📝 {goal.__class__.__name__}: {goal_desc[:100]}...")
+                except Exception as e:
+                    print(f"   ⚠️ Error getting description for {goal.__class__.__name__}: {e}")
+                    goal_descriptions.append(f"{goal.__class__.__name__}: {goal.description}")
+
+        # Check for retry context
+        retry_goals = self.goal_monitor.check_for_retry_requests()
+        retry_context = ""
+        if retry_goals:
+            retry_info = []
+            for goal in retry_goals:
+                retry_info.append(f"- {goal.__class__.__name__}: Retry attempt {goal.retry_count}/{goal.max_retries}")
+                if goal.retry_reason:
+                    retry_info.append(f"  Reason: {goal.retry_reason}")
+            retry_context = f"""
+                                RETRY CONTEXT:
+                                The following goals have requested retries due to previous failures:
+                                {chr(10).join(retry_info)}
+
+                                IMPORTANT: This is a retry attempt. The previous plan failed because the goals detected issues.
+                                Make sure to:
+                                - Look for different elements that might match the goal requirements
+                                - Consider alternative approaches to achieve the same goal
+                                - Be more careful about element selection and targeting
+                                - Address the specific failure reasons mentioned above
+                            """
+            print(f"🔄 Retry context included in plan generation: {len(retry_goals)} goals requesting retry")
+
+        # Build the system prompt with goal descriptions and element data
+        goal_context = ""
+        if goal_descriptions:
+            goal_context = f"""
+                                USER GOAL: {goal_description}
+
+                                ACTIVE GOAL DESCRIPTIONS:
+                                {chr(10).join(f"- {desc}" for desc in goal_descriptions)}
+
+                                IMPORTANT: Use the goal descriptions above to understand exactly what needs to be accomplished.
+                                These descriptions contain real-time analysis of the current page state and goal progress.
+                                Pay special attention to:
+                                - Which specific fields need to be filled (don't fill unnecessary fields)
+                                - Current completion status of fields (✅ = completed, ⏳ = needs filling)
+                                - Any validation errors that need to be addressed (❌ indicators)
+                                - Specific targets for click or navigation goals
+                                - Progress metrics (📊 indicators show completion ratios)
+                                {retry_context}
+                            """
+
+        # Check for retry context
+        retry_goals = self.goal_monitor.check_for_retry_requests()
+        retry_context = ""
+        if retry_goals:
+            retry_info = []
+            for goal in retry_goals:
+                retry_info.append(f"- {goal.__class__.__name__}: Retry attempt {goal.retry_count}/{goal.max_retries}")
+                if goal.retry_reason:
+                    retry_info.append(f"  Reason: {goal.retry_reason}")
+            retry_context = f"""
+
+        RETRY CONTEXT:
+        The following goals have requested retries due to previous failures:
+        {chr(10).join(retry_info)}
+
+        IMPORTANT: This is a retry attempt. The previous plan failed because the goals detected issues.
+        Make sure to:
+        - Look for different elements that might match the goal requirements
+        - Consider alternative approaches to achieve the same goal
+        - Be more careful about element selection and targeting
+        - Address the specific failure reasons mentioned above
+        """
+            print(f"🔄 Retry context included in plan generation: {len(retry_goals)} goals requesting retry")
+
+        # Build the system prompt with goal descriptions and element data
+        goal_context = ""
+        if goal_descriptions:
+            goal_context = f"""
+                                USER GOAL: {goal_description}
+
+                                ACTIVE GOAL DESCRIPTIONS:
+                                {chr(10).join(f"- {desc}" for desc in goal_descriptions)}
+
+                                IMPORTANT: Use the goal descriptions above to understand exactly what needs to be accomplished.
+                                These descriptions contain real-time analysis of the current page state and goal progress.
+                                Pay special attention to:
+                                - Which specific fields need to be filled (don't fill unnecessary fields)
+                                - Current completion status of fields (✅ = completed, ⏳ = needs filling)
+                                - Any validation errors that need to be addressed (❌ indicators)
+                                - Specific targets for click or navigation goals
+                                - Progress metrics (📊 indicators show completion ratios)
+                                {retry_context}
+                            """
+
+        # Extract quoted target phrase if present (e.g., "click the 'company' link")
+        target_phrase = None
+        try:
+            import re as _re
+            m = _re.search(r"['\"]([^'\"]+)['\"]", goal_description)
+            if m:
+                target_phrase = m.group(1).strip()
+        except Exception:
+            target_phrase = None
+
+        # Format element data for the AI
+        element_summary = []
+        for elem in element_data:
+            element_summary.append(f"Element #{elem['index']}: {elem['description']}")
+
+        # Build a recommended elements section if we have a filtered list
+        recommended_block = ""
+        coord_elements: List[Dict] = []
+        if relevant_overlay_indices:
+            rec_lines = []
+            index_set = set(relevant_overlay_indices)
+            for elem in element_data:
+                if elem['index'] in index_set:
+                    rec_lines.append(f"Overlay #{elem['index']}: {elem['description']}")
+                    coord_elements.append(elem)
+            if rec_lines:
+                recommended_block = f"\n\n## Recommended Elements (pre-selected)\n{chr(10).join(rec_lines)}\n"
+        # Exact text matches block (if a quoted target phrase is present)
+        exact_text_block = ""
+        if target_phrase:
+            exact_candidates = []
+            phrase_l = target_phrase.lower()
+            for elem in element_data:
+                txt = (elem.get('textContent') or elem.get('description') or '').strip()
+                if txt and phrase_l == txt.lower():
+                    exact_candidates.append(elem)
+            if exact_candidates:
+                exact_text_block = "\n\n## Exact Text Matches (highest priority)\n" + chr(10).join(
+                    [f"Overlay #{e['index']}: text='{(e.get('textContent') or e.get('description') or '').strip()}'" for e in exact_candidates]
+                ) + "\n"
+                # Prefer these for coordinates if available
+                coord_elements = exact_candidates
+
+        # Fallback for coordinates when no filtered list is available
+        if not coord_elements:
+            # Apply coordinate list threshold to control token size
+            if len(element_data) > self.max_coordinate_overlays:
+                # Use ranking to select top-N likely relevant overlays
+                ranked = self._rank_elements(element_data, f"{goal_description} {additional_context}")
+                coord_elements = ranked[: self.max_coordinate_overlays]
+                print(f"✂️ Truncated coordinate list from {len(element_data)} to {len(coord_elements)} using heuristic ranking")
+            else:
+                coord_elements = element_data
+
+        # Optionally include a detailed section for top-N elements (uses filtered set if present)
+        detailed_elements_block = ""
+        if self.include_detailed_elements and element_data:
+            elements_for_detail = coord_elements if coord_elements else element_data
+            detailed_list = self._build_detailed_element_context(
+                element_data=elements_for_detail,
+                page_info=page_info,
+                goal_text=(goal_description or "") + "\n" + (additional_context or "") + ("\n" + "\n".join(goal_descriptions) if goal_descriptions else "")
+            )
+            if detailed_list:
+                detailed_elements_block = (
+                    "\n\n## Detailed Elements (Top "
+                    + str(min(self.max_detailed_elements, len(detailed_list)))
+                    + ")\n"
+                    + "\n\n".join(detailed_list)
+                )
+
+        # detailed_elements_block already assembled above
+
+        # Guidance block to enforce strict text matching when quoted phrase provided
+        strict_text_block = ""
+        if target_phrase:
+            strict_text_block = f"""
+        TARGET TEXT (STRICT): '{target_phrase}'
+        - Prefer overlays whose visible text equals this text (case-insensitive) and are anchors (<a>).
+        - DO NOT select elements with similar but different text (e.g., 'View Careers').
+        - If multiple matches exist (header/footer), choose the one fully visible in the viewport.
+        - If no exact text matches, choose the closest semantic match that still contains the word '{target_phrase}'.
+        """
+
+        system_prompt = f"""
+        You are a web automation assistant. Create a plan based on the ACTIVE GOAL DESCRIPTIONS below.
+
+        Current page: {page_info.url}
+
+        ## Available Elements
+        The screenshot shows numbered red overlays (1, 2, 3, etc.) on interactive elements:
+        {chr(10).join(element_summary)}
+
+        {recommended_block}
+        {exact_text_block}
+
+        ## Element Coordinates
+        Use these EXACT coordinates based on overlay numbers:
+        {chr(10).join([f"Overlay #{elem['index']}: {elem['normalizedCoords']}" for elem in coord_elements])}
+
+        {detailed_elements_block}
+
+        {goal_context}
+
+        {strict_text_block}
+
+        CRITICAL INSTRUCTIONS:
+        1. Focus ONLY on the ACTIVE GOAL DESCRIPTIONS and USER GOAL above
+        2. The goal descriptions contain real-time analysis of what actually needs to be done
+        3. Follow the specific requirements in the goal descriptions exactly:
+           - Only fill fields marked as "NEEDS FILLING" or "EMPTY"
+           - Ignore fields marked as "COMPLETED" or "✅"
+           - Address any validation errors mentioned
+           - Target specific elements described in click/navigation goals
+        4. Create a plan with 1-3 action steps based on the goal descriptions
+        5. USE ELEMENT INDICES: When selecting elements, use the overlay numbers from the available elements list above
+        6. USE SPECIALIZED ACTION TYPES for special fields:
+           - HANDLE_SELECT: For select dropdowns
+           - HANDLE_UPLOAD: For file upload fields
+           - HANDLE_DATETIME: For date/time input fields
+           - PRESS: For keyboard key presses (e.g., 'enter', 'tab', 'ctrl+c', 'escape')
+           - STOP: To terminate automation and return True
+           - Use CLICK/TYPE only for simple interactions.
+
+        Return a VisionPlan with action_steps, reasoning, and confidence.
+        The action steps should reference element indices from the numbered overlays.
+        """
+
+        try:
+            plan: VisionPlan = generate_model(
+                prompt="Create a plan to achieve the goal using the numbered elements.",
+                model_object_type=VisionPlan,
+                reasoning_level="low",
+                system_prompt=system_prompt,
+                model="gpt-5-nano",
+                image=screenshot_with_overlays
+            )
+
+            if plan and plan.action_steps:
+                # Convert element indices to actual element data
+                detected_elements = self._convert_indices_to_elements(plan.action_steps, element_data)
+                plan.detected_elements = detected_elements
+                print(f"✅ Plan created with {len(detected_elements.elements)} detected elements")
+
+            return plan
+        except Exception as e:
+            print(f"❌ Error creating plan with element indices: {e}")
+            return None
+
+    def _convert_indices_to_elements(self, action_steps: List[ActionStep], element_data: List[Dict]) -> PageElements:
+        """Convert element indices from action steps to actual DetectedElement objects"""
+        detected_elements = []
+        used_indices = set()
+
+        for step in action_steps:
+            if step.target_element_index is not None and step.target_element_index not in used_indices:
+                # Find the element data for this overlay number
+                matching_data = next((elem for elem in element_data if elem['index'] == step.target_element_index), None)
+                if matching_data:
+                    # Create a DetectedElement with the data
+                    element = DetectedElement(
+                        element_label=f"Element {step.target_element_index}",
+                        description=matching_data['description'],
+                        element_type=self._infer_element_type(matching_data),
+                        is_clickable=self._infer_clickable(matching_data),
+                        box_2d=matching_data['normalizedCoords'],
+                        section=PageSection.CONTENT,  # Default to content
+                        confidence=0.9,
+                        overlay_number=step.target_element_index
+                    )
+                    detected_elements.append(element)
+                    used_indices.add(step.target_element_index)
+                    print(f"  ✅ Converted element #{step.target_element_index}: {element.element_label}")
+
+        return PageElements(elements=detected_elements)
+
+    def _refine_overlays_by_goal(self, element_data: List[Dict], indices: Optional[List[int]], goal_text: str) -> Optional[List[int]]:
+        """Heuristically refine overlay indices based on goal text (e.g., target domain/link).
+
+        - If goal mentions a domain or URL-like token (e.g., nuro.ai), prefer overlays whose href/text matches it.
+        - Otherwise, if goal mentions words, boost overlays with text containing those words and tagName 'a'/'button'.
+        """
+        try:
+            if not element_data:
+                return indices
+            goal_l = (goal_text or "").lower()
+            # Extract a simple domain-like token if present
+            import re as _re
+            domain = None
+            m = _re.search(r"([a-z0-9][a-z0-9-]*\.[a-z]{2,})(?!\w)", goal_l)
+            if m:
+                domain = m.group(1)
+
+            # If looking for a 'link', bias toward anchors
+            wants_link = 'link' in goal_l or 'open' in goal_l or 'visit' in goal_l
+
+            # Extract quoted exact phrase if present (e.g., 'company')
+            exact_phrase = None
+            qm = _re.search(r"['\"]([^'\"]+)['\"]", goal_l)
+            if qm:
+                exact_phrase = qm.group(1).strip()
+
+            # Build set for quick lookup
+            index_set = set(indices) if indices else set([e['index'] for e in element_data])
+
+            scored = []
+            for elem in element_data:
+                idx = elem.get('index')
+                if idx not in index_set:
+                    continue
+                tag = (elem.get('tagName') or '').lower()
+                txt = (elem.get('textContent') or elem.get('description') or '').lower()
+                href = (elem.get('href') or '').lower()
+
+                score = 0
+                if wants_link and tag == 'a':
+                    score += 5
+                if domain and href and domain in href:
+                    score += 10
+                if domain and domain in txt:
+                    score += 6
+                if exact_phrase:
+                    if txt.strip() == exact_phrase:
+                        score += 20
+                    elif f" {exact_phrase} " in f" {txt} ":
+                        score += 8
+                # keyword matches
+                for t in set(_re.findall(r"[a-z0-9]{3,}", goal_l)):
+                    if t in txt:
+                        score += 1
+                scored.append((score, idx))
+
+            # If we found strong candidates (score>0), keep top few
+            strong = [idx for s, idx in scored if s > 0]
+            if not strong:
+                return indices
+            # Sort by score desc then keep small set
+            strong_sorted = [idx for s, idx in sorted(scored, key=lambda x: x[0], reverse=True) if s > 0]
+            return strong_sorted[: min(8, len(strong_sorted))]
+        except Exception:
+            return indices
+
+    def _rank_elements(self, element_data: List[Dict], goal_text: str) -> List[Dict]:
+        """Rank elements by simple heuristic relevance to the goal text.
+
+        This is intentionally lightweight and local (no extra model calls):
+        - Token matches across textContent/description/placeholder/type/id/class
+        - Boosts for clickable tags (button, link) and form fields when relevant
+        - Small weight for elements with visible text
+        """
+        goal_text_l = (goal_text or "").lower()
+        tokens = set(re.findall(r"[a-z0-9]{3,}", goal_text_l))
+
+        def score_elem(e: Dict) -> int:
+            s = 0
+            tag = (e.get('tagName') or '').lower()
+            txt = (e.get('textContent') or '').lower()
+            desc = (e.get('description') or '').lower()
+            placeholder = ''  # description already includes placeholder
+            typ = (e.get('type') or '').lower()
+            eid = (e.get('id') or '').lower()
+            cls = (e.get('className') or '').lower()
+
+            haystack = " ".join([txt, desc, placeholder, typ, eid, cls])
+            for t in tokens:
+                if t in haystack:
+                    s += 3
+
+            # Clickable priority
+            if tag in ['button', 'a'] or typ in ['submit', 'button']:
+                s += 5
+
+            # Inputs/controls priority when goal mentions them
+            if tag in ['input', 'textarea', 'select']:
+                s += 2
+                if 'email' in tokens and ('email' in typ or 'email' in eid or 'email' in cls or 'email' in desc):
+                    s += 4
+                if 'password' in tokens and ('password' in typ or 'password' in eid or 'password' in cls or 'password' in desc):
+                    s += 4
+                if 'search' in tokens and ('search' in typ or 'search' in eid or 'search' in cls or 'search' in desc):
+                    s += 4
+
+            # A bit more weight for visible text length (buttons/links with labels)
+            s += min(len(txt) // 12, 3)
+            return s
+
+        ranked = sorted(element_data, key=score_elem, reverse=True)
+        return ranked
+
+    def _build_element_detail_line(self, elem: Dict, page_info: PageInfo) -> str:
+        """Create a concise, readable detail block for one element."""
+        coords = elem.get('normalizedCoords') or [0, 0, 0, 0]
+        y_min, x_min, y_max, x_max = coords
+        cx = int(round(((x_min + x_max) / 2) / 1000.0 * page_info.width))
+        cy = int(round(((y_min + y_max) / 2) / 1000.0 * page_info.height))
+
+        tag = (elem.get('tagName') or 'element').lower()
+        txt = (elem.get('textContent') or '').strip()
+        if len(txt) > 80:
+            txt = txt[:77] + '...'
+        typ = (elem.get('type') or '').lower()
+        clickable = tag in ['button', 'a', 'input', 'select'] or typ in ['submit', 'button']
+
+        attrs = {}
+        if elem.get('id'):
+            attrs['id'] = str(elem['id'])[:60]
+        if elem.get('className'):
+            classes = str(elem['className']).split()
+            attrs['class'] = " ".join(classes[:3])[:60]
+        if typ:
+            attrs['type'] = typ
+        # Placeholder may exist in description JS, include only if directly present
+        if elem.get('placeholder'):
+            attrs['placeholder'] = str(elem['placeholder'])[:60]
+
+        overlay = elem.get('index')
+        parts = [
+            f"Overlay #{overlay} at ({cx}, {cy}):",
+            f"- Tag: {tag}",
+            f"- Text: {repr(txt) if txt else 'None'}",
+            f"- Clickable: {bool(clickable)}",
+            f"- Attrs: {attrs if attrs else '{}'}",
+        ]
+        return "\n            ".join(parts)
+
+    def _build_detailed_element_context(self, element_data: List[Dict], page_info: PageInfo, goal_text: str) -> List[str]:
+        """Build detailed lines for top-N ranked elements to keep prompts lean."""
+        if not element_data:
+            return []
+        ranked = self._rank_elements(element_data, goal_text)
+        top_n = max(1, min(self.max_detailed_elements, len(ranked)))
+        detailed = []
+        for elem in ranked[:top_n]:
+            try:
+                detailed.append(self._build_element_detail_line(elem, page_info))
+            except Exception:
+                continue
+        return detailed
+
+    def _infer_element_type(self, element_data: Dict) -> str:
+        """Infer element type from element data"""
+        if element_data.get('type'):
+            return element_data['type']
+        if 'input' in element_data.get('tagName', '').lower():
+            return 'input'
+        if 'button' in element_data.get('tagName', '').lower():
+            return 'button'
+        if 'a' in element_data.get('tagName', '').lower():
+            return 'link'
+        return 'element'
+
+    def _infer_clickable(self, element_data: Dict) -> bool:
+        """Infer if element is clickable from element data"""
+        tag_name = element_data.get('tagName', '').lower()
+        return tag_name in ['button', 'a', 'input'] or element_data.get('type') == 'submit'
 
 
     def _setup_smart_goals(self, goal_description: str, additional_context: str = "") -> str:
