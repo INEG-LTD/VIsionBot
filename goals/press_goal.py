@@ -137,7 +137,7 @@ class PressGoal(BaseGoal):
                 Return your evaluation.
                 """,
                 model_object_type=KeyPressEvaluation,
-                reasoning_level="medium"
+                reasoning_level="minimal"
             )
             
             if evaluation.is_match:

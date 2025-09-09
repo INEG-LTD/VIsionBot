@@ -29,6 +29,9 @@ from .form_goal import FormFillGoal
 from .if_goal import IfGoal
 from .press_goal import PressGoal
 from .scroll_goal import ScrollGoal
+from .while_goal import WhileGoal
+from .back_goal import BackGoal
+from .forward_goal import ForwardGoal
 
 __all__ = [
     # Base types
@@ -55,4 +58,7 @@ __all__ = [
     "IfGoal",
     "PressGoal",
     "ScrollGoal",
+    "WhileGoal",
+    "BackGoal",
+    "ForwardGoal",
 ]

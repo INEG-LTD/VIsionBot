@@ -20,6 +20,8 @@ class ActionType(str, Enum):
     HANDLE_SELECT = "handle_select"
     HANDLE_UPLOAD = "handle_upload"
     HANDLE_DATETIME = "handle_datetime"
+    BACK = "back"
+    FORWARD = "forward"
 
 
 class PageSection(str, Enum):

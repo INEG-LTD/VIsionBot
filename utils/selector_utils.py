@@ -23,7 +23,7 @@ class SelectorUtils:
             js_code = f"""
             (function() {{
                 console.log('Looking for element at coordinates: {x}, {y}');
-                const element = document.elementFromPoint({x}, {y});
+                let element = document.elementFromPoint({x}, {y});
                 
                 if (!element) {{
                     console.log('No element found at coordinates');

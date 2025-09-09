@@ -18,7 +18,7 @@ from vision_bot_refactored import BrowserVisionBot
 
 def _run_server():
     """Start the Flask server in a background process"""
-    from app import create_app
+from playground.app import create_app
     app = create_app()
     app.run(host="127.0.0.1", port=5001, debug=False, use_reloader=False)
 
@@ -41,6 +41,19 @@ def _create_test_resume(tmpdir: Path) -> Path:
 def run_tests(base_url: str = "http://127.0.0.1:5001", headless: bool = False, only: str = None, match: str = None):
     """Run the test suite using VisionBot"""
     
+    # Start the Flask playground server in a background process
+    server_proc = multiprocessing.Process(target=_run_server, daemon=True)
+    server_proc.start()
+    
+    # Brief wait for server to boot
+    import socket, time as _t
+    for _ in range(50):
+        try:
+            with socket.create_connection(("127.0.0.1", 5001), timeout=0.2):
+                break
+        except OSError:
+            _t.sleep(0.1)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
@@ -256,6 +269,10 @@ def run_tests(base_url: str = "http://127.0.0.1:5001", headless: bool = False, o
         print("\n🎉 Test suite completed!")
         context.close()
         browser.close()
+        try:
+            server_proc.terminate()
+        except Exception:
+            pass
 
 
 def test_new_action_types(base_url: str = "http://127.0.0.1:5001", headless: bool = False):

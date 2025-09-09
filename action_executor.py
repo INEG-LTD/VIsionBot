@@ -58,6 +58,10 @@ class ActionExecutor:
                 elif step.action == ActionType.HANDLE_DATETIME:
                     self.datetime_handler.handle_datetime_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
+                elif step.action == ActionType.BACK:
+                    step_success = self._execute_back()
+                elif step.action == ActionType.FORWARD:
+                    step_success = self._execute_forward()
                 elif step.action == ActionType.STOP:
                     step_success = self._execute_stop(step)
                 else:
@@ -83,6 +87,58 @@ class ActionExecutor:
         
         print("✅ Plan execution completed")
         return True
+
+    def _execute_back(self) -> bool:
+        """Navigate back in browser history and record interaction."""
+        try:
+            prev_url = self.page.url
+        except Exception:
+            prev_url = ""
+        try:
+            self.page.go_back()
+            success = True
+            error_msg = None
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            print(f"  ❌ Back navigation failed: {e}")
+        # Record navigation interaction
+        try:
+            self.goal_monitor.record_interaction(
+                InteractionType.NAVIGATION,
+                target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
+                success=success,
+                error_message=error_msg,
+            )
+        except Exception:
+            pass
+        return success
+
+    def _execute_forward(self) -> bool:
+        """Navigate forward in browser history and record interaction."""
+        try:
+            prev_url = self.page.url
+        except Exception:
+            prev_url = ""
+        try:
+            self.page.go_forward()
+            success = True
+            error_msg = None
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            print(f"  ❌ Forward navigation failed: {e}")
+        # Record navigation interaction
+        try:
+            self.goal_monitor.record_interaction(
+                InteractionType.NAVIGATION,
+                target_element_info={"direction": "forward", "from": prev_url, "to": self.page.url if success else prev_url},
+                success=success,
+                error_message=error_msg,
+            )
+        except Exception:
+            pass
+        return success
 
     def _execute_click(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> bool:
         """Execute a click action"""
@@ -240,8 +296,19 @@ class ActionExecutor:
         print(f"  Typing: {step.text_to_type}")
         
         try:
-            # Clear existing text first
-            self.page.keyboard.type("")
+            # Try to clear existing text first (select-all then delete)
+            try:
+                self.page.keyboard.press('Meta+a')  # macOS
+            except Exception:
+                pass
+            try:
+                self.page.keyboard.press('Control+a')  # Windows/Linux
+            except Exception:
+                pass
+            try:
+                self.page.keyboard.press('Delete')
+            except Exception:
+                pass
             self.page.keyboard.type(step.text_to_type, delay=50)
             success = True
             error_msg = None

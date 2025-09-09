@@ -70,11 +70,9 @@ class OverlayManager:
                 document.body.appendChild(border);
                 document.body.appendChild(label);
                 
-                // Return element info with normalized coordinates
+                // Return element info with normalized coordinates (serialize only plain data)
                 return {{
                     index: index,
-                    element: element,
-                    rect: rect,
                     normalizedCoords: [
                         Math.round((rect.top / viewportHeight) * 1000),     // y_min
                         Math.round((rect.left / viewportWidth) * 1000),     // x_min  

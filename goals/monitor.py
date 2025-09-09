@@ -29,6 +29,7 @@ class GoalMonitor:
         self.interaction_history: List[Interaction] = []
         self.state_history: List[BrowserState] = []
         self.url_history: List[str] = []
+        self.url_pointer: int = 0
         self.session_start_time = time.time()
         self.element_analyzer = ElementAnalyzer(page)
         
@@ -240,6 +241,15 @@ class GoalMonitor:
                 for goal in self.active_goals:
                     goal.on_state_change(old_state, new_state)
         
+        # Maintain URL history pointer based on the latest state
+        try:
+            current_url = interaction.after_state.url if interaction.after_state else (self.page.url if self.page else "")
+            if not self.url_history or self.url_history[-1] != current_url:
+                self.url_history.append(current_url)
+            self.url_pointer = len(self.url_history) - 1
+        except Exception:
+            pass
+
         print(f"[GoalMonitor] Recorded {interaction_type} interaction")
     
     def _evaluate_post_interaction_goals(self, interaction_type: InteractionType) -> None:
@@ -250,7 +260,7 @@ class GoalMonitor:
                     context = self._build_goal_context()
                     result = goal.evaluate(context)
                     goal._last_evaluation = result
-                    print(f"[GoalMonitor] Post-interaction evaluation: {goal} -> {result.status}")
+                    print(f"[GoalMonitor] Post-interaction evaluation: {goal} -> {result.status} -> {result.reasoning}")
                     
                     # Check if this goal requested a retry during evaluation
                     if goal.retry_requested:
@@ -306,6 +316,7 @@ class GoalMonitor:
         initial_state = self._capture_current_state()
         self.state_history.append(initial_state)
         self.url_history.append(initial_state.url)
+        self.url_pointer = len(self.url_history) - 1
     
     def _capture_current_state(self) -> BrowserState:
         """Capture current browser state"""
@@ -353,8 +364,9 @@ class GoalMonitor:
         # Update URL history if changed
         if not self.url_history or self.url_history[-1] != current_state.url:
             self.url_history.append(current_state.url)
+        self.url_pointer = len(self.url_history) - 1
         
-        return GoalContext(
+        context = GoalContext(
             initial_state=self.state_history[0] if self.state_history else current_state,
             current_state=current_state,
             all_interactions=self.interaction_history.copy(),
@@ -363,6 +375,12 @@ class GoalMonitor:
             session_duration=time.time() - self.session_start_time,
             page_reference=self.page  # Provide page access for advanced goals
         )
+        # Attach pointer dynamically for consumers that expect it
+        try:
+            setattr(context, 'url_pointer', self.url_pointer)
+        except Exception:
+            pass
+        return context
     
     def get_status_summary(self) -> Dict[str, Any]:
         """Get a summary of all goal statuses"""
