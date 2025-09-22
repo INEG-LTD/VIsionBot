@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
+import traceback
 import uuid
 import re
 from typing import Any, Optional, List, Dict
@@ -14,13 +16,13 @@ from playwright.sync_api import Browser, Page, Playwright
 from goals.base import GoalResult
 from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType
-from element_detection import OverlayManager, ElementDetector
+from element_detection import ElementDetector
+from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from models.core_models import PageInfo
 from utils import PageUtils
-from utils.memory_store import MemoryStore
 from goals import GoalMonitor, ClickGoal, GoalStatus, FormFillGoal, NavigationGoal, IfGoal, WhileGoal, PressGoal, ScrollGoal, Condition, BaseGoal, BackGoal, ForwardGoal
-from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as create_predicate
+# from goals.condition_engine import create_predicate_condition as create_predicate
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     parse_while_statement,
@@ -30,11 +32,16 @@ from utils.intent_parsers import (
     parse_structured_if,
     parse_structured_while,
     parse_keyword_command,
+    parse_focus_command,
+    parse_undo_command,
 )
 from goals.history_utils import (
     resolve_back_target,
     resolve_forward_target,
 )
+from focus_manager_ai_first import AIFirstFocusManager as FocusManager
+from utils.bot_logger import get_logger, LogLevel, LogCategory
+from utils.semantic_targets import SemanticTarget, build_semantic_target
 
 
 class BrowserVisionBot:
@@ -45,10 +52,10 @@ class BrowserVisionBot:
         page: Page = None,
         model_name: str = "gemini-2.0-flash",
         max_attempts: int = 10,
-        max_detailed_elements: int = 20,
+        max_detailed_elements: int = 400,
         include_detailed_elements: bool = True,
         two_pass_planning: bool = True,
-        max_coordinate_overlays: int = 60,
+        max_coordinate_overlays: int = 600,
     ):
         self.page = page
         self.model_name = model_name
@@ -75,11 +82,24 @@ class BrowserVisionBot:
         self._pending_auto_on_load: bool = False
         self._pending_auto_on_load_url: Optional[str] = None
         
-        # General-purpose memory (dedup, context). Session-lifetime by default.
-        self.memory_store = MemoryStore()
         # Dedup policy: detect from prompt by default ('auto').
         # 'off' = never dedup, 'on' = always dedup, 'auto' = only when prompt asks.
         self.dedup_mode: str = "auto"
+        
+        # Command history for "do that again" functionality
+        self.command_history: List[str] = []
+        self.max_command_history: int = 10  # Keep last 10 commands
+        
+        # Multi-command reference storage
+        self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
+        
+        # Initialize logger
+        self.logger = get_logger()
+
+        # Interpretation / semantic resolution helpers
+        self.default_interpretation_mode: str = "literal"
+        self._interpretation_mode_stack: List[str] = []
+        self._semantic_target_cache: Dict[str, Optional[SemanticTarget]] = {}
         
     def init_browser(self) -> tuple[Playwright, Browser, Page]:
         # Local import to avoid dependency when not running as script
@@ -131,7 +151,9 @@ class BrowserVisionBot:
         self.overlay_manager = OverlayManager(page)
         self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
-        self.action_executor = ActionExecutor(page, self.goal_monitor, self.page_utils)
+        # AI-first focus manager for element focusing
+        self.focus_manager = FocusManager(page, self.page_utils)
+        self.action_executor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.focus_manager)
         # Plan generator for AI planning prompts
         self.plan_generator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
@@ -278,24 +300,6 @@ class BrowserVisionBot:
             except Exception:
                 pass
 
-    def disable_auto_act_on_page_load(self) -> None:
-        """Disable the auto-on-load behavior and detach the handler if possible."""
-        self._auto_on_load_enabled = False
-        self._auto_on_load_actions = []
-        self._auto_on_load_urls_handled.clear()
-        try:
-            if self.page and self._auto_on_load_handler:
-                # Playwright's sync API exposes .off on EventEmitter-like objects
-                if self._auto_on_load_event_name:
-                    self.page.off(self._auto_on_load_event_name, self._auto_on_load_handler)
-                else:
-                    self.page.off("load", self._auto_on_load_handler)
-        except Exception:
-            pass
-        finally:
-            self._auto_on_load_handler = None
-            self._auto_on_load_event_name = None
-
     def _attach_page_load_handler(self) -> None:
         """Attach a 'load' event handler on the active page to auto-run actions."""
         if not self.page:
@@ -377,7 +381,7 @@ class BrowserVisionBot:
                 try:
                     print(f"⚡ Auto-on-load: act('{prompt}')")
                     # Snapshot current goals and user prompt so auto-action does not disrupt ongoing task
-                    saved_goals = list(getattr(self.goal_monitor, 'active_goals', []) or []) if hasattr(self, 'goal_monitor') else []
+                    saved_goal = getattr(self.goal_monitor, 'active_goal', None) if hasattr(self, 'goal_monitor') else None
                     saved_user_prompt = getattr(self.goal_monitor, 'user_prompt', "") if hasattr(self, 'goal_monitor') else ""
                     try:
                         # If we're inside act(), we still call act() but our snapshot/restore prevents disruption
@@ -388,7 +392,7 @@ class BrowserVisionBot:
                         try:
                             if hasattr(self, 'goal_monitor'):
                                 self.goal_monitor.clear_all_goals()
-                                for g in saved_goals:
+                                for g in saved_goal:
                                     try:
                                         self.goal_monitor.add_goal(g)
                                     except Exception:
@@ -424,31 +428,30 @@ class BrowserVisionBot:
         Returns True/False if executed, or None to fall back to normal planning.
         """
         try:
-            if not self.goal_monitor or not self.goal_monitor.active_goals:
+            if not self.goal_monitor or not self.goal_monitor.active_goal:
                 return None
             from goals import PressGoal, ScrollGoal
-            goals = self.goal_monitor.active_goals
+            goal = self.goal_monitor.active_goal
             # Only bypass for Press/Scroll; Back/Forward use history + AI selection
-            if not all(isinstance(g, (PressGoal, ScrollGoal)) for g in goals):
+            if not isinstance(goal, (PressGoal, ScrollGoal)):
                 return None
 
             # Build minimal plan
             steps: List[ActionStep] = []
-            for g in goals:
-                if isinstance(g, PressGoal):
-                    if getattr(g, 'target_keys', None):
-                        steps.append(ActionStep(action=ActionType.PRESS, keys_to_press=g.target_keys))
-                elif isinstance(g, ScrollGoal):
-                    # Heuristic direction from request; executor will refine using ScrollGoal
-                    req = (getattr(g, 'user_request', '') or '').lower()
-                    direction = 'down'
-                    if 'up' in req:
-                        direction = 'up'
-                    elif 'left' in req:
-                        direction = 'left'
-                    elif 'right' in req:
-                        direction = 'right'
-                    steps.append(ActionStep(action=ActionType.SCROLL, scroll_direction=direction))
+            if isinstance(goal, PressGoal):
+                if getattr(goal, 'target_keys', None):
+                    steps.append(ActionStep(action=ActionType.PRESS, keys_to_press=goal.target_keys))
+            elif isinstance(goal, ScrollGoal):
+                # Heuristic direction from request; executor will refine using ScrollGoal
+                req = (getattr(goal, 'user_request', '') or '').lower()
+                direction = 'down'
+                if 'up' in req:
+                    direction = 'up'
+                elif 'left' in req:
+                    direction = 'left'
+                elif 'right' in req:
+                    direction = 'right'
+                steps.append(ActionStep(action=ActionType.SCROLL, scroll_direction=direction))
                 # Intentionally skip Back/Forward here to avoid duplicate/conflicting navigation
 
             # Always add STOP to return quickly
@@ -467,8 +470,8 @@ class BrowserVisionBot:
                 return False
 
             # Evaluate goals after execution
-            results = self.goal_monitor.evaluate_goals()
-            if any(r.status == GoalStatus.ACHIEVED for r in results.values()):
+            goal_result = self.goal_monitor.evaluate_goal()
+            if goal_result.status == GoalStatus.ACHIEVED:
                 self._print_goal_summary()
                 return True
 
@@ -478,65 +481,133 @@ class BrowserVisionBot:
             print(f"⚠️ Simple-goal bypass failed: {e}")
             return None
 
-    def act(self, goal_description: str, additional_context: str = "", smart_goals: bool = True) -> bool:
+    def _try_direct_click_bypass(self, prompt_text: str) -> Optional[bool]:
+        """Direct DOM bypass removed; rely on vision planning."""
+        return None
+
+    def _try_direct_type_bypass(self, prompt_text: str) -> Optional[bool]:
+        """Direct DOM bypass removed; rely on vision planning."""
+        return None
+
+    def _try_direct_select_bypass(self, prompt_text: str) -> Optional[bool]:
+        """Direct DOM bypass removed; rely on vision planning."""
+        return None
+
+    def _try_direct_datetime_bypass(self, prompt_text: str) -> Optional[bool]:
+        """Direct DOM bypass removed; rely on vision planning."""
+        return None
+
+    def _try_direct_upload_bypass(self, prompt_text: str) -> Optional[bool]:
+        """Direct DOM bypass removed; rely on vision planning."""
+        return None
+
+    def act(
+        self,
+        goal_description: str,
+        additional_context: str = "",
+        interpretation_mode: Optional[str] = None,
+    ) -> bool:
         """Main method to achieve a goal using vision-based automation"""
+        if interpretation_mode is None:
+            resolved_mode = self._get_current_interpretation_mode()
+        else:
+            resolved_mode = self._normalize_interpretation_mode(interpretation_mode)
+        self._interpretation_mode_stack.append(resolved_mode)
         self._in_act = True
+        start_time = time.time()
+        
         try:
             if not self.started:
+                self.logger.log_error("Bot not started", "act() called before bot.start()")
                 print("❌ Bot not started")
                 return False
             
             if self.page.url.startswith("about:blank"):
+                self.logger.log_error("Page is on initial blank page", "act() called before navigation")
                 print("❌ Page is on the initial blank page")
                 return False
             
+            # Log goal start
+            self.logger.log_goal_start(goal_description)
             print(f"🎯 Starting goal: {goal_description}")
             
+            # Add command to history
+            self._add_to_command_history(goal_description)
+            
+            # Check for focus commands first
+            focus_result = self._handle_focus_commands(goal_description, self.overlay_manager)
+            if focus_result is not None:
+                return focus_result
+            
+            # Check for dedup commands
+            dedup_result = self._handle_dedup_commands(goal_description)
+            if dedup_result is not None:
+                return dedup_result
+            
+            # Check for ref commands
+            ref_result = self._handle_ref_commands(goal_description)
+            if ref_result is not None:
+                return ref_result
+
             # Clear any existing goals before starting a new goal
-            if self.goal_monitor.active_goals:
-                print(f"🧹 Clearing {len(self.goal_monitor.active_goals)} previous goals")
+            if self.goal_monitor.active_goal:
+                print(f"🧹 Clearing {self.goal_monitor.active_goal} previous goals")
                 self.goal_monitor.clear_all_goals()
             
             # Reset goal monitor state for fresh start
-            self.goal_monitor.reset_retry_requests()
+            self.goal_monitor.reset_retry_request()
             
             self.goal_monitor.set_user_prompt(goal_description)
             
             # Set up smart goal monitoring if enabled
-            if smart_goals:
-                goal_description = self._setup_smart_goals(goal_description, additional_context)
-                # If conditional evaluation resulted in a deliberate no-op (no fail action and condition false)
-                if not goal_description.strip():
-                    print("ℹ️ No actionable goal after condition evaluation (no-op). Skipping.")
-                    return True
+            goal, transformed_goal_description = self._create_goal_from_description(goal_description)
+
+            if isinstance(goal, WhileGoal):
+                return self._execute_while_loop(goal, start_time)
+
+            if goal:
+                goal_description = transformed_goal_description
+                self.goal_monitor.add_goal(goal)
+            else:
+                print("ℹ️ No smart goal setup")
+                return True
             
-            print(f"🔍 Smart goals setup: {self.goal_monitor.active_goals}\n")
+            # If conditional evaluation resulted in a deliberate no-op (no fail action and condition false)
+            if not goal_description.strip():
+                duration_ms = (time.time() - start_time) * 1000
+                self.logger.log(LogLevel.INFO, LogCategory.GOAL, "No actionable goal after condition evaluation (no-op)", duration_ms=duration_ms)
+                print("ℹ️ No actionable goal after condition evaluation (no-op). Skipping.")
+                return True
+            
+            print(f"🔍 Smart goals setup: {goal}\n")
 
             # Simple goal bypass (no LLM): handle press/scroll-only flows directly
             simple_result = self._try_simple_goal_bypass()
             if simple_result is not None:
                 return simple_result
-            
+
             for attempt in range(self.max_attempts):
                 self.current_attempt = attempt + 1
                 print(f"\n--- Attempt {self.current_attempt}/{self.max_attempts} ---")
                 
                 # Show retry context at the start of each new attempt (but don't reset yet)
                 if attempt > 0:  # Don't reset on first attempt
-                    retry_goals = self.goal_monitor.check_for_retry_requests()
-                    if retry_goals:
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
                         print(f"🔄 Starting attempt {self.current_attempt} with retry state from previous attempt")
-                        for goal in retry_goals:
-                            print(f"   🔄 {goal}: Retry attempt {goal.retry_count}/{goal.max_retries}")
+                        print(f"   🔄 {retry_goal}: Retry attempt {retry_goal.retry_count}/{retry_goal.max_retries}")
                         # Don't reset retry state here - let it persist until after plan generation
+                    else:
+                        print("ℹ️ No retry state from previous attempt")
                 
                 # Check if goal is already achieved
-                if smart_goals:
-                    goal_results = self.goal_monitor.evaluate_goals()
-                    if any(result.status == GoalStatus.ACHIEVED for result in goal_results.values()):
-                        print("✅ Smart goal achieved!")
-                        self._print_goal_summary()
-                        return True
+                goal_result = self.goal_monitor.evaluate_goal()
+                if goal_result.status == GoalStatus.ACHIEVED:
+                    duration_ms = (time.time() - start_time) * 1000
+                    self.logger.log_goal_success(goal_description, duration_ms)
+                    print("✅ Smart goal achieved!")
+                    self._print_goal_summary()
+                    return True
                 
                 # Get current page state
                 page_info = self.page_utils.get_page_info()
@@ -559,35 +630,49 @@ class BrowserVisionBot:
                 sig_hash = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
                 
                 # Skip if DOM signature hasn't changed and no retry requested
-                retry_goals = self.goal_monitor.check_for_retry_requests()
-                if sig_hash == self.last_dom_signature and not retry_goals:
+                retry_goal = self.goal_monitor.check_for_retry_request()
+                if sig_hash == self.last_dom_signature and not retry_goal:
                     print("⚠️ Same DOM signature as last attempt, scrolling to break loop")
                     self.page_utils.scroll_page()
                     continue
-                elif sig_hash == self.last_dom_signature and retry_goals:
+                elif sig_hash == self.last_dom_signature and retry_goal:
                     print("🔄 Same DOM but retry requested - proceeding with retry attempt")
                 self.last_dom_signature = sig_hash
                 
                 # Decide whether detection will be needed to avoid an extra screenshot
-                needs_detection = any(g.needs_detection for g in self.goal_monitor.active_goals) if self.goal_monitor.active_goals else True
+                needs_detection = self.goal_monitor.active_goal.needs_detection if self.goal_monitor.active_goal else True
                 # Only take a screenshot now when not running detection
                 screenshot = None
                 if not needs_detection:
                     # Lower quality for model-bound screenshot to reduce payload
                     screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
 
+                if goal.needs_plan:
                 # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
-                plan = self._generate_plan(goal_description, additional_context, screenshot, page_info)
-                
+                    plan = self._generate_plan(goal_description, additional_context, screenshot, page_info)
+                else:
+                    plan = None
+                    
+                    goal_eval_result = self.goal_monitor.evaluate_goal()
+                    print(f"🔍 Smart goal {goal_description} for goal {self.goal_monitor.active_goal.__class__.__name__} evaluation result: {goal_eval_result}")
+                    if goal_eval_result.status == GoalStatus.ACHIEVED:
+                        duration_ms = (time.time() - start_time) * 1000
+                        self.logger.log_goal_success(goal_description, duration_ms)
+                        print(f"✅ Smart goal {goal_description} achieved during plan execution!")
+                        self._print_goal_summary()
+                        return True
+                    else:
+                        print(f"⏳ Smart goal {goal_description} pending further evaluation")
+
                 if not plan or not plan.action_steps:
-                    print("❌ No valid plan generated")
+                    print(f"❌ No valid plan generated for goal: {goal_description}")
                     continue
                 
                 # Reset retry state after plan generation (retry context has been used)
-                retry_goals = self.goal_monitor.check_for_retry_requests()
-                if retry_goals:
+                retry_goal = self.goal_monitor.check_for_retry_request()
+                if retry_goal:
                     print("🔄 Retry context used in plan generation, resetting retry state")
-                    self.goal_monitor.reset_retry_requests()
+                    self.goal_monitor.reset_retry_request()
                 
                 print(f"📋 Generated plan with {len(plan.action_steps)} steps")
                 print(f"🤔 Reasoning: {plan.reasoning}")
@@ -595,23 +680,24 @@ class BrowserVisionBot:
                 # Execute the plan
                 success = self.action_executor.execute_plan(plan, page_info)
                 if success:
-                    if smart_goals:
-                        # Check if goals were achieved during execution
-                        goal_results = self.goal_monitor.evaluate_goals()
-                        
-                        # Check for retry requests after goal evaluation
-                        retry_goals = self.goal_monitor.check_for_retry_requests()
-                        if retry_goals:
-                            print("🔄 Goals requested retry after plan execution - regenerating plan")
-                            for goal in retry_goals:
-                                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
-                            # Don't reset retry requests here - let them persist for the next iteration
-                            continue
-                        
-                        if any(result.status == GoalStatus.ACHIEVED for result in goal_results.values()):
-                            print("✅ Smart goal achieved during plan execution!")
-                            self._print_goal_summary()
-                            return True
+                    
+                    # Check if goals were achieved during execution
+                    goal_result = self.goal_monitor.evaluate_goal()
+                    
+                    # Check for retry requests after goal evaluation
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
+                        print("🔄 Goal requested retry after plan execution - regenerating plan")
+                        print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        # Don't reset retry requests here - let them persist for the next iteration
+                        continue
+                    
+                    if goal_result.status == GoalStatus.ACHIEVED:
+                        duration_ms = (time.time() - start_time) * 1000
+                        self.logger.log_goal_success(goal_description, duration_ms)
+                        print(f"✅ Smart goal {goal_description} achieved during plan execution!")
+                        self._print_goal_summary()
+                        return True
                     
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
                     # to explore more of the page instead of waiting for duplicate screenshots
@@ -620,8 +706,8 @@ class BrowserVisionBot:
                     continue
                 else:
                     # Plan execution failed - check if it was due to retry request
-                    retry_goals = self.goal_monitor.check_for_retry_requests()
-                    if retry_goals:
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
                         print("🔄 Plan execution aborted due to retry request - regenerating plan")
                         # Don't reset retry requests here - let them persist for the next iteration
                         # The retry state will be used to inform the next plan generation
@@ -630,25 +716,28 @@ class BrowserVisionBot:
                         print("❌ Plan execution failed for unknown reason")
                         continue
             
+            duration_ms = (time.time() - start_time) * 1000
+            self.logger.log_goal_failure(goal_description, f"Failed after {self.max_attempts} attempts", duration_ms)
             print(f"❌ Failed to achieve goal after {self.max_attempts} attempts")
-            if smart_goals:
-                self._print_goal_summary()
+            self._print_goal_summary()
             return False
         finally:
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
             self._in_act = False
+            if self._interpretation_mode_stack:
+                self._interpretation_mode_stack.pop()
             try:
                 self._flush_pending_auto_on_load()
             except Exception:
                 pass
 
-    def goto(self, url: str) -> None:
+    def goto(self, url: str, timeout: int = 2000) -> None:
         """Go to a URL"""
         if not self.started:
             print("❌ Bot not started")
             return
         
-        self.page.goto(url, wait_until="domcontentloaded")
+        self.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
         self.url = url
         # Ensure GoalMonitor history reflects the first real navigation instead of about:blank
         try:
@@ -680,12 +769,92 @@ class BrowserVisionBot:
         except Exception:
             pass
 
+    def register_prompts(
+        self,
+        prompts: List[str],
+        ref_id: str,
+        all_must_be_true: bool = False,
+        interpretation_mode: Optional[str] = None,
+    ) -> bool:
+        """
+        Register multiple commands for later reference and execution.
+        
+        Args:
+            prompts: List of command prompts to register
+            ref_id: Unique identifier for referencing these commands
+            all_must_be_true: Require every command to succeed when evaluating this ref
+            interpretation_mode: Optional interpretation mode to apply when executing this ref
+            
+        Returns:
+            True if commands were registered successfully, False otherwise
+        """
+        try:
+            if not prompts:
+                self.logger.log_error("No prompts provided for register_prompts", "register_prompts() called with empty prompts")
+                print("❌ No prompts provided for register_prompts")
+                return False
+            
+            # Store the commands for later reference
+            normalized_mode = self._normalize_interpretation_mode(interpretation_mode) if interpretation_mode else None
+
+            self.command_refs[ref_id] = {
+                "prompts": prompts.copy(),
+                "all_must_be_true": bool(all_must_be_true),
+                "interpretation_mode": normalized_mode,
+            }
+            mode = "ALL" if all_must_be_true else "ANY"
+            extra = f", interpretation={normalized_mode}" if normalized_mode else ""
+            self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, f"Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}{extra})")
+            print(f"📋 Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}{extra})")
+            
+            # Show what was registered
+            for i, prompt in enumerate(prompts, 1):
+                print(f"   {i}. {prompt}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.log_error(f"Error in register_prompts: {e}", "register_prompts() execution", {"ref_id": ref_id})
+            print(f"❌ Error in register_prompts: {e}")
+            return False
+
+    def _normalize_interpretation_mode(self, mode: Optional[str]) -> str:
+        if not mode:
+            return self.default_interpretation_mode
+        normalized = str(mode).lower().strip()
+        if normalized not in {"literal", "semantic", "auto"}:
+            return self.default_interpretation_mode
+        if normalized == "auto":
+            return "semantic"
+        return normalized
+
+    def _get_current_interpretation_mode(self) -> str:
+        if self._interpretation_mode_stack:
+            return self._interpretation_mode_stack[-1]
+        return self.default_interpretation_mode
+
+    def _get_semantic_target(self, description: str) -> Optional[SemanticTarget]:
+        mode = self._get_current_interpretation_mode()
+        if mode == "literal":
+            return None
+        key = (description or "").strip().lower()
+        if not key:
+            return None
+        if key in self._semantic_target_cache:
+            return self._semantic_target_cache[key]
+        target = build_semantic_target(description)
+        self._semantic_target_cache[key] = target
+        return target
 
     def _generate_plan(self, goal_description: str, additional_context: str, screenshot: bytes, page_info: PageInfo) -> Optional[VisionPlan]:
         """Generate an action plan using numbered element detection"""
 
         # Check if any active goal needs element detection
-        needs_detection = any(goal.needs_detection for goal in self.goal_monitor.active_goals) if self.goal_monitor.active_goals else True
+        needs_detection = self.goal_monitor.active_goal.needs_detection if self.goal_monitor.active_goal else True
+
+        current_mode = self._get_current_interpretation_mode()
+        semantic_hint = self._get_semantic_target(goal_description)
+        print(f"[PlanGen] interpretation_mode={current_mode} semantic_hint={'yes' if semantic_hint else 'no'} for '{goal_description}'")
 
         if not needs_detection:
             print("🚫 Skipping element detection - goal doesn't require it")
@@ -696,15 +865,21 @@ class BrowserVisionBot:
                 detected_elements=PageElements(elements=[]),
                 page_info=page_info,
                 screenshot=screenshot,
-                active_goals=list(self.goal_monitor.active_goals or []) if self.goal_monitor else [],
-                retry_goals=list(self.goal_monitor.check_for_retry_requests() or []) if self.goal_monitor else [],
+                active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
+                retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
                 page=self.page,
+                command_history=self.command_history,
             )
             return plan
 
-        # Step 1: Number every element
-        print("🔢 Numbering all interactive elements...")
-        element_data = self.overlay_manager.create_numbered_overlays(page_info)
+        # Step 1: Number interactive elements (respecting focus context)
+        print("🔢 Numbering interactive elements...")
+        element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive")
+        
+        # Filter elements based on current focus context
+        if self.focus_manager.get_current_focus_context():
+            print("🎯 Filtering elements based on current focus context...")
+            element_data = self._filter_elements_by_focus(element_data)
 
         if not element_data:
             print("❌ No interactive elements found for overlays")
@@ -714,30 +889,6 @@ class BrowserVisionBot:
         # Lower quality for model-bound overlay screenshot
         screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
 
-        # Optional pass 2a: pre-select relevant overlays using the detector to reduce prompt size
-        relevant_overlay_indices = None
-        # Run two-pass detection only when there are many overlays (saves a model call)
-        if self.two_pass_planning and len(element_data) > self.max_coordinate_overlays:
-            try:
-                detected = self.element_detector.detect_elements_with_overlays(
-                    goal_description=goal_description,
-                    additional_context=additional_context,
-                    screenshot=screenshot_with_overlays,
-                    element_data=element_data,
-                    page_info=page_info,
-                )
-                if detected and getattr(detected, 'elements', None):
-                    relevant_overlay_indices = [
-                        e.overlay_number for e in detected.elements if getattr(e, 'overlay_number', None) is not None
-                    ]
-                    # Heuristic refinement for link/navigation intents (e.g., prefer hrefs matching goal)
-                    refined = self.plan_generator.refine_overlays_by_goal(element_data, relevant_overlay_indices, goal_description)
-                    if refined:
-                        relevant_overlay_indices = refined
-                    print(f"🎯 Two-pass: {len(relevant_overlay_indices)} recommended overlays from detector: {relevant_overlay_indices[:10]}{'...' if len(relevant_overlay_indices)>10 else ''}")
-            except Exception as e:
-                print(f"⚠️ Two-pass detection failed, continuing with single-pass: {e}")
-
         # Step 3: Generate plan with element indices (and optional filtered overlay list)
         plan = self.plan_generator.create_plan_with_element_indices(
             goal_description=goal_description,
@@ -745,100 +896,62 @@ class BrowserVisionBot:
             element_data=element_data,
             screenshot_with_overlays=screenshot_with_overlays,
             page_info=page_info,
-            relevant_overlay_indices=relevant_overlay_indices,
-            active_goals=list(self.goal_monitor.active_goals or []) if self.goal_monitor else [],
-            retry_goals=list(self.goal_monitor.check_for_retry_requests() or []) if self.goal_monitor else [],
-            page=self.page,
-            dedup_mode=self.dedup_mode,
-        )
+                active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
+                retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
+                page=self.page,
+                command_history=self.command_history,
+                interpretation_mode=current_mode,
+                semantic_hint=semantic_hint,
+            )
 
         # Step 4: Clean up overlays after plan generation
         self.overlay_manager.remove_overlays()
 
         return plan
 
-    # -------------------- Dedup policy helpers --------------------
-    def set_dedup_mode(self, mode: str) -> None:
-        """Set dedup mode: 'off' (default), 'on', or 'auto'."""
-        mode = (mode or "off").strip().lower()
-        if mode not in ("off", "on", "auto"):
-            mode = "off"
-        self.dedup_mode = mode
-
-
     # -------------------- Public memory helpers (general) --------------------
-    def remember(self, kind: str, signature: str, *, scope: str = "domain", ttl_seconds: float | None = 3600.0, data: Dict | None = None) -> None:
-        """Add an item to the bot's general memory.
+    # Memory store methods removed - deduplication now handled by focus manager
 
-        - kind: logical namespace (e.g., 'clicked', 'dismissed_banner', 'filled_field')
-        - signature: any stable identifier for the target (use stable_sig for hashing)
-        - scope: 'global' | 'domain' | 'page'
-        - ttl_seconds: expire after this many seconds (None = no expiry)
-        - data: optional metadata
-        """
-        try:
-            url = self.page.url if self.page else ""
-            self.memory_store.put(kind, signature, scope=scope, url=url, ttl_seconds=ttl_seconds, data=data)
-        except Exception:
-            pass
-
-    def remember_has(self, kind: str, signature: str, *, scope: str = "domain") -> bool:
-        try:
-            url = self.page.url if self.page else ""
-            return self.memory_store.has(kind, signature, scope=scope, url=url)
-        except Exception:
-            return False
-
-    def remember_remove(self, kind: str, signature: str, *, scope: str = "domain") -> None:
-        try:
-            url = self.page.url if self.page else ""
-            self.memory_store.remove(kind, signature, scope=scope, url=url)
-        except Exception:
-            pass
-
-    def remember_list(self, kind: str | None = None, *, scope: str = "domain") -> Dict[str, Any]:
-        try:
-            url = self.page.url if self.page else ""
-            return self.memory_store.list(kind=kind, scope=scope, url=url)
-        except Exception:
-            return {}
-
-    def remember_clear_scope(self, scope: str = "domain") -> None:
-        try:
-            url = self.page.url if self.page else ""
-            self.memory_store.clear_scope(scope=scope, url=url)
-        except Exception:
-            pass
-
-    def _setup_smart_goals(self, goal_description: str, additional_context: str = "") -> str:
+    def _create_goal_from_description(self, goal_description: str) -> tuple[BaseGoal, str]:
         """Set up smart goals based on the goal description and return the updated description"""
         # 1) Structured syntax (explicit) takes precedence
         try:
             sw = parse_structured_while(goal_description)
             if sw:
+                print(f"🔁 WhileGoal (structured): '{sw}'")
                 cond_text, body_text = sw
-                wg = self._create_while_goal_from_parts(cond_text, body_text)
+                wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text)
                 if wg:
-                    self.goal_monitor.add_goal(wg)
-                    print(f"🔁 Added WhileGoal (structured): '{wg.description}'")
-                    return body_text
+                    print(f"🔁 Created WhileGoal (structured): '{wg.description}'")
+                    return wg, body_text
+                else:
+                    print(f"ℹ️ No WhileGoal created from structured while parse for goal description: '{goal_description}'")
+            else:
+                print(f"ℹ️ No structured while parse for goal description: '{goal_description}'")
         except Exception as e:
             print(f"⚠️ Structured while parse failed: {e}")
 
         try:
-            si = parse_structured_if(goal_description)
-            if si:
-                cond_text, success_desc, fail_desc = si
-                ig = self._create_if_goal_from_parts(cond_text, success_desc, fail_desc)
-                if ig:
-                    active_sub_goal, updated_description = self._evaluate_conditional_goal_immediately(ig)
-                    if active_sub_goal:
-                        self.goal_monitor.add_goal(active_sub_goal)
-                        print(f"🔀 Added IfGoal (structured) active sub-goal: {active_sub_goal.__class__.__name__} - '{active_sub_goal.description}'")
-                        return updated_description
-                    elif updated_description == "":
+            parsed_if = parse_structured_if(goal_description)
+            if parsed_if:
+                print(f"🔀 Structured IF parse: {parsed_if}")
+                condition_text, success_action, fail_action = parsed_if
+                if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action)
+                print(f"🔀 Created IfGoal (structured): '{if_goal.description}'")
+                if if_goal:
+                    result_goal, result_description = self._evaluate_if_goal(if_goal)
+                    print(f"🔀 IfGoal (structured) evaluation result: {result_goal}")
+                    if result_goal:
+                        print(f"🔀 Added IfGoal (structured) active sub-goal: {result_goal.__class__.__name__} - '{result_goal.description}'")
+                        return result_goal, result_description
+                    elif result_description == "":
                         print("ℹ️ Structured IF evaluated false with no fail action → no-op")
-                        return ""
+                        return None, ""
+                else:
+                    print(f"ℹ️ No IfGoal created from structured if parse for goal description: '{goal_description}'")
+            else:
+                print(f"ℹ️ No structured if parse for goal description: '{goal_description}'")
+            
         except Exception as e:
             print(f"⚠️ Structured IF parse failed: {e}")
 
@@ -847,16 +960,24 @@ class BrowserVisionBot:
             kw = parse_keyword_command(goal_description)
             if kw:
                 keyword, payload = kw
+                
                 goal = self._create_goal_from_keyword(keyword, payload)
                 if goal:
-                    self.goal_monitor.add_goal(goal)
-                    print(f"✅ Added {goal.__class__.__name__} via keyword '{keyword}': '{goal.description}'")
+                    print(f"✅ Created {goal.__class__.__name__} via keyword '{keyword}': '{goal.description}'")
                     # Focus plan generation on the payload/action text
-                    return payload or goal_description
+                    return goal, payload or goal_description
+                else:
+                    print(f"ℹ️ No goal created from keyword command for goal description: '{goal_description}'")
+                    return None, goal_description
+            else:
+                print(f"ℹ️ No keyword command parse for goal description: '{goal_description}'")
+                return None, goal_description
         except Exception as e:
             print(f"⚠️ Keyword command parse failed: {e}")
-            
-        return goal_description
+
+
+        print(f"ℹ️ No goal created from goal description: '{goal_description}'")
+        return None, goal_description
 
     def _create_goal_from_keyword(self, keyword: str, payload: str) -> Optional[BaseGoal]:
         """Create a specific goal from a single keyword and payload."""
@@ -908,274 +1029,19 @@ class BrowserVisionBot:
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
             return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False)
+        # if k == "ref":
+        #     goal_description = keyword + ": " + payload
+        #     print(f"🔄 Handling ref command: '{goal_description}'")
+        #     ref_result = self._handle_ref_commands(goal_description)
+        #     if ref_result is not None:
+        #         print("✅ Created RefGoal (structured)")
+        #         return BaseGoal.make_ref_goal(goal_description, payload, ref_result)
+        #     else:
+        #         print(f"ℹ️ No ref result for ref command: '{goal_description}'")
+        #         return BaseGoal.make_ref_goal(goal_description, payload, False)
         return None
 
-    def _create_while_goal(self, goal_description: str) -> tuple[Optional[WhileGoal], str]:
-        """Create a WhileGoal from natural language loop text. Returns (goal, loop_body_description)."""
-        try:
-            cond_text, body_text = parse_while_statement(goal_description)
-            if not cond_text or not body_text:
-                return None, ""
-
-            print("🔍 DEBUG: Parsed while/until statement:")
-            print(f"   📋 Stop condition: '{cond_text}'")
-            print(f"   🔁 Loop body: '{body_text}'")
-
-            # Build condition via predicate engine only (no legacy screenshot methods)
-            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
-
-            expr = compile_nl_to_expr(cond_text)
-            condition = _create_predicate(expr, f"Predicate: {cond_text}") if expr else None
-
-            # Fallbacks for common loop stops
-            if not condition:
-                low = cond_text.lower()
-                # time patterns like "5pm", "17:00" → use engine system.hour/minute
-                if not condition:
-                    import re
-                    m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", cond_text, flags=re.IGNORECASE)
-                    if m:
-                        hour = int(m.group(1))
-                        minute = int(m.group(2) or 0)
-                        mer = (m.group(3) or "").lower()
-                        if mer == "pm" and hour < 12:
-                            hour += 12
-                        if mer == "am" and hour == 12:
-                            hour = 0
-                        expr = {
-                            "or": [
-                                {">": [{"call": {"name": "system.hour"}}, hour]},
-                                {"and": [
-                                    {"==": [{"call": {"name": "system.hour"}}, hour]},
-                                    {">=": [{"call": {"name": "system.minute"}}, minute]}
-                                ]}
-                            ]
-                        }
-                        condition = _create_predicate(expr, f"Time >= {hour:02d}:{minute:02d}")
-                # "see X" → viewport text contains X
-                if not condition and ("see" in low or "visible" in low):
-                    # Try to extract quoted target first
-                    import re
-                    qm = re.search(r"['\"]([^'\"]+)['\"]", cond_text)
-                    target = qm.group(1) if qm else cond_text
-                    expr = {"contains": [{"call": {"name": "env.page.viewport_text"}}, target]}
-                    condition = _create_predicate(expr, f"Viewport shows '{target}'")
-
-            if not condition:
-                # Heuristic fallback: handle "reach X page" style conditions by building a predicate
-                low = cond_text.lower()
-                import re as _re
-                # Try to extract quoted phrase or the word(s) after 'reach'/'back to'/'return to'
-                qm = _re.search(r"['\"]([^'\"]+)['\"]", cond_text)
-                target_phrase = (qm.group(1) if qm else cond_text).strip()
-                # Common specialization: google search page
-                expr = None
-                if ("google" in low) and ("search" in low or "results" in low):
-                    expr = {
-                        "and": [
-                            {"contains": [{"call": {"name": "env.page.url"}}, "google"]},
-                            {"or": [
-                                {"contains": [{"call": {"name": "env.page.url"}}, "search"]},
-                                {"contains": [{"call": {"name": "env.page.url"}}, "q="]}
-                            ]}
-                        ]
-                    }
-                else:
-                    # Generic: URL or title contains target phrase tokens
-                    expr = {
-                        "or": [
-                            {"contains": [{"call": {"name": "env.page.url"}}, target_phrase]},
-                            {"contains": [{"call": {"name": "env.page.title"}}, target_phrase]}
-                        ]
-                    }
-                from goals.condition_engine import create_predicate_condition as _create_predicate
-                try:
-                    condition = _create_predicate(expr, f"Reach '{target_phrase}'")
-                except Exception:
-                    condition = None
-
-            if not condition:
-                print(f"⚠️ Could not create condition for while-statement: {cond_text}")
-                return None, ""
-
-            # Create the loop body as a sub-goal using shared logic
-            body_goal = self._create_sub_goal(body_text)
-
-            # Build WhileGoal; align detection with body goal
-            wg = WhileGoal(
-                condition=condition,
-                loop_goal=body_goal,
-                description=goal_description,
-                max_iterations=30,
-                max_duration_s=240.0,
-                needs_detection=getattr(body_goal, 'needs_detection', True),
-            )
-
-            # For planning, we want the body text as the main requested action
-            updated_description = body_goal.description
-            return wg, updated_description
-
-        except Exception as e:
-            print(f"❌ Error creating WhileGoal: {e}")
-            return None, ""
-
-    def _create_conditional_goal(self, goal_description: str) -> Optional[IfGoal]:
-        """Create a conditional goal from a goal description"""
-        try:
-            # Parse the conditional statement
-            condition_text, success_action, fail_action = self._parse_conditional_statement(goal_description)
-            
-            print("🔍 DEBUG: Parsed conditional statement:")
-            print(f"   📋 Condition: '{condition_text}'")
-            print(f"   ✅ Success action: '{success_action}'")
-            print(f"   ❌ Fail action: '{fail_action}'")
-            
-            if not condition_text:
-                print(f"⚠️ Could not parse condition from: {goal_description}")
-                return None
-            
-            # Build the predicate using the condition engine (which can use AI-assisted helpers internally)
-            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
-            expr = compile_nl_to_expr(condition_text)
-            condition = _create_predicate(expr, f"Predicate: {condition_text}") if expr else None
-            
-            if not condition:
-                # Fallback: create a simple condition based on common patterns
-                condition = self._create_fallback_condition(condition_text)
-            
-            if not condition:
-                print(f"⚠️ Could not create condition for: {condition_text}")
-                return None
-            
-            print("🔍 DEBUG: Created condition:")
-            print(f"   📋 Condition type: {condition.condition_type}")
-            print(f"   📋 Condition description: {condition.description}")
-            
-            # Create sub-goals for success and (optional) fail actions
-            # A success action is required - if none provided, the goal should fail
-            if success_action is None:
-                print("⚠️ No success action provided for conditional goal. Goal will fail.")
-                return None
-
-            success_goal = self._create_sub_goal(success_action)
-
-            if fail_action is None:
-                # Use a no-op fail goal so we can skip adding any fail action later
-                from goals.base import BaseGoal, GoalResult, GoalStatus
-                class _NoOpFailGoal(BaseGoal):
-                    def __init__(self):
-                        super().__init__("No-op (no fail action)")
-                        self._is_noop = True
-                    def evaluate(self, context):
-                        return GoalResult(status=GoalStatus.ACHIEVED, confidence=1.0, reasoning="Condition false → no-op fail branch")
-                    def get_description(self, context):
-                        return self.description
-                fail_goal = _NoOpFailGoal()
-            else:
-                fail_goal = self._create_sub_goal(fail_action)
-            
-            print("🔍 DEBUG: Created sub-goals:")
-            print(f"   ✅ Success goal: {success_goal.__class__.__name__} - '{success_goal.description}'")
-            print(f"   ❌ Fail goal: {fail_goal.__class__.__name__} - '{fail_goal.description}'")
-            
-            # Create the IfGoal
-            if_goal = IfGoal(
-                condition=condition,
-                success_goal=success_goal,
-                fail_goal=fail_goal,
-                description=goal_description
-            )
-            
-            return if_goal
-            
-        except Exception as e:
-            print(f"❌ Error creating conditional goal: {e}")
-            return None
-
-    def _parse_conditional_statement(self, goal_description: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        """Parse a conditional statement into condition, success action, and fail action using AI"""
-        try:
-            from ai_utils import generate_text
-            
-            # Create a prompt for the AI to parse the conditional statement
-            prompt = f"""
-                        Parse the following conditional statement and extract the condition, success action, and fail action.
-
-                        Conditional statement: "{goal_description}"
-
-                        Rules:
-                        - Extract the condition that needs to be evaluated
-                        - Extract the success action to take if the condition is true
-                        - Extract the fail action to take if the condition is false (if present)
-                        - A success action is REQUIRED - if none is found, the statement is invalid
-                        - A fail action is OPTIONAL - if none is found, use null
-
-                        Common conditional patterns:
-                        - "if X then Y else Z" → condition: X, success: Y, fail: Z
-                        - "when X do Y otherwise Z" → condition: X, success: Y, fail: Z
-                        - "if X, Y, else Z" → condition: X, success: Y, fail: Z
-                        - "should X, then Y, otherwise Z" → condition: X, success: Y, fail: Z
-                        - "provided that X, do Y, else Z" → condition: X, success: Y, fail: Z
-                        - "in case X, Y, otherwise Z" → condition: X, success: Y, fail: Z
-                        - "unless X, do Y, else Z" → condition: X, success: Y, fail: Z
-                        - "if X then Y" → condition: X, success: Y, fail: null
-                        - "when X do Y" → condition: X, success: Y, fail: null
-
-                        Response format (JSON only):
-                        {{
-                            "condition": "the condition to evaluate",
-                            "success_action": "action to take if condition is true",
-                            "fail_action": "action to take if condition is false (or null if not specified)"
-                        }}
-
-                        If the statement cannot be parsed or has no success action, return:
-                        {{
-                            "condition": null,
-                            "success_action": null,
-                            "fail_action": null
-                        }}
-                        """
-            
-            # Call AI to parse the conditional statement
-            response = generate_text(
-                prompt=prompt,
-                reasoning_level="minimal",
-                system_prompt="You are a conditional statement parser. Extract condition, success action, and fail action from natural language conditional statements. Return only JSON.",
-                model="gpt-5-nano"
-            )
-            
-            if not response:
-                print(f"⚠️ No AI response for conditional statement: '{goal_description}'")
-                return None, None, None
-            
-            # Parse the JSON response
-            import json
-            try:
-                result: dict = json.loads(response.strip())
-            except json.JSONDecodeError:
-                print(f"⚠️ Invalid JSON response for conditional statement '{goal_description}': {response}")
-                return None, None, None
-            
-            condition = result.get('condition')
-            success_action = result.get('success_action')
-            fail_action = result.get('fail_action')
-            
-            # Validate that we have at least a condition and success action
-            if not condition or not success_action:
-                print(f"⚠️ Invalid conditional statement - missing condition or success action: '{goal_description}'")
-                return None, None, None
-            
-            # Convert null fail_action to None
-            if fail_action is None or fail_action == "null":
-                fail_action = None
-            
-            return condition, success_action, fail_action
-                
-        except Exception as e:
-            print(f"⚠️ Error parsing conditional statement '{goal_description}': {e}")
-            return None, None, None
-
-    def _create_while_goal_from_parts(self, cond_text: str, body_text: str) -> Optional[WhileGoal]:
+    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str) -> Optional[WhileGoal]:
         """Create WhileGoal from explicit condition/body parts."""
         try:
             from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
@@ -1183,19 +1049,93 @@ class BrowserVisionBot:
             if not expr:
                 return None
             condition = _create_predicate(expr, f"Predicate: {cond_text}")
-            loop_goal = self._create_goal_from_description(body_text, is_sub_goal=True)
-            if not loop_goal:
-                return None
             wg = WhileGoal(
+                description=goal_description,
                 condition=condition,
-                loop_goal=loop_goal,
-                description=f"While ({cond_text}) do: {loop_goal.description}",
-                needs_detection=getattr(loop_goal, 'needs_detection', True),
+                loop_prompt=body_text,
             )
             return wg
         except Exception as e:
             print(f"⚠️ Error creating structured WhileGoal: {e}")
             return None
+
+    def _execute_while_loop(self, goal: WhileGoal, start_time: float) -> bool:
+        """Execute a WhileGoal using standard while-loop semantics."""
+        loop_description = goal.description or f"While loop: {goal.loop_prompt}"
+        print(f"🔁 Starting while loop: {loop_description}")
+
+        iterations = 0
+        # Ensure we evaluate a clean condition on the first pass
+        if self.goal_monitor.active_goal:
+            self.goal_monitor.clear_all_goals()
+        self.goal_monitor.reset_retry_request()
+
+        while True:
+            try:
+                context = self.goal_monitor._build_goal_context()
+            except Exception as e:
+                error_msg = f"Unable to build context for while loop evaluation: {e}"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
+                return False
+
+            try:
+                condition_result = bool(goal.condition.evaluator(context))
+            except Exception as e:
+                error_msg = f"While condition error: {e}"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
+                return False
+
+            goal.progress.last_condition_result = condition_result
+            self.logger.log_condition_evaluation(goal.condition.description, condition_result)
+            print(f"🔍 While condition '{goal.condition.description}' → {condition_result}")
+
+            if not condition_result:
+                duration_ms = (time.time() - start_time) * 1000
+                print(f"✅ While loop condition false after {iterations} iteration{'s' if iterations != 1 else ''}")
+                if goal.else_prompt and goal.else_prompt.strip():
+                    print(f"➡️ Executing while-else prompt: {goal.else_prompt}")
+                    else_result = bool(self.act(goal.else_prompt))
+                    if else_result:
+                        self.logger.log_goal_success(loop_description, duration_ms, {"iterations": iterations, "outcome": "else"})
+                    else:
+                        self.logger.log_goal_failure(loop_description, f"Else prompt failed: {goal.else_prompt}", duration_ms)
+                    return else_result
+
+                self.logger.log_goal_success(loop_description, duration_ms, {"iterations": iterations, "outcome": "completed"})
+                return True
+
+            if iterations >= goal.max_iterations:
+                duration_ms = (time.time() - start_time) * 1000
+                reason = f"Loop exceeded max iterations ({goal.max_iterations})"
+                print(f"❌ {reason}")
+                self.logger.log_goal_failure(loop_description, reason, duration_ms)
+                return False
+
+            if not goal.loop_prompt or not goal.loop_prompt.strip():
+                duration_ms = (time.time() - start_time) * 1000
+                reason = "While loop body is empty"
+                print(f"❌ {reason}")
+                self.logger.log_goal_failure(loop_description, reason, duration_ms)
+                return False
+
+            iterations += 1
+            goal.progress.iterations = iterations
+            print(f"🔄 While loop iteration {iterations}: executing body '{goal.loop_prompt}'")
+
+            body_result = bool(self.act(goal.loop_prompt))
+            if not body_result:
+                duration_ms = (time.time() - start_time) * 1000
+                reason = f"Loop body failed on iteration {iterations}"
+                print(f"❌ {reason}")
+                self.logger.log_goal_failure(loop_description, reason, duration_ms)
+                return False
+
+            # Reset goal monitor state before the next condition check
+            if self.goal_monitor.active_goal:
+                self.goal_monitor.clear_all_goals()
+            self.goal_monitor.reset_retry_request()
 
     def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str]) -> Optional[IfGoal]:
         """Create IfGoal from explicit parts."""
@@ -1206,16 +1146,17 @@ class BrowserVisionBot:
                 return None
             condition = _create_predicate(expr, f"Predicate: {condition_text}")
 
-            success_goal = self._create_goal_from_description(success_text, is_sub_goal=True)
+            print(f"Success text: '{success_text}'")
+            success_goal, _ = self._create_goal_from_description(success_text)
             if not success_goal:
                 return None
-
+            print(f"🔀 Created success goal: '{success_goal.description}'")
             if fail_text and fail_text.strip():
-                fail_goal = self._create_goal_from_description(fail_text, is_sub_goal=True)
+                fail_goal, _ = self._create_goal_from_description(fail_text)
                 if not fail_goal:
-                    fail_goal = self._make_noop_goal("No-op fail branch")
+                    fail_goal = BaseGoal.make_noop_goal("No-op fail branch")
             else:
-                fail_goal = self._make_noop_goal("No-op fail branch")
+                fail_goal = BaseGoal.make_noop_goal("No-op fail branch")
 
             if_goal = IfGoal(condition, success_goal, fail_goal, description=f"If {condition_text} then {success_goal.description} else {fail_goal.description}")
             return if_goal
@@ -1223,244 +1164,7 @@ class BrowserVisionBot:
             print(f"⚠️ Error creating structured IfGoal: {e}")
             return None
 
-    def _make_noop_goal(self, reason: str):
-        class _NoOpGoal(BaseGoal):
-            def __init__(self, description: str):
-                super().__init__(description, needs_detection=False)
-                self._is_noop = True
-            def evaluate(self, context):
-                return GoalResult(status=GoalStatus.ACHIEVED, confidence=1.0, reasoning="No-op branch")
-            def get_description(self, context):
-                return self.description
-        return _NoOpGoal(reason)
-
-    def _create_fallback_condition(self, condition_text: str) -> Optional[Condition]:
-        """Create a fallback condition when AI parser fails"""
-        try:
-            # Simple fallback conditions based on common patterns
-            condition_lower = condition_text.lower().strip()
-            
-            # Check for cookie banner patterns
-            if "cookie" in condition_lower and ("banner" in condition_lower or "consent" in condition_lower):
-                # Use common cookie banner selectors
-                cookie_selectors = [
-                    "[data-testid*='cookie']",
-                    ".cookie-banner",
-                    "#cookie-banner", 
-                    "[class*='cookie']",
-                    "[id*='cookie']",
-                    "[data-testid*='consent']",
-                    ".consent-banner",
-                    "[class*='consent']"
-                ]
-                selector = ", ".join(cookie_selectors)
-                from goals.condition_engine import create_predicate_condition as _create_predicate
-                expr = {"call": {"name": "dom.exists", "args": {"selector": selector, "within": "page"}}}
-                return _create_predicate(expr, "Cookie banner exists")
-            
-            # Check for element existence patterns
-            if "element" in condition_lower and ("exists" in condition_lower or "visible" in condition_lower):
-                # Extract selector if possible
-                selector_match = re.search(r"element\s+['\"]([^'\"]+)['\"]", condition_text)
-                if selector_match:
-                    selector = selector_match.group(1)
-                    from goals.condition_engine import create_predicate_condition as _create_predicate
-                    expr = {"call": {"name": "dom.exists", "args": {"selector": selector, "within": "page"}}}
-                    return _create_predicate(expr, condition_text)
-            
-            # Check for text content patterns
-            if "contains" in condition_lower and ("text" in condition_lower or "page" in condition_lower):
-                text_match = re.search(r"['\"]([^'\"]+)['\"]", condition_text)
-                if text_match:
-                    text = text_match.group(1)
-                    from goals.condition_engine import create_predicate_condition as _create_predicate
-                    expr = {"contains": [{"call": {"name": "env.page.viewport_text"}}, text]}
-                    return _create_predicate(expr, condition_text)
-            
-            # Check for URL patterns
-            if "url" in condition_lower and "contains" in condition_lower:
-                url_match = re.search(r"['\"]([^'\"]+)['\"]", condition_text)
-                if url_match:
-                    url_fragment = url_match.group(1)
-                    from goals.condition_engine import create_predicate_condition as _create_predicate
-                    expr = {"contains": [{"call": {"name": "env.page.url"}}, url_fragment]}
-                    return _create_predicate(expr, condition_text)
-            
-            # Check for weekday patterns
-            if "weekday" in condition_lower or "weekend" in condition_lower:
-                from goals.condition_engine import create_predicate_condition as _create_predicate
-                if "weekday" in condition_lower:
-                    expr = {"call": {"name": "system.weekday"}}
-                    return _create_predicate(expr, condition_text)
-                else:
-                    expr = {"call": {"name": "system.weekend"}}
-                    return _create_predicate(expr, condition_text)
-            
-            # Default: no reliable fallback
-            return None
-            
-        except Exception as e:
-            print(f"⚠️ Error creating fallback condition: {e}")
-            return None
-
-    def _create_goal_from_description(self, description: str, is_sub_goal: bool = False) -> Optional[BaseGoal]:
-        """Shared method to create goals from descriptions (used by both _setup_smart_goals and _create_sub_goal)"""
-        description_lower = description.lower().strip()
-        prefix = "action" if is_sub_goal else "goal"
-        
-        # Detect press goals first (keyboard key presses)
-        press_patterns = ["press enter", "press tab", "press escape", "press ctrl", "press alt", "press shift", "press f1", "press f2", "press f3", "press f4", "press f5", "press f6", "press f7", "press f8", "press f9", "press f10", "press f11", "press f12", "press space", "press backspace", "press delete", "press home", "press end", "press pageup", "press pagedown", "press up", "press down", "press left", "press right"]
-        if any(pattern in description_lower for pattern in press_patterns):
-            target_keys = extract_press_target(description)
-            if target_keys:
-                press_goal = PressGoal(
-                    description=f"Press {prefix}: {description}",
-                    target_keys=target_keys
-                )
-                return press_goal
-        
-        # Detect scroll goals
-        scroll_patterns = [
-            # Vertical scroll patterns
-            "scroll down", "scroll up", "scroll to", "scroll by", "scroll a bit", "scroll slightly", 
-            "scroll a page", "scroll one page", "scroll half", "scroll a third", "scroll a quarter",
-            "scroll two thirds", "scroll three quarters", "scroll to top", "scroll to bottom",
-            "scroll to middle", "scroll to center", "scroll down a bit", "scroll up a bit",
-            "scroll down slightly", "scroll up slightly", "scroll down a page", "scroll up a page",
-            # Horizontal scroll patterns
-            "scroll left", "scroll right", "scroll left a bit", "scroll right a bit",
-            "scroll left slightly", "scroll right slightly", "scroll left a page", "scroll right a page",
-            "scroll left half", "scroll right half", "scroll left a third", "scroll right a third",
-            "scroll left a quarter", "scroll right a quarter", "scroll left two thirds", "scroll right two thirds",
-            "scroll left three quarters", "scroll right three quarters", "scroll to left edge", "scroll to right edge",
-            "scroll to left middle", "scroll to right middle", "scroll to left center", "scroll to right center"
-        ]
-        if any(pattern in description_lower for pattern in scroll_patterns):
-            scroll_goal = ScrollGoal(
-                description=f"Scroll {prefix}: {description}",
-                user_request=description
-            )
-            return scroll_goal
-
-        # Detect back navigation goals (before general navigation detection)
-        back_patterns = [
-            "go back", "back", "previous page", "prev page", "back to", "go back to", "return to"
-        ]
-        if any(pattern in description_lower for pattern in back_patterns):
-            url_history = list(self.goal_monitor.url_history or []) if self.goal_monitor else []
-            pointer = getattr(self.goal_monitor, 'url_pointer', None)
-            state_history = getattr(self.goal_monitor, 'state_history', None)
-            target = resolve_back_target(description, url_history, pointer, state_history, self.page.url if self.page else None)
-            steps_back = target.get("steps_back") or 1
-            expected_url = target.get("expected_url")
-            expected_title_substr = target.get("expected_title_substr")
-            # Capture baseline index/url at goal creation for reliable multi-step validation
-            try:
-                pointer = getattr(self.goal_monitor, 'url_pointer', None)
-                start_index = pointer if pointer is not None else (len(self.goal_monitor.url_history) - 1 if self.goal_monitor and self.goal_monitor.url_history else 0)
-                start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
-            except Exception:
-                start_index, start_url = 0, (self.page.url if self.page else "")
-
-            back_goal = BackGoal(
-                description=f"Back {prefix}: {description}",
-                expected_url=expected_url,
-                steps_back=steps_back,
-                expected_title_substr=expected_title_substr,
-                start_index=start_index,
-                start_url=start_url,
-                needs_detection=False
-            )
-            return back_goal
-
-        # Detect forward navigation goals
-        forward_patterns = [
-            "go forward", "forward", "next page", "go forward to"
-        ]
-        if any(pattern in description_lower for pattern in forward_patterns):
-            url_history = list(self.goal_monitor.url_history or []) if self.goal_monitor else []
-            pointer = getattr(self.goal_monitor, 'url_pointer', None)
-            state_history = getattr(self.goal_monitor, 'state_history', None)
-            target = resolve_forward_target(description, url_history, pointer, state_history, self.page.url if self.page else None)
-            steps_forward = target.get("steps_forward") or 1
-            expected_url = target.get("expected_url")
-
-            # Baseline should be the current pointer
-            try:
-                pointer = getattr(self.goal_monitor, 'url_pointer', None)
-                start_index = pointer if pointer is not None else (len(self.goal_monitor.url_history) - 1 if self.goal_monitor and self.goal_monitor.url_history else 0)
-                start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
-            except Exception:
-                start_index, start_url = 0, (self.page.url if self.page else "")
-
-            forward_goal = ForwardGoal(
-                description=f"Forward {prefix}: {description}",
-                expected_url=expected_url,
-                steps_forward=steps_forward,
-                start_index=start_index,
-                start_url=start_url,
-                needs_detection=False
-            )
-            return forward_goal
-        
-        # Detect click goals (more specific patterns, excluding press)
-        click_patterns = ["click", "tap", "select", "choose", "close"]
-        if any(pattern in description_lower for pattern in click_patterns):
-            target_description = extract_click_target(description)
-            if target_description:
-                click_goal = ClickGoal(
-                    description=f"Click {prefix}: {description}",
-                    target_description=target_description
-                )
-                return click_goal
-        
-        # Detect form filling goals (after click goals to avoid conflicts)
-        form_patterns = [
-            "fill", "complete", "submit", "form", "enter", "input", "set the", "set only", "type", "search"
-        ]
-        
-        if any(pattern in description_lower for pattern in form_patterns):
-            form_goal = FormFillGoal(
-                description=f"Form fill {prefix}: {description}",
-                trigger_on_submit=False,
-                trigger_on_field_input=True
-            )
-            return form_goal
-        
-        # Detect navigation goals
-        navigation_patterns = ["go to", "navigate to", "open", "visit"]
-        if any(pattern in description_lower for pattern in navigation_patterns):
-            navigation_intent = extract_navigation_intent(description)
-            if navigation_intent:
-                nav_goal = NavigationGoal(
-                    description=f"Navigation {prefix}: {description}",
-                    navigation_intent=navigation_intent
-                )
-                return nav_goal
-        
-        # If no specific goal type is detected, create a generic action goal
-        class ActionGoal(BaseGoal):
-            def __init__(self, description: str):
-                super().__init__(description)
-            
-            def evaluate(self, context):
-                from goals.base import GoalResult
-                return GoalResult(
-                    status=GoalStatus.ACHIEVED,
-                    confidence=0.8,
-                    reasoning=f"Action completed: {self.description}"
-                )
-            
-            def get_description(self, context):
-                return f"Action: {self.description}"
-        
-        return ActionGoal(description)
-
-    def _create_sub_goal(self, action_description: str):
-        """Create a sub-goal from an action description using shared goal creation logic"""
-        return self._create_goal_from_description(action_description, is_sub_goal=True)
-
-    def _evaluate_conditional_goal_immediately(self, conditional_goal) -> tuple[Optional[BaseGoal], str]:
+    def _evaluate_if_goal(self, if_goal: IfGoal) -> tuple[Optional[BaseGoal], str]:
         """Evaluate a conditional goal immediately and return the active sub-goal and updated description"""
         try:
             # Create a basic context for evaluation
@@ -1482,120 +1186,286 @@ class BrowserVisionBot:
             )
             
             # Evaluate the conditional goal to get the active sub-goal
-            conditional_goal.evaluate(basic_context)
-            active_sub_goal = getattr(conditional_goal, '_current_sub_goal', None)
-            condition_result = getattr(conditional_goal, '_last_condition_result', None)
+            eval_result = if_goal.evaluate(basic_context)
             
-            if active_sub_goal:
-                print("🔍 DEBUG: Conditional goal evaluated immediately:")
-                print(f"   📋 Condition result: {condition_result}")
-                print(f"   🎯 Active sub-goal: {active_sub_goal.__class__.__name__} - '{active_sub_goal.description}'")
-                # If this was a no-op fail branch (no explicit fail action), skip activating any goal
-                if getattr(active_sub_goal, '_is_noop', False):
-                    print("   📝 No-op fail branch (no fail action specified) → skipping goal activation")
-                    return None, ""
-
-                # Extract the specific action from the sub-goal description
-                # Remove the prefix like "Click action:" or "Form fill action:" to get the clean action
-                sub_goal_desc = active_sub_goal.description
-                updated_description = sub_goal_desc
-                
-                print(f"   📝 Updated goal description: '{updated_description}'")
-                return active_sub_goal, updated_description
+            if eval_result.status == GoalStatus.ACHIEVED:
+                return if_goal.success_goal, if_goal.success_goal.description
             else:
-                print("⚠️ Conditional goal evaluation failed, no active sub-goal")
-                return None, ""
+                return if_goal.fail_goal, if_goal.fail_goal.description
                 
         except Exception as e:
-            print(f"⚠️ Error evaluating conditional goal immediately: {e}")
+            print(f"⚠️ Error evaluating IfGoal: {e}")
             return None, ""
-
-    def _get_detected_elements_for_goal(self, goal: BaseGoal, page_info) -> str:
-        """Get detected elements for a specific goal by running element detection"""
-        try:
-            # Check if this goal needs element detection
-            if not goal.needs_detection:
-                return "No element detection needed for this goal type"
-            
-            # Take a screenshot for element detection (lower quality for speed)
-            screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
-            
-            # Create numbered overlays and get element data
-            element_data = self.overlay_manager.create_numbered_overlays(page_info)
-            
-            if not element_data:
-                return "No interactive elements found"
-            
-            # Use AI to identify relevant elements for this specific goal
-            detected_elements = self.element_detector.detect_elements_with_overlays(
-                goal.description, "", screenshot, element_data, page_info
-            )
-            
-            # Clean up overlays after detection
-            self.overlay_manager.remove_overlays()
-            
-            if not detected_elements or not detected_elements.elements:
-                return "No elements detected for this goal"
-            
-            # Format the detected elements
-            formatted_elements = []
-            for i, element in enumerate(detected_elements.elements):
-                element_info = f"Element {i}: {element.description} ({element.element_type})"
-                if hasattr(element, 'box_2d') and element.box_2d:
-                    element_info += f" at {element.box_2d}"
-                formatted_elements.append(element_info)
-            
-            return "\n".join(formatted_elements)
-            
-        except Exception as e:
-            print(f"⚠️ Error detecting elements for goal: {e}")
-            return "Error detecting elements"
-
-    def _format_elements_for_prompt(self, elements) -> str:
-        """Format detected elements for AI prompt"""
-        if not elements or not hasattr(elements, 'elements'):
-            return "No elements detected"
-        
-        formatted_elements = []
-        for i, element in enumerate(elements.elements):
-            element_info = f"Element {i}: {element.description} ({element.element_type})"
-            if hasattr(element, 'box_2d') and element.box_2d:
-                element_info += f" at {element.box_2d}"
-            formatted_elements.append(element_info)
-        
-        return "\n".join(formatted_elements) if formatted_elements else "No elements detected"
 
     def _print_goal_summary(self) -> None:
         """Print a summary of all goal statuses"""
         summary = self.goal_monitor.get_status_summary()
         
         print("\n📊 Goal Summary:")
-        print(f"   Total Goals: {summary['total_goals']}")
         print(f"   ✅ Achieved: {summary['achieved']}")
         print(f"   ⏳ Pending: {summary['pending']}")
         print(f"   ❌ Failed: {summary['failed']}")
 
-    # Convenience methods
-    def click_element(self, description: str) -> bool:
-        return self.act(f"Click the {description}")
+    def _add_to_command_history(self, command: str) -> None:
+        """Add a command to the history, maintaining max size"""
+        if command and command.strip():
+            self.command_history.append(command.strip())
+            # Keep only the last max_command_history commands
+            if len(self.command_history) > self.max_command_history:
+                self.command_history = self.command_history[-self.max_command_history:]
+            print(f"📝 Added to command history: '{command.strip()}'")
+    
+    def _handle_focus_commands(self, goal_description: str, overlay_manager: OverlayManager) -> Optional[bool]:
+        """
+        Handle focus, subfocus, and undo commands.
+        
+        Args:
+            goal_description: The goal description to check for focus commands
+        
+        Returns:
+            bool: True if command was handled successfully, False if failed, None if not a focus command
+        """
+        try:
+            # Check for focus commands
+            focus_parsed = parse_focus_command(goal_description)
+            if focus_parsed:
+                command_type, payload = focus_parsed
+                if command_type == "focus":
+                    # Get current page info for AI-first approach
+                    page_info = self.page_utils.get_page_info()
+                    success = self.focus_manager.focus_on_elements(payload, page_info, overlay_manager)
+                    if success:
+                        self.logger.log_focus_operation("focus", payload, True)
+                        print("🎯 AI-first focus command executed successfully")
+                        return True
+                    else:
+                        self.logger.log_focus_operation("focus", payload, False)
+                        print("❌ AI-first focus command failed")
+                        return False
+            
+            # Subfocus commands not needed in AI-first approach
+            
+            # Check for undo commands
+            undo_parsed = parse_undo_command(goal_description)
+            if undo_parsed:
+                command_type, payload = undo_parsed
+                if command_type == "undo":
+                    success = self.focus_manager.undo_focus()
+                    if success:
+                        self.logger.log_focus_operation("undo", "focus", True)
+                        print("↩️ Undo command executed successfully")
+                        return True
+                    else:
+                        self.logger.log_focus_operation("undo", "focus", False)
+                        print("❌ Undo command failed")
+                        return False
+                elif command_type == "undofocus":
+                    success = self.focus_manager.undo_focus()
+                    if success:
+                        self.logger.log_focus_operation("undofocus", "focus", True)
+                        print("↩️ Undofocus command executed successfully")
+                        return True
+                    else:
+                        self.logger.log_focus_operation("undofocus", "focus", False)
+                        print("❌ Undofocus command failed")
+                        return False
+            
+            # Check for keyword commands that might be focus-related
+            kw_parsed = parse_keyword_command(goal_description)
+            if kw_parsed:
+                keyword, payload = kw_parsed
+                if keyword == "focus":
+                    success = self.focus_manager.focus_on_elements(payload, page_info, overlay_manager)
+                    if success:
+                        print("🎯 Focus command executed successfully")
+                        return True
+                    else:
+                        print("❌ Focus command failed")
+                        return False
+                elif keyword == "subfocus":
+                    success = self.focus_manager.subfocus_on_elements(payload, page_info, overlay_manager)
+                    if success:
+                        print("🎯 Subfocus command executed successfully")
+                        return True
+                    else:
+                        print("❌ Subfocus command failed")
+                        return False
+                elif keyword == "undo":
+                    success = self.focus_manager.undo_focus()
+                    if success:
+                        print("↩️ Undo command executed successfully")
+                        return True
+                    else:
+                        print("❌ Undo command failed")
+                        return False
+                elif keyword == "undofocus":
+                    success = self.focus_manager.undo_focus()
+                    if success:
+                        print("↩️ Undofocus command executed successfully")
+                        return True
+                    else:
+                        print("❌ Undofocus command failed")
+                        return False
+            
+            return None  # Not a focus command
+            
+        except Exception as e:
+            print(f"⚠️ Error handling focus commands: {e}")
+            return False
+    
+    def _handle_dedup_commands(self, goal_description: str) -> Optional[bool]:
+        """
+        Handle dedup enable/disable commands.
+        
+        Args:
+            goal_description: The goal description to check for dedup commands
+        
+        Returns:
+            bool: True if command was handled successfully, False if failed, None if not a dedup command
+        """
+        try:
+            goal_lower = goal_description.lower().strip()
+            
+            # Check for dedup: enable
+            if goal_lower in ["dedup: enable", "dedup:enabled"]:
+                self.dedup_mode = "on"
+                if hasattr(self, 'focus_manager') and self.focus_manager:
+                    self.focus_manager.dedup_enabled = True
+                self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication enabled")
+                print("🧹 Deduplication enabled")
+                return True
+            
+            # Check for dedup: disable
+            elif goal_lower in ["dedup: disable", "dedup:disabled"]:
+                self.dedup_mode = "off"
+                if hasattr(self, 'focus_manager') and self.focus_manager:
+                    self.focus_manager.dedup_enabled = False
+                self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication disabled")
+                print("🧹 Deduplication disabled")
+                return True
+            
+            return None  # Not a dedup command
+            
+        except Exception as e:
+            print(f"⚠️ Error handling dedup commands: {e}")
+            return False
+    
+    def _handle_ref_commands(self, goal_description: str) -> Optional[bool]:
+        """
+        Handle ref commands that execute stored multi-commands.
+        
+        Args:
+            goal_description: The goal description to check for ref commands
+        
+        Returns:
+            bool: True if command was handled successfully, False if failed, None if not a ref command
+        """
+        try:
+            goal_lower = goal_description.lower().strip()
+            
+            # Check for ref: refID pattern
+            if goal_lower.startswith("ref:"):
+                ref_id = goal_description[4:].strip()
+                
+                if not ref_id:
+                    print("❌ No ref ID provided after 'ref:'")
+                    return False
+                
+                if ref_id not in self.command_refs:
+                    print(f"❌ Ref ID '{ref_id}' not found in stored commands")
+                    return False
+                
+                ref_entry = self.command_refs[ref_id]
+                stored_prompts = ref_entry.get("prompts", [])
+                all_must_be_true = bool(ref_entry.get("all_must_be_true", False))
+                ref_mode = ref_entry.get("interpretation_mode")
 
-    def fill_form_field(self, field_name: str, value: str) -> bool:
-        return self.act(f"Fill the {field_name} field with '{value}'")
+                if not stored_prompts:
+                    print(f"⚠️ Ref ID '{ref_id}' has no stored commands")
+                    return True
+
+                summary_mode = 'ALL' if all_must_be_true else 'ANY'
+                mode_suffix = f", interpretation={ref_mode}" if ref_mode else ""
+                print(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode}{mode_suffix})")
+                results: List[bool] = []
+
+                for i, prompt in enumerate(stored_prompts, 1):
+                    print(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
+                    success = bool(self.act(prompt, interpretation_mode=ref_mode))
+                    results.append(success)
+                    if success:
+                        print(f"   ✅ Stored command {i} succeeded")
+                    else:
+                        print(f"   ❌ Stored command {i} failed")
+
+                final_result = all(results) if all_must_be_true else any(results)
+                summary_mode = "ALL must succeed" if all_must_be_true else "ANY success suffices"
+                print(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → {'✅ True' if final_result else '❌ False'}")
+                return final_result
+            
+            return None  # Not a ref command
+            
+        except Exception as e:
+            traceback.print_exc()
+            print(f"⚠️ Error handling ref commands: {e}")
+            return False
+    
+    def write_session_log(self):
+        """Write the session summary to the log file"""
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.write_session_summary()
+            print(f"📝 Session log written to: {self.logger.log_file}")
+    
+    def _filter_elements_by_focus(self, element_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter element data based on current focus context.
+        
+        Args:
+            element_data: List of element data dictionaries
+        
+        Returns:
+            Filtered list of element data
+        """
+        try:
+            current_focus = self.focus_manager.get_current_focus_context()
+            if not current_focus:
+                return element_data  # No focus means all elements are available
+            
+            
+            # Filter elements that are within the focus context
+            focused_elements = []
+            for elem in element_data:
+                element_id = str(elem.get('index', ''))
+                is_in_focus = self.focus_manager.is_element_in_focus(element_id, elem)
+                if is_in_focus:
+                    focused_elements.append(elem)
+                    print(f"✅ Element {element_id} is in focus: {elem.get('description', 'Unknown')}")
+                else:
+                    print(f"🚫 Filtered out element {element_id} (not in focus): {elem.get('description', 'Unknown')}")
+            
+            print(f"🎯 Focused on {len(focused_elements)} out of {len(element_data)} elements")
+            return focused_elements
+            
+        except Exception as e:
+            print(f"⚠️ Error filtering elements by focus: {e}")
+            return element_data
 
 
 # Example usage
 if __name__ == "__main__":
     bot = BrowserVisionBot()
     bot.start()
-    bot.goto("https://google.com/")
-    bot.on_new_page_load(["if: cookie banner visible then: click accept cookies button"])
+    bot.goto("https://www.reed.co.uk/jobs/ios-developer-jobs")
+    bot.on_new_page_load(["if: cookie banner visible then: click: the button to accept cookies"])
+    # bot.act("dedup: enable")
+    # bot.register_prompts([
+    #     "click: an ios job button", 
+    #     "press: escape"
+    # ], "job_loop_commands")
+    # bot.act("while: not at the bottom of the page do: ref: job_loop_commands")
     
-    bot.act("form: fill the search bar with 'nuro ai'")
-    bot.act("press: enter")
-    bot.act("click: the nuro ai link")
-    bot.act("while: we can't see the phrase 'Proven L4 Autonomy' do: scroll down a bit")
-    # bot.act("scroll down")
-    # bot.act("click the 'company' link")
+    bot.act("click: an ios job listing button", interpretation_mode="semantic")
+    bot.act("click: the apply button", interpretation_mode="semantic")
     
     
     while True:
@@ -1603,3 +1473,6 @@ if __name__ == "__main__":
         if user_input.lower() == "q":
             break
         bot.act(user_input)
+    
+    # Write session log when done
+    bot.write_session_log()
