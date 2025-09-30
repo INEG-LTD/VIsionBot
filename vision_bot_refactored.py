@@ -4,12 +4,13 @@ Vision Bot - Clean modular version.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 import traceback
 import uuid
 import re
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Tuple
 
 from playwright.sync_api import Browser, Page, Playwright
 
@@ -21,7 +22,22 @@ from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from models.core_models import PageInfo
 from utils import PageUtils
-from goals import GoalMonitor, ClickGoal, GoalStatus, FormFillGoal, NavigationGoal, IfGoal, WhileGoal, PressGoal, ScrollGoal, Condition, BaseGoal, BackGoal, ForwardGoal
+from goals import (
+    GoalMonitor,
+    ClickGoal,
+    GoalStatus,
+    FormFillGoal,
+    NavigationGoal,
+    IfGoal,
+    WhileGoal,
+    PressGoal,
+    ScrollGoal,
+    Condition,
+    BaseGoal,
+    BackGoal,
+    ForwardGoal,
+    DeferGoal,
+)
 # from goals.condition_engine import create_predicate_condition as create_predicate
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
@@ -92,9 +108,12 @@ class BrowserVisionBot:
         
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
-        
+
         # Initialize logger
         self.logger = get_logger()
+
+        # Deduplication history settings (-1 = unlimited)
+        self.dedup_history_quantity: int = -1
 
         # Interpretation / semantic resolution helpers
         self.default_interpretation_mode: str = "literal"
@@ -153,6 +172,10 @@ class BrowserVisionBot:
         self.page_utils = PageUtils(page)
         # AI-first focus manager for element focusing
         self.focus_manager = FocusManager(page, self.page_utils)
+        try:
+            self.focus_manager.set_interaction_history_limit(self.dedup_history_quantity)
+        except Exception:
+            pass
         self.action_executor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.focus_manager)
         # Plan generator for AI planning prompts
         self.plan_generator = PlanGenerator(
@@ -675,6 +698,7 @@ class BrowserVisionBot:
                     self.goal_monitor.reset_retry_request()
                 
                 print(f"📋 Generated plan with {len(plan.action_steps)} steps")
+                print(f"🤔 Action steps: {plan.action_steps}")
                 print(f"🤔 Reasoning: {plan.reasoning}")
                 
                 # Execute the plan
@@ -846,6 +870,60 @@ class BrowserVisionBot:
         self._semantic_target_cache[key] = target
         return target
 
+    def _determine_dedup_usage(self, goal_description: str) -> Tuple[bool, str]:
+        """Decide whether duplicate interactions should be avoided for this prompt."""
+
+        desc_lower = (goal_description or "").lower()
+        keyword_triggers = [
+            "no duplicate",
+            "avoid duplicate",
+            "avoid repeats",
+            "no repeats",
+            "unique",
+            "fresh",
+            "unseen",
+            "next link",
+            "different link",
+            "dedup",
+        ]
+        explicit_request = any(trigger in desc_lower for trigger in keyword_triggers)
+
+        if self.dedup_mode == "on":
+            return True, "dedup_mode:on"
+        if self.dedup_mode == "off":
+            return False, "dedup_mode:off"
+        if explicit_request:
+            return True, "prompt_keywords"
+        return False, "no_request"
+
+    def _build_dedup_prompt_context(self, goal_description: str) -> Optional[Dict[str, Any]]:
+        """Build deduplication context for plan prompts when duplicates must be avoided."""
+
+        should_avoid, reason = self._determine_dedup_usage(goal_description)
+        if not should_avoid:
+            return None
+
+        focus_mgr: FocusManager = getattr(self, 'focus_manager', None)
+        if not focus_mgr or not hasattr(focus_mgr, 'get_interacted_element_history'):
+            return None
+
+        limit = self.dedup_history_quantity
+        history_limit = None if limit is None or limit < 0 else limit
+        try:
+            history = focus_mgr.get_interacted_element_history(history_limit)
+        except Exception:
+            return None
+
+        if not history:
+            return None
+
+        return {
+            "avoid_duplicates": True,
+            "quantity": limit if limit is not None else -1,
+            "entries": history,
+            "reason": reason,
+        }
+
     def _generate_plan(self, goal_description: str, additional_context: str, screenshot: bytes, page_info: PageInfo) -> Optional[VisionPlan]:
         """Generate an action plan using numbered element detection"""
 
@@ -855,6 +933,8 @@ class BrowserVisionBot:
         current_mode = self._get_current_interpretation_mode()
         semantic_hint = self._get_semantic_target(goal_description)
         print(f"[PlanGen] interpretation_mode={current_mode} semantic_hint={'yes' if semantic_hint else 'no'} for '{goal_description}'")
+
+        dedup_context = self._build_dedup_prompt_context(goal_description)
 
         if not needs_detection:
             print("🚫 Skipping element detection - goal doesn't require it")
@@ -869,6 +949,7 @@ class BrowserVisionBot:
                 retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
                 page=self.page,
                 command_history=self.command_history,
+                dedup_context=dedup_context,
             )
             return plan
 
@@ -902,6 +983,7 @@ class BrowserVisionBot:
                 command_history=self.command_history,
                 interpretation_mode=current_mode,
                 semantic_hint=semantic_hint,
+                dedup_context=dedup_context,
             )
 
         # Step 4: Clean up overlays after plan generation
@@ -959,9 +1041,9 @@ class BrowserVisionBot:
         try:
             kw = parse_keyword_command(goal_description)
             if kw:
-                keyword, payload = kw
-                
-                goal = self._create_goal_from_keyword(keyword, payload)
+                keyword, payload, helper = kw
+
+                goal = self._create_goal_from_keyword(keyword, payload, helper)
                 if goal:
                     print(f"✅ Created {goal.__class__.__name__} via keyword '{keyword}': '{goal.description}'")
                     # Focus plan generation on the payload/action text
@@ -979,30 +1061,36 @@ class BrowserVisionBot:
         print(f"ℹ️ No goal created from goal description: '{goal_description}'")
         return None, goal_description
 
-    def _create_goal_from_keyword(self, keyword: str, payload: str) -> Optional[BaseGoal]:
+    def _create_goal_from_keyword(self, keyword: str, payload: str, helper: Optional[str]) -> Optional[BaseGoal]:
         """Create a specific goal from a single keyword and payload."""
         k = (keyword or "").lower().strip()
         p = (payload or "").strip()
+
+        def _attach_helper(goal_obj: Optional[BaseGoal]) -> Optional[BaseGoal]:
+            if goal_obj and helper:
+                setattr(goal_obj, "command_helper", helper)
+            return goal_obj
+
         if k == "press":
             keys = p or extract_press_target(p)
             if keys:
-                return PressGoal(description=f"Press action: {keys}", target_keys=keys)
+                return _attach_helper(PressGoal(description=f"Press action: {keys}", target_keys=keys))
         if k == "scroll":
             if p:
-                return ScrollGoal(description=f"Scroll action: {p}", user_request=p)
+                return _attach_helper(ScrollGoal(description=f"Scroll action: {p}", user_request=p))
             else:
-                return ScrollGoal(description="Scroll action: down", user_request="scroll down")
+                return _attach_helper(ScrollGoal(description="Scroll action: down", user_request="scroll down"))
         if k == "click":
             target = p or extract_click_target(p)
             if target:
-                return ClickGoal(description=f"Click action: {target}", target_description=target)
+                return _attach_helper(ClickGoal(description=f"Click action: {target}", target_description=target))
         if k == "navigate":
             target = p
             if target:
-                return NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target)
+                return _attach_helper(NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target))
         if k == "form":
             desc = p or "Fill the form"
-            return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True)
+            return _attach_helper(FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True))
         if k == "back":
             import re as _re
             steps = 1
@@ -1015,7 +1103,7 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False)
+            return _attach_helper(BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False))
         if k == "forward":
             import re as _re
             steps = 1
@@ -1028,7 +1116,10 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False)
+            return _attach_helper(ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False))
+        if k == "defer":
+            message = p or "Manual control active"
+            return _attach_helper(DeferGoal(description=f"Defer action: {message}", prompt=message))
         # if k == "ref":
         #     goal_description = keyword + ": " + payload
         #     print(f"🔄 Handling ref command: '{goal_description}'")
@@ -1153,12 +1244,16 @@ class BrowserVisionBot:
             print(f"🔀 Created success goal: '{success_goal.description}'")
             if fail_text and fail_text.strip():
                 fail_goal, _ = self._create_goal_from_description(fail_text)
-                if not fail_goal:
-                    fail_goal = BaseGoal.make_noop_goal("No-op fail branch")
             else:
-                fail_goal = BaseGoal.make_noop_goal("No-op fail branch")
+                fail_goal = None
 
-            if_goal = IfGoal(condition, success_goal, fail_goal, description=f"If {condition_text} then {success_goal.description} else {fail_goal.description}")
+            fail_desc = fail_goal.description if fail_goal else "(no fail action)"
+            if_goal = IfGoal(
+                condition,
+                success_goal,
+                fail_goal,
+                description=f"If {condition_text} then {success_goal.description} else {fail_desc}"
+            )
             return if_goal
         except Exception as e:
             print(f"⚠️ Error creating structured IfGoal: {e}")
@@ -1188,10 +1283,13 @@ class BrowserVisionBot:
             # Evaluate the conditional goal to get the active sub-goal
             eval_result = if_goal.evaluate(basic_context)
             
-            if eval_result.status == GoalStatus.ACHIEVED:
-                return if_goal.success_goal, if_goal.success_goal.description
-            else:
+            if if_goal._last_condition_result:
+                return if_goal.success_goal, getattr(if_goal.success_goal, 'description', '')
+
+            if if_goal.fail_goal:
                 return if_goal.fail_goal, if_goal.fail_goal.description
+
+            return None, ""
                 
         except Exception as e:
             print(f"⚠️ Error evaluating IfGoal: {e}")
@@ -1273,7 +1371,7 @@ class BrowserVisionBot:
             # Check for keyword commands that might be focus-related
             kw_parsed = parse_keyword_command(goal_description)
             if kw_parsed:
-                keyword, payload = kw_parsed
+                keyword, payload, helper = kw_parsed
                 if keyword == "focus":
                     success = self.focus_manager.focus_on_elements(payload, page_info, overlay_manager)
                     if success:
@@ -1456,16 +1554,20 @@ if __name__ == "__main__":
     bot = BrowserVisionBot()
     bot.start()
     bot.goto("https://www.reed.co.uk/jobs/ios-developer-jobs")
-    bot.on_new_page_load(["if: cookie banner visible then: click: the button to accept cookies"])
-    # bot.act("dedup: enable")
-    # bot.register_prompts([
-    #     "click: an ios job button", 
-    #     "press: escape"
-    # ], "job_loop_commands")
-    # bot.act("while: not at the bottom of the page do: ref: job_loop_commands")
+    bot.default_interpretation_mode = "semantic"
+    # bot.on_new_page_load(["if: cookie banner visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"])
+    bot.act("dedup: enable")
+    bot.act("defer")
+    bot.register_prompts([
+        "click: the next ios job listing button/link: look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior iOS Developer', 'Junior iOS Developer', etc",
+        "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid",
+        "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.",
+        "press: escape"
+    ], "job_loop_commands", all_must_be_true=True)
+    bot.act("while: not at the bottom of the page do: ref: job_loop_commands")
     
-    bot.act("click: an ios job listing button", interpretation_mode="semantic")
-    bot.act("click: the apply button", interpretation_mode="semantic")
+    # bot.act("click: an ios job listing button", interpretation_mode="semantic")
+    # bot.act("click: the apply button", interpretation_mode="semantic")
     
     
     while True:

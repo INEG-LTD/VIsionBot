@@ -10,17 +10,18 @@ from handlers import DateTimeHandler, SelectHandler, UploadHandler
 from utils import SelectorUtils
 from unittest.mock import Mock
 from utils.page_utils import PageUtils
-from vision_utils import validate_and_clamp_coordinates, get_gemini_box_2d_center_pixels
+from vision_utils import get_gemini_box_2d_center_pixels
 from goals import GoalMonitor, InteractionType, GoalStatus
 
 
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None):
+    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, focus_manager=None):
         self.page = page
         self.goal_monitor = goal_monitor
         self.page_utils = page_utils
+        self.focus_manager = focus_manager
         
         # Initialize specialized handlers
         self.datetime_handler = DateTimeHandler(page, goal_monitor)
@@ -74,7 +75,7 @@ class ActionExecutor:
                     return False
                 
                 # Only check for goal achievement AFTER the action executes
-                if self._check_goals_achieved():
+                if self._check_goal_achieved():
                     print("✅ Goal achieved during step execution. Ending plan early.")
                     return True
 
@@ -142,6 +143,18 @@ class ActionExecutor:
 
     def _execute_click(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> bool:
         """Execute a click action"""
+        # Check if target element is in the filtered elements (focus context)
+        if step.overlay_index is not None:
+            target_found = False
+            for element in elements.elements:
+                if getattr(element, 'overlay_number', None) == step.overlay_index:
+                    target_found = True
+                    break
+            
+            if not target_found:
+                print(f"❌ Target element {step.overlay_index} is not in focus context - goal failed")
+                return False
+        
         x, y = self._get_click_coordinates(step, elements, page_info)
         if x is None or y is None:
             raise ValueError("Could not determine click coordinates")
@@ -149,9 +162,9 @@ class ActionExecutor:
         # Try to resolve a truly clickable element (anchor/button/etc.) and remember a selector
         try:
             box = None
-            if step.target_element_index is not None and elements and getattr(elements, 'elements', None):
+            if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
                 for el in elements.elements:
-                    if getattr(el, 'overlay_number', None) == step.target_element_index and getattr(el, 'box_2d', None):
+                    if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
                         box = el.box_2d
                         break
             # Use robust resolver that marks the DOM node and returns a selector
@@ -174,25 +187,20 @@ class ActionExecutor:
         )
         
         # Check for retry requests from goals immediately after evaluation
-        retry_goals = self.goal_monitor.check_for_retry_requests()
-        if retry_goals:
+        retry_goal = self.goal_monitor.check_for_retry_request()
+        if retry_goal:
             print("🔄 Goals have requested retry - aborting current plan execution")
-            for goal in retry_goals:
-                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
+            print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
             # Return False to indicate plan should be regenerated
             return False
         
-        # Check if any goals were achieved before the click (informational only)
-        if any(result.status == GoalStatus.ACHIEVED for result in pre_evaluations.values()):
+        # Check if the goal was achieved before the click (informational only)
+        if pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before click (pre-eval)! Proceeding with click as requested.")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.ACHIEVED:
-                    print(f"   ✅ {goal_name}: {result.reasoning}")
-        elif any(result.status == GoalStatus.FAILED for result in pre_evaluations.values()):
+            print(f"   ✅ {pre_evaluations.reasoning}")
+        elif pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this click may not achieve the target:")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.FAILED:
-                    print(f"   ❌ {goal_name}: {result.reasoning}")
+            print(f"   ❌ {pre_evaluations.reasoning}")
             # Continue with click anyway - the user's plan should be executed
         
         # print(f"Elements: {elements.model_dump_json()}")
@@ -218,13 +226,15 @@ class ActionExecutor:
                         success=success,
                         error_message=error_msg
                     )
+                    if success:
+                        self._mark_element_as_interacted(step, elements, "click")
                     return success
                 except Exception:
                     pass
 
             # Overlay-based DOM click fallback
-            if step.target_element_index is not None:
-                selector = f'[data-automation-overlay-index="{step.target_element_index}"]'
+            if step.overlay_index is not None:
+                selector = f'[data-automation-overlay-index="{step.overlay_index}"]'
                 clickable_sel = selector + ' a, ' + selector + ' button, ' + selector + ' [role="link"], ' + selector + ' [role="button"], ' + selector + ' input, ' + selector + ' select, ' + selector + ' textarea'
                 try:
                     count = self.page.locator(clickable_sel).count()
@@ -260,6 +270,11 @@ class ActionExecutor:
             success=success,
             error_message=error_msg
         )
+        
+        # Mark element as interacted for deduplication
+        if success:
+            self._mark_element_as_interacted(step, elements, "click")
+        
         return success
 
     def _execute_type(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> bool:
@@ -276,13 +291,13 @@ class ActionExecutor:
             # Refine to a truly focusable/clickable target before clicking to focus
             try:
                 box = None
-                if step.target_element_index is not None and elements and getattr(elements, 'elements', None):
+                if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
                     for el in elements.elements:
-                        if getattr(el, 'overlay_number', None) == step.target_element_index and getattr(el, 'box_2d', None):
+                        if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
                             box = el.box_2d
                             break
-                if step.target_element_index is not None:
-                    ovx, ovy = self._find_clickable_point_from_overlay(step.target_element_index)
+                if step.overlay_index is not None:
+                    ovx, ovy = self._find_clickable_point_from_overlay(step.overlay_index)
                     if ovx is not None and ovy is not None:
                         x, y = ovx, ovy
                 rx, ry = self._refine_click_coordinates(x, y, page_info, normalized_box=box)
@@ -326,6 +341,12 @@ class ActionExecutor:
             error_message=error_msg
         )
         
+        # Mark element as interacted for deduplication
+        print("Success: ", success)
+        if success:
+            print(f"Marking element as interacted for deduplication: {step.overlay_index}")
+            self._mark_element_as_interacted(step, elements, "type")
+        
         return success
 
     def _get_interpreted_scroll_position(self, direction: str):
@@ -333,13 +354,10 @@ class ActionExecutor:
         try:
             # Find active ScrollGoal
             from goals import ScrollGoal
-            scroll_goals = [goal for goal in self.goal_monitor.active_goals if isinstance(goal, ScrollGoal)]
+            scroll_goal = self.goal_monitor.active_goal if isinstance(self.goal_monitor.active_goal, ScrollGoal) else None
             
-            if not scroll_goals:
+            if not scroll_goal:
                 return None
-            
-            # Use the first ScrollGoal (there should typically be only one)
-            scroll_goal = scroll_goals[0]
             
             # Create a basic context for interpretation
             from goals.base import GoalContext, BrowserState
@@ -434,26 +452,21 @@ class ActionExecutor:
             scroll_axis=axis
         )
         
-        # Check for retry requests from goals immediately after evaluation
-        retry_goals = self.goal_monitor.check_for_retry_requests()
-        if retry_goals:
+        # Check for retry requests from the goal immediately after evaluation
+        retry_goal = self.goal_monitor.check_for_retry_request()
+        if retry_goal:
             print("🔄 Goals have requested retry - aborting current plan execution")
-            for goal in retry_goals:
-                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
+            print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
             # Return False to indicate plan should be regenerated
             return False
         
-        # Check if any goals were achieved before the scroll (informational only)
-        if any(result.status == GoalStatus.ACHIEVED for result in pre_evaluations.values()):
+        # Check if the goal was achieved before the scroll (informational only)
+        if pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before scroll (pre-eval)! Proceeding with scroll as requested.")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.ACHIEVED:
-                    print(f"   ✅ {goal_name}: {result.reasoning}")
-        elif any(result.status == GoalStatus.FAILED for result in pre_evaluations.values()):
+            print(f"   ✅ {pre_evaluations.reasoning}")
+        elif pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this scroll may not achieve the target:")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.FAILED:
-                    print(f"   ❌ {goal_name}: {result.reasoning}")
+            print(f"   ❌ {pre_evaluations.reasoning}")
             # Continue with scroll anyway - the user's plan should be executed
         
         print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
@@ -502,24 +515,19 @@ class ActionExecutor:
         )
         
         # Check for retry requests from goals immediately after evaluation
-        retry_goals = self.goal_monitor.check_for_retry_requests()
-        if retry_goals:
+        retry_goal = self.goal_monitor.check_for_retry_request()
+        if retry_goal:
             print("🔄 Goals have requested retry - aborting current plan execution")
-            for goal in retry_goals:
-                print(f"   🔄 {goal}: Retry requested (attempt {goal.retry_count}/{goal.max_retries})")
+            print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
             return False
         
-        # Check if any goals were achieved before the press (informational only)
-        if any(result.status == GoalStatus.ACHIEVED for result in pre_evaluations.values()):
+        # Check if the goal was achieved before the press (informational only)
+        if pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before key press (pre-eval)! Proceeding with press as requested.")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.ACHIEVED:
-                    print(f"   ✅ {goal_name}: {result.reasoning}")
-        elif any(result.status == GoalStatus.FAILED for result in pre_evaluations.values()):
+            print(f"   ✅ {pre_evaluations.reasoning}")
+        elif pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this key press may not achieve the target:")
-            for goal_name, result in pre_evaluations.items():
-                if result.status == GoalStatus.FAILED:
-                    print(f"   ❌ {goal_name}: {result.reasoning}")
+            print(f"   ❌ {pre_evaluations.reasoning}")
         
         try:
             # Parse and execute the key combination
@@ -653,27 +661,30 @@ class ActionExecutor:
     def _get_click_coordinates(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> Tuple[Optional[int], Optional[int]]:
         """Get the coordinates to click based on the step"""
         # Prefer overlay index → convert to pixel center from normalized box
-        if step.target_element_index is not None:
+        if step.overlay_index is not None:
             # First try to find by overlay number (preferred)
             for element in elements.elements:
-                if element.overlay_number == step.target_element_index and element.box_2d:
+                if element.overlay_number == step.overlay_index and element.box_2d:
                     center_x, center_y = get_gemini_box_2d_center_pixels(
                         element.box_2d, page_info.width, page_info.height
                     )
                     if center_x > 0 or center_y > 0:
+                        print(f"[Exec][coords] Using overlay #{step.overlay_index} center=({center_x},{center_y}) from box={element.box_2d}")
                         return center_x, center_y
             # Fallback to array index (legacy support)
-            if 0 <= step.target_element_index < len(elements.elements):
-                element = elements.elements[step.target_element_index]
+            if 0 <= step.overlay_index < len(elements.elements):
+                element = elements.elements[step.overlay_index]
                 if element.box_2d:
                     center_x, center_y = get_gemini_box_2d_center_pixels(
                         element.box_2d, page_info.width, page_info.height
                     )
                     if center_x > 0 or center_y > 0:
+                        print(f"[Exec][coords] Using elements[{step.overlay_index}] center=({center_x},{center_y}) from box={element.box_2d}")
                         return center_x, center_y
 
         # Fallback: use raw coordinates if provided
         if step.x is not None and step.y is not None:
+            print(f"[Exec][coords] Using explicit coordinates=({int(step.x)},{int(step.y)})")
             return int(step.x), int(step.y)
         
         return None, None
@@ -942,10 +953,77 @@ class ActionExecutor:
         print("🛑 STOP action executed - terminating automation")
         return True
 
-    def _check_goals_achieved(self) -> bool:
+    def _check_goal_achieved(self) -> bool:
         """Helper to check if any active goal has been achieved"""
         try:
-            results = self.goal_monitor.evaluate_goals() if self.goal_monitor else {}
-            return any(r.status == GoalStatus.ACHIEVED for r in results.values())
+            result = self.goal_monitor.evaluate_goal() if self.goal_monitor else None
+            return result.status == GoalStatus.ACHIEVED if result else False
         except Exception:
             return False
+    
+    def _mark_element_as_interacted(self, step: ActionStep, elements: PageElements, interaction_type: str) -> None:
+        """Mark an element as interacted with for deduplication"""
+        if not self.focus_manager:
+            print("❌ No focus manager to mark element as interacted with")
+            return
+        
+        # Find the target element
+        recorded_interaction = False
+
+        if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
+            for element in elements.elements:
+                if getattr(element, 'overlay_number', None) == step.overlay_index:
+                    # Convert element to dict format expected by focus manager
+                    description = getattr(element, 'description', None)
+                    label = getattr(element, 'element_label', None)
+                    element_dict = {
+                        'tagName': getattr(element, 'element_type', '') or '',
+                        'text': description or label or '',
+                        'textContent': description or label or '',
+                        'description': description or '',
+                        'element_type': getattr(element, 'element_type', ''),
+                        'href': getattr(element, 'href', ''),
+                        'ariaLabel': getattr(element, 'aria_label', ''),
+                        'aria_label': getattr(element, 'aria_label', ''),
+                        'id': getattr(element, 'id', ''),
+                        'role': getattr(element, 'role', '') or getattr(element, 'element_type', ''),
+                        'overlayIndex': getattr(element, 'overlay_number', None) or step.overlay_index,
+                        'box2d': getattr(element, 'box_2d', None),
+                        'normalizedCoords': getattr(element, 'box_2d', None),
+                    }
+                    self.focus_manager.mark_element_as_interacted(element_dict, interaction_type)
+                    recorded_interaction = True
+                    break
+                else:
+                    print(f"❌ No element found with overlay index {step.overlay_index} to mark as interacted with")
+
+        if not recorded_interaction:
+            action_value = ''
+            if getattr(step, 'action', None):
+                try:
+                    action_value = step.action.value  # Enum value (e.g., 'click')
+                except Exception:
+                    action_value = str(step.action)
+            text_value = step.text_to_type or action_value
+            rect_data = None
+            if step.x is not None and step.y is not None:
+                rect_data = {
+                    'x': step.x,
+                    'y': step.y,
+                    'width': 0,
+                    'height': 0,
+                }
+            fallback_dict = {
+                'tagName': '',
+                'text': text_value,
+                'textContent': text_value,
+                'description': text_value,
+                'element_type': action_value,
+                'overlayIndex': step.overlay_index,
+                'box2d': None,
+                'normalizedCoords': None,
+                'role': action_value,
+                'rect': rect_data,
+            }
+            self.focus_manager.mark_element_as_interacted(fallback_dict, interaction_type)
+            print(f"❌ No element found with overlay index {step.overlay_index} to mark as interacted with")
