@@ -74,7 +74,7 @@ Respond with only the JSON object, no other text.
             
             response = generate_text(
                 prompt=prompt,
-                reasoning_level="minimal",
+                reasoning_level="medium",
                 system_prompt="You are a scroll interpretation assistant. Given a user's scroll request and current page state, determine the exact scroll action needed.",
                 model="gpt-5-nano"
             )

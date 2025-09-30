@@ -55,7 +55,7 @@ class PageElements(BaseModel):
 class ActionStep(BaseModel):
     """A single action to perform"""
     action: ActionType
-    target_element_index: Optional[int] = Field(default=None, description="Index of target element from detections")
+    overlay_index: Optional[int] = Field(default=None, description="Overlay index of target element from detections")
     x: Optional[int] = Field(default=None, description="X coordinate in pixels")
     y: Optional[int] = Field(default=None, description="Y coordinate in pixels")
     text_to_type: Optional[str] = Field(default=None, description="Text to type (for TYPE action)")
@@ -64,6 +64,7 @@ class ActionStep(BaseModel):
     keys_to_press: Optional[str] = Field(default=None, description="Keys to press (for PRESS action, e.g., 'enter', 'ctrl+c', 'tab')")
     select_option_text: Optional[str] = Field(default=None, description="Text of option to select (for HANDLE_SELECT)")
     datetime_value: Optional[str] = Field(default=None, description="Date/time value to set (for HANDLE_DATETIME)")
+    upload_file_path: Optional[str] = Field(default=None, description="File path to upload (for HANDLE_UPLOAD)")
 
 
 class VisionPlan(BaseModel):

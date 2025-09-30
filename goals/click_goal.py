@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from ai_utils import generate_model
+from utils.vision_resolver import score_element_against_instruction
 from .base import BaseGoal, GoalResult, GoalStatus, EvaluationTiming, GoalContext, InteractionType
 from .element_analyzer import ElementAnalyzer
 
@@ -234,8 +235,17 @@ class ClickGoal(BaseGoal):
                 # Fallback description
                 element_description = self._create_fallback_description(self.actual_element_info)
             
-            # Compare with target using AI
-            match_result = self._evaluate_element_match(element_description, self.target_description)
+            # Compare with target using vision-assisted evaluation
+            page_dims = (
+                context.current_state.page_width,
+                context.current_state.page_height,
+            ) if context.current_state else None
+            match_result = self._evaluate_element_match(
+                element_description,
+                self.target_description,
+                self.actual_element_info,
+                page_dims,
+            )
             
             if match_result["is_match"]:
                 return GoalResult(
@@ -341,7 +351,16 @@ class ClickGoal(BaseGoal):
                         else:
                             element_description = self._create_fallback_description(element_info)
                         print(f"[ClickGoal] About to click (by selector): '{element_description}'")
-                        match_result = self._evaluate_element_match(element_description, element_info, self.target_description)
+                        page_dims = (
+                            context.current_state.page_width,
+                            context.current_state.page_height,
+                        ) if context.current_state else None
+                        match_result = self._evaluate_element_match(
+                            element_description,
+                            self.target_description,
+                            element_info,
+                            page_dims,
+                        )
                         if match_result["is_match"]:
                             return GoalResult(
                                 status=GoalStatus.ACHIEVED,
@@ -469,7 +488,16 @@ class ClickGoal(BaseGoal):
             print(f"[ClickGoal] About to click: '{element_description}'")
             
             # Compare with target using AI
-            match_result = self._evaluate_element_match(element_description, element_info, self.target_description)
+            page_dims = (
+                context.current_state.page_width,
+                context.current_state.page_height,
+            ) if context.current_state else None
+            match_result = self._evaluate_element_match(
+                element_description,
+                self.target_description,
+                element_info,
+                page_dims,
+            )
             
             if match_result["is_match"]:
                 print(f"[ClickGoal] About to click: '{element_description}' which matches target '{self.target_description}'")
@@ -551,43 +579,85 @@ class ClickGoal(BaseGoal):
             print(f"[GoalFramework] Element description with fallback: {element_type}")
             return element_type
     
-    def _evaluate_element_match(self, actual_description: str, actual_element_info: Dict[str, Any], target_description: str) -> Dict[str, Any]:
+    def _evaluate_element_match(
+        self,
+        actual_description: str,
+        target_description: str,
+        actual_element_info: Optional[Dict[str, Any]] = None,
+        page_dimensions: Optional[Tuple[int, int]] = None,
+    ) -> Dict[str, Any]:
         """
-        Use AI to determine if the clicked element matches the target description.
-        
-        Returns dict with is_match, confidence, and reasoning.
+        Primarily use natural-language evaluation; vision scores are retained as diagnostics only.
         """
+        score = 0
+        diag: Optional[Dict[str, Any]] = None
+        diag_reason = ""
+
+        if actual_element_info:
+            page_w = page_dimensions[0] if page_dimensions else None
+            page_h = page_dimensions[1] if page_dimensions else None
+            score, diag = score_element_against_instruction(
+                target_description,
+                actual_element_info,
+                page_w=page_w,
+                page_h=page_h,
+                mode="click",
+                interpretation_mode="semantic",
+            )
+            diag_parts: List[str] = [f"score={score}"]
+            if diag.get('role_match'):
+                diag_parts.append('role match')
+            if diag.get('purpose_score'):
+                diag_parts.append(f"purpose={diag['purpose_score']}")
+            if diag.get('matched_terms'):
+                diag_parts.append(f"terms={','.join(diag['matched_terms'])}")
+            acc_name = diag.get('accessible_name')
+            if acc_name:
+                diag_parts.append(f"name='{acc_name[:60]}'")
+            diag_reason = "; ".join(diag_parts)
+
         try:
             print(f"[GoalFramework] Evaluating element match: {actual_description} vs {target_description}")
             system_prompt = f"""
             You are evaluating whether a clicked UI element matches the user's intent.
-            
+
             User wanted to click: "{target_description}"
             Actually clicked: "{actual_description}"
             Actually clicked element info: "{actual_element_info}"
-            
+
             Determine if these match semantically. Consider:
             - Synonyms and similar terms (e.g., "button" vs "btn", "link" vs "anchor")
             - Partial matches (e.g., "first link" could match "navigation link")
             - Context and intent (e.g., "submit" could match "submit button" or "send button")
-            
+
             Provide your evaluation with confidence and reasoning.
             """
-            
+
             result = generate_model(
                 prompt="Evaluate if the clicked element matches the target description.",
                 model_object_type=ElementMatchEvaluation,
                 system_prompt=system_prompt,
-                model="gemini-2.5-flash-lite",
-                reasoning_level="none"
+                model="gpt-5-mini",
+                reasoning_level="medium"
             )
-            
-            # Return as dict for compatibility
-            return result.model_dump()
-                
+
+            payload = result.model_dump()
+            if diag is not None:
+                payload.setdefault('vision_score', score)
+                payload.setdefault('vision_diagnostics', diag)
+                if diag_reason:
+                    payload['reasoning'] = f"{payload['reasoning']} | Vision: {diag_reason}"
+            return payload
+
         except Exception:
             print("AI evaluation failed, falling back to simple matching")
-            return self._simple_string_match(actual_description, target_description)
+            result = self._simple_string_match(actual_description, target_description)
+            if diag is not None:
+                result.setdefault('vision_score', score)
+                result.setdefault('vision_diagnostics', diag)
+                if diag_reason:
+                    result['reasoning'] = f"{result['reasoning']} | Vision: {diag_reason}"
+            return result
     
     def _simple_string_match(self, actual: str, target: str) -> Dict[str, Any]:
         """Simple fallback matching when AI is not available"""

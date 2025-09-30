@@ -11,6 +11,7 @@ from .core_models import (
     Goal,
     PageInfo
 )
+from .intent_models import ActionIntent
 
 __all__ = [
     "ActionType",
@@ -20,5 +21,6 @@ __all__ = [
     "ActionStep",
     "VisionPlan",
     "Goal",
-    "PageInfo"
+    "PageInfo",
+    "ActionIntent"
 ]

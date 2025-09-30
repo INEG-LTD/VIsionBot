@@ -35,6 +35,7 @@ class InteractionType(str, Enum):
     PAGE_LOAD = "page_load"
     ELEMENT_APPEAR = "element_appear"
     ELEMENT_DISAPPEAR = "element_disappear"
+    CONTEXT_GUARD = "context_guard"
 
 
 class EvaluationTiming(str, Enum):
@@ -128,7 +129,7 @@ class BaseGoal(ABC):
     # Subclasses should override this to specify when they want to be evaluated
     EVALUATION_TIMING: EvaluationTiming = EvaluationTiming.AFTER
     
-    def __init__(self, description: str, max_retries: int = 3, needs_detection: bool = True, **kwargs):
+    def __init__(self, description: str, max_retries: int = 3, needs_detection: bool = True, needs_plan: bool = True, **kwargs):
         self.description = description
         self.created_at = time.time()
         self.kwargs = kwargs
@@ -139,7 +140,16 @@ class BaseGoal(ABC):
         self.retry_requested = False
         self.retry_reason = ""
         self.needs_detection = needs_detection
-    
+        self.needs_plan = needs_plan
+        
+    @classmethod
+    def make_noop_goal(cls, description: str) -> BaseGoal:
+        return _NoOpGoal(description)
+      
+    @classmethod
+    def make_ref_goal(cls, description: str, ref_id: str, run_result: bool) -> BaseGoal:
+        return RefGoal(description, ref_id, run_result)
+        
     @abstractmethod
     def evaluate(self, context: GoalContext) -> GoalResult:
         """
@@ -382,6 +392,27 @@ class Condition:
     evaluator: Callable[[GoalContext], bool]
     confidence_threshold: float = 0.8
 
+class _NoOpGoal(BaseGoal):
+    def __init__(self, description: str):
+        super().__init__(description, needs_detection=False)
+    def evaluate(self, context):
+        return GoalResult(status=GoalStatus.ACHIEVED, confidence=1.0, reasoning="No-op goal")
+    def get_description(self, context):
+        return self.description
+    
+class RefGoal(BaseGoal):
+    def __init__(self, description: str, ref_id: str, run_result: bool):
+        super().__init__(description)
+        self.ref_id = ref_id
+        self.run_result = run_result
+        self.needs_plan = False
+        self.needs_detection = False
+        
+    def evaluate(self, context):
+        return GoalResult(status=GoalStatus.ACHIEVED if self.run_result else GoalStatus.FAILED, confidence=1.0, reasoning="Ref goal")
+    
+    def get_description(self, context):
+        return self.description
 
 class ConditionalGoal(BaseGoal):
     """
@@ -391,8 +422,8 @@ class ConditionalGoal(BaseGoal):
     sub-goals based on the result. This allows for complex branching logic in goal execution.
     """
     
-    def __init__(self, description: str, condition: Condition, 
-                 success_goal: BaseGoal, fail_goal: BaseGoal, 
+    def __init__(self, description: str, condition: Condition,
+                 success_goal: Optional[BaseGoal], fail_goal: Optional[BaseGoal],
                  max_retries: int = 3, **kwargs):
         super().__init__(description, max_retries, **kwargs)
         self.condition = condition
@@ -417,18 +448,35 @@ class ConditionalGoal(BaseGoal):
             # Determine which sub-goal to use
             active_goal = self.success_goal if condition_result else self.fail_goal
             self._current_sub_goal = active_goal
-            
-            print(f"   🎯 Selected sub-goal: {active_goal.__class__.__name__} - '{active_goal.description}'")
-            
-            # If the sub-goal is achieved, the conditional goal is also achieved
+
+            if active_goal:
+                print(f"   🎯 Selected sub-goal: {active_goal.__class__.__name__} - '{active_goal.description}'")
+            else:
+                print("   🎯 No sub-goal to execute for this branch")
+
+            if active_goal is None:
+                status = GoalStatus.ACHIEVED
+                reasoning = (
+                    "Condition TRUE but no success goal provided"
+                    if condition_result
+                    else "Condition FALSE and no fail goal provided"
+                )
+            else:
+                status = GoalStatus.ACHIEVED if condition_result else GoalStatus.FAILED
+                reasoning = (
+                    f"Condition TRUE: executing success goal '{active_goal.description}'"
+                    if condition_result
+                    else f"Condition FALSE: executing fail goal '{active_goal.description}'"
+                )
+
             return GoalResult(
-                status=GoalStatus.ACHIEVED,
+                status=status,
                 confidence=1,
-                reasoning=f"Conditional goal completed: {self.condition.description} → {active_goal.description}",
+                reasoning=reasoning,
                 evidence={
                     "condition_type": self.condition.condition_type.value,
                     "condition_result": condition_result,
-                    "active_goal": active_goal.description,
+                    "active_goal": getattr(active_goal, 'description', None),
                 }
             )
             

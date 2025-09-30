@@ -214,7 +214,7 @@ def resolve_back_target(
             prompt=prompt,
             model_object_type=BackTargetSelection,
             system_prompt=system,
-            reasoning_level="minimal",
+            reasoning_level="medium",
             model="gpt-5-mini",
         )
         selected_index = int(getattr(model_out, 'selected_index', -1) or -1)
@@ -336,7 +336,7 @@ def resolve_forward_target(
             prompt=prompt,
             model_object_type=ForwardTargetSelection,
             system_prompt=system,
-            reasoning_level="minimal",
+            reasoning_level="medium",
             model="gpt-5-mini",
         )
         selected_index = int(getattr(model_out, 'selected_index', -1) or -1)

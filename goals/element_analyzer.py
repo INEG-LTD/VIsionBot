@@ -208,7 +208,8 @@ class ElementAnalyzer:
             description = generate_text(
                 prompt="Describe this UI element naturally and concisely.",
                 system_prompt=system_prompt,
-                model="gemini-2.5-flash-lite",
+                model="gpt-5-mini",
+                reasoning_level="medium",
                 # image=screenshot
             )
             print(f"[GoalFramework] Element description with AI: {description}")

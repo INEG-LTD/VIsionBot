@@ -19,7 +19,8 @@ class ElementDetector:
         additional_context: str,
         screenshot: bytes,
         element_data: List[Dict[str, Any]],
-        page_info: PageInfo
+        page_info: PageInfo,
+        target_context_guard: Optional[str] = None,
     ) -> Optional[PageElements]:
         """Detect relevant UI elements using numbered overlays for precise coordinate mapping"""
         
@@ -37,6 +38,7 @@ class ElementDetector:
         - Current Page URL: {page_info.url}
         - User's Goal: {goal_description}
         {f"- Additional Information: {additional_context}" if additional_context else ""}
+        {f"- Required surrounding context for the correct element: {target_context_guard}" if target_context_guard else ""}
 
         ## Available Elements
         The screenshot shows numbered red overlays (1, 2, 3, etc.) on interactive elements:
@@ -45,8 +47,9 @@ class ElementDetector:
         ## Instructions
         1. Look at the screenshot and identify which numbered elements are most relevant to achieving the user's goal
         2. Focus on elements that directly help accomplish the goal
-        3. Return information about the relevant elements using their exact overlay numbers
-        4. Return at least 3 candidates for the user to choose from
+        {"3. Ignore any overlay whose surrounding content conflicts with the required context." if target_context_guard else ''}
+        {"4. Return information about the relevant elements using their exact overlay numbers" if target_context_guard else "3. Return information about the relevant elements using their exact overlay numbers"}
+        {"5. Return at least 3 candidates for the user to choose from" if target_context_guard else "4. Return at least 3 candidates for the user to choose from"}
 
         ## Output Schema
         Return a JSON list where each object represents a relevant element with:

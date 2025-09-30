@@ -24,28 +24,33 @@ class DateTimeHandler:
         print("  Handling datetime field with direct fill()")
         
         # Debug information
-        print(f"    Debug: target_element_index = {step.target_element_index}")
+        print(f"    Debug: overlay_index = {step.overlay_index}")
         print(f"    Debug: elements count = {len(elements.elements)}")
         print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
+        element_selector = None
+        detected_element = None
+        if step.overlay_index is not None and step.overlay_index < len(elements.elements):
+            detected_element = elements.elements[step.overlay_index]
+
         # Get coordinates from the action step or element
         if step.x is not None and step.y is not None:
             x, y = int(step.x), int(step.y)
             print(f"    Using coordinates from step: ({x}, {y})")
-        elif step.target_element_index is not None and step.target_element_index < len(elements.elements):
+        elif step.overlay_index is not None and step.overlay_index < len(elements.elements):
             # Get coordinates from element
             from vision_utils import get_gemini_box_2d_center_pixels
-            element = elements.elements[step.target_element_index]
+            element = elements.elements[step.overlay_index]
             if element.box_2d:
                 x, y = get_gemini_box_2d_center_pixels(
                     element.box_2d, page_info.width, page_info.height
                 )
-                print(f"    Using coordinates from element {step.target_element_index}: ({x}, {y})")
+                print(f"    Using coordinates from element {step.overlay_index}: ({x}, {y})")
             else:
                 raise ValueError("Could not determine coordinates for datetime field")
         else:
-            print(f"    ❌ Invalid target element index: {step.target_element_index} (max: {len(elements.elements) - 1})")
-            raise ValueError(f"Invalid target element index {step.target_element_index} for datetime field (elements count: {len(elements.elements)})")
+            print(f"    ❌ Invalid target element index: {step.overlay_index} (max: {len(elements.elements) - 1})")
+            raise ValueError(f"Invalid target element index {step.overlay_index} for datetime field (elements count: {len(elements.elements)})")
         
         # Validate and clamp coordinates
         x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
@@ -55,9 +60,21 @@ class DateTimeHandler:
             target_date = step.datetime_value or "2024-12-15"
             
             # Get element selector from coordinates
-            element_selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
             if not element_selector:
-                raise ValueError("Could not get element selector from coordinates")
+                element_selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+            if not element_selector:
+                raise ValueError("Could not determine element selector from coordinates")
+
+            try:
+                center = self.page.evaluate(
+                    "(sel) => { const el = document.querySelector(sel); if(!el) return null; const r = el.getBoundingClientRect(); return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2)}; }",
+                    element_selector,
+                )
+                if isinstance(center, dict) and 'x' in center and 'y' in center:
+                    x, y = int(center['x']), int(center['y'])
+                    print(f"    Refined coordinates from selector: ({x}, {y})")
+            except Exception:
+                pass
             
             print(f"    Found element selector: {element_selector}")
             

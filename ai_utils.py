@@ -127,7 +127,7 @@ def generate_text_gpt_with_cost(
         "total_tokens": _get(usage, "total_tokens"),
     }
 
-def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
+def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = "gpt-5-mini") -> str:
     return generate_text_gpt_with_cost(
         prompt=prompt, 
         system_prompt=system_prompt, 
@@ -136,7 +136,7 @@ def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None,
         image_detail=image_detail, 
         model=model, reasoning_level=reasoning_level)[0]
 
-def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> str:
+def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = "gpt-5-mini") -> str:
     if model.startswith("gpt"):
         return generate_text_gpt(
             prompt=prompt, 
@@ -154,6 +154,60 @@ def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, mul
             model=model)
     else:
         raise ValueError(f"Invalid model: {model}")
+
+
+def rewrite_condition_to_question(condition: str, model: str = "gpt-5-mini") -> str:
+    """Convert a natural-language condition into a clear yes/no question."""
+    condition = (condition or "").strip()
+    if not condition:
+        return "Is the condition true?"
+
+    system_prompt = (
+        "You rewrite natural-language conditions into concise yes/no questions about a web page. "
+        "Keep the question short and unambiguous."
+    )
+    prompt = f"Condition: {condition}\nRewrite as a yes/no question about the page:"
+    try:
+        question = generate_text(prompt, system_prompt=system_prompt, model=model).strip()
+        return question or f"Is it true that {condition}?"
+    except Exception:
+        return f"Is it true that {condition}?"
+
+
+def answer_question_with_vision(
+    question: str,
+    screenshot: Optional[bytes],
+    *,
+    model: str = "gpt-5-mini",
+    reasoning_level: str = "medium",
+) -> Optional[bool]:
+    """Use a vision-capable model to answer a yes/no question about the screenshot."""
+    question = (question or "").strip()
+    if not screenshot or not question:
+        return None
+
+    system_prompt = (
+        "You are a careful web QA assistant. Look at the screenshot and answer the question with 'Yes' or 'No' followed by a brief reason."
+    )
+    prompt = f"Question: {question}\nAnswer 'Yes' or 'No' based on the screenshot."
+    try:
+        answer = generate_text(
+            prompt,
+            system_prompt=system_prompt,
+            image=screenshot,
+            reasoning_level=reasoning_level,
+            model=model,
+        ).strip().lower()
+    except Exception:
+        return None
+
+    if not answer:
+        return None
+    if answer.startswith("yes"):
+        return True
+    if answer.startswith("no"):
+        return False
+    return None
 
 def generate_model_gpt_with_cost(
     prompt: str,
@@ -300,7 +354,7 @@ def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseMode
     )
     return response.parsed
 
-def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
+def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = "gpt-5-mini") -> BaseModel:
     return generate_model_gpt_with_cost(
         prompt, 
         model_object_type=model_object_type, 
@@ -311,7 +365,7 @@ def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]]
         model=model, 
         reasoning_level=reasoning_level)[0]
 
-def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "minimal", model: str = "gpt-5-mini") -> BaseModel:
+def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = "gpt-5-mini") -> BaseModel:
     if model.startswith("gpt"):
         return generate_model_gpt(
             prompt=prompt, 

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page
 
 from .base import BaseGoal, GoalResult, GoalStatus, GoalContext, EvaluationTiming
+from utils.vision_resolver import rank_elements_against_instruction
 
 
 class FormFillGoal(BaseGoal):
@@ -57,7 +58,7 @@ class FormFillGoal(BaseGoal):
         self.detected_fields = self.detect_elements_on_page(page, self.description)
         
         # Filter to get relevant fields for this goal
-        relevant_fields = self._filter_relevant_fields(self.detected_fields)
+        relevant_fields = self._filter_relevant_fields(context, self.detected_fields)
         
         # Update field values for relevant fields only
         self._update_field_values(page, relevant_fields)
@@ -132,17 +133,71 @@ class FormFillGoal(BaseGoal):
                 field['isFilled'] = bool(value and value.strip())
                 field['isRelevant'] = True  # Mark as relevant to this goal
     
-    def _filter_relevant_fields(self, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _filter_relevant_fields(self, context: GoalContext, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter fields to only include those relevant to the goal description using AI"""
         if not all_fields:
             return []
+
+        # Try deterministic vision-based matching first (fast path)
+        vision_fields = self._vision_filter_relevant_fields(context, all_fields)
+        if vision_fields:
+            return vision_fields
         
         # Use AI to determine field relevance
         relevant_fields = self._ai_filter_relevant_fields(all_fields)
         
         print(f"   🎯 AI filtered to {len(relevant_fields)} relevant fields out of {len(all_fields)} total")
         return relevant_fields
-    
+
+    def _vision_filter_relevant_fields(self, context: GoalContext, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use deterministic vision heuristics to pick relevant form fields when possible."""
+        page_w = context.current_state.page_width if context and context.current_state else None
+        page_h = context.current_state.page_height if context and context.current_state else None
+
+        if self.required_fields:
+            selected_indices: List[int] = []
+            for requirement in self.required_fields:
+                ranked = rank_elements_against_instruction(
+                    requirement,
+                    all_fields,
+                    page_w=page_w,
+                    page_h=page_h,
+                    mode="field",
+                    interpretation_mode="semantic",
+                )
+                if not ranked:
+                    continue
+                idx, score, diag = ranked[0]
+                if score < 5:
+                    continue
+                if idx not in selected_indices:
+                    selected_indices.append(idx)
+                field = all_fields[idx]
+                field_name = field.get('name') or field.get('id') or field.get('placeholder') or field.get('textContent') or 'unnamed'
+                print(f"   🎯 Vision matched '{requirement}' -> field index {idx} ({field_name}) [score={score:.1f}]")
+            if selected_indices:
+                return [all_fields[i] for i in selected_indices]
+
+        # If no explicit requirements, pick high-scoring matches from the goal description itself
+        ranked = rank_elements_against_instruction(
+            self.description,
+            all_fields,
+            page_w=page_w,
+            page_h=page_h,
+            mode="field",
+            interpretation_mode="semantic",
+        )
+        strong_candidates = [item for item in ranked if item[1] >= 6][: min(3, len(all_fields))]
+        if strong_candidates:
+            indices = [idx for idx, _, _ in strong_candidates]
+            for idx, score, _ in strong_candidates:
+                field = all_fields[idx]
+                field_name = field.get('name') or field.get('id') or field.get('placeholder') or field.get('textContent') or 'unnamed'
+                print(f"   🎯 Vision highlighted field index {idx} ({field_name}) from goal description [score={score:.1f}]")
+            return [all_fields[i] for i in indices]
+
+        return []
+
     def _ai_filter_relevant_fields(self, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use AI to determine which fields are relevant to the goal"""
         try:
@@ -193,7 +248,7 @@ class FormFillGoal(BaseGoal):
             result = generate_model(
                 prompt="Analyze the form fields and determine which ones are relevant to the user's goal.",
                 model_object_type=FieldRelevance,
-                reasoning_level="minimal",
+                reasoning_level="medium",
                 system_prompt=system_prompt,
                 model="gpt-5-nano"
             )
@@ -628,7 +683,7 @@ class FormFillGoal(BaseGoal):
             detected_fields = self.detect_elements_on_page(page, self.description)
             
             # Filter to get relevant fields for this goal
-            relevant_fields = self._filter_relevant_fields(detected_fields)
+            relevant_fields = self._filter_relevant_fields(context, detected_fields)
             
             # Update field values for relevant fields only
             self._update_field_values(page, relevant_fields)

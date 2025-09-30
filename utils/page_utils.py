@@ -50,7 +50,7 @@ class PageUtils:
                 doc_height=800
             )
     
-    def scroll_page(self, direction: str = "down", amount: int = 200):
+    def scroll_page(self, direction: str = "down", amount: int = 600):
         """Scroll the page"""
         scroll_amount = amount if direction == "down" else -amount
         self.page.evaluate(f"window.scrollBy(0, {scroll_amount})")

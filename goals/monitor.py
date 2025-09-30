@@ -25,7 +25,7 @@ class GoalMonitor:
     def __init__(self, page: Page):
         self.page = page
         self.user_prompt = ""
-        self.active_goals: List[BaseGoal] = []
+        self.active_goal: BaseGoal = None
         self.interaction_history: List[Interaction] = []
         self.state_history: List[BrowserState] = []
         self.url_history: List[str] = []
@@ -48,24 +48,28 @@ class GoalMonitor:
         if hasattr(goal, 'set_element_analyzer'):
             goal.set_element_analyzer(self.element_analyzer)
         
-        self.active_goals.append(goal)
+        # Set goal monitor reference for goals that need it (like WhileGoal with command queues)
+        if hasattr(goal, 'set_goal_monitor'):
+            goal.set_goal_monitor(self)
+        
+        self.active_goal = goal
         print(f"[GoalMonitor] Added goal: {goal}")
     
     def remove_goal(self, goal: BaseGoal) -> None:
         """Remove a goal from monitoring"""
-        if goal in self.active_goals:
+        if goal == self.active_goal:
             goal.stop_monitoring()
-            self.active_goals.remove(goal)
+            self.active_goal = None
             print(f"[GoalMonitor] Removed goal: {goal}")
     
-    def record_planned_interaction(self, interaction_type: InteractionType, **kwargs) -> Dict[str, GoalResult]:
+    def record_planned_interaction(self, interaction_type: InteractionType, **kwargs) -> GoalResult:
         """
         Record a planned interaction BEFORE it happens and evaluate goals based on their timing preferences.
         
         Returns:
             Dict of goal evaluations that occurred before the interaction
         """
-        pre_interaction_results = {}
+        pre_interaction_results = None
         
         if interaction_type == InteractionType.CLICK:
             coordinates = kwargs.get('coordinates')
@@ -86,25 +90,24 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                for goal in self.active_goals:
-                    if goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
-                        try:
-                            # Create context with planned interaction data
-                            context = self._build_goal_context()
-                            context.planned_interaction = planned_interaction_data
+                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                    try:
+                        # Create context with planned interaction data
+                        context = self._build_goal_context()
+                        context.planned_interaction = planned_interaction_data
+                        
+                        # Evaluate the goal
+                        result = self.active_goal.evaluate(context)
+                        pre_interaction_results = result
+                        self.active_goal._last_evaluation = result
+                        print(f"[GoalMonitor] Pre-interaction evaluation: {self.active_goal} -> {result.status}")
+                        
+                        # If goal is achieved before interaction, note it
+                        if result.status == GoalStatus.ACHIEVED:
+                            print(f"[GoalMonitor] Goal achieved before interaction: {self.active_goal}")
                             
-                            # Evaluate the goal
-                            result = goal.evaluate(context)
-                            pre_interaction_results[str(goal)] = result
-                            goal._last_evaluation = result
-                            print(f"[GoalMonitor] Pre-interaction evaluation: {goal} -> {result.status}")
-                            
-                            # If goal is achieved before interaction, note it
-                            if result.status == GoalStatus.ACHIEVED:
-                                print(f"[GoalMonitor] Goal achieved before interaction: {goal}")
-                                
-                        except Exception as e:
-                            print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
+                    except Exception as e:
+                        print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
         elif interaction_type == InteractionType.PRESS:
             keys_to_press = kwargs.get('keys_to_press')
@@ -117,25 +120,24 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                for goal in self.active_goals:
-                    if goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
-                        try:
-                            # Create context with planned interaction data
-                            context = self._build_goal_context()
-                            context.planned_interaction = planned_interaction_data
+                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                    try:
+                        # Create context with planned interaction data
+                        context = self._build_goal_context()
+                        context.planned_interaction = planned_interaction_data
+                        
+                        # Evaluate the goal
+                        result = self.active_goal.evaluate(context)
+                        pre_interaction_results = result
+                        self.active_goal._last_evaluation = result
+                        print(f"[GoalMonitor] Pre-interaction evaluation: {self.active_goal} -> {result.status}")
+                        
+                        # If goal is achieved before interaction, note it
+                        if result.status == GoalStatus.ACHIEVED:
+                            print(f"[GoalMonitor] Goal achieved before interaction: {self.active_goal}")
                             
-                            # Evaluate the goal
-                            result = goal.evaluate(context)
-                            pre_interaction_results[str(goal)] = result
-                            goal._last_evaluation = result
-                            print(f"[GoalMonitor] Pre-interaction evaluation: {goal} -> {result.status}")
-                            
-                            # If goal is achieved before interaction, note it
-                            if result.status == GoalStatus.ACHIEVED:
-                                print(f"[GoalMonitor] Goal achieved before interaction: {goal}")
-                                
-                        except Exception as e:
-                            print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
+                    except Exception as e:
+                        print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
         elif interaction_type == InteractionType.SCROLL:
             target_x = kwargs.get('target_x')
@@ -152,50 +154,49 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                for goal in self.active_goals:
-                    if goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
-                        try:
-                            # Create context with planned interaction data
-                            context = self._build_goal_context()
-                            context.planned_interaction = planned_interaction_data
+                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                    try:
+                        # Create context with planned interaction data
+                        context = self._build_goal_context()
+                        context.planned_interaction = planned_interaction_data
+                        
+                        # Evaluate the goal
+                        result = self.active_goal.evaluate(context)
+                        pre_interaction_results = result
+                        self.active_goal._last_evaluation = result
+                        print(f"[GoalMonitor] Pre-interaction evaluation: {self.active_goal} -> {result.status}")
+                        
+                        # If goal is achieved before interaction, note it
+                        if result.status == GoalStatus.ACHIEVED:
+                            print(f"[GoalMonitor] Goal achieved before interaction: {self.active_goal}")
                             
-                            # Evaluate the goal
-                            result = goal.evaluate(context)
-                            pre_interaction_results[str(goal)] = result
-                            goal._last_evaluation = result
-                            print(f"[GoalMonitor] Pre-interaction evaluation: {goal} -> {result.status}")
-                            
-                            # If goal is achieved before interaction, note it
-                            if result.status == GoalStatus.ACHIEVED:
-                                print(f"[GoalMonitor] Goal achieved before interaction: {goal}")
-                                
-                        except Exception as e:
-                            print(f"[GoalMonitor] Error in pre-interaction evaluation for {goal}: {e}")
+                    except Exception as e:
+                        print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
         return pre_interaction_results
     
-    def check_for_retry_requests(self) -> List[BaseGoal]:
+    def check_for_retry_request(self) -> BaseGoal:
         """
         Check if any goals have requested a retry.
         
         Returns:
             List of goals that have requested retries
         """
-        retry_goals = []
-        for goal in self.active_goals:
-            if goal.retry_requested:
-                retry_goals.append(goal)
-        return retry_goals
+        retry_goal = None
+        if self.active_goal:
+            if self.active_goal.retry_requested:
+                retry_goal = self.active_goal
+        return retry_goal
     
-    def reset_retry_requests(self) -> None:
+    def reset_retry_request(self) -> None:
         """Reset retry requests for all goals"""
-        for goal in self.active_goals:
-            goal.reset_retry_state()
+        if self.active_goal:
+            self.active_goal.reset_retry_state()
     
     def clear_all_goals(self) -> None:
         """Clear all active goals"""
-        for goal in self.active_goals.copy():
-            self.remove_goal(goal)
+        if self.active_goal:
+            self.remove_goal(self.active_goal)
     
     def record_interaction(self, interaction_type: InteractionType, **kwargs) -> None:
         """
@@ -227,8 +228,8 @@ class GoalMonitor:
         self.interaction_history.append(interaction)
         
         # Notify goals
-        for goal in self.active_goals:
-            goal.on_interaction(interaction)
+        if self.active_goal:
+            self.active_goal.on_interaction(interaction)
         
         # Evaluate goals that want AFTER or BOTH timing
         self._evaluate_post_interaction_goals(interaction_type)
@@ -238,8 +239,8 @@ class GoalMonitor:
             old_state = self.state_history[-1]
             new_state = interaction.after_state
             if self._is_significant_state_change(old_state, new_state):
-                for goal in self.active_goals:
-                    goal.on_state_change(old_state, new_state)
+                if self.active_goal:
+                    self.active_goal.on_state_change(old_state, new_state)
         
         # Maintain URL history pointer based on the latest state
         try:
@@ -254,44 +255,44 @@ class GoalMonitor:
     
     def _evaluate_post_interaction_goals(self, interaction_type: InteractionType) -> None:
         """Evaluate goals that want AFTER or BOTH timing after an interaction"""
-        for goal in self.active_goals:
-            if goal.EVALUATION_TIMING in (EvaluationTiming.AFTER, EvaluationTiming.BOTH):
+        if self.active_goal:
+            if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.AFTER, EvaluationTiming.BOTH):
                 try:
                     context = self._build_goal_context()
-                    result = goal.evaluate(context)
-                    goal._last_evaluation = result
-                    print(f"[GoalMonitor] Post-interaction evaluation: {goal} -> {result.status} -> {result.reasoning}")
+                    result = self.active_goal.evaluate(context)
+                    self.active_goal._last_evaluation = result
+                    print(f"[GoalMonitor] Post-interaction evaluation: {self.active_goal} -> {result.status} -> {result.reasoning}")
                     
                     # Check if this goal requested a retry during evaluation
-                    if goal.retry_requested:
-                        print(f"[GoalMonitor] Goal {goal} requested retry during post-interaction evaluation")
+                    if self.active_goal.retry_requested:
+                        print(f"[GoalMonitor] Goal {self.active_goal} requested retry during post-interaction evaluation")
                         
                 except Exception as e:
-                    print(f"[GoalMonitor] Error in post-interaction evaluation for {goal}: {e}")
+                    print(f"[GoalMonitor] Error in post-interaction evaluation for {self.active_goal}: {e}")
     
-    def evaluate_goals(self) -> Dict[str, GoalResult]:
+    def evaluate_goal(self) -> GoalResult:
         """
-        Evaluate all active goals and return their current status.
+        Evaluate active goal and return its current status.
         This respects each goal's evaluation timing preferences.
         """
-        results = {}
+        result = None
         
-        for goal in self.active_goals:
+        if self.active_goal:
             # Use the last evaluation if it exists, otherwise evaluate now
-            if goal._last_evaluation:
-                results[str(goal)] = goal._last_evaluation
+            if self.active_goal._last_evaluation:
+                result = self.active_goal._last_evaluation
             else:
                 # For CONTINUOUS goals, evaluate now
-                if goal.EVALUATION_TIMING == EvaluationTiming.CONTINUOUS:
+                if self.active_goal.EVALUATION_TIMING == EvaluationTiming.CONTINUOUS:
                     try:
                         context = self._build_goal_context()
-                        result = goal.evaluate(context)
-                        goal._last_evaluation = result
-                        results[str(goal)] = result
+                        result = self.active_goal.evaluate(context)
+                        self.active_goal._last_evaluation = result
+                        result = result
                         
                         # Check if this goal requested a retry during evaluation
-                        if goal.retry_requested:
-                            print(f"[GoalMonitor] Goal {goal} requested retry during continuous evaluation")
+                        if self.active_goal.retry_requested:
+                            print(f"[GoalMonitor] Goal {self.active_goal} requested retry during continuous evaluation")
                             
                     except Exception as e:
                         error_result = GoalResult(
@@ -300,16 +301,16 @@ class GoalMonitor:
                             reasoning=f"Error evaluating goal: {e}",
                             evidence={"error": str(e)}
                         )
-                        results[str(goal)] = error_result
+                        result = error_result
                 else:
                     # For BEFORE/AFTER goals, return pending if no evaluation yet
-                    results[str(goal)] = GoalResult(
+                    result = GoalResult(
                         status=GoalStatus.PENDING,
                         confidence=1.0,
-                        reasoning=f"Goal with {goal.EVALUATION_TIMING} timing waiting for appropriate evaluation trigger"
+                        reasoning=f"Goal with {self.active_goal.EVALUATION_TIMING} timing waiting for appropriate evaluation trigger"
                     )
         
-        return results
+        return result
     
     def _capture_initial_state(self) -> None:
         """Capture the initial browser state"""
@@ -382,19 +383,54 @@ class GoalMonitor:
             pass
         return context
     
+    def is_goal_achieved(self, goal: BaseGoal) -> bool:
+        """Check if a specific goal is achieved"""
+        if goal != self.active_goal:
+            return False
+        
+        # Use the last evaluation if it exists
+        if goal._last_evaluation:
+            return goal._last_evaluation.status == GoalStatus.ACHIEVED
+        
+        # For goals that haven't been evaluated yet, evaluate now
+        try:
+            context = self._build_goal_context()
+            result = goal.evaluate(context)
+            goal._last_evaluation = result
+            return result.status == GoalStatus.ACHIEVED
+        except Exception:
+            return False
+    
+    def is_goal_failed(self, goal: BaseGoal) -> bool:
+        """Check if a specific goal has failed"""
+        if goal != self.active_goal:
+            return False
+        
+        # Use the last evaluation if it exists
+        if goal._last_evaluation:
+            return goal._last_evaluation.status == GoalStatus.FAILED
+        
+        # For goals that haven't been evaluated yet, evaluate now
+        try:
+            context = self._build_goal_context()
+            result = goal.evaluate(context)
+            goal._last_evaluation = result
+            return result.status == GoalStatus.FAILED
+        except Exception:
+            return False
+
     def get_status_summary(self) -> Dict[str, Any]:
         """Get a summary of all goal statuses"""
-        results = self.evaluate_goals()
+        result = self.evaluate_goal()
         
         summary = {
-            "total_goals": len(self.active_goals),
-            "achieved": sum(1 for r in results.values() if r.status == GoalStatus.ACHIEVED),
-            "pending": sum(1 for r in results.values() if r.status == GoalStatus.PENDING),
-            "failed": sum(1 for r in results.values() if r.status == GoalStatus.FAILED),
-            "unknown": sum(1 for r in results.values() if r.status == GoalStatus.UNKNOWN),
-            "interactions_count": len(self.interaction_history),
+            "achieved": 1 if result.status == GoalStatus.ACHIEVED else 0,
+            "pending": 1 if result.status == GoalStatus.PENDING else 0,
+            "failed": 1 if result.status == GoalStatus.FAILED else 0,
+            "unknown": 1 if result.status == GoalStatus.UNKNOWN else 0,
+            "interactions_count": 1 if self.active_goal else 0,
             "session_duration": time.time() - self.session_start_time,
-            "goals": results
+            "goal": result
         }
         
         return summary

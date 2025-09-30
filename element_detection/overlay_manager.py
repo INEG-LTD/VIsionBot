@@ -10,13 +10,22 @@ from models import PageInfo
 
 
 class OverlayManager:
-    """Manages numbered overlays on interactive elements"""
+    """Manages numbered overlays on page elements.
+
+    Default behavior overlays likely-interactive elements. You can switch to
+    non-discriminatory mode (all visible elements) via the `mode` parameter.
+    """
     
     def __init__(self, page: Page):
         self.page = page
     
-    def create_numbered_overlays(self, page_info: PageInfo) -> List[Dict[str, Any]]:
-        """Draw numbered overlays on interactive elements and return their normalized coordinates"""
+    def create_numbered_overlays(self, page_info: PageInfo, mode: str = "interactive") -> List[Dict[str, Any]]:
+        """Draw numbered overlays and return their normalized coordinates.
+
+        Args:
+            page_info: Basic viewport/page sizing info
+            mode: 'interactive' (default) or 'all' to include every visible element
+        """
         js_code = f"""
         (function() {{
             // Remove any existing overlays
@@ -25,7 +34,35 @@ class OverlayManager:
             
             const viewportWidth = {page_info.width};
             const viewportHeight = {page_info.height};
+            const MODE = "{mode}";
+            const INCLUDE_ALL = (MODE === 'all' || MODE === 'visible');
             
+            function collectContextText(element) {{
+                const pieces = [];
+                let current = element;
+                let depth = 0;
+                const MAX_DEPTH = 4;
+                while (current && current !== document.body && depth < MAX_DEPTH) {{
+                    const text = (current.innerText || '').trim();
+                    if (text) {{
+                        pieces.push(text.replace(/\\s+/g, ' ').substring(0, 180));
+                    }}
+                    current = current.parentElement;
+                    depth += 1;
+                }}
+                return pieces.join(' | ').substring(0, 360);
+            }}
+
+            function collectDataAttributes(element) {{
+                const attrs = {{}};
+                Array.from(element.attributes || []).forEach(attr => {{
+                    if (attr.name && attr.name.startsWith('data-')) {{
+                        attrs[attr.name] = attr.value || '';
+                    }}
+                }});
+                return attrs;
+            }}
+
             // Function to create a numbered overlay
             function createNumberedOverlay(element, index) {{
                 const rect = element.getBoundingClientRect();
@@ -92,7 +129,9 @@ class OverlayManager:
                     role: element.getAttribute('role') || '',
                     name: element.getAttribute('name') || '',
                     ariaLabel: element.getAttribute('aria-label') || '',
-                    href: element.getAttribute('href') || ''
+                    href: element.getAttribute('href') || '',
+                    contextText: collectContextText(element),
+                    dataAttributes: collectDataAttributes(element)
                 }};
             }}
             
@@ -166,24 +205,29 @@ class OverlayManager:
             let index = 1;
             
             allElements.forEach(element => {{
-                if (!isLikelyInteractive(element)) {{
-                    return;
-                }}
-                
                 const style = window.getComputedStyle(element);
                 if (style.display === 'none' || style.visibility === 'hidden' || 
                     element.offsetWidth === 0 || element.offsetHeight === 0) {{
                     return;
                 }}
                 
-                const rect = element.getBoundingClientRect();
-                // Skip if too small
-                if (rect.width < 10 || rect.height < 10) {{
+                // In interactive mode, filter aggressively to reduce noise
+                if (!INCLUDE_ALL && !isLikelyInteractive(element)) {{
                     return;
                 }}
+                
+                const rect = element.getBoundingClientRect();
+                
                 // Skip if element is completely outside the viewport (no intersection)
                 if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportHeight || rect.left >= viewportWidth) {{
                     return;
+                }}
+                
+                // Only in interactive mode, drop tiny elements
+                if (!INCLUDE_ALL) {{
+                    if (rect.width < 10 || rect.height < 10) {{
+                        return;
+                    }}
                 }}
                 
                 elementData.push(createNumberedOverlay(element, index));

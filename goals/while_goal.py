@@ -22,6 +22,7 @@ class LoopProgress:
     iterations: int = 0
     last_condition_result: Optional[bool] = None
     started_at: float = 0.0
+    loop_retries: int = 0  # Track custom loop retries separately from goal retries
 
 
 class WhileGoal(BaseGoal):
@@ -29,6 +30,8 @@ class WhileGoal(BaseGoal):
     Goal that keeps requesting retries (i.e., new plans) until the condition
     evaluates to True. The provided `loop_goal` describes the body (what to do
     on each iteration), and its description is surfaced to planning prompts.
+    
+    Enhanced to support multi-command loop bodies through simple parsing.
     """
 
     # Evaluate after interactions to decide whether to continue
@@ -37,22 +40,38 @@ class WhileGoal(BaseGoal):
     def __init__(
         self,
         condition: Condition,
-        loop_goal: BaseGoal,
+        loop_prompt: str,
+        else_prompt: Optional[str] = None,
         description: Optional[str] = None,
         max_iterations: int = 30,
-        max_duration_s: Optional[float] = 180.0,
         **kwargs,
     ) -> None:
-        desc = description or f"While ({condition.description}) do: {loop_goal.description}"
+        # Update description to include else goal if provided
+        # if else_prompt:
+        #     desc = description or f"While ({condition.description}) do: {loop_prompt} else: {else_prompt}"
+        # else:
+        #     desc = description or f"While ({condition.description}) do: {loop_prompt}"
+        
         # Align detection need with the body by default
-        needs_detection = kwargs.pop("needs_detection", getattr(loop_goal, "needs_detection", True))
-        super().__init__(desc, needs_detection=needs_detection, **kwargs)
+        super().__init__(description, needs_detection=False, needs_plan=False, **kwargs)
 
         self.condition = condition
-        self.loop_goal = loop_goal
-        self.progress = LoopProgress(iterations=0, last_condition_result=None, started_at=time.time())
+        self.loop_prompt = loop_prompt
+        self.else_prompt = else_prompt
+        self.progress = LoopProgress(iterations=0, last_condition_result=None, started_at=time.time(), loop_retries=0)
         self.max_iterations = max(1, int(max_iterations))
-        self.max_duration_s = max_duration_s if (max_duration_s is None or max_duration_s > 0) else None
+        
+
+    def set_goal_monitor(self, goal_monitor) -> None:
+        """Set the goal monitor."""
+        self.goal_monitor = goal_monitor
+
+    def get_description(self, context: GoalContext) -> str:
+        """Generate a detailed description of what this goal is looking for."""
+        if self.else_prompt:
+            return f"While ({self.condition.description}) do: {self.loop_prompt} else: {self.else_prompt}"
+        else:
+            return f"While ({self.condition.description}) do: {self.loop_prompt}"
 
     def evaluate(self, context: GoalContext) -> GoalResult:
         """Evaluate loop condition; request retries while condition is true."""
@@ -62,106 +81,47 @@ class WhileGoal(BaseGoal):
             cond = False
         self.progress.last_condition_result = cond
 
-        # If condition is false -> loop terminates successfully
+        # If condition is false -> loop terminates, execute else goal if provided
         if not cond:
-            return GoalResult(
-                status=GoalStatus.ACHIEVED,
-                confidence=1.0,
-                reasoning=f"Loop complete. Condition no longer satisfied: {self.condition.description}",
-                evidence={
-                    "iterations": self.progress.iterations,
-                    "duration_s": round(time.time() - self.progress.started_at, 2),
-                    "condition": self.condition.description,
-                },
-                next_actions=[],
-            )
+            # Execute else goal if provided
+            if self.else_prompt:
+                print(f"🔄 Executing else goal: {self.else_prompt}")
+                # The else goal will be executed by the main bot loop
+                return GoalResult(
+                    status=GoalStatus.ACHIEVED,
+                    confidence=1.0,
+                    reasoning=f"Loop condition false, executing else goal: {self.else_prompt}",
+                    evidence={"iterations": self.progress.iterations},
+                    next_actions=[f"Execute else: {self.else_prompt}"]
+                )
+            else:
+                # No else goal, loop is complete
+                return GoalResult(
+                    status=GoalStatus.ACHIEVED,
+                    confidence=1.0,
+                    reasoning=f"Loop condition false after {self.progress.iterations} iterations",
+                    evidence={"iterations": self.progress.iterations},
+                    next_actions=[]
+                )
 
-        # Check iteration/time safety limits
+        # Condition is true -> continue loop
         self.progress.iterations += 1
-        duration = time.time() - self.progress.started_at
-        if self.progress.iterations >= self.max_iterations:
+        
+        # Check iteration limits
+        if self.progress.iterations > self.max_iterations:
             return GoalResult(
                 status=GoalStatus.FAILED,
-                confidence=0.3,
-                reasoning=(
-                    f"Loop aborted after {self.progress.iterations} iterations: "
-                    f"condition still true: {self.condition.description}"
-                ),
-                evidence={"iterations": self.progress.iterations, "duration_s": round(duration, 2)},
-                next_actions=["Consider refining the loop action or condition"],
+                confidence=0.8,
+                reasoning=f"Loop exceeded max iterations ({self.max_iterations})",
+                evidence={"iterations": self.progress.iterations},
+                next_actions=[]
             )
 
-        if self.max_duration_s is not None and duration > self.max_duration_s:
-            return GoalResult(
-                status=GoalStatus.FAILED,
-                confidence=0.3,
-                reasoning=(
-                    f"Loop timed out after {round(duration, 1)}s: "
-                    f"condition still true: {self.condition.description}"
-                ),
-                evidence={"iterations": self.progress.iterations, "duration_s": round(duration, 2)},
-                next_actions=["Narrow the condition or adjust max duration"],
-            )
-
-        # Condition is still true: request another planning/execution pass
-        self.request_retry(
-            reason=f"WhileGoal continuing: condition still true → {self.condition.description}"
-        )
+        # Execute the loop body via act() - this will be handled by the main bot loop
         return GoalResult(
             status=GoalStatus.PENDING,
-            confidence=0.6,
-            reasoning=(
-                f"Condition still true; continue loop body: {self.loop_goal.description}"
-            ),
-            evidence={
-                "iterations": self.progress.iterations,
-                "condition": self.condition.description,
-                "condition_result": True,
-            },
-            next_actions=[f"Repeat: {self.loop_goal.description}"],
+            confidence=0.9,
+            reasoning=f"Loop condition true (iteration {self.progress.iterations}), executing loop body",
+            evidence={"iterations": self.progress.iterations, "condition_result": cond},
+            next_actions=[f"Execute: {self.loop_prompt}"],
         )
-
-    def get_description(self, context: GoalContext) -> str:
-        """Structured description used to guide planning."""
-        status = (
-            "TRUE" if self.progress.last_condition_result
-            else "FALSE" if self.progress.last_condition_result is not None
-            else "UNEVALUATED"
-        )
-        return (
-            f"Goal Type: While Loop\n"
-            f"Continue Condition: {self.condition.description}\n"
-            f"Condition Status: {status}\n"
-            f"Iterations: {self.progress.iterations} / {self.max_iterations}\n"
-            f"Max Duration (s): {self.max_duration_s if self.max_duration_s is not None else 'unlimited'}\n"
-            f"Loop Body: {self.loop_goal.description}\n"
-            f"Planning Guidance: Focus on executing the loop body once per pass while the condition remains true."
-        )
-
-    # Propagate lifecycle events to the loop body for consistency
-    def start_monitoring(self) -> None:
-        super().start_monitoring()
-        try:
-            self.loop_goal.start_monitoring()
-        except Exception:
-            pass
-
-    def stop_monitoring(self) -> None:
-        super().stop_monitoring()
-        try:
-            self.loop_goal.stop_monitoring()
-        except Exception:
-            pass
-
-    def on_interaction(self, interaction) -> None:
-        try:
-            self.loop_goal.on_interaction(interaction)
-        except Exception:
-            pass
-
-    def on_state_change(self, old_state, new_state) -> None:
-        try:
-            self.loop_goal.on_state_change(old_state, new_state)
-        except Exception:
-            pass
-

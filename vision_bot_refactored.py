@@ -30,6 +30,7 @@ from goals import (
     NavigationGoal,
     IfGoal,
     WhileGoal,
+    ForGoal,
     PressGoal,
     ScrollGoal,
     Condition,
@@ -47,6 +48,7 @@ from utils.intent_parsers import (
     extract_navigation_intent,
     parse_structured_if,
     parse_structured_while,
+    parse_structured_for,
     parse_keyword_command,
     parse_focus_command,
     parse_undo_command,
@@ -55,7 +57,8 @@ from goals.history_utils import (
     resolve_back_target,
     resolve_forward_target,
 )
-from focus_manager_ai_first import AIFirstFocusManager as FocusManager
+from focus_manager import FocusManager
+from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 
@@ -166,27 +169,28 @@ class BrowserVisionBot:
         self.last_dom_signature = None
         
         # Initialize components
-        self.goal_monitor = GoalMonitor(page)
+        self.goal_monitor: GoalMonitor = GoalMonitor(page)
         self.overlay_manager = OverlayManager(page)
         self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
-        # AI-first focus manager for element focusing
-        self.focus_manager = FocusManager(page, self.page_utils)
+        
+        # Initialize deduplication system
+        self.deduper = InteractionDeduper()
         try:
-            self.focus_manager.set_interaction_history_limit(self.dedup_history_quantity)
+            self.deduper.set_interaction_history_limit(self.dedup_history_quantity)
         except Exception:
             pass
-        self.action_executor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.focus_manager)
+        
+        # Initialize focus manager with deduper
+        self.focus_manager: FocusManager = FocusManager(page, self.page_utils, self.deduper)
+        
+        # Initialize action executor with deduper
+        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper)
         # Plan generator for AI planning prompts
-        self.plan_generator = PlanGenerator(
+        self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
             max_detailed_elements=self.max_detailed_elements,
         )
-        # Attach shared memory to the monitor so clicks are remembered generically
-        try:
-            self.goal_monitor.set_memory_store(self.memory_store)
-        except Exception:
-            pass
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
         try:
@@ -529,6 +533,9 @@ class BrowserVisionBot:
         goal_description: str,
         additional_context: str = "",
         interpretation_mode: Optional[str] = None,
+        target_context_guard: Optional[str] = None,
+        skip_post_guard_refinement: bool = True,
+        confirm_before_interaction: bool = False,
     ) -> bool:
         """Main method to achieve a goal using vision-based automation"""
         if interpretation_mode is None:
@@ -587,10 +594,17 @@ class BrowserVisionBot:
 
             if isinstance(goal, WhileGoal):
                 return self._execute_while_loop(goal, start_time)
+            
+            if isinstance(goal, ForGoal):
+                return self._execute_for_loop(goal, start_time)
 
             if goal:
                 goal_description = transformed_goal_description
                 self.goal_monitor.add_goal(goal)
+            elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
+                # Handle reference commands that were returned from IF evaluation
+                print(f"🔄 Executing reference command from IF evaluation: {transformed_goal_description}")
+                return self._handle_ref_commands(transformed_goal_description)
             else:
                 print("ℹ️ No smart goal setup")
                 return True
@@ -648,18 +662,56 @@ class BrowserVisionBot:
                         }
                         """
                     )
+                    current_components = sig_src.split('|')
+                    current_url = current_components[0]
+                    current_scroll = current_components[1]
+                    current_elements = int(current_components[2])
+                    current_text = current_components[3]
+                    
+                    # Compare with previous signature if available
+                    if hasattr(self, 'last_dom_components') and self.last_dom_components:
+                        prev_url, prev_scroll, prev_elements, prev_text = self.last_dom_components
+                        changes = []
+                        
+                        if current_url != prev_url:
+                            changes.append(f"URL: {prev_url} → {current_url}")
+                        if current_scroll != prev_scroll:
+                            changes.append(f"Scroll: {prev_scroll} → {current_scroll}")
+                        if current_elements != prev_elements:
+                            diff = current_elements - prev_elements
+                            changes.append(f"Elements: {prev_elements} → {current_elements} ({diff:+d})")
+                        if current_text != prev_text:
+                            changes.append("Text content changed")
+                        
+                        if changes:
+                            print("🔄 DOM changes detected:")
+                            for change in changes:
+                                print(f"   • {change}")
+                        else:
+                            print("✅ No DOM changes detected")
+                    
+                    # Store current components for next comparison
+                    self.last_dom_components = (current_url, current_scroll, current_elements, current_text)
+                    
                 except Exception:
                     sig_src = f"{self.page.url}|{page_info.scroll_y}|{page_info.scroll_x}"
+                    print("⚠️ Using fallback DOM signature (evaluation failed)")
                 sig_hash = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
                 
                 # Skip if DOM signature hasn't changed and no retry requested
                 retry_goal = self.goal_monitor.check_for_retry_request()
                 if sig_hash == self.last_dom_signature and not retry_goal:
                     print("⚠️ Same DOM signature as last attempt, scrolling to break loop")
+                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
+                    print(f"   📊 Previous interactions count: {len(self.interaction_deduper.interactions) if hasattr(self, 'interaction_deduper') else 'unknown'}")
+                    print("   🎯 Reason: Page hasn't changed but goal needs new elements (likely due to deduplication)")
                     self.page_utils.scroll_page()
                     continue
                 elif sig_hash == self.last_dom_signature and retry_goal:
                     print("🔄 Same DOM but retry requested - proceeding with retry attempt")
+                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
+                if sig_hash != self.last_dom_signature:
+                    print(f"🔄 DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
                 self.last_dom_signature = sig_hash
                 
                 # Decide whether detection will be needed to avoid an extra screenshot
@@ -672,7 +724,13 @@ class BrowserVisionBot:
 
                 if goal.needs_plan:
                 # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
-                    plan = self._generate_plan(goal_description, additional_context, screenshot, page_info)
+                    plan = self._generate_plan(
+                        goal_description,
+                        additional_context,
+                        screenshot,
+                        page_info,
+                        target_context_guard,
+                    )
                 else:
                     plan = None
                     
@@ -702,7 +760,13 @@ class BrowserVisionBot:
                 print(f"🤔 Reasoning: {plan.reasoning}")
                 
                 # Execute the plan
-                success = self.action_executor.execute_plan(plan, page_info)
+                success = self.action_executor.execute_plan(
+                    plan,
+                    page_info,
+                    target_context_guard=target_context_guard,
+                    skip_post_guard_refinement=skip_post_guard_refinement,
+                    confirm_before_interaction=confirm_before_interaction,
+                )
                 if success:
                     
                     # Check if goals were achieved during execution
@@ -737,7 +801,11 @@ class BrowserVisionBot:
                         # The retry state will be used to inform the next plan generation
                         continue
                     else:
-                        print("❌ Plan execution failed for unknown reason")
+                        failure_reason = getattr(self.action_executor, "last_failure_reason", None)
+                        if failure_reason:
+                            print(f"❌ Plan execution failed: {failure_reason}")
+                        else:
+                            print("❌ Plan execution failed for unknown reason")
                         continue
             
             duration_ms = (time.time() - start_time) * 1000
@@ -799,6 +867,10 @@ class BrowserVisionBot:
         ref_id: str,
         all_must_be_true: bool = False,
         interpretation_mode: Optional[str] = None,
+        additional_context: str = "",
+        target_context_guard: Optional[str] = None,
+        skip_post_guard_refinement: bool = True,
+        confirm_before_interaction: bool = False,
     ) -> bool:
         """
         Register multiple commands for later reference and execution.
@@ -808,6 +880,10 @@ class BrowserVisionBot:
             ref_id: Unique identifier for referencing these commands
             all_must_be_true: Require every command to succeed when evaluating this ref
             interpretation_mode: Optional interpretation mode to apply when executing this ref
+            additional_context: Extra context to include when executing each stored prompt
+            target_context_guard: Guard condition description applied to each stored prompt
+            skip_post_guard_refinement: Whether to skip post-plan guard refinement when executing stored prompts
+            confirm_before_interaction: Whether to require confirmation before each stored interaction
             
         Returns:
             True if commands were registered successfully, False otherwise
@@ -825,11 +901,30 @@ class BrowserVisionBot:
                 "prompts": prompts.copy(),
                 "all_must_be_true": bool(all_must_be_true),
                 "interpretation_mode": normalized_mode,
+                "additional_context": additional_context or "",
+                "target_context_guard": target_context_guard,
+                "skip_post_guard_refinement": bool(skip_post_guard_refinement),
+                "confirm_before_interaction": bool(confirm_before_interaction),
             }
             mode = "ALL" if all_must_be_true else "ANY"
-            extra = f", interpretation={normalized_mode}" if normalized_mode else ""
-            self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, f"Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}{extra})")
-            print(f"📋 Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}{extra})")
+            extra_parts = []
+            if normalized_mode:
+                extra_parts.append(f"interpretation={normalized_mode}")
+            if additional_context:
+                extra_parts.append("additional_context")
+            if target_context_guard:
+                extra_parts.append("target_context_guard")
+            if not skip_post_guard_refinement:
+                extra_parts.append("skip_post_guard_refinement=False")
+            if confirm_before_interaction:
+                extra_parts.append("confirm_before_interaction=True")
+            extra_summary = f" ({', '.join(extra_parts)})" if extra_parts else ""
+            self.logger.log(
+                LogLevel.INFO,
+                LogCategory.SYSTEM,
+                f"Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}){extra_summary}",
+            )
+            print(f"📋 Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}){extra_summary}")
             
             # Show what was registered
             for i, prompt in enumerate(prompts, 1):
@@ -903,14 +998,14 @@ class BrowserVisionBot:
         if not should_avoid:
             return None
 
-        focus_mgr: FocusManager = getattr(self, 'focus_manager', None)
-        if not focus_mgr or not hasattr(focus_mgr, 'get_interacted_element_history'):
+        deduper = getattr(self, 'deduper', None)
+        if not deduper or not hasattr(deduper, 'get_interacted_element_history'):
             return None
 
         limit = self.dedup_history_quantity
         history_limit = None if limit is None or limit < 0 else limit
         try:
-            history = focus_mgr.get_interacted_element_history(history_limit)
+            history = deduper.get_interacted_element_history(history_limit)
         except Exception:
             return None
 
@@ -924,7 +1019,14 @@ class BrowserVisionBot:
             "reason": reason,
         }
 
-    def _generate_plan(self, goal_description: str, additional_context: str, screenshot: bytes, page_info: PageInfo) -> Optional[VisionPlan]:
+    def _generate_plan(
+        self,
+        goal_description: str,
+        additional_context: str,
+        screenshot: bytes,
+        page_info: PageInfo,
+        target_context_guard: Optional[str] = None,
+    ) -> Optional[VisionPlan]:
         """Generate an action plan using numbered element detection"""
 
         # Check if any active goal needs element detection
@@ -950,6 +1052,7 @@ class BrowserVisionBot:
                 page=self.page,
                 command_history=self.command_history,
                 dedup_context=dedup_context,
+                target_context_guard=target_context_guard,
             )
             return plan
 
@@ -961,6 +1064,47 @@ class BrowserVisionBot:
         if self.focus_manager.get_current_focus_context():
             print("🎯 Filtering elements based on current focus context...")
             element_data = self._filter_elements_by_focus(element_data)
+
+        # Filter out interacted elements if dedup is enabled
+        if self.deduper and self.deduper.dedup_enabled:
+            should_avoid, reason = self._determine_dedup_usage(goal_description)
+            if should_avoid:
+                print(f"🚫 Filtering out interacted elements (reason: {reason})...")
+                # Convert element_data to the format expected by deduper
+                elements_for_dedup = []
+                for elem in element_data:
+                    element_dict = {
+                        'tagName': elem.get('tagName', ''),
+                        'text': elem.get('text', ''),
+                        'textContent': elem.get('text', ''),
+                        'description': elem.get('description', ''),
+                        'element_type': elem.get('tagName', ''),
+                        'href': elem.get('href', ''),
+                        'ariaLabel': elem.get('ariaLabel', ''),
+                        'aria_label': elem.get('ariaLabel', ''),
+                        'id': elem.get('id', ''),
+                        'role': elem.get('role', ''),
+                        'overlayIndex': elem.get('index'),
+                        'box2d': elem.get('normalizedCoords'),
+                        'normalizedCoords': elem.get('normalizedCoords'),
+                    }
+                    elements_for_dedup.append(element_dict)
+                
+                # Filter out interacted elements
+                filtered_elements = self.deduper.filter_interacted_elements(elements_for_dedup, "click")
+                print(f"🔢 Found {len(filtered_elements)} elements after deduplication (removed {len(elements_for_dedup) - len(filtered_elements)} duplicates)")
+                
+                # Convert back to element_data format and update indices
+                filtered_element_data = []
+                for elem in filtered_elements:
+                    overlay_idx = elem.get('overlayIndex')
+                    # Find the original element by overlay index (keep original numbering)
+                    original_elem = next((e for e in element_data if e.get('index') == overlay_idx), None)
+                    if original_elem:
+                        # Preserve the original index to keep alignment with DOM overlays
+                        filtered_element_data.append(original_elem.copy())
+                
+                element_data = filtered_element_data
 
         if not element_data:
             print("❌ No interactive elements found for overlays")
@@ -984,6 +1128,7 @@ class BrowserVisionBot:
                 interpretation_mode=current_mode,
                 semantic_hint=semantic_hint,
                 dedup_context=dedup_context,
+                target_context_guard=target_context_guard,
             )
 
         # Step 4: Clean up overlays after plan generation
@@ -1026,6 +1171,9 @@ class BrowserVisionBot:
                     if result_goal:
                         print(f"🔀 Added IfGoal (structured) active sub-goal: {result_goal.__class__.__name__} - '{result_goal.description}'")
                         return result_goal, result_description
+                    elif result_description and result_description.strip().lower().startswith('ref:'):
+                        print(f"🔀 IfGoal (structured) evaluation result: Reference command '{result_description}'")
+                        return None, result_description
                     elif result_description == "":
                         print("ℹ️ Structured IF evaluated false with no fail action → no-op")
                         return None, ""
@@ -1037,13 +1185,30 @@ class BrowserVisionBot:
         except Exception as e:
             print(f"⚠️ Structured IF parse failed: {e}")
 
+        # 1.5) Structured FOR loops
+        try:
+            parsed_for = parse_structured_for(goal_description)
+            if parsed_for:
+                print(f"🔄 Structured FOR parse: {parsed_for}")
+                iteration_mode, iteration_target, loop_body, break_conditions = parsed_for
+                for_goal = self._create_for_goal_from_parts(iteration_mode, iteration_target, loop_body, break_conditions)
+                if for_goal:
+                    print(f"🔄 Created ForGoal (structured): '{for_goal.description}'")
+                    return for_goal, goal_description
+                else:
+                    print(f"ℹ️ No ForGoal created from structured for parse for goal description: '{goal_description}'")
+            else:
+                print(f"ℹ️ No structured for parse for goal description: '{goal_description}'")
+        except Exception as e:
+            print(f"⚠️ Structured for parse failed: {e}")
+
         # 2) Single-keyword commands (fast path)
         try:
             kw = parse_keyword_command(goal_description)
             if kw:
-                keyword, payload, helper = kw
+                keyword, payload, _helper = kw
 
-                goal = self._create_goal_from_keyword(keyword, payload, helper)
+                goal = self._create_goal_from_keyword(keyword, payload)
                 if goal:
                     print(f"✅ Created {goal.__class__.__name__} via keyword '{keyword}': '{goal.description}'")
                     # Focus plan generation on the payload/action text
@@ -1061,36 +1226,31 @@ class BrowserVisionBot:
         print(f"ℹ️ No goal created from goal description: '{goal_description}'")
         return None, goal_description
 
-    def _create_goal_from_keyword(self, keyword: str, payload: str, helper: Optional[str]) -> Optional[BaseGoal]:
+    def _create_goal_from_keyword(self, keyword: str, payload: str) -> Optional[BaseGoal]:
         """Create a specific goal from a single keyword and payload."""
         k = (keyword or "").lower().strip()
         p = (payload or "").strip()
 
-        def _attach_helper(goal_obj: Optional[BaseGoal]) -> Optional[BaseGoal]:
-            if goal_obj and helper:
-                setattr(goal_obj, "command_helper", helper)
-            return goal_obj
-
         if k == "press":
             keys = p or extract_press_target(p)
             if keys:
-                return _attach_helper(PressGoal(description=f"Press action: {keys}", target_keys=keys))
+                return PressGoal(description=f"Press action: {keys}", target_keys=keys)
         if k == "scroll":
             if p:
-                return _attach_helper(ScrollGoal(description=f"Scroll action: {p}", user_request=p))
+                return ScrollGoal(description=f"Scroll action: {p}", user_request=p)
             else:
-                return _attach_helper(ScrollGoal(description="Scroll action: down", user_request="scroll down"))
+                return ScrollGoal(description="Scroll action: down", user_request="scroll down")
         if k == "click":
             target = p or extract_click_target(p)
             if target:
-                return _attach_helper(ClickGoal(description=f"Click action: {target}", target_description=target))
+                return ClickGoal(description=f"Click action: {target}", target_description=target)
         if k == "navigate":
             target = p
             if target:
-                return _attach_helper(NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target))
+                return NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target)
         if k == "form":
             desc = p or "Fill the form"
-            return _attach_helper(FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True))
+            return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True)
         if k == "back":
             import re as _re
             steps = 1
@@ -1103,7 +1263,7 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return _attach_helper(BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False))
+            return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False)
         if k == "forward":
             import re as _re
             steps = 1
@@ -1116,10 +1276,10 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return _attach_helper(ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False))
+            return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False)
         if k == "defer":
             message = p or "Manual control active"
-            return _attach_helper(DeferGoal(description=f"Defer action: {message}", prompt=message))
+            return DeferGoal(description=f"Defer action: {message}", prompt=message)
         # if k == "ref":
         #     goal_description = keyword + ": " + payload
         #     print(f"🔄 Handling ref command: '{goal_description}'")
@@ -1149,6 +1309,118 @@ class BrowserVisionBot:
         except Exception as e:
             print(f"⚠️ Error creating structured WhileGoal: {e}")
             return None
+
+    def _create_for_goal_from_parts(self, iteration_mode: str, iteration_target: str, loop_body: str, break_conditions: Optional[str] = None) -> Optional[ForGoal]:
+        """Create ForGoal from parsed iteration parts."""
+        try:
+            # Parse iteration target based on mode
+            if iteration_mode == "count":
+                target_count = int(iteration_target)
+                target = target_count
+            elif iteration_mode == "elements":
+                target = iteration_target
+            elif iteration_mode == "items":
+                # Parse "item|list" format
+                if "|" in iteration_target:
+                    item, item_list = iteration_target.split("|", 1)
+                    # For now, create a simple list - in real implementation, this would parse the actual list
+                    target = [item.strip(), "item2", "item3"]  # Placeholder
+                else:
+                    target = [iteration_target]
+            else:
+                print(f"⚠️ Unsupported iteration mode: {iteration_mode}")
+                return None
+            
+            # Parse break conditions
+            break_conds = [break_conditions] if break_conditions else []
+            
+            for_goal = ForGoal(
+                iteration_mode=iteration_mode,
+                iteration_target=target,
+                loop_prompt=loop_body,
+                break_conditions=break_conds,
+                description=f"For loop: {iteration_mode} iteration of '{iteration_target}'"
+            )
+            
+            return for_goal
+            
+        except Exception as e:
+            print(f"⚠️ Error creating structured ForGoal: {e}")
+            return None
+
+    def _execute_for_loop(self, goal: ForGoal, start_time: float) -> bool:
+        """Execute a ForGoal using target resolution and contextual execution."""
+        loop_description = goal.description or f"For loop: {goal.loop_prompt}"
+        print(f"🔄 Starting for loop: {loop_description}")
+
+        # Clear any existing goals and reset retry state
+        if self.goal_monitor.active_goal:
+            self.goal_monitor.clear_all_goals()
+        self.goal_monitor.reset_retry_request()
+
+        # Execute the for loop
+        while True:
+            try:
+                context = self.goal_monitor._build_goal_context()
+            except Exception as e:
+                error_msg = f"Unable to build context for for loop evaluation: {e}"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
+                return False
+
+            try:
+                result = goal.evaluate(context)
+            except Exception as e:
+                error_msg = f"For loop evaluation error: {e}"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
+                return False
+
+            # Check if loop is complete
+            if result.status == GoalStatus.ACHIEVED:
+                duration_ms = (time.time() - start_time) * 1000
+                print("✅ For loop completed successfully")
+                self.logger.log_goal_success(loop_description, duration_ms, result.evidence)
+                return True
+            elif result.status == GoalStatus.FAILED:
+                duration_ms = (time.time() - start_time) * 1000
+                error_msg = result.reasoning or "For loop failed"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
+                return False
+            elif result.status == GoalStatus.PENDING:
+                # Execute the next action
+                if result.next_actions:
+                    action = result.next_actions[0]
+                    print(f"🔄 Executing for loop action: {action}")
+                    
+                    # Execute the action
+                    action_success = self.act(action)
+                    
+                    # Notify the for goal of the result
+                    goal.on_iteration_complete(action_success)
+                    
+                    # Check if we should continue
+                    if not action_success and not goal.can_retry():
+                        duration_ms = (time.time() - start_time) * 1000
+                        error_msg = "For loop iteration failed and max retries exceeded"
+                        print(f"❌ {error_msg}")
+                        self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
+                        return False
+                else:
+                    # No next actions, loop might be stuck
+                    duration_ms = (time.time() - start_time) * 1000
+                    error_msg = "For loop has no next actions"
+                    print(f"❌ {error_msg}")
+                    self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
+                    return False
+            else:
+                # Unknown status
+                duration_ms = (time.time() - start_time) * 1000
+                error_msg = f"Unknown for loop status: {result.status}"
+                print(f"❌ {error_msg}")
+                self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
+                return False
 
     def _execute_while_loop(self, goal: WhileGoal, start_time: float) -> bool:
         """Execute a WhileGoal using standard while-loop semantics."""
@@ -1238,12 +1510,40 @@ class BrowserVisionBot:
             condition = _create_predicate(expr, f"Predicate: {condition_text}")
 
             print(f"Success text: '{success_text}'")
-            success_goal, _ = self._create_goal_from_description(success_text)
-            if not success_goal:
-                return None
+            
+            # Handle reference commands differently - don't create goals for them
+            if success_text.strip().lower().startswith("ref:"):
+                # Create a simple placeholder goal for reference commands
+                from goals.base import BaseGoal
+                class RefPlaceholderGoal(BaseGoal):
+                    def __init__(self, description: str):
+                        super().__init__(description)
+                    def evaluate(self, context):
+                        return None  # Will be handled by _evaluate_if_goal
+                    def get_description(self, context):
+                        return self.description
+                success_goal = RefPlaceholderGoal(success_text)
+            else:
+                success_goal, _ = self._create_goal_from_description(success_text)
+                if not success_goal:
+                    return None
+            
             print(f"🔀 Created success goal: '{success_goal.description}'")
+            
             if fail_text and fail_text.strip():
-                fail_goal, _ = self._create_goal_from_description(fail_text)
+                if fail_text.strip().lower().startswith("ref:"):
+                    # Create a simple placeholder goal for reference commands
+                    from goals.base import BaseGoal
+                    class RefPlaceholderGoal(BaseGoal):
+                        def __init__(self, description: str):
+                            super().__init__(description)
+                        def evaluate(self, context):
+                            return None  # Will be handled by _evaluate_if_goal
+                        def get_description(self, context):
+                            return self.description
+                    fail_goal = RefPlaceholderGoal(fail_text)
+                else:
+                    fail_goal, _ = self._create_goal_from_description(fail_text)
             else:
                 fail_goal = None
 
@@ -1280,14 +1580,21 @@ class BrowserVisionBot:
                 page_reference=self.page
             )
             
-            # Evaluate the conditional goal to get the active sub-goal
-            eval_result = if_goal.evaluate(basic_context)
-            
             if if_goal._last_condition_result:
-                return if_goal.success_goal, getattr(if_goal.success_goal, 'description', '')
+                success_goal = if_goal.success_goal
+                # If the success branch is a reference command, defer execution to act()
+                if hasattr(success_goal, 'description') and success_goal.description.strip().lower().startswith('ref:'):
+                    print(f"🔀 Success branch resolved to reference command: {success_goal.description} (execution deferred)")
+                    return None, success_goal.description
+                return success_goal, getattr(success_goal, 'description', '')
 
             if if_goal.fail_goal:
-                return if_goal.fail_goal, if_goal.fail_goal.description
+                fail_goal = if_goal.fail_goal
+                # If the fail branch is a reference command, defer execution to act()
+                if hasattr(fail_goal, 'description') and fail_goal.description.strip().lower().startswith('ref:'):
+                    print(f"🔀 Fail branch resolved to reference command: {fail_goal.description} (execution deferred)")
+                    return None, fail_goal.description
+                return fail_goal, fail_goal.description
 
             return None, ""
                 
@@ -1427,8 +1734,8 @@ class BrowserVisionBot:
             # Check for dedup: enable
             if goal_lower in ["dedup: enable", "dedup:enabled"]:
                 self.dedup_mode = "on"
-                if hasattr(self, 'focus_manager') and self.focus_manager:
-                    self.focus_manager.dedup_enabled = True
+                if hasattr(self, 'deduper') and self.deduper:
+                    self.deduper.set_dedup_enabled(True)
                 self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication enabled")
                 print("🧹 Deduplication enabled")
                 return True
@@ -1436,8 +1743,8 @@ class BrowserVisionBot:
             # Check for dedup: disable
             elif goal_lower in ["dedup: disable", "dedup:disabled"]:
                 self.dedup_mode = "off"
-                if hasattr(self, 'focus_manager') and self.focus_manager:
-                    self.focus_manager.dedup_enabled = False
+                if hasattr(self, 'deduper') and self.deduper:
+                    self.deduper.set_dedup_enabled(False)
                 self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication disabled")
                 print("🧹 Deduplication disabled")
                 return True
@@ -1477,6 +1784,10 @@ class BrowserVisionBot:
                 stored_prompts = ref_entry.get("prompts", [])
                 all_must_be_true = bool(ref_entry.get("all_must_be_true", False))
                 ref_mode = ref_entry.get("interpretation_mode")
+                ref_additional_context = ref_entry.get("additional_context", "")
+                ref_target_context_guard = ref_entry.get("target_context_guard")
+                ref_skip_post_guard_refinement = ref_entry.get("skip_post_guard_refinement", True)
+                ref_confirm_before_interaction = ref_entry.get("confirm_before_interaction", False)
 
                 if not stored_prompts:
                     print(f"⚠️ Ref ID '{ref_id}' has no stored commands")
@@ -1489,7 +1800,16 @@ class BrowserVisionBot:
 
                 for i, prompt in enumerate(stored_prompts, 1):
                     print(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
-                    success = bool(self.act(prompt, interpretation_mode=ref_mode))
+                    success = bool(
+                        self.act(
+                            prompt,
+                            additional_context=ref_additional_context,
+                            interpretation_mode=ref_mode,
+                            target_context_guard=ref_target_context_guard,
+                            skip_post_guard_refinement=ref_skip_post_guard_refinement,
+                            confirm_before_interaction=ref_confirm_before_interaction,
+                        )
+                    )
                     results.append(success)
                     if success:
                         print(f"   ✅ Stored command {i} succeeded")

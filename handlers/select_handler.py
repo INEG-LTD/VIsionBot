@@ -22,23 +22,29 @@ class SelectHandler:
         print("  Handling select field")
         
         # Debug information
-        print(f"    Debug: target_element_index = {step.target_element_index}")
+        print(f"    Debug: overlay_index = {step.overlay_index}")
         print(f"    Debug: elements count = {len(elements.elements)}")
         print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
-        if step.target_element_index is None or step.target_element_index >= len(elements.elements):
-            print(f"    ❌ Invalid target element index: {step.target_element_index} (max: {len(elements.elements) - 1})")
-            raise ValueError(f"Invalid target element index {step.target_element_index} for select field (elements count: {len(elements.elements)})")
+        if step.overlay_index is None or step.overlay_index >= len(elements.elements):
+            print(f"    ❌ Invalid target element index: {step.overlay_index} (max: {len(elements.elements) - 1})")
+            raise ValueError(f"Invalid target element index {step.overlay_index} for select field (elements count: {len(elements.elements)})")
         
-        element = elements.elements[step.target_element_index]
+        element = elements.elements[step.overlay_index]
         x, y = self._get_click_coordinates(step, elements, page_info)
-        
+        target_description = element.description or element.element_label or element.element_type
+        selector_hint: Optional[str] = None
+
         if x is None or y is None:
             raise ValueError("Could not determine coordinates for select field")
-        
+
         # Validate and clamp coordinates
         x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
-        
+
+        selector_hint = self.selector_utils.get_element_selector_from_coordinates(x, y)
+        if selector_hint:
+            print(f"    Vision selector resolved for '{target_description}': {selector_hint}")
+
         try:
             # Step 1: Analyze the HTML element at these coordinates to determine type
             html_element_info = self._get_element_at_coordinates(x, y)
@@ -63,10 +69,10 @@ class SelectHandler:
             # Step 4: Handle based on determined type
             if is_custom:
                 print("    Detected custom select, using AI for option selection")
-                self._handle_custom_select(element, step, page_info)
+                self._handle_custom_select(element, step, page_info, selector_hint)
             else:
                 print("    Detected traditional select, using standard selection")
-                self._handle_traditional_select(element, step, page_info)
+                self._handle_traditional_select(element, step, page_info, selector_hint)
                 
         except Exception as e:
             print(f"    ❌ Select handling failed: {e}")
@@ -77,9 +83,9 @@ class SelectHandler:
         if step.x is not None and step.y is not None:
             return int(step.x), int(step.y)
         
-        if step.target_element_index is not None:
-            if 0 <= step.target_element_index < len(elements.elements):
-                element = elements.elements[step.target_element_index]
+        if step.overlay_index is not None:
+            if 0 <= step.overlay_index < len(elements.elements):
+                element = elements.elements[step.overlay_index]
                 if element.box_2d:
                     center_x, center_y = get_gemini_box_2d_center_pixels(
                         element.box_2d, page_info.width, page_info.height
@@ -186,52 +192,113 @@ class SelectHandler:
         print("    No custom indicators found, treating as traditional")
         return False
     
-    def _handle_traditional_select(self, element: DetectedElement, step: ActionStep, page_info: PageInfo):
+    def _handle_traditional_select(
+        self,
+        element: DetectedElement,
+        step: ActionStep,
+        page_info: PageInfo,
+        selector_hint: Optional[str] = None,
+    ) -> None:
         """Handle traditional HTML select element"""
         try:
-            # Try to find the select element and get its options
-            select_options = self.page.evaluate("""
-                () => {
-                    const selects = document.querySelectorAll('select');
-                    for (let select of selects) {
-                        const rect = select.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            return Array.from(select.options).map((opt, index) => ({
-                                value: opt.value,
-                                text: opt.textContent.trim(),
-                                index: index,
-                                disabled: opt.disabled
-                            }));
-                        }
+            query_selector = selector_hint
+            if not query_selector and element.box_2d:
+                cx, cy = get_gemini_box_2d_center_pixels(element.box_2d, page_info.width, page_info.height)
+                query_selector = self.selector_utils.get_element_selector_from_coordinates(cx, cy)
+
+            if not query_selector:
+                query_selector = 'select'
+
+            if step.select_option_text:
+                opt = step.select_option_text
+                try:
+                    self.page.select_option(query_selector, label=opt)
+                    print(f"    ✅ Selected '{opt}' via selector {query_selector}")
+                    return
+                except Exception:
+                    print(f"    ⚠️ select_option by label failed for '{opt}', trying text matching")
+                try:
+                    self.page.select_option(query_selector, value=opt)
+                    print(f"    ✅ Selected value '{opt}' via selector {query_selector}")
+                    return
+                except Exception:
+                    print(f"    ⚠️ select_option by value failed for '{opt}'")
+
+            # Fallback: pick first non-disabled option different from placeholder
+            selected = self.page.evaluate("""
+                (sel) => {
+                    const select = document.querySelector(sel);
+                    if (!select) return null;
+                    const options = Array.from(select.options || []);
+                    for (let i = 0; i < options.length; i++) {
+                        const opt = options[i];
+                        if (opt.disabled) continue;
+                        if (i === 0 && opt.value === '') continue;
+                        select.value = opt.value;
+                        select.dispatchEvent(new Event('input', { bubbles: true }));
+                        select.dispatchEvent(new Event('change', { bubbles: true }));
+                        return { value: opt.value, text: opt.textContent };
                     }
-                    return [];
+                    return null;
                 }
-            """)
-            
-            if not select_options or len(select_options) <= 1:
-                print("    ⚠️ No valid options found in traditional select")
-                return
-            
-            # Select the first non-disabled, non-placeholder option
-            for option in select_options[1:]:  # Skip first option (usually placeholder)
-                if not option['disabled']:
-                    print(f"    Selecting option: {option['text']}")
-                    
-                    # Use Playwright's select_option method
-                    select_element = self.page.query_selector('select')
-                    if select_element:
-                        select_element.select_option(value=option['value'])
-                        print(f"    ✅ Selected: {option['text']}")
-                        return
-            
-            print("    ⚠️ No suitable option found to select")
+            """, query_selector)
+
+            if selected:
+                print(f"    ✅ Selected option '{selected['text']}' via DOM fallback")
+            else:
+                print("    ⚠️ No suitable option found to select")
             
         except Exception as e:
             print(f"    ❌ Traditional select handling failed: {e}")
-    
-    def _handle_custom_select(self, element: DetectedElement, step: ActionStep, page_info: PageInfo):
+
+    def _handle_custom_select(
+        self,
+        element: DetectedElement,
+        step: ActionStep,
+        page_info: PageInfo,
+        selector_hint: Optional[str] = None,
+    ) -> None:
         """Handle custom select element with AI assistance"""
-        # This would need the full custom select logic from the original file
-        # For now, just a placeholder
-        print("    Custom select handling not yet implemented in modular version")
-        pass
+        option_text = (step.select_option_text or "").strip()
+        try:
+            candidate_locators = []
+            if option_text:
+                if selector_hint:
+                    candidate_locators.append(self.page.locator(selector_hint).locator('[role="option"]', has_text=option_text))
+                    candidate_locators.append(self.page.locator(selector_hint).locator('text=' + option_text))
+                candidate_locators.append(self.page.get_by_role('option', name=option_text))
+                candidate_locators.append(self.page.locator('[role="option"]', has_text=option_text))
+                candidate_locators.append(self.page.locator('li', has_text=option_text))
+                candidate_locators.append(self.page.locator('button', has_text=option_text))
+                candidate_locators.append(self.page.locator('div', has_text=option_text))
+
+                for loc in candidate_locators:
+                    try:
+                        count = loc.count()
+                    except Exception:
+                        count = 0
+                    if not count:
+                        continue
+                    try:
+                        loc.first.click()
+                        print(f"    ✅ Clicked custom option '{option_text}'")
+                        return
+                    except Exception:
+                        continue
+
+                print(f"    ⚠️ Could not find option '{option_text}' via candidate locators; attempting fallback")
+
+            fallback_loc = self.page.locator('[role="option"]')
+            try:
+                fallback_count = fallback_loc.count()
+            except Exception:
+                fallback_count = 0
+            if fallback_count:
+                fallback_loc.first.click()
+                print("    ✅ Selected first available custom option (fallback)")
+                return
+
+            print("    ⚠️ No custom options available after fallback attempts")
+
+        except Exception as err:
+            print(f"    ❌ Custom select handling failed: {err}")

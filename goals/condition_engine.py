@@ -14,7 +14,7 @@ Expression (JSON) examples:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union, Callable, Tuple
+from typing import Any, Dict, List, Optional, Union, Callable
 import datetime
 import json
 import re
@@ -22,10 +22,11 @@ import re
 from playwright.sync_api import Page
 
 from .base import Condition, GoalContext, create_environment_condition
-from ai_utils import generate_text
+from ai_utils import generate_text, rewrite_condition_to_question, answer_question_with_vision
 from utils.page_utils import PageUtils
 from element_detection.overlay_manager import OverlayManager
 from element_detection.element_detector import ElementDetector
+from utils.vision_resolver import visible_from_overlays, dom_text_visible
 
 
 JsonExpr = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
@@ -210,6 +211,8 @@ class ConditionEngine:
             # AI-assisted helpers (opt-in, slower)
             "ai.visible_button": self._fn_ai_visible_button,
             "ai.is_visible_nl": self._fn_ai_is_visible_nl,
+            # Vision deterministic helpers
+            "vision.visible": self._fn_vision_visible,
         })
 
     def _call_function(self, name: str, args: Dict[str, Any], context: GoalContext, cache: FactCache) -> Any:
@@ -228,370 +231,578 @@ class ConditionEngine:
 
     # ------------------------- System providers ----------------------------
     def _fn_system_hour(self, p: Dict[str, Any]) -> int:
-        return int(datetime.datetime.now().hour)
+        """Use LLM to determine current hour."""
+        cache: FactCache = p["cache"]
+        
+        try:
+            # Use LLM to determine current hour
+            prompt = "What is the current hour of the day (0-23)? Answer with just a number."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="You are a time assistant. Answer with just the current hour as a number between 0-23.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            if result:
+                hour = int(str(result).strip())
+                cache.add_trace({"call": "system.hour", "result": hour, "method": "llm"})
+                return max(0, min(23, hour))
+            
+            # Fallback to system time
+            hour = int(datetime.datetime.now().hour)
+            cache.add_trace({"call": "system.hour", "result": hour, "method": "fallback"})
+            return hour
+        except Exception as e:
+            cache.add_trace({"call": "system.hour", "error": str(e)})
+            return int(datetime.datetime.now().hour)
 
     def _fn_system_minute(self, p: Dict[str, Any]) -> int:
-        return int(datetime.datetime.now().minute)
+        """Use LLM to determine current minute."""
+        cache: FactCache = p["cache"]
+        
+        try:
+            # Use LLM to determine current minute
+            prompt = "What is the current minute of the hour (0-59)? Answer with just a number."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="You are a time assistant. Answer with just the current minute as a number between 0-59.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            if result:
+                minute = int(str(result).strip())
+                cache.add_trace({"call": "system.minute", "result": minute, "method": "llm"})
+                return max(0, min(59, minute))
+            
+            # Fallback to system time
+            minute = int(datetime.datetime.now().minute)
+            cache.add_trace({"call": "system.minute", "result": minute, "method": "fallback"})
+            return minute
+        except Exception as e:
+            cache.add_trace({"call": "system.minute", "error": str(e)})
+            return int(datetime.datetime.now().minute)
 
     def _fn_system_weekday(self, p: Dict[str, Any]) -> bool:
-        return datetime.datetime.now().weekday() < 5
+        """Use LLM to determine if it's a weekday."""
+        cache: FactCache = p["cache"]
+        
+        try:
+            # Use LLM to determine if it's a weekday
+            prompt = "Is today a weekday (Monday through Friday)? Answer with just 'yes' or 'no'."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekday.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            if result:
+                is_weekday = str(result).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": "system.weekday", "result": is_weekday, "method": "llm"})
+                return is_weekday
+            
+            # Fallback to system time
+            is_weekday = datetime.datetime.now().weekday() < 5
+            cache.add_trace({"call": "system.weekday", "result": is_weekday, "method": "fallback"})
+            return is_weekday
+        except Exception as e:
+            cache.add_trace({"call": "system.weekday", "error": str(e)})
+            return datetime.datetime.now().weekday() < 5
 
     def _fn_system_weekend(self, p: Dict[str, Any]) -> bool:
-        return datetime.datetime.now().weekday() >= 5
+        """Use LLM to determine if it's a weekend."""
+        cache: FactCache = p["cache"]
+        
+        try:
+            # Use LLM to determine if it's a weekend
+            prompt = "Is today a weekend (Saturday or Sunday)? Answer with just 'yes' or 'no'."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekend.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            if result:
+                is_weekend = str(result).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": "system.weekend", "result": is_weekend, "method": "llm"})
+                return is_weekend
+            
+            # Fallback to system time
+            is_weekend = datetime.datetime.now().weekday() >= 5
+            cache.add_trace({"call": "system.weekend", "result": is_weekend, "method": "fallback"})
+            return is_weekend
+        except Exception as e:
+            cache.add_trace({"call": "system.weekend", "error": str(e)})
+            return datetime.datetime.now().weekday() >= 5
 
     # ------------------------- Page providers ------------------------------
     def _page(self, context: GoalContext) -> Optional[Page]:
         return context.page_reference
 
     def _fn_page_url(self, p: Dict[str, Any]) -> str:
+        """Use LLM to extract URL from page context."""
         ctx: GoalContext = p["context"]
-        val = ctx.current_state.url or ""
-        try:
-            p["cache"].add_trace({"var": "env.page.url", "value": val})
-        except Exception:
-            pass
-        return val
-
-    def _fn_page_title(self, p: Dict[str, Any]) -> str:
-        ctx: GoalContext = p["context"]
-        val = ctx.current_state.title or ""
-        try:
-            p["cache"].add_trace({"var": "env.page.title", "value": val})
-        except Exception:
-            pass
-        return val
-
-    def _fn_page_full_text(self, p: Dict[str, Any]) -> str:
-        ctx: GoalContext = p["context"]
-        val = (ctx.current_state.visible_text or "").strip()
-        try:
-            p["cache"].add_trace({"var": "env.page.full_text", "len": len(val)})
-        except Exception:
-            pass
-        return val
-
-    def _fn_page_scroll_y(self, p: Dict[str, Any]) -> int:
-        ctx: GoalContext = p["context"]
-        page = self._page(ctx)
-        try:
-            if page:
-                y = int(page.evaluate("() => window.scrollY || 0"))
-                p["cache"].add_trace({"var": "env.page.scroll_y", "value": y})
-                return y
-        except Exception:
-            pass
-        try:
-            y = int(ctx.current_state.scroll_y)
-            p["cache"].add_trace({"var": "env.page.scroll_y", "value": y})
-            return y
-        except Exception:
-            return 0
-
-    def _fn_page_viewport_height(self, p: Dict[str, Any]) -> int:
-        ctx: GoalContext = p["context"]
-        page = self._page(ctx)
-        try:
-            if page and page.viewport_size:
-                h = int(page.viewport_size.get("height") or 0)
-                if h:
-                    p["cache"].add_trace({"var": "env.page.viewport_height", "value": h})
-                    return h
-        except Exception:
-            pass
-        try:
-            h = int(ctx.current_state.page_height)
-            p["cache"].add_trace({"var": "env.page.viewport_height", "value": h})
-            return h
-        except Exception:
-            return 0
-
-    def _fn_page_document_height(self, p: Dict[str, Any]) -> int:
-        ctx: GoalContext = p["context"]
-        page = self._page(ctx)
-        try:
-            if page:
-                h = int(page.evaluate("() => (document && document.body && document.body.scrollHeight) || 0"))
-                p["cache"].add_trace({"var": "env.page.document_height", "value": h})
-                return h
-        except Exception:
-            pass
-        # Fallback to viewport height when DOM not accessible
-        try:
-            h = int(ctx.current_state.page_height)
-            p["cache"].add_trace({"var": "env.page.document_height", "value": h})
-            return h
-        except Exception:
-            return 0
-
-    def _fn_page_at_bottom(self, p: Dict[str, Any]) -> bool:
-        ctx: GoalContext = p["context"]
-        args: Dict[str, Any] = p.get("args", {})
-        threshold = int(args.get("threshold", 100))  # px tolerance
+        cache: FactCache = p["cache"]
+        
+        # Use LLM to analyze page and extract URL
         try:
             page = self._page(ctx)
-            if page:
-                res = page.evaluate(
-                    "({th}) => { const y = window.scrollY||0; const h = window.innerHeight||0; const dh = (document && document.body && document.body.scrollHeight)||0; return (y + h) >= (dh - th); }",
-                    {"th": threshold}
-                )
-                p["cache"].add_trace({"call": "env.page.at_bottom", "args": {"threshold": threshold}, "result": bool(res)})
-                return bool(res)
-        except Exception:
-            pass
-        # Fallback using current_state snapshot
+            if not page:
+                return ctx.current_state.url or ""
+            
+            # Get page context for LLM analysis
+            page_utils = PageUtils(page)
+            page_info = page_utils.get_page_info()
+            
+            # Use LLM to extract URL from page context
+            prompt = f"Analyze this page and extract the current URL. Page title: {page_info.get('title', '')}. Return only the URL."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="Extract the URL from the page information. Return only the URL.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            url = str(result or "").strip()
+            if not url:
+                url = ctx.current_state.url or ""
+            
+            cache.add_trace({"var": "env.page.url", "value": url, "method": "llm"})
+            return url
+        except Exception as e:
+            cache.add_trace({"var": "env.page.url", "error": str(e)})
+            return ctx.current_state.url or ""
+
+    def _fn_page_title(self, p: Dict[str, Any]) -> str:
+        """Use LLM to extract title from page context."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        
+        # Use LLM to analyze page and extract title
         try:
-            y = int(ctx.current_state.scroll_y)
-            vh = int(ctx.current_state.page_height)
-            # Without doc height, assume viewport as doc → can't be at bottom unless y==0. Treat as False conservatively
-            dh = vh
+            page = self._page(ctx)
+            if not page:
+                return ctx.current_state.title or ""
+            
+            # Get page context for LLM analysis
+            page_utils = PageUtils(page)
+            page_info = page_utils.get_page_info()
+            
+            # Use LLM to extract title from page context
+            prompt = f"Analyze this page and extract the page title. Page content preview: {page_info.get('content', '')[:500]}. Return only the title."
+            result = generate_text(
+                prompt=prompt,
+                system_prompt="Extract the page title from the page information. Return only the title.",
+                reasoning_level="low",
+                model="gpt-5-mini"
+            )
+            
+            title = str(result or "").strip()
+            if not title:
+                title = ctx.current_state.title or ""
+            
+            cache.add_trace({"var": "env.page.title", "value": title, "method": "llm"})
+            return title
+        except Exception as e:
+            cache.add_trace({"var": "env.page.title", "error": str(e)})
+            return ctx.current_state.title or ""
+
+    def _fn_page_full_text(self, p: Dict[str, Any]) -> str:
+        """Use vision/LLM to extract full page text."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                return (ctx.current_state.visible_text or "").strip()
+            
+            # Use vision to extract all visible text from the page
+            question = "What is all the visible text content on this page? Include text from all sections, headers, paragraphs, and UI elements."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=True)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            text = str(vision_answer or "").strip()
+            
+            if not text:
+                text = (ctx.current_state.visible_text or "").strip()
+            
+            cache.add_trace({"var": "env.page.full_text", "len": len(text), "method": "vision"})
+            return text
+        except Exception as e:
+            cache.add_trace({"var": "env.page.full_text", "error": str(e)})
+            return (ctx.current_state.visible_text or "").strip()
+
+    def _fn_page_scroll_y(self, p: Dict[str, Any]) -> int:
+        """Use vision/LLM to determine scroll position."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                return int(ctx.current_state.scroll_y) if ctx.current_state.scroll_y else 0
+            
+            # Use vision to analyze scroll position
+            question = "What is the current vertical scroll position of this page? Answer with just a number representing pixels scrolled from the top."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                try:
+                    y = int(str(vision_answer).strip())
+                    cache.add_trace({"var": "env.page.scroll_y", "value": y, "method": "vision"})
+                    return max(0, y)
+                except ValueError:
+                    pass
+            
+            # Fallback to context state
+            y = int(ctx.current_state.scroll_y) if ctx.current_state.scroll_y else 0
+            cache.add_trace({"var": "env.page.scroll_y", "value": y, "method": "fallback"})
+            return y
+        except Exception as e:
+            cache.add_trace({"var": "env.page.scroll_y", "error": str(e)})
+            return int(ctx.current_state.scroll_y) if ctx.current_state.scroll_y else 0
+
+    def _fn_page_viewport_height(self, p: Dict[str, Any]) -> int:
+        """Use vision/LLM to determine viewport height."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                return int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+            
+            # Use vision to analyze viewport height
+            question = "What is the height of the visible viewport area of this page? Answer with just a number representing pixels."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                try:
+                    h = int(str(vision_answer).strip())
+                    cache.add_trace({"var": "env.page.viewport_height", "value": h, "method": "vision"})
+                    return max(0, h)
+                except ValueError:
+                    pass
+            
+            # Fallback to context state
+            h = int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+            cache.add_trace({"var": "env.page.viewport_height", "value": h, "method": "fallback"})
+            return h
+        except Exception as e:
+            cache.add_trace({"var": "env.page.viewport_height", "error": str(e)})
+            return int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+
+    def _fn_page_document_height(self, p: Dict[str, Any]) -> int:
+        """Use vision/LLM to determine document height."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                return int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+            
+            # Use vision to analyze document height
+            question = "What is the total height of the entire document/page content? Answer with just a number representing pixels."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=True)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                try:
+                    h = int(str(vision_answer).strip())
+                    cache.add_trace({"var": "env.page.document_height", "value": h, "method": "vision"})
+                    return max(0, h)
+                except ValueError:
+                    pass
+            
+            # Fallback to context state
+            h = int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+            cache.add_trace({"var": "env.page.document_height", "value": h, "method": "fallback"})
+            return h
+        except Exception as e:
+            cache.add_trace({"var": "env.page.document_height", "error": str(e)})
+            return int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+
+    def _fn_page_at_bottom(self, p: Dict[str, Any]) -> bool:
+        """Use vision/LLM to determine if page is at bottom."""
+        ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
+        args: Dict[str, Any] = p.get("args", {})
+        threshold = int(args.get("threshold", 100))
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                return False
+            
+            # Use vision to analyze if page is at bottom
+            question = f"Is this page scrolled to the bottom? Consider that we might be within {threshold} pixels of the bottom as 'at bottom'. Answer with just 'yes' or 'no'."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": "env.page.at_bottom", "args": {"threshold": threshold}, "result": result, "method": "vision"})
+                return result
+            
+            # Fallback using context state
+            y = int(ctx.current_state.scroll_y) if ctx.current_state.scroll_y else 0
+            vh = int(ctx.current_state.page_height) if ctx.current_state.page_height else 0
+            dh = vh  # Assume viewport as doc height
             val = (y + vh) >= (dh - threshold)
-            p["cache"].add_trace({"call": "env.page.at_bottom", "args": {"threshold": threshold}, "result": bool(val), "mode": "fallback"})
-            return bool(val)
-        except Exception:
+            cache.add_trace({"call": "env.page.at_bottom", "args": {"threshold": threshold}, "result": val, "method": "fallback"})
+            return val
+        except Exception as e:
+            cache.add_trace({"call": "env.page.at_bottom", "args": {"threshold": threshold}, "error": str(e)})
             return False
 
     def _fn_page_at_top(self, p: Dict[str, Any]) -> bool:
+        """Use vision/LLM to determine if page is at top."""
         ctx: GoalContext = p["context"]
+        cache: FactCache = p["cache"]
         args: Dict[str, Any] = p.get("args", {})
         threshold = int(args.get("threshold", 20))
+        
         try:
             page = self._page(ctx)
-            if page:
-                y = int(page.evaluate("() => window.scrollY || 0"))
-                res = y <= threshold
-                p["cache"].add_trace({"call": "env.page.at_top", "args": {"threshold": threshold}, "result": bool(res)})
-                return res
-        except Exception:
-            pass
-        try:
-            y = int(ctx.current_state.scroll_y)
-            res = y <= threshold
-            p["cache"].add_trace({"call": "env.page.at_top", "args": {"threshold": threshold}, "result": bool(res), "mode": "fallback"})
-            return res
-        except Exception:
+            if not page:
+                return True
+            
+            # Use vision to analyze if page is at top
+            question = f"Is this page scrolled to the top? Consider that we might be within {threshold} pixels of the top as 'at top'. Answer with just 'yes' or 'no'."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": "env.page.at_top", "args": {"threshold": threshold}, "result": result, "method": "vision"})
+                return result
+            
+            # Fallback using context state
+            y = int(ctx.current_state.scroll_y) if ctx.current_state.scroll_y else 0
+            result = y <= threshold
+            cache.add_trace({"call": "env.page.at_top", "args": {"threshold": threshold}, "result": result, "method": "fallback"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "env.page.at_top", "args": {"threshold": threshold}, "error": str(e)})
             return True
 
     def _fn_page_viewport_text(self, p: Dict[str, Any]) -> str:
+        """Use vision/LLM to extract viewport text."""
         ctx: GoalContext = p["context"]
         cache: FactCache = p["cache"]
         key = "env.page.viewport_text"
         cached = cache.get(key)
         if cached is not None:
             return cached
-        page = self._page(ctx)
-        if not page:
+        
+        try:
+            page = self._page(ctx)
+            if not page:
+                cache.set(key, "")
+                return ""
+            
+            # Use vision to extract viewport text
+            question = "What is all the visible text content in the current viewport? Include text from headers, paragraphs, buttons, links, and all other visible elements."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            text = str(vision_answer or "").strip()
+            
+            cache.add_trace({"var": "env.page.viewport_text", "len": len(text), "method": "vision"})
+            cache.set(key, text)
+            return text
+        except Exception as e:
+            cache.add_trace({"var": "env.page.viewport_text", "error": str(e)})
             cache.set(key, "")
             return ""
 
-        js_collect = r"""
-        () => {
-          const normalize = s => String(s || '').replace(/\s+/g, ' ').trim();
-          const W = window.innerWidth, H = window.innerHeight;
-          function elementAndAncestorsVisible(el) {
-            let e = el;
-            while (e && e !== document.documentElement) {
-              const s = getComputedStyle(e);
-              if (s.display === 'none' || s.visibility !== 'visible' || parseFloat(s.opacity || '1') === 0) return false;
-              e = e.parentElement;
-            }
-            return true;
-          }
-          function rectIntersectsViewport(r) {
-            return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < W && r.top < H;
-          }
-          const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-            { acceptNode: (n) => {
-                const v = n.nodeValue;
-                if (!v || !v.trim()) return NodeFilter.FILTER_REJECT;
-                return NodeFilter.FILTER_ACCEPT;
-            }}
-          );
-          let parts = [];
-          while (walker.nextNode()) {
-            const n = walker.currentNode;
-            const p = n.parentElement; if (!p) continue;
-            if (!elementAndAncestorsVisible(p)) continue;
-            let range;
-            try { range = document.createRange(); range.selectNodeContents(n); } catch (e) { continue; }
-            const rects = range.getClientRects();
-            let inViewport = false;
-            for (let i=0;i<rects.length;i++){ if (rectIntersectsViewport(rects[i])) { inViewport = true; break; } }
-            if (!inViewport) continue;
-            parts.push(normalize(n.nodeValue));
-          }
-          return parts.join(' ').trim();
-        }
-        """
-
-        try:
-            text_main = page.evaluate(js_collect) or ""
-        except Exception:
-            text_main = ""
-
-        # Include visible iframes' viewport text
-        def _frame_in_viewport(frame) -> bool:
-            try:
-                fe = frame.frame_element()
-                bb = fe.bounding_box() if fe else None
-                if not bb:
-                    return False
-                W = page.viewport_size.get("width", 0) if page.viewport_size else 0
-                H = page.viewport_size.get("height", 0) if page.viewport_size else 0
-                return not (bb["x"] > W or bb["y"] > H or (bb["x"] + bb["width"]) < 0 or (bb["y"] + bb["height"]) < 0)
-            except Exception:
-                return False
-
-        texts = [text_main]
-        for frame in page.frames:
-            if frame == page.main_frame:
-                continue
-            if not _frame_in_viewport(frame):
-                continue
-            try:
-                t = frame.evaluate(js_collect) or ""
-                if t:
-                    texts.append(t)
-            except Exception:
-                continue
-
-        combined = " ".join([t for t in texts if t]).strip()
-        try:
-            cache.add_trace({"var": "env.page.viewport_text", "len": len(combined)})
-        except Exception:
-            pass
-        cache.set(key, combined)
-        return combined
-
     # ------------------------- DOM providers --------------------------------
     def _fn_dom_exists(self, p: Dict[str, Any]) -> bool:
-        return self._dom_eval(p, mode="exists", method="dom.exists")
-
-    def _fn_dom_visible(self, p: Dict[str, Any]) -> bool:
-        return self._dom_eval(p, mode="visible", method="dom.visible")
-
-    def _fn_dom_count(self, p: Dict[str, Any]) -> int:
-        return self._dom_eval(p, mode="count", method="dom.count")
-
-    def _fn_dom_text(self, p: Dict[str, Any]) -> str:
-        return self._dom_eval(p, mode="text", method="dom.text")
-
-    def _fn_dom_value(self, p: Dict[str, Any]) -> str:
-        return self._dom_eval(p, mode="value", method="dom.value")
-
-    def _fn_dom_attr(self, p: Dict[str, Any]) -> str:
-        return self._dom_eval(p, mode="attr", method="dom.attr")
-
-    def _dom_eval(self, p: Dict[str, Any], mode: str, method: str) -> Any:
+        """Use vision/LLM to check if elements matching a description exist."""
         args = p.get("args", {})
         ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
         page = self._page(ctx)
         if not page:
-            return 0 if mode == "count" else ("" if mode in ("text", "value", "attr") else False)
+            return False
 
-        selector = args.get("selector", "")
-        within = (args.get("within") or "page").lower()  # 'viewport' or 'page'
-        attr_name = args.get("name")
-        include_iframes = bool(args.get("iframes", True))
+        description = args.get("description", "") or args.get("selector", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description:
+            return False
 
-        js = r"""
-        ({ selector, within, attrName }) => {
-          const W = window.innerWidth, H = window.innerHeight;
-          function isVisible(el) {
-            const s = getComputedStyle(el);
-            if (s.display === 'none' || s.visibility !== 'visible' || parseFloat(s.opacity || '1') === 0) return false;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) return false;
-            if (within === 'viewport') {
-              if (r.right <= 0 || r.bottom <= 0 || r.left >= W || r.top >= H) return false;
-            }
-            return true;
-          }
-          const nodes = Array.from(document.querySelectorAll(selector));
-          const vis = nodes.filter(n => isVisible(n));
-          return {
-            exists: nodes.length > 0,
-            anyVisible: vis.length > 0,
-            countAll: nodes.length,
-            countVisible: vis.length,
-            firstVisibleText: vis[0]?.innerText?.trim() || '',
-            firstVisibleValue: (vis[0] && (vis[0].value !== undefined) ? String(vis[0].value) : ''),
-            firstVisibleAttr: (vis[0] && attrName) ? (vis[0].getAttribute(attrName) || '') : ''
-          };
-        }
-        """
-
-        def in_viewport(frame) -> bool:
-            try:
-                fe = frame.frame_element()
-                bb = fe.bounding_box() if fe else None
-                if not bb:
-                    return False
-                W = page.viewport_size.get("width", 0) if page.viewport_size else 0
-                H = page.viewport_size.get("height", 0) if page.viewport_size else 0
-                return not (bb["x"] > W or bb["y"] > H or (bb["x"] + bb["width"]) < 0 or (bb["y"] + bb["height"]) < 0)
-            except Exception:
-                return False
-
-        def eval_on(frame) -> Dict[str, Any]:
-            try:
-                return frame.evaluate(js, {"selector": selector, "within": within, "attrName": attr_name}) or {}
-            except Exception:
-                return {}
-
-        # Main frame first
-        agg = eval_on(page.main_frame)
-
-        # Iframes if requested
-        if include_iframes:
-            for f in page.frames:
-                if f == page.main_frame:
-                    continue
-                if within == "viewport" and not in_viewport(f):
-                    continue
-                r = eval_on(f)
-                # Aggregate counts and any/exists
-                agg = {
-                    "exists": bool(agg.get("exists") or r.get("exists")),
-                    "anyVisible": bool(agg.get("anyVisible") or r.get("anyVisible")),
-                    "countAll": int(agg.get("countAll", 0)) + int(r.get("countAll", 0)),
-                    "countVisible": int(agg.get("countVisible", 0)) + int(r.get("countVisible", 0)),
-                    "firstVisibleText": agg.get("firstVisibleText") or r.get("firstVisibleText") or '',
-                    "firstVisibleValue": agg.get("firstVisibleValue") or r.get("firstVisibleValue") or '',
-                    "firstVisibleAttr": agg.get("firstVisibleAttr") or r.get("firstVisibleAttr") or ''
-                }
-
+        # Use vision-based element detection with natural language description
         try:
-            p["cache"].add_trace({
-                "call": method,
-                "args": {"selector": selector, "within": within, "name": attr_name},
-                "summary": {
-                    "exists": bool(agg.get("exists")),
-                    "visible": bool(agg.get("anyVisible")),
-                    "count_all": int(agg.get("countAll", 0)),
-                    "count_visible": int(agg.get("countVisible", 0)),
-                }
-            })
-        except Exception:
-            pass
+            question = f"Are there any elements that match this description visible in the {within}: '{description}'? Answer with just 'yes' or 'no'."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            # Use vision to answer the question
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+            
+            cache.add_trace({"call": "dom.exists", "args": {"description": description, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.exists", "args": {"description": description, "within": within}, "error": str(e)})
+            return False
 
-        if mode == "exists":
-            return bool(agg.get("exists"))
-        if mode == "visible":
-            return bool(agg.get("anyVisible"))
-        if mode == "count":
-            return int(agg.get("countVisible" if within == "viewport" else "countAll", 0))
-        if mode == "text":
-            return str(agg.get("firstVisibleText", ""))
-        if mode == "value":
-            return str(agg.get("firstVisibleValue", ""))
-        if mode == "attr":
-            return str(agg.get("firstVisibleAttr", ""))
-        return False
+    def _fn_dom_visible(self, p: Dict[str, Any]) -> bool:
+        """Use vision/LLM to check if elements matching a description are visible."""
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return False
+
+        description = args.get("description", "") or args.get("selector", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description:
+            return False
+
+        # Use vision-based visibility check with natural language description
+        try:
+            question = f"Are there any visible elements that match this description in the {within}: '{description}'? Answer with just 'yes' or 'no'."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+            
+            cache.add_trace({"call": "dom.visible", "args": {"description": description, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.visible", "args": {"description": description, "within": within}, "error": str(e)})
+            return False
+
+    def _fn_dom_count(self, p: Dict[str, Any]) -> int:
+        """Use vision/LLM to count elements matching a description."""
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return 0
+
+        description = args.get("description", "") or args.get("selector", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description:
+            return 0
+
+        # Use vision-based counting with natural language description
+        try:
+            question = f"How many elements that match this description are visible in the {within}: '{description}'? Answer with just a number."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                try:
+                    result = int(str(vision_answer).strip())
+                    cache.add_trace({"call": "dom.count", "args": {"description": description, "within": within}, "result": result, "method": "vision"})
+                    return max(0, result)
+                except ValueError:
+                    pass
+            
+            cache.add_trace({"call": "dom.count", "args": {"description": description, "within": within}, "result": 0, "method": "vision_fallback"})
+            return 0
+        except Exception as e:
+            cache.add_trace({"call": "dom.count", "args": {"description": description, "within": within}, "error": str(e)})
+            return 0
+
+    def _fn_dom_text(self, p: Dict[str, Any]) -> str:
+        """Use vision/LLM to extract text from elements matching a description."""
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return ""
+
+        description = args.get("description", "") or args.get("selector", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description:
+            return ""
+
+        # Use vision-based text extraction with natural language description
+        try:
+            question = f"What is the text content of the first visible element that matches this description in the {within}: '{description}'?"
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer or "").strip()
+            
+            cache.add_trace({"call": "dom.text", "args": {"description": description, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.text", "args": {"description": description, "within": within}, "error": str(e)})
+            return ""
+
+    def _fn_dom_value(self, p: Dict[str, Any]) -> str:
+        """Use vision/LLM to extract value from input elements matching a description."""
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return ""
+
+        description = args.get("description", "") or args.get("selector", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description:
+            return ""
+
+        # Use vision-based value extraction with natural language description
+        try:
+            question = f"What is the value of the first visible input field that matches this description in the {within}: '{description}'?"
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer or "").strip()
+            
+            cache.add_trace({"call": "dom.value", "args": {"description": description, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.value", "args": {"description": description, "within": within}, "error": str(e)})
+            return ""
+
+    def _fn_dom_attr(self, p: Dict[str, Any]) -> str:
+        """Use vision/LLM to extract attribute from elements matching a description."""
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return ""
+
+        description = args.get("description", "") or args.get("selector", "")
+        attr_name = args.get("name", "")
+        within = (args.get("within") or "viewport").lower()
+        if not description or not attr_name:
+            return ""
+
+        # Use vision-based attribute extraction with natural language description
+        try:
+            question = f"What is the value of the '{attr_name}' attribute of the first visible element that matches this description in the {within}: '{description}'?"
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer or "").strip()
+            
+            cache.add_trace({"call": "dom.attr", "args": {"description": description, "name": attr_name, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.attr", "args": {"description": description, "name": attr_name, "within": within}, "error": str(e)})
+            return ""
+
 
     def _resolve_var(self, path: str, context: GoalContext, cache: FactCache) -> Any:
-        # Only expose safe, deterministic vars
+        # Use LLM/vision-based variable resolution
         try:
             if path == "env.page.url":
                 return self._fn_page_url({"context": context, "args": {}, "cache": cache})
@@ -640,93 +851,46 @@ class ConditionEngine:
         return int(self._semantic_button_eval(p, want="count", method="dom.button_count") or 0)
 
     def _semantic_button_eval(self, p: Dict[str, Any], want: str, method: str) -> Union[bool, int]:
+        """Use vision/LLM to evaluate semantic button presence."""
         args = p.get("args", {})
         ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
         page = self._page(ctx)
         if not page:
             return 0 if want == "count" else False
 
         label = args.get("label", "")
         within = (args.get("within") or "viewport").lower()
-        include_iframes = bool(args.get("iframes", True))
         fuzzy = bool(args.get("fuzzy", True))
-        variants = self._label_variants(label, fuzzy)
+        
+        if not label:
+            return 0 if want == "count" else False
 
-        js = r"""
-        ({ variants, within }) => {
-          const W = window.innerWidth, H = window.innerHeight;
-          function isVisible(el) {
-            const s = getComputedStyle(el);
-            if (s.display === 'none' || s.visibility !== 'visible' || parseFloat(s.opacity || '1') === 0) return false;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) return false;
-            if (within === 'viewport') {
-              if (r.right <= 0 || r.bottom <= 0 || r.left >= W || r.top >= H) return false;
-            }
-            return true;
-          }
-          function labelFor(el) {
-            const parts = [];
-            const txt = (el.innerText || '').trim(); if (txt) parts.push(txt);
-            const val = (el.value !== undefined ? String(el.value) : ''); if (val) parts.push(val);
-            const aria = el.getAttribute && (el.getAttribute('aria-label') || ''); if (aria) parts.push(aria);
-            const title = el.getAttribute && (el.getAttribute('title') || ''); if (title) parts.push(title);
-            return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-          }
-          function matches(lbl, variants) {
-            if (!lbl) return false;
-            for (const v of variants) {
-              if (lbl.includes(String(v).toLowerCase())) return true;
-            }
-            return false;
-          }
-          const nodes = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'));
-          let visibleMatches = [];
-          for (const n of nodes) {
-            if (!isVisible(n)) continue;
-            const lbl = labelFor(n);
-            if (matches(lbl, variants)) visibleMatches.push(n);
-          }
-          return {
-            any: visibleMatches.length > 0,
-            count: visibleMatches.length
-          };
-        }
-        """
-
-        def in_viewport(frame) -> bool:
-            try:
-                fe = frame.frame_element()
-                bb = fe.bounding_box() if fe else None
-                if not bb:
-                    return False
-                W = page.viewport_size.get("width", 0) if page.viewport_size else 0
-                H = page.viewport_size.get("height", 0) if page.viewport_size else 0
-                return not (bb["x"] > W or bb["y"] > H or (bb["x"] + bb["width"]) < 0 or (bb["y"] + bb["height"]) < 0)
-            except Exception:
-                return False
-
-        def eval_on(frame) -> Dict[str, Any]:
-            try:
-                return frame.evaluate(js, {"variants": variants, "within": within}) or {"any": False, "count": 0}
-            except Exception:
-                return {"any": False, "count": 0}
-
-        agg = eval_on(page.main_frame)
-        if include_iframes:
-            for f in page.frames:
-                if f == page.main_frame:
-                    continue
-                if within == "viewport" and not in_viewport(f):
-                    continue
-                r = eval_on(f)
-                agg = {"any": bool(agg.get("any") or r.get("any")), "count": int(agg.get("count", 0)) + int(r.get("count", 0))}
-        result = agg.get(want, 0 if want == "count" else False)
         try:
-            p["cache"].add_trace({"call": method, "args": {"label": label, "within": within, "fuzzy": fuzzy}, "result": result})
-        except Exception:
-            pass
-        return result
+            # Use vision to detect buttons with the specified label
+            if want == "count":
+                question = f"How many buttons with the label '{label}' are visible in the {within}? Answer with just a number."
+            else:
+                question = f"Are there any buttons with the label '{label}' visible in the {within}? Answer with just 'yes' or 'no'."
+            
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            vision_answer = answer_question_with_vision(question, screenshot)
+            
+            if want == "count":
+                try:
+                    result = int(str(vision_answer).strip())
+                    cache.add_trace({"call": method, "args": {"label": label, "within": within, "fuzzy": fuzzy}, "result": result, "method": "vision"})
+                    return max(0, result)
+                except ValueError:
+                    cache.add_trace({"call": method, "args": {"label": label, "within": within, "fuzzy": fuzzy}, "result": 0, "method": "vision_fallback"})
+                    return 0
+            else:
+                result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": method, "args": {"label": label, "within": within, "fuzzy": fuzzy}, "result": result, "method": "vision"})
+                return result
+        except Exception as e:
+            cache.add_trace({"call": method, "args": {"label": label, "within": within, "fuzzy": fuzzy}, "error": str(e)})
+            return 0 if want == "count" else False
 
     # Link semantics ---------------------------------------------------------
     def _fn_dom_visible_link(self, p: Dict[str, Any]) -> bool:
@@ -736,166 +900,75 @@ class ConditionEngine:
         return int(self._semantic_link_eval(p, want="count", method="dom.link_count") or 0)
 
     def _semantic_link_eval(self, p: Dict[str, Any], want: str, method: str) -> Union[bool, int]:
+        """Use vision/LLM to evaluate semantic link presence."""
         args = p.get("args", {})
         ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
         page = self._page(ctx)
         if not page:
             return 0 if want == "count" else False
 
         label = args.get("label", "")
         within = (args.get("within") or "viewport").lower()
-        include_iframes = bool(args.get("iframes", True))
+        
+        if not label:
+            return 0 if want == "count" else False
 
-        js = r"""
-        ({ label, within }) => {
-          const W = window.innerWidth, H = window.innerHeight;
-          function isVisible(el) {
-            const s = getComputedStyle(el);
-            if (s.display === 'none' || s.visibility !== 'visible' || parseFloat(s.opacity || '1') === 0) return false;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) return false;
-            if (within === 'viewport') { if (r.right <= 0 || r.bottom <= 0 || r.left >= W || r.top >= H) return false; }
-            return true;
-          }
-          function labelFor(el) {
-            const parts = [];
-            const txt = (el.innerText || '').trim(); if (txt) parts.push(txt);
-            const aria = el.getAttribute && (el.getAttribute('aria-label') || ''); if (aria) parts.push(aria);
-            const title = el.getAttribute && (el.getAttribute('title') || ''); if (title) parts.push(title);
-            return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-          }
-          const q = String(label || '').toLowerCase();
-          const nodes = Array.from(document.querySelectorAll('a, [role="link"]'));
-          let visibleMatches = [];
-          for (const n of nodes) { if (!isVisible(n)) continue; if (labelFor(n).includes(q)) visibleMatches.push(n); }
-          return { any: visibleMatches.length > 0, count: visibleMatches.length };
-        }
-        """
-
-        def in_viewport(frame) -> bool:
-            try:
-                fe = frame.frame_element()
-                bb = fe.bounding_box() if fe else None
-                if not bb:
-                    return False
-                W = page.viewport_size.get("width", 0) if page.viewport_size else 0
-                H = page.viewport_size.get("height", 0) if page.viewport_size else 0
-                return not (bb["x"] > W or bb["y"] > H or (bb["x"] + bb["width"]) < 0 or (bb["y"] + bb["height"]) < 0)
-            except Exception:
-                return False
-
-        def eval_on(frame) -> Dict[str, Any]:
-            try:
-                return frame.evaluate(js, {"label": label, "within": within}) or {"any": False, "count": 0}
-            except Exception:
-                return {"any": False, "count": 0}
-
-        agg = eval_on(page.main_frame)
-        if include_iframes:
-            for f in page.frames:
-                if f == page.main_frame: continue
-                if within == "viewport" and not in_viewport(f): continue
-                r = eval_on(f)
-                agg = {"any": bool(agg.get("any") or r.get("any")), "count": int(agg.get("count", 0)) + int(r.get("count", 0))}
-
-        result = agg.get(want, 0 if want == "count" else False)
         try:
-            p["cache"].add_trace({"call": method, "args": {"label": label, "within": within}, "result": result})
-        except Exception:
-            pass
-        return result
+            # Use vision to detect links with the specified label
+            if want == "count":
+                question = f"How many links with the label '{label}' are visible in the {within}? Answer with just a number."
+            else:
+                question = f"Are there any links with the label '{label}' visible in the {within}? Answer with just 'yes' or 'no'."
+            
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            vision_answer = answer_question_with_vision(question, screenshot)
+            
+            if want == "count":
+                try:
+                    result = int(str(vision_answer).strip())
+                    cache.add_trace({"call": method, "args": {"label": label, "within": within}, "result": result, "method": "vision"})
+                    return max(0, result)
+                except ValueError:
+                    cache.add_trace({"call": method, "args": {"label": label, "within": within}, "result": 0, "method": "vision_fallback"})
+                    return 0
+            else:
+                result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+                cache.add_trace({"call": method, "args": {"label": label, "within": within}, "result": result, "method": "vision"})
+                return result
+        except Exception as e:
+            cache.add_trace({"call": method, "args": {"label": label, "within": within}, "error": str(e)})
+            return 0 if want == "count" else False
 
     # Field filled by label ---------------------------------------------------
     def _fn_dom_field_filled_by_label(self, p: Dict[str, Any]) -> bool:
+        """Use vision/LLM to check if a field is filled by label."""
         args = p.get("args", {})
         ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
         page = self._page(ctx)
         if not page:
             return False
+        
         label = args.get("label", "")
         within = (args.get("within") or "viewport").lower()
-        include_iframes = bool(args.get("iframes", True))
-
-        js = """
-        ({ label, within }) => {
-          const W = window.innerWidth, H = window.innerHeight;
-          function isVisible(el) {
-            const s = getComputedStyle(el);
-            if (s.display === 'none' || s.visibility !== 'visible' || parseFloat(s.opacity || '1') === 0) return false;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) return false;
-            if (within === 'viewport') { if (r.right <= 0 || r.bottom <= 0 || r.left >= W || r.top >= H) return false; }
-            return true;
-          }
-          function byId(id) { try { return document.getElementById(id); } catch(e) { return null; } }
-          function isFilled(el) {
-            if (!el) return false;
-            const tag = (el.tagName||'').toLowerCase();
-            const type = (el.getAttribute && (el.getAttribute('type')||'').toLowerCase()) || '';
-            if (tag === 'select') return el.selectedIndex >= 0 && !!(el.value||'').trim();
-            if (tag === 'textarea') return !!(el.value||'').trim();
-            if (tag === 'input') {
-              if (['checkbox','radio'].includes(type)) return !!el.checked;
-              return !!(el.value||'').trim();
-            }
-            return false;
-          }
-          const q = String(label||'').toLowerCase();
-          // Labels
-          const labels = Array.from(document.querySelectorAll('label')).filter(l => isVisible(l) && (l.innerText||'').toLowerCase().includes(q));
-          for (const lab of labels) {
-            let target = null;
-            const forId = lab.getAttribute('for');
-            if (forId) target = byId(forId);
-            if (!target) target = lab.querySelector('input,select,textarea');
-            if (target && isVisible(target) && isFilled(target)) return true;
-          }
-          // aria-labelledby
-          const controls = Array.from(document.querySelectorAll('input,select,textarea'));
-          for (const c of controls) {
-            const ids = (c.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean);
-            if (!ids.length) continue;
-            let text = '';
-            for (const id of ids) { const el = byId(id); if (el) text += ' ' + (el.innerText||''); }
-            if (!text) continue;
-            if (text.toLowerCase().includes(q) && isVisible(c) && isFilled(c)) return true;
-          }
-          return false;
-        }
-        """
-
-        def in_viewport(frame) -> bool:
-            try:
-                fe = frame.frame_element()
-                bb = fe.bounding_box() if fe else None
-                if not bb:
-                    return False
-                W = page.viewport_size.get("width", 0) if page.viewport_size else 0
-                H = page.viewport_size.get("height", 0) if page.viewport_size else 0
-                return not (bb["x"] > W or bb["y"] > H or (bb["x"] + bb["width"]) < 0 or (bb["y"] + bb["height"]) < 0)
-            except Exception:
-                return False
-
-        def eval_on(frame) -> bool:
-            try:
-                return bool(frame.evaluate(js, {"label": label, "within": within}))
-            except Exception:
-                return False
-
-        result = eval_on(page.main_frame)
-        if include_iframes and not result:
-            for f in page.frames:
-                if f == page.main_frame: continue
-                if within == "viewport" and not in_viewport(f): continue
-                if eval_on(f):
-                    result = True
-                    break
+        
+        if not label:
+            return False
 
         try:
-            p["cache"].add_trace({"call": "dom.field_filled_by_label", "args": {"label": label, "within": within}, "result": result})
-        except Exception:
-            pass
-        return result
+            # Use vision to check if field is filled
+            question = f"Is there a form field with the label '{label}' that is filled/has content in the {within}? Answer with just 'yes' or 'no'."
+            screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+            
+            vision_answer = answer_question_with_vision(question, screenshot)
+            result = str(vision_answer).lower().strip() in ['yes', 'true', '1']
+            
+            cache.add_trace({"call": "dom.field_filled_by_label", "args": {"label": label, "within": within}, "result": result, "method": "vision"})
+            return result
+        except Exception as e:
+            cache.add_trace({"call": "dom.field_filled_by_label", "args": {"label": label, "within": within}, "error": str(e)})
+            return False
 
     # ------------------------- AI-assisted helpers --------------------------
     def _fn_ai_visible_button(self, p: Dict[str, Any]) -> bool:
@@ -929,14 +1002,26 @@ class ConditionEngine:
             return True
 
         overlays = None
+        screenshot = None
         try:
             # Step 2: prepare overlays + screenshot
             page_utils = PageUtils(page)
             page_info = page_utils.get_page_info()
             overlays = OverlayManager(page)
-            overlay_data = overlays.create_numbered_overlays(page_info)
+            overlay_data = overlays.create_numbered_overlays(page_info, mode="interactive")
             if not overlay_data:
                 return False
+            # Quick deterministic overlay label match before invoking vision model
+            try:
+                lbl = (label or '').lower()
+                if lbl:
+                    for el in overlay_data:
+                        text = ((el.get('textContent') or '') + ' ' + (el.get('ariaLabel') or '')).lower()
+                        if lbl in text:
+                            p["cache"].add_trace({"call": "ai.visible_button.overlay_precheck", "args": {"label": label}, "overlay": el.get('index')})
+                            return True
+            except Exception:
+                pass
             screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
 
             det = ElementDetector(model_name="gemini-2.5-flash-lite")
@@ -1021,6 +1106,28 @@ class ConditionEngine:
             except Exception:
                 pass
 
+        # Attempt vision QA rewrite if overlays/DOM checks failed
+        question = rewrite_condition_to_question(f"Is there a visible button for '{label}'?")
+        if not screenshot:
+            try:
+                screenshot = page.screenshot(type="jpeg", quality=40, full_page=False)
+            except Exception:
+                screenshot = None
+
+        if screenshot:
+            vision_answer = answer_question_with_vision(question, screenshot)
+            if vision_answer is not None:
+                try:
+                    cache.add_trace({
+                        "call": "ai.visible_button.vision_qa",
+                        "question": question,
+                        "result": vision_answer,
+                    })
+                except Exception:
+                    pass
+                cache.set(cache_key, bool(vision_answer))
+                return bool(vision_answer)
+
         cache.set(cache_key, False)
         return False
 
@@ -1053,8 +1160,103 @@ class ConditionEngine:
             search_text = query[1:-1]
             return self._exact_text_search(search_text, ctx, cache, args.get("within", "viewport"))
         else:
-            # Use AI for fuzzy/semantic matching
+            # Prefer deterministic vision checks before AI fuzzy search
+            try:
+                if dom_text_visible(page, query):
+                    cache.add_trace({"call": "vision.dom.visible", "args": {"query": query}, "result": True})
+                    return True
+            except Exception:
+                pass
+            overlays = None
+            try:
+                page_utils = PageUtils(page)
+                page_info = page_utils.get_page_info()
+                overlays = OverlayManager(page)
+                overlay_data = overlays.create_numbered_overlays(page_info, mode="interactive") or []
+                if overlay_data and visible_from_overlays(query, overlay_data, mode="click", interpretation_mode="semantic"):
+                    cache.add_trace({"call": "vision.overlay.visible", "args": {"query": query}, "result": True})
+                    return True
+            except Exception:
+                pass
+            finally:
+                try:
+                    if overlays:
+                        overlays.remove_overlays()
+                except Exception:
+                    pass
+
+            # Attempt vision QA: rewrite condition to question and ask model using screenshot
+            question = rewrite_condition_to_question(query)
+            screenshot = ctx.current_state.screenshot if ctx and ctx.current_state else None
+            if not screenshot:
+                try:
+                    screenshot = page.screenshot(type="jpeg", quality=40, full_page=False)
+                except Exception:
+                    screenshot = None
+
+            if screenshot:
+                vision_answer = answer_question_with_vision(question, screenshot)
+                if vision_answer is not None:
+                    try:
+                        cache.add_trace({
+                            "call": "ai.is_visible_nl.vision_qa",
+                            "question": question,
+                            "result": vision_answer,
+                        })
+                    except Exception:
+                        pass
+                    return bool(vision_answer)
+
+            # Fallback to AI fuzzy/semantic text-only search
             return self._fuzzy_text_search(query, ctx, cache, args.get("within", "viewport"))
+
+    # ------------------------- Vision helpers ---------------------------------
+    def _fn_vision_visible(self, p: Dict[str, Any]) -> bool:
+        """Deterministically check if a semantic region/text is visible using vision heuristics.
+
+        Args:
+            query: string to resolve (e.g., "cookie banner", "login modal")
+            within: "viewport" | "page" (default: viewport) — currently informational for DOM check.
+        """
+        args = p.get("args", {})
+        ctx: GoalContext = p.get("context")
+        cache: FactCache = p.get("cache")
+        page = self._page(ctx)
+        if not page:
+            return False
+
+        query = (args.get("query") or "").strip()
+        within = (args.get("within") or "viewport").lower()
+        if not query:
+            return False
+
+        try:
+            if dom_text_visible(page, query):
+                cache.add_trace({"call": "vision.visible", "args": {"query": query, "within": within}, "mode": "dom", "result": True})
+                return True
+        except Exception:
+            pass
+
+        overlays = None
+        try:
+            page_utils = PageUtils(page)
+            page_info = page_utils.get_page_info()
+            overlays = OverlayManager(page)
+            overlay_data = overlays.create_numbered_overlays(page_info, mode="interactive") or []
+            if overlay_data and visible_from_overlays(query, overlay_data, interpretation_mode="semantic"):
+                cache.add_trace({"call": "vision.visible", "args": {"query": query, "within": within}, "mode": "overlay", "result": True})
+                return True
+        except Exception:
+            pass
+        finally:
+            try:
+                if overlays:
+                    overlays.remove_overlays()
+            except Exception:
+                pass
+
+        cache.add_trace({"call": "vision.visible", "args": {"query": query, "within": within}, "result": False})
+        return False
 
     def _exact_text_search(self, search_text: str, ctx: GoalContext, cache: FactCache, within: str) -> bool:
         """Perform deterministic exact text search in viewport."""
@@ -1094,7 +1296,7 @@ class ConditionEngine:
             page_utils = PageUtils(page)
             page_info = page_utils.get_page_info()
             overlays = OverlayManager(page)
-            overlay_data = overlays.create_numbered_overlays(page_info) or []
+            overlay_data = overlays.create_numbered_overlays(page_info, mode="interactive") or []
 
             # Collect a short viewport text excerpt for context
             try:
@@ -1134,8 +1336,8 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="Answer with strict JSON only as {\"visible\": true|false}.",
-                reasoning_level="minimal",
-                model="gpt-5-nano",
+                reasoning_level="medium",
+                model="gpt-5-mini",
             )
             try:
                 parsed = _json.loads((result or "").strip())
@@ -1202,47 +1404,52 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
         "DSL operators: and/or/not, ==, !=, >, <, >=, <=, contains, regex, len, between, var, call.\n"
         "Use {\"var\": \"env.page.url\"} to access facts.\n"
         "Available calls (call.name):\n"
-        " - env.page.url, env.page.title, env.page.viewport_text, env.page.full_text (no args)\n"
-        " - env.page.scroll_y(), env.page.viewport_height(), env.page.document_height()\n"
-        " - env.page.at_bottom(threshold=px), env.page.at_top(threshold=px)\n"
-        " - dom.exists(selector, within=page|viewport, iframes=true)\n"
-        " - dom.visible(selector, within=page|viewport, iframes=true)\n"
-        " - dom.count(selector, within=page|viewport, iframes=true)\n"
-        " - dom.text(selector, within=page|viewport, iframes=true)\n"
-        " - dom.value(selector, within=page|viewport, iframes=true)\n"
-        " - dom.attr(selector, name, within=page|viewport, iframes=true)\n"
-        " - dom.visible_button(label, within=page|viewport, iframes=true, fuzzy=true)\n"
-        " - dom.button_count(label, within=page|viewport, iframes=true, fuzzy=true)\n"
-        " - dom.visible_link(label, within=page|viewport, iframes=true)\n"
-        " - dom.link_count(label, within=page|viewport, iframes=true)\n"
-        " - dom.field_filled_by_label(label, within=page|viewport, iframes=true)\n"
+        " - env.page.url, env.page.title, env.page.viewport_text, env.page.full_text (no args) - LLM-based\n"
+        " - env.page.scroll_y(), env.page.viewport_height(), env.page.document_height() - Vision-based\n"
+        " - env.page.at_bottom(threshold=px), env.page.at_top(threshold=px) - Vision-based\n"
+        " - dom.exists(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.visible(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.count(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.text(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.value(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.attr(description, name, within=page|viewport) - Vision-based, use natural language descriptions\n"
+        " - dom.visible_button(label, within=page|viewport, iframes=true, fuzzy=true) - Vision-based\n"
+        " - dom.button_count(label, within=page|viewport, iframes=true, fuzzy=true) - Vision-based\n"
+        " - dom.visible_link(label, within=page|viewport, iframes=true) - Vision-based\n"
+        " - dom.link_count(label, within=page|viewport, iframes=true) - Vision-based\n"
+        " - dom.field_filled_by_label(label, within=page|viewport, iframes=true) - Vision-based\n"
+        " - vision.visible(query, within=page|viewport)  # Vision semantic visibility check\n"
         " - ai.is_visible_nl(query, within=page|viewport)  # Text search: quoted=exact match, unquoted=fuzzy match\n"
-        " - system.hour(), system.minute(), system.weekday(), system.weekend()\n"
+        " - system.hour(), system.minute(), system.weekday(), system.weekend() - LLM-based\n"
         "Examples:\n"
         "1) Page shows Welcome and URL has dashboard:\n"
         "{\"and\": [ {\"contains\": [ {\"call\": {\"name\": \"env.page.url\"}}, \"dashboard\"]}, {\"contains\": [ {\"call\": {\"name\": \"env.page.viewport_text\"}}, \"Welcome\"]} ]}\n"
-        "2) Exactly 3 visible .item elements in viewport:\n"
-        "{\"==\": [ {\"call\": {\"name\": \"dom.count\", \"args\": {\"selector\": \".item\", \"within\": \"viewport\"}}}, 3 ]}\n"
+        "2) Exactly 3 visible product items in viewport:\n"
+        "{\"==\": [ {\"call\": {\"name\": \"dom.count\", \"args\": {\"description\": \"product items\", \"within\": \"viewport\"}}}, 3 ]}\n"
         "3) Submit button visible:\n"
         "{\"call\": {\"name\": \"dom.visible_button\", \"args\": {\"label\": \"submit\", \"within\": \"viewport\"}}}\n"
-        "4) Cookie banner visible (no selector known):\n"
+        "4) Red button with 'Save' text visible:\n"
+        "{\"call\": {\"name\": \"dom.visible\", \"args\": {\"description\": \"red button with Save text\", \"within\": \"viewport\"}}}\n"
+        "5) Login form field filled:\n"
+        "{\"call\": {\"name\": \"dom.field_filled_by_label\", \"args\": {\"label\": \"username\", \"within\": \"viewport\"}}}\n"
+        "6) Cookie banner visible:\n"
         "{\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"cookie banner\", \"within\": \"viewport\"}}}\n"
-        "5) Newsletter modal visible:\n"
+        "7) Newsletter modal visible:\n"
         "{\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"newsletter modal\"}}}\n"
-        "6) At bottom of the page:\n"
+        "8) At bottom of the page:\n"
         "{\"call\": {\"name\": \"env.page.at_bottom\"}}\n"
-        "7) Not at bottom of the page:\n"
+        "9) Not at bottom of the page:\n"
         "{\"not\": {\"call\": {\"name\": \"env.page.at_bottom\", \"args\": {\"threshold\": 120}}}}\n"
-        "8) Next button visible (pagination):\n"
-        "{\"or\": [ {\"call\": {\"name\": \"dom.visible_button\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible_link\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible\", \"args\": {\"selector\": \"a[rel=next], button[aria-label*=next] \" , \"within\": \"viewport\"}}} ]}\n"
-        "9) Can't see exact text (quoted = exact match, unquoted = fuzzy match):\n"
+        "10) Next button visible (pagination):\n"
+        "{\"or\": [ {\"call\": {\"name\": \"dom.visible_button\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible_link\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible\", \"args\": {\"description\": \"next page button or link\", \"within\": \"viewport\"}}} ]}\n"
+        "11) Can't see exact text (quoted = exact match, unquoted = fuzzy match):\n"
         "{\"not\": {\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"\\\"Proven L4 Autonomy\\\"\", \"within\": \"viewport\"}}}}\n"
-        "10) Can't see fuzzy text (semantic matching):\n"
+        "12) Can't see fuzzy text (semantic matching):\n"
         "{\"not\": {\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"autonomous vehicle technology\", \"within\": \"viewport\"}}}}\n"
     )
     prompt = f"Condition: {condition_text}\nReturn only the JSON expression."
     try:
-        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system, reasoning_level="minimal", model="gpt-5-nano")
+        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system, reasoning_level="medium", model="gpt-5-mini")
         if not out:
             return None
         # Extract JSON
@@ -1254,9 +1461,28 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
             text = text.split('\n', 1)[-1]
             if text.endswith("```"):
                 text = text[:-3]
+        
+        # Debug: print the raw text before parsing
+        print(f"[ConditionEngine] Raw AI output: '{text}'")
+        
+        # Try to fix common JSON issues
+        # Remove any trailing commas before closing braces/brackets
+        import re
+        text = re.sub(r',(\s*[}\]])', r'\1', text)
+        
+        # Try to extract JSON from text that might have extra content
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            text = json_match.group(0)
+        
         result = json.loads(text)
         print(f"[ConditionEngine] Compiled '{condition_text}' to: {json.dumps(result, indent=2)}")
         return result
+    except json.JSONDecodeError as e:
+        print(f"[ConditionEngine] JSON parse error: {e}")
+        print(f"[ConditionEngine] Raw text that failed to parse: '{text}'")
+        # Try to return a simple fallback condition
+        return {"call": {"name": "ai.is_visible_nl", "args": {"query": condition_text, "within": "viewport"}}}
     except Exception as e:
         print(f"[ConditionEngine] NL→DSL compile error: {e}")
         return None

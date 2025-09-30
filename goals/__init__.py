@@ -30,8 +30,11 @@ from .if_goal import IfGoal
 from .press_goal import PressGoal
 from .scroll_goal import ScrollGoal
 from .while_goal import WhileGoal
+from .for_goal import ForGoal
+from .for_models import IterationTargetsResponse, ElementContextResponse, TargetValidationResponse
 from .back_goal import BackGoal
 from .forward_goal import ForwardGoal
+from .defer_goal import DeferGoal
 
 __all__ = [
     # Base types
@@ -59,6 +62,11 @@ __all__ = [
     "PressGoal",
     "ScrollGoal",
     "WhileGoal",
+    "ForGoal",
+    "IterationTargetsResponse",
+    "ElementContextResponse", 
+    "TargetValidationResponse",
     "BackGoal",
     "ForwardGoal",
+    "DeferGoal",
 ]

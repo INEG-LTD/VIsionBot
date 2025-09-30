@@ -439,9 +439,9 @@ class NavigationGoal(BaseGoal):
                 prompt="Analyze this webpage screenshot and determine if it matches the user's navigation intent.",
                 model_object_type=NavigationAnalysis,
                 system_prompt=system_prompt,
-                model="gemini-2.5-flash-lite",
+                model="gpt-5-mini",
                 image=screenshot,
-                reasoning_level="none"
+                reasoning_level="medium"
             )
             
             print(f"[NavigationGoal] AI analysis result: {result}")
