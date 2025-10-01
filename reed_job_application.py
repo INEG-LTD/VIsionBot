@@ -1,7 +1,7 @@
 from vision_bot import BrowserVisionBot
 
 # Initialize bot with GIF recording enabled
-bot = BrowserVisionBot(save_gif=True, gif_output_dir="gif_recordings")
+bot = BrowserVisionBot(save_gif=True)
 bot.start()
 bot.goto("https://www.reed.co.uk/")
 bot.default_interpretation_mode = "semantic"
