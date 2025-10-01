@@ -1,4 +1,4 @@
-from vision_bot_refactored import BrowserVisionBot
+from vision_bot import BrowserVisionBot
 
 bot = BrowserVisionBot()
 bot.start()
