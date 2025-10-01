@@ -19,11 +19,12 @@ from interaction_deduper import InteractionDeduper
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None):
+    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None):
         self.page = page
         self.goal_monitor = goal_monitor
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
+        self.gif_recorder = gif_recorder
         self.last_failure_reason: Optional[str] = None
         
         # Initialize specialized handlers
@@ -478,6 +479,32 @@ class ActionExecutor:
         # print(f"Step: {step.model_dump_json()}")
         print(f"  Clicking at ({x}, {y})")
         
+        # Record interaction for GIF if recorder is available
+        if self.gif_recorder:
+            element_box = None
+            if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
+                for el in elements.elements:
+                    if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
+                        # Convert normalized coordinates to pixel coordinates
+                        from vision_utils import get_gemini_box_2d_center_pixels
+                        center_x, center_y = get_gemini_box_2d_center_pixels(el.box_2d, page_info.width, page_info.height)
+                        # Convert to pixel box coordinates
+                        y_min, x_min, y_max, x_max = el.box_2d
+                        element_box = (
+                            int(x_min / 1000.0 * page_info.width),
+                            int(y_min / 1000.0 * page_info.height),
+                            int(x_max / 1000.0 * page_info.width),
+                            int(y_max / 1000.0 * page_info.height)
+                        )
+                        break
+            
+            self.gif_recorder.record_interaction(
+                interaction_type="click",
+                coordinates=(x, y),
+                element_box=element_box,
+                action_description=f"Click on element at ({x}, {y})"
+            )
+        
         try:
             self.page.mouse.click(x, y)
             success = True
@@ -547,6 +574,30 @@ class ActionExecutor:
             time.sleep(0.2)
         
         print(f"  Typing: {step.text_to_type}")
+        
+        # Record interaction for GIF if recorder is available
+        if self.gif_recorder:
+            element_box = None
+            if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
+                for el in elements.elements:
+                    if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
+                        # Convert normalized coordinates to pixel coordinates
+                        y_min, x_min, y_max, x_max = el.box_2d
+                        element_box = (
+                            int(x_min / 1000.0 * page_info.width),
+                            int(y_min / 1000.0 * page_info.height),
+                            int(x_max / 1000.0 * page_info.width),
+                            int(y_max / 1000.0 * page_info.height)
+                        )
+                        break
+            
+            self.gif_recorder.record_interaction(
+                interaction_type="type",
+                coordinates=(x, y) if x is not None and y is not None else None,
+                element_box=element_box,
+                action_description=f"Type '{step.text_to_type}'",
+                text_input=step.text_to_type
+            )
         
         try:
             # Try to clear existing text first (select-all then delete)
@@ -709,6 +760,15 @@ class ActionExecutor:
         
         print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
         
+        # Record interaction for GIF if recorder is available
+        if self.gif_recorder:
+            self.gif_recorder.record_interaction(
+                interaction_type="scroll",
+                coordinates=None,
+                element_box=None,
+                action_description=f"Scroll {direction} to ({target_x}, {target_y})"
+            )
+        
         try:
             self.page.evaluate(f"window.scrollTo({target_x}, {target_y})")
             success = True
@@ -745,6 +805,16 @@ class ActionExecutor:
             return False
         
         print(f"  Pressing keys: {step.keys_to_press}")
+        
+        # Record interaction for GIF if recorder is available
+        if self.gif_recorder:
+            self.gif_recorder.record_interaction(
+                interaction_type="press",
+                coordinates=None,
+                element_box=None,
+                action_description=f"Press keys: {step.keys_to_press}",
+                keys_pressed=step.keys_to_press
+            )
         
         # Record planned interaction with goal monitor
         pre_evaluations = self.goal_monitor.record_planned_interaction(

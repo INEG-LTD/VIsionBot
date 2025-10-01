@@ -8373,3 +8373,402 @@ Log File: bot_automation.log
     Details: {
   "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1759332316
+Start Time: 2025-10-01T16:25:16.793827
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-01T16:25:22.201345] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-01T16:25:22.209849] INFO     SYSTEM       Registered 3 commands with ref ID: apply_button_commands (mode=ANY)
+[2025-10-01T16:25:22.209985] INFO     SYSTEM       Registered 1 commands with ref ID: escape_button_commands (mode=ANY)
+[2025-10-01T16:25:22.210046] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-01T16:25:22.212137] INFO     GOAL         Starting goal: if: cookie banner visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: cookie banner visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:25:26.760417] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1759332456
+Start Time: 2025-10-01T16:27:36.719554
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-01T16:27:38.193802] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-01T16:27:38.194896] INFO     SYSTEM       Registered 3 commands with ref ID: apply_button_commands (mode=ANY)
+[2025-10-01T16:27:38.195241] INFO     SYSTEM       Registered 1 commands with ref ID: escape_button_commands (mode=ANY)
+[2025-10-01T16:27:38.195573] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-01T16:27:38.212170] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:27:41.722100] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1759332557
+Start Time: 2025-10-01T16:29:17.112807
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-01T16:29:19.165646] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-01T16:29:19.167462] INFO     SYSTEM       Registered 3 commands with ref ID: apply_button_commands (mode=ANY)
+[2025-10-01T16:29:19.167687] INFO     SYSTEM       Registered 1 commands with ref ID: escape_button_commands (mode=ANY)
+[2025-10-01T16:29:19.167750] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-01T16:29:19.191440] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:30:19.888641] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (took 60697.2ms) ✅
+[2025-10-01T16:30:19.891638] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1759332756
+Start Time: 2025-10-01T16:32:36.978860
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-01T16:32:37.914258] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 138022.6ms) ✅
+[2025-10-01T16:32:37.915177] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-01T16:32:39.161347] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-01T16:32:39.162979] INFO     SYSTEM       Registered 3 commands with ref ID: apply_button_commands (mode=ANY)
+[2025-10-01T16:32:39.163085] INFO     SYSTEM       Registered 1 commands with ref ID: escape_button_commands (mode=ANY)
+[2025-10-01T16:32:39.163854] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-01T16:32:39.171893] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:33:29.457392] SUCCESS  GOAL         Goal completed: the search jobs button (took 51542.2ms) ✅
+[2025-10-01T16:33:29.458689] INFO     GOAL         Starting goal: if: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-01T16:33:39.678798] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (took 60506.9ms) ✅
+[2025-10-01T16:33:39.679676] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+[2025-10-01T16:34:52.844784] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 83386.1ms) ✅
+[2025-10-01T16:34:52.846234] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:35:11.513890] INFO     GOAL         Starting goal: if: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-01T16:35:31.295526] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-01T16:36:26.198103] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 166518.4ms) ✅
+[2025-10-01T16:36:26.199864] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-01T16:36:47.368867] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 76073.3ms) ✅
+[2025-10-01T16:36:47.370008] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-01T16:37:31.279232] SUCCESS  GOAL         Goal completed: the search jobs button (took 65079.4ms) ✅
+[2025-10-01T16:37:31.281535] INFO     GOAL         Starting goal: if: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-01T16:37:34.152857] SUCCESS  GOAL         Goal completed: the sign in without password button (took 46782.9ms) ✅
+[2025-10-01T16:37:34.153711] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-01T16:37:34.198007] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SBWUmp6ZlB2SzY0Wk9qNFBFZElZd2c1VzViWUFBTXlrQaFupWxvZ2luo3RpZNkgWDc2MGlkYlhsb0lYSkJCQVV2SG5PaXN4NFpCS01OUXajY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=dDRKWXRtLnEwSHVDa0p6clB%2BT1FYY1VkSExxaHN1Lk5LVS5lR0hkRlVyZw%3D%3D&code_challenge=Ay2_ywFU6cELE5KN5UhB1wyhDH-4ofwGe15FGI_gagc&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-01T16:37:34.198180] INFO     SYSTEM       Defer pause ended (took 44.2ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 0.044
+}
+[2025-10-01T16:37:34.198283] SUCCESS  GOAL         Goal completed: defer (took 44.6ms) ✅
+[2025-10-01T16:37:34.198355] INFO     GOAL         Starting goal: for 3 times: ref: click_ios_job_action
+    Details: {
+  "goal_description": "for 3 times: ref: click_ios_job_action"
+}
+[2025-10-01T16:37:34.280057] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T16:37:34.280723] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T16:37:34.280793] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T16:37:34.280837] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}
+[2025-10-01T16:38:53.663338] ERROR    GOAL         Goal failed: an ios job listing button/link (took 79382.3ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:38:53.666082] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-01T16:38:53.666425] INFO     SYSTEM       Deduplication disabled
+[2025-10-01T16:38:53.666545] INFO     GOAL         Starting goal: click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid
+    Details: {
+  "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
+}
+[2025-10-01T16:38:58.973119] ERROR    GOAL         Goal failed: the apply button (took 5306.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:38:58.976282] INFO     GOAL         Starting goal: click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.
+    Details: {
+  "goal_description": "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal."
+}
+[2025-10-01T16:39:01.593614] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 90312.2ms) ✅
+[2025-10-01T16:39:01.594674] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T16:39:04.254122] ERROR    GOAL         Goal failed: the button to submit the application (took 5277.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:04.257415] INFO     GOAL         Starting goal: press: escape
+    Details: {
+  "goal_description": "press: escape"
+}
+[2025-10-01T16:39:09.218497] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T16:39:09.219911] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T16:39:09.220102] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T16:39:09.220166] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}
+[2025-10-01T16:39:14.490748] ERROR    GOAL         Goal failed: an ios job listing button/link (took 5270.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:14.493089] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-01T16:39:14.493515] INFO     SYSTEM       Deduplication disabled
+[2025-10-01T16:39:14.493651] INFO     GOAL         Starting goal: click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid
+    Details: {
+  "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
+}
+[2025-10-01T16:39:19.799524] ERROR    GOAL         Goal failed: the apply button (took 5305.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:19.802270] INFO     GOAL         Starting goal: click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.
+    Details: {
+  "goal_description": "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal."
+}
+[2025-10-01T16:39:25.097106] ERROR    GOAL         Goal failed: the button to submit the application (took 5294.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:25.099690] INFO     GOAL         Starting goal: press: escape
+    Details: {
+  "goal_description": "press: escape"
+}
+[2025-10-01T16:39:30.254692] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T16:39:30.255920] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T16:39:30.256001] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T16:39:30.256058] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}
+[2025-10-01T16:39:35.531919] ERROR    GOAL         Goal failed: an ios job listing button/link (took 5275.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:35.534335] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-01T16:39:35.534701] INFO     SYSTEM       Deduplication disabled
+[2025-10-01T16:39:35.534865] INFO     GOAL         Starting goal: click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid
+    Details: {
+  "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
+}
+[2025-10-01T16:39:40.844389] ERROR    GOAL         Goal failed: the apply button (took 5309.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:40.846243] INFO     GOAL         Starting goal: click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.
+    Details: {
+  "goal_description": "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal."
+}
+[2025-10-01T16:39:46.113378] ERROR    GOAL         Goal failed: the button to submit the application (took 5267.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T16:39:46.115958] INFO     GOAL         Starting goal: press: escape
+    Details: {
+  "goal_description": "press: escape"
+}
+[2025-10-01T16:39:50.821304] SUCCESS  GOAL         Goal completed: For loop: count iteration of '3' (took 136622.9ms) ✅
+    Details: {
+  "iterations": 3,
+  "successful": 3,
+  "failed": 0,
+  "skipped": 0
+}
+[2025-10-01T16:40:01.663598] INFO     GOAL         Starting goal: if: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-01T16:40:32.944181] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-01T16:42:56.445929] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 143501.8ms) ✅
+[2025-10-01T16:42:56.447482] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-01T16:43:58.289776] SUCCESS  GOAL         Goal completed: the sign in without password button (took 61842.3ms) ✅
+[2025-10-01T16:43:58.290886] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-01T16:43:58.336293] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SBGeXFHY3dFUFFsYkM3NktCWFNlWTZCT2tNeW5vTU5FQqFupWxvZ2luo3RpZNkgcEhiOFV2VE1FQUotXy13SU1qU0FDeUM4c1ZDUDg2NFajY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=NUx1U1FpSC1kdjg4bVBmMEcyMC1mN3VHZ0R1dmJpbDBHY1RTUkxVN1FYTA%3D%3D&code_challenge=F55aIVZLaIFbmUTJD_muiBrV2BVRtTcvMOvyM8Ht_SE&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-01T17:17:28.542264] INFO     SYSTEM       Defer pause ended (took 2010251.1ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 2010.251
+}
+[2025-10-01T17:17:28.549544] SUCCESS  GOAL         Goal completed: defer (took 2010258.6ms) ✅
+[2025-10-01T17:17:28.549855] INFO     GOAL         Starting goal: for 3 times: ref: click_ios_job_action
+    Details: {
+  "goal_description": "for 3 times: ref: click_ios_job_action"
+}
+[2025-10-01T17:17:28.936963] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T17:17:28.937887] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T17:17:28.937955] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T17:17:28.938003] INFO     GOAL         Starting goal: if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner
+    Details: {
+  "goal_description": "if: a cookie banner/dialog is visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"
+}
+[2025-10-01T17:17:56.880829] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}
+[2025-10-01T17:27:18.125743] ERROR    GOAL         Goal failed: an ios job listing button/link (took 561244.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-01T17:27:18.127878] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-01T17:27:18.128017] INFO     SYSTEM       Deduplication disabled
+[2025-10-01T17:27:18.128086] INFO     GOAL         Starting goal: click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid
+    Details: {
+  "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
+}
+[2025-10-01T17:28:40.923206] SUCCESS  GOAL         Goal completed: the apply button (took 82795.1ms) ✅
+[2025-10-01T17:28:40.924775] INFO     GOAL         Starting goal: click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.
+    Details: {
+  "goal_description": "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal."
+}
+[2025-10-01T17:29:43.493440] SUCCESS  GOAL         Goal completed: the button to submit the application (took 62568.7ms) ✅
+[2025-10-01T17:29:43.494603] INFO     GOAL         Starting goal: press: escape
+    Details: {
+  "goal_description": "press: escape"
+}
+[2025-10-01T17:29:48.972384] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T17:29:48.973244] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T17:29:48.973414] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T17:29:48.973476] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}
+[2025-10-01T17:31:41.458836] SUCCESS  GOAL         Goal completed: an ios job listing button/link (took 112485.4ms) ✅
+[2025-10-01T17:31:41.467761] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-01T17:31:41.467914] INFO     SYSTEM       Deduplication disabled
+[2025-10-01T17:31:41.467969] INFO     GOAL         Starting goal: click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid
+    Details: {
+  "goal_description": "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid"
+}
+[2025-10-01T17:47:52.802121] SUCCESS  GOAL         Goal completed: the apply button (took 971334.1ms) ✅
+[2025-10-01T17:47:52.803222] INFO     GOAL         Starting goal: click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.
+    Details: {
+  "goal_description": "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal."
+}
+[2025-10-01T17:57:09.181007] SUCCESS  GOAL         Goal completed: the button to submit the application (took 556377.8ms) ✅
+[2025-10-01T17:57:09.182525] INFO     GOAL         Starting goal: press: escape
+    Details: {
+  "goal_description": "press: escape"
+}
+[2025-10-01T17:57:16.021895] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-01T17:57:16.022810] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-01T17:57:16.022998] INFO     SYSTEM       Deduplication enabled
+[2025-10-01T17:57:16.023062] INFO     GOAL         Starting goal: click: an ios job listing button/link
+    Details: {
+  "goal_description": "click: an ios job listing button/link"
+}

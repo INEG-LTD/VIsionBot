@@ -61,6 +61,7 @@ from focus_manager import FocusManager
 from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
+from gif_recorder import GIFRecorder
 
 
 class BrowserVisionBot:
@@ -75,6 +76,8 @@ class BrowserVisionBot:
         include_detailed_elements: bool = True,
         two_pass_planning: bool = True,
         max_coordinate_overlays: int = 600,
+        save_gif: bool = False,
+        gif_output_dir: str = "gif_recordings",
     ):
         self.page = page
         self.model_name = model_name
@@ -111,6 +114,14 @@ class BrowserVisionBot:
         
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
+
+        # GIF recording functionality
+        self.save_gif = save_gif
+        self.gif_output_dir = gif_output_dir
+        self.gif_recorder: Optional[GIFRecorder] = None
+
+        # Bot termination state
+        self.terminated = False
 
         # Initialize logger
         self.logger = get_logger()
@@ -184,13 +195,19 @@ class BrowserVisionBot:
         # Initialize focus manager with deduper
         self.focus_manager: FocusManager = FocusManager(page, self.page_utils, self.deduper)
         
-        # Initialize action executor with deduper
-        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper)
+        # Initialize action executor with deduper and GIF recorder
+        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder)
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
             max_detailed_elements=self.max_detailed_elements,
         )
+        
+        # Initialize GIF recorder if enabled
+        if self.save_gif:
+            self.gif_recorder = GIFRecorder(page, self.gif_output_dir)
+            self.gif_recorder.start_recording()
+            print("🎬 GIF recording started")
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
         try:
@@ -206,6 +223,61 @@ class BrowserVisionBot:
                 self._attach_page_load_handler()
         except Exception:
             pass
+
+    def stop_gif_recording(self) -> Optional[str]:
+        """Stop GIF recording and return the path to the generated GIF"""
+        if not self.save_gif or not self.gif_recorder:
+            return None
+            
+        gif_path = self.gif_recorder.stop_recording()
+        self.gif_recorder = None
+        return gif_path
+
+    def end(self) -> Optional[str]:
+        """
+        Terminate the bot, stop GIF recording, and prevent any subsequent operations.
+        
+        Returns:
+            Optional[str]: Path to the generated GIF if recording was enabled, None otherwise
+        """
+        if self.terminated:
+            print("⚠️ Bot is already terminated")
+            return None
+            
+        print("🛑 Terminating bot...")
+        
+        # Stop GIF recording first
+        gif_path = None
+        if self.save_gif and self.gif_recorder:
+            print("🎬 Stopping GIF recording...")
+            gif_path = self.gif_recorder.stop_recording()
+            self.gif_recorder = None
+            if gif_path:
+                print(f"✅ GIF saved to: {gif_path}")
+        
+        # Close browser and cleanup
+        try:
+            if hasattr(self, 'browser') and self.browser:
+                print("🔒 Closing browser...")
+                self.browser.close()
+        except Exception as e:
+            print(f"⚠️ Error closing browser: {e}")
+        
+        # Mark as terminated
+        self.terminated = True
+        self.started = False
+        
+        print("✅ Bot terminated successfully")
+        
+        if gif_path:
+            print(f"📁 GIF recording available at: {gif_path}")
+        
+        return gif_path
+
+    def _check_termination(self) -> None:
+        """Check if bot is terminated and raise error if so"""
+        if self.terminated:
+            raise RuntimeError("Bot has been terminated. No further operations are allowed.")
 
     def _attach_new_page_listener(self) -> None:
         """Attach a browser-context listener to detect new pages/tabs and switch context automatically."""
@@ -538,6 +610,8 @@ class BrowserVisionBot:
         confirm_before_interaction: bool = False,
     ) -> bool:
         """Main method to achieve a goal using vision-based automation"""
+        self._check_termination()
+        
         if interpretation_mode is None:
             resolved_mode = self._get_current_interpretation_mode()
         else:
@@ -825,6 +899,8 @@ class BrowserVisionBot:
 
     def goto(self, url: str, timeout: int = 2000) -> None:
         """Go to a URL"""
+        self._check_termination()
+        
         if not self.started:
             print("❌ Bot not started")
             return
@@ -888,6 +964,8 @@ class BrowserVisionBot:
         Returns:
             True if commands were registered successfully, False otherwise
         """
+        self._check_termination()
+        
         try:
             if not prompts:
                 self.logger.log_error("No prompts provided for register_prompts", "register_prompts() called with empty prompts")
@@ -1579,6 +1657,9 @@ class BrowserVisionBot:
                 ),
                 page_reference=self.page
             )
+            
+            # Evaluate the condition first
+            if_goal.evaluate(basic_context)
             
             if if_goal._last_condition_result:
                 success_goal = if_goal.success_goal
