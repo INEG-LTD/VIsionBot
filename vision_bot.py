@@ -22,6 +22,7 @@ from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from models.core_models import PageInfo
 from utils import PageUtils
+from action_queue import ActionQueue, QueuedAction
 from goals import (
     GoalMonitor,
     ClickGoal,
@@ -62,6 +63,7 @@ from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from gif_recorder import GIFRecorder
+from command_ledger import CommandLedger
 
 
 class BrowserVisionBot:
@@ -99,6 +101,7 @@ class BrowserVisionBot:
         self._auto_on_load_handler = None  # keep reference for potential removal
         self._auto_on_load_running: bool = False
         self._auto_on_load_event_name: str | None = None
+        self._auto_on_load_command_id: Optional[str] = None
         self._in_act: bool = False
         # Queue auto-on-load actions when a page load happens during an active act()
         self._pending_auto_on_load: bool = False
@@ -114,6 +117,10 @@ class BrowserVisionBot:
         
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
+
+        # Action queue system for deferred actions
+        self.action_queue = ActionQueue()
+        self._auto_process_queue = True  # Auto-process queue after each act()
 
         # GIF recording functionality
         self.save_gif = save_gif
@@ -195,19 +202,22 @@ class BrowserVisionBot:
         # Initialize focus manager with deduper
         self.focus_manager: FocusManager = FocusManager(page, self.page_utils, self.deduper)
         
-        # Initialize action executor with deduper and GIF recorder
-        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder)
+        # Initialize command ledger for tracking command execution
+        self.command_ledger: CommandLedger = CommandLedger()
+        
+        # Initialize GIF recorder if enabled (BEFORE ActionExecutor)
+        if self.save_gif:
+            self.gif_recorder = GIFRecorder(page, self.gif_output_dir)
+            self.gif_recorder.start_recording()
+            print("🎬 GIF recording started")
+        
+        # Initialize action executor with deduper, GIF recorder, and command ledger
+        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
             max_detailed_elements=self.max_detailed_elements,
         )
-        
-        # Initialize GIF recorder if enabled
-        if self.save_gif:
-            self.gif_recorder = GIFRecorder(page, self.gif_output_dir)
-            self.gif_recorder.start_recording()
-            print("🎬 GIF recording started")
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
         try:
@@ -353,18 +363,25 @@ class BrowserVisionBot:
             print(f"⚠️ Failed to switch to new page: {e}")
 
     # ---------- Auto actions on page load ----------
-    def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True) -> None:
-        """Register prompts to run via act() after each page load.
+    def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True, command_id: Optional[str] = None) -> None:
+        """
+        Register prompts to run via act() after each page load.
+
+        Args:
+            actions_to_take: List of commands to run on each page load
+            run_once_per_url: If True, only run once per unique URL
+            command_id: Optional command ID for tracking (auto-generated if not provided)
 
         Typical usage: on_new_page_load([
             "if a cookie banner is visible click the accept button",
             "close any newsletter modal if present",
-        ])
+        ], command_id="auto-page-load")
         """
         self._auto_on_load_actions = [a for a in (actions_to_take or []) if isinstance(a, str) and a.strip()]
         self._auto_on_load_run_once_per_url = bool(run_once_per_url)
         self._auto_on_load_enabled = True
         self._auto_on_load_urls_handled.clear()
+        self._auto_on_load_command_id = command_id
         # Attach to current page if available
         try:
             self._attach_page_load_handler()
@@ -476,22 +493,38 @@ class BrowserVisionBot:
 
         self._auto_on_load_running = True
         try:
-            for prompt in self._auto_on_load_actions:
+            # Register parent command if we have a command_id
+            parent_cmd_id = None
+            if hasattr(self, '_auto_on_load_command_id') and self._auto_on_load_command_id:
+                parent_cmd_id = self.command_ledger.register_command(
+                    command=f"on_new_page_load: {len(self._auto_on_load_actions)} actions",
+                    command_id=self._auto_on_load_command_id,
+                    metadata={"source": "on_new_page_load", "url": current_url}
+                )
+                self.command_ledger.start_command(parent_cmd_id)
+            
+            for i, prompt in enumerate(self._auto_on_load_actions, 1):
                 try:
                     print(f"⚡ Auto-on-load: act('{prompt}')")
                     # Snapshot current goals and user prompt so auto-action does not disrupt ongoing task
                     saved_goal = getattr(self.goal_monitor, 'active_goal', None) if hasattr(self, 'goal_monitor') else None
                     saved_user_prompt = getattr(self.goal_monitor, 'user_prompt', "") if hasattr(self, 'goal_monitor') else ""
+                    
+                    # Generate child command ID if we have a parent
+                    child_cmd_id = f"{parent_cmd_id}_action{i}" if parent_cmd_id else None
+                    
                     try:
                         # If we're inside act(), we still call act() but our snapshot/restore prevents disruption
                         # and _auto_on_load_running avoids re-entrancy loops
-                        self.act(prompt)
+                        self.act(prompt, command_id=child_cmd_id)
                     finally:
                         # Restore previous goals/user prompt if they existed prior
                         try:
-                            if hasattr(self, 'goal_monitor'):
+                            if hasattr(self, 'goal_monitor') and saved_goal is not None:
                                 self.goal_monitor.clear_all_goals()
-                                for g in saved_goal:
+                                # Handle single goal or list of goals
+                                goals_to_restore = saved_goal if isinstance(saved_goal, list) else [saved_goal]
+                                for g in goals_to_restore:
                                     try:
                                         self.goal_monitor.add_goal(g)
                                     except Exception:
@@ -504,6 +537,10 @@ class BrowserVisionBot:
                             pass
                 except Exception as e:
                     print(f"⚠️ Auto-on-load action failed: {e}")
+            
+            # Complete parent command
+            if parent_cmd_id:
+                self.command_ledger.complete_command(parent_cmd_id, success=True)
         finally:
             self._auto_on_load_running = False
 
@@ -521,9 +558,12 @@ class BrowserVisionBot:
             self._pending_auto_on_load_url = None
 
 
-    def _try_simple_goal_bypass(self) -> Optional[bool]:
+    def _try_simple_goal_bypass(self, command_id: Optional[str] = None) -> Optional[bool]:
         """Fast path: if all active goals are simple (Press/Scroll), execute directly without LLM.
 
+        Args:
+            command_id: Optional command ID to track this execution
+        
         Returns True/False if executed, or None to fall back to normal planning.
         """
         try:
@@ -564,7 +604,7 @@ class BrowserVisionBot:
             )
 
             page_info = self.page_utils.get_page_info()
-            ok = self.action_executor.execute_plan(fast_plan, page_info)
+            ok = self.action_executor.execute_plan(fast_plan, page_info, command_id=command_id)
             if not ok:
                 return False
 
@@ -608,8 +648,23 @@ class BrowserVisionBot:
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
+        command_id: Optional[str] = None,
     ) -> bool:
-        """Main method to achieve a goal using vision-based automation"""
+        """
+        Main method to achieve a goal using vision-based automation
+        
+        Args:
+            goal_description: The goal to achieve
+            additional_context: Extra context to help with planning
+            interpretation_mode: Vision interpretation mode
+            target_context_guard: Guard condition for actions
+            skip_post_guard_refinement: Skip refinement after guard checks
+            confirm_before_interaction: Require user confirmation before each action
+            command_id: Optional command ID for tracking (auto-generated if not provided)
+        
+        Returns:
+            True if goal was achieved, False otherwise
+        """
         self._check_termination()
         
         if interpretation_mode is None:
@@ -631,9 +686,17 @@ class BrowserVisionBot:
                 print("❌ Page is on the initial blank page")
                 return False
             
+            # Register command in ledger
+            command_id = self.command_ledger.register_command(
+                command=goal_description,
+                command_id=command_id,
+                metadata={"source": "act", "mode": resolved_mode}
+            )
+            self.command_ledger.start_command(command_id)
+            
             # Log goal start
             self.logger.log_goal_start(goal_description)
-            print(f"🎯 Starting goal: {goal_description}")
+            print(f"🎯 Starting goal: {goal_description} [ID: {command_id}]")
             
             # Add command to history
             self._add_to_command_history(goal_description)
@@ -641,16 +704,19 @@ class BrowserVisionBot:
             # Check for focus commands first
             focus_result = self._handle_focus_commands(goal_description, self.overlay_manager)
             if focus_result is not None:
+                self.command_ledger.complete_command(command_id, success=focus_result)
                 return focus_result
             
             # Check for dedup commands
             dedup_result = self._handle_dedup_commands(goal_description)
             if dedup_result is not None:
+                self.command_ledger.complete_command(command_id, success=dedup_result)
                 return dedup_result
             
             # Check for ref commands
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
+                self.command_ledger.complete_command(command_id, success=ref_result)
                 return ref_result
 
             # Clear any existing goals before starting a new goal
@@ -670,7 +736,7 @@ class BrowserVisionBot:
                 return self._execute_while_loop(goal, start_time)
             
             if isinstance(goal, ForGoal):
-                return self._execute_for_loop(goal, start_time)
+                return self._execute_for_loop(goal, start_time, parent_command_id=command_id)
 
             if goal:
                 goal_description = transformed_goal_description
@@ -693,7 +759,7 @@ class BrowserVisionBot:
             print(f"🔍 Smart goals setup: {goal}\n")
 
             # Simple goal bypass (no LLM): handle press/scroll-only flows directly
-            simple_result = self._try_simple_goal_bypass()
+            simple_result = self._try_simple_goal_bypass(command_id=command_id)
             if simple_result is not None:
                 return simple_result
 
@@ -840,6 +906,7 @@ class BrowserVisionBot:
                     target_context_guard=target_context_guard,
                     skip_post_guard_refinement=skip_post_guard_refinement,
                     confirm_before_interaction=confirm_before_interaction,
+                    command_id=command_id,
                 )
                 if success:
                     
@@ -859,6 +926,8 @@ class BrowserVisionBot:
                         self.logger.log_goal_success(goal_description, duration_ms)
                         print(f"✅ Smart goal {goal_description} achieved during plan execution!")
                         self._print_goal_summary()
+                        # Mark command as completed successfully
+                        self.command_ledger.complete_command(command_id, success=True)
                         return True
                     
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
@@ -886,6 +955,8 @@ class BrowserVisionBot:
             self.logger.log_goal_failure(goal_description, f"Failed after {self.max_attempts} attempts", duration_ms)
             print(f"❌ Failed to achieve goal after {self.max_attempts} attempts")
             self._print_goal_summary()
+            # Mark command as failed
+            self.command_ledger.complete_command(command_id, success=False, error_message=f"Failed after {self.max_attempts} attempts")
             return False
         finally:
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
@@ -896,6 +967,15 @@ class BrowserVisionBot:
                 self._flush_pending_auto_on_load()
             except Exception:
                 pass
+            
+            # Process queued actions if auto-processing is enabled
+            if self._auto_process_queue and not self.action_queue.is_empty():
+                try:
+                    executed_count = self.process_queue()
+                    if executed_count > 0:
+                        print(f"🔄 Auto-processed {executed_count} queued actions")
+                except Exception as e:
+                    print(f"⚠️ Error processing action queue: {e}")
 
     def goto(self, url: str, timeout: int = 2000) -> None:
         """Go to a URL"""
@@ -947,6 +1027,7 @@ class BrowserVisionBot:
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
+        command_id: Optional[str] = None,
     ) -> bool:
         """
         Register multiple commands for later reference and execution.
@@ -966,6 +1047,13 @@ class BrowserVisionBot:
         """
         self._check_termination()
         
+        # Register the ref in command ledger
+        command_id = self.command_ledger.register_command(
+            command=f"register_prompts: {ref_id}",
+            command_id=command_id,
+            metadata={"source": "register_prompts", "ref_id": ref_id, "prompt_count": len(prompts)}
+        )
+        
         try:
             if not prompts:
                 self.logger.log_error("No prompts provided for register_prompts", "register_prompts() called with empty prompts")
@@ -979,6 +1067,7 @@ class BrowserVisionBot:
                 "prompts": prompts.copy(),
                 "all_must_be_true": bool(all_must_be_true),
                 "interpretation_mode": normalized_mode,
+                "command_id": command_id,  # Store the original command ID
                 "additional_context": additional_context or "",
                 "target_context_guard": target_context_guard,
                 "skip_post_guard_refinement": bool(skip_post_guard_refinement),
@@ -1426,8 +1515,15 @@ class BrowserVisionBot:
             print(f"⚠️ Error creating structured ForGoal: {e}")
             return None
 
-    def _execute_for_loop(self, goal: ForGoal, start_time: float) -> bool:
-        """Execute a ForGoal using target resolution and contextual execution."""
+    def _execute_for_loop(self, goal: ForGoal, start_time: float, parent_command_id: Optional[str] = None) -> bool:
+        """
+        Execute a ForGoal using target resolution and contextual execution.
+        
+        Args:
+            goal: The ForGoal to execute
+            start_time: Start time for duration tracking
+            parent_command_id: Optional parent command ID for tracking iterations
+        """
         loop_description = goal.description or f"For loop: {goal.loop_prompt}"
         print(f"🔄 Starting for loop: {loop_description}")
 
@@ -1472,8 +1568,12 @@ class BrowserVisionBot:
                     action = result.next_actions[0]
                     print(f"🔄 Executing for loop action: {action}")
                     
+                    # Generate iteration command ID
+                    iteration_num = goal.progress.current_target_index + 1
+                    iter_cmd_id = f"{parent_command_id}_iter{iteration_num}" if parent_command_id else None
+                    
                     # Execute the action
-                    action_success = self.act(action)
+                    action_success = self.act(action, command_id=iter_cmd_id)
                     
                     # Notify the for goal of the result
                     goal.on_iteration_complete(action_success)
@@ -1579,66 +1679,46 @@ class BrowserVisionBot:
             self.goal_monitor.reset_retry_request()
 
     def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str]) -> Optional[IfGoal]:
-        """Create IfGoal from explicit parts."""
+        """Create IfGoal from explicit parts - currently not implemented, use direct evaluation."""
         try:
-            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
-            expr = compile_nl_to_expr(condition_text)
-            if not expr:
-                return None
-            condition = _create_predicate(expr, f"Predicate: {condition_text}")
-
-            print(f"Success text: '{success_text}'")
-            
-            # Handle reference commands differently - don't create goals for them
-            if success_text.strip().lower().startswith("ref:"):
-                # Create a simple placeholder goal for reference commands
-                from goals.base import BaseGoal
-                class RefPlaceholderGoal(BaseGoal):
-                    def __init__(self, description: str):
-                        super().__init__(description)
-                    def evaluate(self, context):
-                        return None  # Will be handled by _evaluate_if_goal
-                    def get_description(self, context):
-                        return self.description
-                success_goal = RefPlaceholderGoal(success_text)
-            else:
-                success_goal, _ = self._create_goal_from_description(success_text)
-                if not success_goal:
-                    return None
-            
-            print(f"🔀 Created success goal: '{success_goal.description}'")
-            
-            if fail_text and fail_text.strip():
-                if fail_text.strip().lower().startswith("ref:"):
-                    # Create a simple placeholder goal for reference commands
-                    from goals.base import BaseGoal
-                    class RefPlaceholderGoal(BaseGoal):
-                        def __init__(self, description: str):
-                            super().__init__(description)
-                        def evaluate(self, context):
-                            return None  # Will be handled by _evaluate_if_goal
-                        def get_description(self, context):
-                            return self.description
-                    fail_goal = RefPlaceholderGoal(fail_text)
-                else:
-                    fail_goal, _ = self._create_goal_from_description(fail_text)
-            else:
-                fail_goal = None
-
-            fail_desc = fail_goal.description if fail_goal else "(no fail action)"
-            if_goal = IfGoal(
-                condition,
-                success_goal,
-                fail_goal,
-                description=f"If {condition_text} then {success_goal.description} else {fail_desc}"
-            )
-            return if_goal
-        except Exception as e:
-            print(f"⚠️ Error creating structured IfGoal: {e}")
+            # TODO: Implement vision-based IfGoal with simple question API
+            # For now, we'll evaluate the condition directly and return the action
+            print(f"⚠️ Vision-based IfGoal not fully implemented, falling back to direct evaluation")
             return None
+        except Exception as e:
+            print(f"⚠️ Error creating IfGoal: {e}")
+            return None
+    
+    def _convert_condition_to_question(self, condition_text: str) -> str:
+        """Convert condition text to a yes/no question for vision."""
+        # Simple conversion - make it more natural for vision
+        condition_lower = condition_text.lower()
+        
+        # Common patterns
+        if "is visible" in condition_lower or "visible" in condition_lower:
+            # "a button is visible" -> "Is a button visible?"
+            if not condition_text.endswith("?"):
+                return f"Is {condition_text}?"
+            return condition_text
+        
+        elif "contains" in condition_lower or "has" in condition_lower:
+            # "page contains login" -> "Does the page contain login?"
+            if not condition_text.startswith("does"):
+                return f"Does {condition_text}?"
+            return condition_text
+        
+        elif "on " in condition_lower and ("page" in condition_lower or "site" in condition_lower):
+            # "on login page" -> "Are we on the login page?"
+            return f"Are we {condition_text}?"
+        
+        else:
+            # Default: just add "Is" at the beginning and "?" at the end
+            if not condition_text.endswith("?"):
+                return f"Is {condition_text}?"
+            return condition_text
 
     def _evaluate_if_goal(self, if_goal: IfGoal) -> tuple[Optional[BaseGoal], str]:
-        """Evaluate a conditional goal immediately and return the active sub-goal and updated description"""
+        """Evaluate an IfGoal immediately and return the action to execute"""
         try:
             # Create a basic context for evaluation
             from goals.base import GoalContext, BrowserState
@@ -1658,26 +1738,22 @@ class BrowserVisionBot:
                 page_reference=self.page
             )
             
-            # Evaluate the condition first
-            if_goal.evaluate(basic_context)
+            # Evaluate the IfGoal
+            result = if_goal.evaluate(basic_context)
             
-            if if_goal._last_condition_result:
-                success_goal = if_goal.success_goal
-                # If the success branch is a reference command, defer execution to act()
-                if hasattr(success_goal, 'description') and success_goal.description.strip().lower().startswith('ref:'):
-                    print(f"🔀 Success branch resolved to reference command: {success_goal.description} (execution deferred)")
-                    return None, success_goal.description
-                return success_goal, getattr(success_goal, 'description', '')
-
-            if if_goal.fail_goal:
-                fail_goal = if_goal.fail_goal
-                # If the fail branch is a reference command, defer execution to act()
-                if hasattr(fail_goal, 'description') and fail_goal.description.strip().lower().startswith('ref:'):
-                    print(f"🔀 Fail branch resolved to reference command: {fail_goal.description} (execution deferred)")
-                    return None, fail_goal.description
-                return fail_goal, fail_goal.description
-
-            return None, ""
+            if result.status == GoalStatus.PENDING and result.next_actions:
+                # Return the action to execute
+                action = result.next_actions[0]
+                print(f"🔀 IfGoal resolved to action: {action}")
+                return None, action
+            elif result.status == GoalStatus.ACHIEVED:
+                # No action needed
+                print(f"🔀 IfGoal: {result.reasoning}")
+                return None, ""
+            else:
+                # Failed or other status
+                print(f"🔀 IfGoal failed: {result.reasoning}")
+                return None, ""
                 
         except Exception as e:
             print(f"⚠️ Error evaluating IfGoal: {e}")
@@ -1869,6 +1945,7 @@ class BrowserVisionBot:
                 ref_target_context_guard = ref_entry.get("target_context_guard")
                 ref_skip_post_guard_refinement = ref_entry.get("skip_post_guard_refinement", True)
                 ref_confirm_before_interaction = ref_entry.get("confirm_before_interaction", False)
+                stored_command_id = ref_entry.get("command_id")  # Get the original command ID
 
                 if not stored_prompts:
                     print(f"⚠️ Ref ID '{ref_id}' has no stored commands")
@@ -1879,8 +1956,15 @@ class BrowserVisionBot:
                 print(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode}{mode_suffix})")
                 results: List[bool] = []
 
+                # Use the stored command ID as the parent, fallback to current if not available
+                ref_command_id = stored_command_id or self.command_ledger.get_current_command_id()
+                
                 for i, prompt in enumerate(stored_prompts, 1):
                     print(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
+                    
+                    # Generate a child command ID
+                    child_cmd_id = f"{ref_command_id}_cmd{i}" if ref_command_id else None
+                    
                     success = bool(
                         self.act(
                             prompt,
@@ -1889,6 +1973,7 @@ class BrowserVisionBot:
                             target_context_guard=ref_target_context_guard,
                             skip_post_guard_refinement=ref_skip_post_guard_refinement,
                             confirm_before_interaction=ref_confirm_before_interaction,
+                            command_id=child_cmd_id,  # Pass child ID
                         )
                     )
                     results.append(success)
@@ -1948,6 +2033,67 @@ class BrowserVisionBot:
         except Exception as e:
             print(f"⚠️ Error filtering elements by focus: {e}")
             return element_data
+
+    def queue_action(self, action: str, command_id: Optional[str] = None, 
+                    priority: int = 0, metadata: Dict[str, Any] = None) -> None:
+        """
+        Queue an action for later execution.
+        
+        Args:
+            action: The action to execute (e.g., "click: button")
+            command_id: Optional command ID for tracking
+            priority: Priority level (higher = executed first)
+            metadata: Optional metadata dict
+        """
+        self.action_queue.enqueue(action, command_id, priority, metadata)
+        print(f"📋 Queued action: {action} [Priority: {priority}]")
+    
+    def process_queue(self) -> int:
+        """
+        Process all queued actions, returns count of executed actions.
+        
+        Returns:
+            int: Number of actions successfully executed
+        """
+        executed = 0
+        failed = 0
+        
+        while not self.action_queue.is_empty():
+            queued_action = self.action_queue.dequeue()
+            if queued_action:
+                print(f"🔄 Processing queued action: {queued_action.action}")
+                try:
+                    success = self.act(
+                        queued_action.action,
+                        command_id=queued_action.command_id
+                    )
+                    if success:
+                        executed += 1
+                        print(f"   ✅ Queued action succeeded: {queued_action.action}")
+                    else:
+                        failed += 1
+                        print(f"   ❌ Queued action failed: {queued_action.action}")
+                except Exception as e:
+                    failed += 1
+                    print(f"   ❌ Queued action error: {e}")
+        
+        if failed > 0:
+            print(f"⚠️ {failed} queued actions failed")
+        
+        return executed
+    
+    def clear_queue(self) -> None:
+        """Clear all queued actions"""
+        self.action_queue.clear()
+        print("🧹 Cleared action queue")
+    
+    def inspect_queue(self) -> List[QueuedAction]:
+        """Inspect queued actions without processing"""
+        return self.action_queue.inspect()
+    
+    def queue_size(self) -> int:
+        """Get current queue size"""
+        return self.action_queue.size()
 
 
 # Example usage

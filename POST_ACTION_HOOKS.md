@@ -1,6 +1,52 @@
-# Post-Action Hooks
+# Action Hooks
 
-Post-action hooks allow you to run custom actions **automatically after every browser interaction** (click, type, scroll, press, etc.).
+Action hooks allow you to run custom code **automatically before and after every browser interaction** (click, type, scroll, press, etc.).
+
+## Pre-Action Hooks
+
+Pre-action hooks run **before** an action executes, allowing you to inspect what's about to happen or perform setup operations.
+
+### Quick Start (Pre-Action)
+
+```python
+from vision_bot import BrowserVisionBot
+from action_executor import PreActionContext
+from models import ActionType
+
+# Define your pre-action callback
+def my_pre_callback(ctx: PreActionContext):
+    if ctx.action_type == ActionType.CLICK:
+        print(f"About to click at {ctx.coordinates}")
+        # Run any setup logic here
+
+# Initialize bot and register callback
+bot = BrowserVisionBot()
+bot.start()
+bot.action_executor.register_pre_action_callback(my_pre_callback)
+
+# Now all actions will trigger the callback BEFORE execution
+bot.goto("https://example.com")
+bot.act("click: the first button")
+```
+
+### PreActionContext Fields
+
+The callback receives a `PreActionContext` object with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `action_type` | `ActionType` | The type of action about to execute (CLICK, TYPE, SCROLL, PRESS) |
+| `step` | `ActionStep` | Complete action details (overlay_index, text_to_type, etc.) |
+| `page_info` | `PageInfo` | Page state (URL, dimensions, scroll position) |
+| `elements` | `PageElements` | Detected elements on the page |
+| `coordinates` | `Optional[Tuple[int, int]]` | Target coordinates (if applicable) |
+| `page` | `Optional[Page]` | Direct access to Playwright Page object |
+| `command_id` | `Optional[str]` | ID of the command triggering this action |
+| `command_lineage` | `Optional[List[str]]` | Full lineage of command IDs |
+
+## Post-Action Hooks
+
+Post-action hooks run **after** an action executes, allowing you to inspect results and perform follow-up operations.
 
 ## Overview
 
@@ -13,14 +59,14 @@ The callback system provides complete context about each action, including:
 - Error messages (if failed)
 - Direct access to the Playwright `Page` object
 
-## Quick Start
+### Quick Start (Post-Action)
 
 ```python
 from vision_bot import BrowserVisionBot
 from action_executor import PostActionContext
 from models import ActionType
 
-# Define your callback
+# Define your post-action callback
 def my_callback(ctx: PostActionContext):
     if ctx.success and ctx.action_type == ActionType.CLICK:
         print(f"Clicked at {ctx.coordinates}")
@@ -31,7 +77,7 @@ bot = BrowserVisionBot()
 bot.start()
 bot.action_executor.register_post_action_callback(my_callback)
 
-# Now all actions will trigger the callback
+# Now all actions will trigger the callback AFTER execution
 bot.goto("https://example.com")
 bot.act("click: the first button")
 ```
@@ -244,6 +290,38 @@ bot.act("type: 'hello' into: input")
 # Print statistics
 tracker.print_stats()
 bot.end()
+```
+
+## When to Use Pre-Action vs Post-Action Hooks
+
+### Use Pre-Action Hooks When:
+- **Logging/Monitoring**: Log what action is about to happen before execution
+- **Validation**: Check conditions before an action executes
+- **Setup**: Prepare the environment before an action (e.g., close popups)
+- **Rate Limiting**: Add delays before certain actions
+- **Debugging**: Inspect the planned action before it runs
+
+Example:
+```python
+def rate_limit_callback(ctx: PreActionContext):
+    # Add a delay before clicks to prevent overwhelming the server
+    if ctx.action_type == ActionType.CLICK:
+        time.sleep(0.5)
+```
+
+### Use Post-Action Hooks When:
+- **Verification**: Check if action achieved desired result
+- **Follow-up Actions**: Perform additional actions after success
+- **Error Handling**: React to failures and retry
+- **Tracking**: Track successful interactions
+- **Conditional Logic**: Branch based on action results
+
+Example:
+```python
+def verify_navigation_callback(ctx: PostActionContext):
+    # Wait for page to fully load after clicking navigation links
+    if ctx.success and ctx.action_type == ActionType.CLICK:
+        ctx.page.wait_for_load_state("networkidle")
 ```
 
 ## See Also

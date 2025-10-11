@@ -64,6 +64,10 @@ class FocusManager:
         self.recent_failures: List[Dict[str, Any]] = []
         self.max_failure_memory = 10
         
+        # Duplicate rejection tracking
+        self.duplicate_rejection_count: int = 0
+        self.duplicate_rejection_threshold: int = 2
+        
         # Screenshot directory
         self.screenshot_dir = "focus_screenshots"
         os.makedirs(self.screenshot_dir, exist_ok=True)

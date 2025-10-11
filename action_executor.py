@@ -15,6 +15,20 @@ from utils.context_guard import ContextGuard, GuardDecision
 from vision_utils import get_gemini_box_2d_center_pixels
 from goals import GoalMonitor, InteractionType, GoalStatus
 from interaction_deduper import InteractionDeduper
+from command_ledger import CommandLedger
+
+
+@dataclass
+class PreActionContext:
+    """Complete context information passed to pre-action callbacks"""
+    action_type: ActionType
+    step: ActionStep
+    page_info: PageInfo
+    elements: PageElements
+    coordinates: Optional[Tuple[int, int]] = None
+    page: Optional[Page] = None  # Access to the page for custom actions
+    command_id: Optional[str] = None  # ID of the command that triggered this action
+    command_lineage: Optional[List[str]] = None  # Full lineage of command IDs
 
 
 @dataclass
@@ -28,17 +42,20 @@ class PostActionContext:
     coordinates: Optional[Tuple[int, int]] = None
     error_message: Optional[str] = None
     page: Optional[Page] = None  # Access to the page for custom actions
+    command_id: Optional[str] = None  # ID of the command that triggered this action
+    command_lineage: Optional[List[str]] = None  # Full lineage of command IDs
 
 
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None):
+    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None):
         self.page = page
         self.goal_monitor = goal_monitor
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
         self.gif_recorder = gif_recorder
+        self.command_ledger = command_ledger or CommandLedger()
         self.last_failure_reason: Optional[str] = None
         
         # Initialize specialized handlers
@@ -49,8 +66,40 @@ class ActionExecutor:
         analyzer = getattr(goal_monitor, "element_analyzer", None)
         self.context_guard = ContextGuard(page, analyzer)
         
+        # Pre-action callback system
+        self.pre_action_callbacks: List[Callable[[PreActionContext], None]] = []
         # Post-action callback system
         self.post_action_callbacks: List[Callable[[PostActionContext], None]] = []
+    
+    def register_pre_action_callback(self, callback: Callable[[PreActionContext], None]) -> None:
+        """
+        Register a callback to run before every action.
+        
+        Args:
+            callback: Function that takes PreActionContext with action information
+        
+        Example:
+            def my_callback(ctx: PreActionContext):
+                if ctx.action_type == ActionType.CLICK:
+                    print(f"About to click at {ctx.coordinates}")
+                    # Run custom pre-action logic
+            
+            executor.register_pre_action_callback(my_callback)
+        """
+        self.pre_action_callbacks.append(callback)
+        print(f"✅ Registered pre-action callback: {callback.__name__}")
+    
+    def unregister_pre_action_callback(self, callback: Callable[[PreActionContext], None]) -> None:
+        """Remove a registered pre-action callback"""
+        if callback in self.pre_action_callbacks:
+            self.pre_action_callbacks.remove(callback)
+            print(f"✅ Unregistered pre-action callback: {callback.__name__}")
+    
+    def clear_pre_action_callbacks(self) -> None:
+        """Remove all registered pre-action callbacks"""
+        count = len(self.pre_action_callbacks)
+        self.pre_action_callbacks.clear()
+        print(f"✅ Cleared {count} pre-action callback(s)")
     
     def register_post_action_callback(self, callback: Callable[[PostActionContext], None]) -> None:
         """
@@ -82,6 +131,39 @@ class ActionExecutor:
         self.post_action_callbacks.clear()
         print(f"✅ Cleared {count} post-action callback(s)")
     
+    def _trigger_pre_action_hooks(
+        self,
+        action_type: ActionType,
+        step: ActionStep,
+        page_info: PageInfo,
+        elements: PageElements,
+        coordinates: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        """Execute all registered pre-action callbacks with full context"""
+        if not self.pre_action_callbacks:
+            return
+        
+        # Get current command context
+        command_id = self.command_ledger.get_current_command_id()
+        command_lineage = self.command_ledger.get_lineage(command_id) if command_id else None
+        
+        context = PreActionContext(
+            action_type=action_type,
+            step=step,
+            page_info=page_info,
+            elements=elements,
+            coordinates=coordinates,
+            page=self.page,
+            command_id=command_id,
+            command_lineage=command_lineage,
+        )
+        
+        for callback in self.pre_action_callbacks:
+            try:
+                callback(context)
+            except Exception as e:
+                print(f"⚠️ Pre-action callback '{callback.__name__}' error: {e}")
+    
     def _trigger_post_action_hooks(
         self,
         action_type: ActionType,
@@ -91,10 +173,17 @@ class ActionExecutor:
         elements: PageElements,
         coordinates: Optional[Tuple[int, int]] = None,
         error_message: Optional[str] = None,
+        command_id: Optional[str] = None,
     ) -> None:
         """Execute all registered post-action callbacks with full context"""
         if not self.post_action_callbacks:
             return
+        
+        # Get current command context
+        # Use provided command_id or fall back to execution stack
+        if command_id is None:
+            command_id = self.command_ledger.get_current_command_id()
+        command_lineage = self.command_ledger.get_lineage(command_id) if command_id else None
         
         context = PostActionContext(
             action_type=action_type,
@@ -105,6 +194,8 @@ class ActionExecutor:
             coordinates=coordinates,
             error_message=error_message,
             page=self.page,
+            command_id=command_id,
+            command_lineage=command_lineage,
         )
         
         for callback in self.post_action_callbacks:
@@ -121,8 +212,22 @@ class ActionExecutor:
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
+        command_id: Optional[str] = None,
     ) -> bool:
-        """Execute the generated plan"""
+        """
+        Execute the generated plan
+        
+        Args:
+            plan: The plan to execute
+            page_info: Current page information
+            target_context_guard: Guard condition for actions
+            skip_post_guard_refinement: Skip refinement after guard checks
+            confirm_before_interaction: Require user confirmation before actions
+            command_id: Optional command ID for tracking (will use execution stack if not provided)
+        
+        Returns:
+            True if plan executed successfully, False otherwise
+        """
         print(f"🚀 Executing plan with {len(plan.action_steps)} steps")
 
         # Note: Only evaluate goals AFTER actions execute, not before
@@ -132,6 +237,9 @@ class ActionExecutor:
             self.context_guard.reset_cache()
 
         self.last_failure_reason = None
+        
+        # Store command_id for use in action hooks
+        self._current_plan_command_id = command_id
 
         for i, step in enumerate(plan.action_steps):
             print(f"\n  Step {i+1}: {step.action}")
@@ -505,6 +613,15 @@ class ActionExecutor:
                     box = el.box_2d
                     break
 
+        # Trigger pre-action hooks early, before any confirmations or refinements
+        self._trigger_pre_action_hooks(
+            action_type=ActionType.CLICK,
+            step=step,
+            page_info=page_info,
+            elements=elements,
+            coordinates=(x, y),
+        )
+
         if confirm_before_interaction:
             self._confirm_interaction_visual(
                 action_label="click",
@@ -613,6 +730,7 @@ class ActionExecutor:
             elements=elements,
             coordinates=(x, y),
             error_message=error_msg,
+            command_id=getattr(self, '_current_plan_command_id', None),
         )
         
         return success
@@ -631,9 +749,20 @@ class ActionExecutor:
             print("⚠️ No text specified for TYPE action")
             return False
 
-        # Click first to focus the element
+        # Get coordinates for the element to type into
         x, y = self._get_click_coordinates(step, elements, page_info)
         box = None
+        
+        # Trigger pre-action hooks early, before any interactions
+        self._trigger_pre_action_hooks(
+            action_type=ActionType.TYPE,
+            step=step,
+            page_info=page_info,
+            elements=elements,
+            coordinates=(x, y) if x is not None and y is not None else None,
+        )
+        
+        # Click first to focus the element
         if x is not None and y is not None:
             # Validate and clamp coordinates to viewport
             # x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
@@ -734,6 +863,7 @@ class ActionExecutor:
             elements=elements,
             coordinates=(x, y) if x is not None and y is not None else None,
             error_message=error_msg,
+            command_id=getattr(self, '_current_plan_command_id', None),
         )
         
         return success
@@ -832,6 +962,21 @@ class ActionExecutor:
                 axis = "horizontal"
             print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         
+        # Trigger pre-action hooks early, before goal evaluations
+        page_info = PageInfo(
+            url=self.page.url, width=1200, height=800,
+            ss_pixel_w=1200, ss_pixel_h=800, css_scale=1.0,
+            doc_width=1200, doc_height=2000
+        )
+        elements = PageElements(elements=[])
+        self._trigger_pre_action_hooks(
+            action_type=ActionType.SCROLL,
+            step=step,
+            page_info=page_info,
+            elements=elements,
+            coordinates=None,
+        )
+        
         # Record planned interaction with goal monitor and get pre-interaction evaluations
         pre_evaluations = self.goal_monitor.record_planned_interaction(
             InteractionType.SCROLL,
@@ -905,6 +1050,7 @@ class ActionExecutor:
             elements=PE(elements=[]),
             coordinates=(target_x, target_y),
             error_message=error_msg,
+            command_id=getattr(self, '_current_plan_command_id', None),
         )
         
         return success
@@ -923,6 +1069,22 @@ class ActionExecutor:
             return False
         
         print(f"  Pressing keys: {step.keys_to_press}")
+        
+        # Trigger pre-action hooks early, before any interactions
+        from models import PageElements as PE, PageInfo as PI
+        current_page_info = self.page_utils.get_page_info() if self.page_utils else PI(
+            width=1200, height=800, scroll_x=0, scroll_y=0,
+            url=self.page.url, title="", dpr=1.0,
+            ss_pixel_w=1200, ss_pixel_h=800, css_scale=1.0,
+            doc_width=1200, doc_height=800
+        )
+        self._trigger_pre_action_hooks(
+            action_type=ActionType.PRESS,
+            step=step,
+            page_info=current_page_info,
+            elements=PE(elements=[]),
+            coordinates=None,
+        )
         
         # Record interaction for GIF if recorder is available
         if self.gif_recorder:
@@ -990,6 +1152,7 @@ class ActionExecutor:
             elements=PE(elements=[]),
             coordinates=None,
             error_message=error_msg,
+            command_id=getattr(self, '_current_plan_command_id', None),
         )
         
         return success
