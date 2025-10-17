@@ -18,8 +18,8 @@ def sign_in_without_password_commands(bot: BrowserVisionBot):
         bot.act("click: the search jobs button")
 
         # If user is not logged in, click the button to login and sign in without password
-        bot.act("if: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)")
-        bot.act("if: on sign in page then: ref: sign_in_without_password_commands")
+        bot.act("if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)")
+        bot.act("if see: on sign in page then: ref: sign_in_without_password_commands")
 
 bot.register_prompts([
         "dedup: enable",
@@ -36,7 +36,7 @@ bot.register_prompts([
         command_id="click_ios_job_action")
 
 # If cookie banner is visible, click the button to accept cookies
-bot.on_new_page_load(["if: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
+bot.on_new_page_load(["if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
 sign_in_without_password_commands(bot)
 
 # bot.act("defer")

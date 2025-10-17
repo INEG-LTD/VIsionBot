@@ -1373,8 +1373,13 @@ class BrowserVisionBot:
             parsed_if = parse_structured_if(goal_description)
             if parsed_if:
                 print(f"🔀 Structured IF parse: {parsed_if}")
-                condition_text, success_action, fail_action = parsed_if
-                if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action)
+                if len(parsed_if) == 4:
+                    condition_text, success_action, fail_action, route = parsed_if
+                    if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action, route, modifier)
+                else:
+                    # Old format without route
+                    condition_text, success_action, fail_action = parsed_if
+                    if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action, None, modifier)
                 print(f"🔀 Created IfGoal (structured): '{if_goal.description}'")
                 if if_goal:
                     result_goal, result_description = self._evaluate_if_goal(if_goal)
@@ -1739,14 +1744,29 @@ class BrowserVisionBot:
                 self.goal_monitor.clear_all_goals()
             self.goal_monitor.reset_retry_request()
 
-    def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str]) -> Optional[IfGoal]:
-        """Create IfGoal from explicit parts."""
+    def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str], route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[IfGoal]:
+        """Create IfGoal from explicit parts with route determination."""
         try:
-            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
-            expr = compile_nl_to_expr(condition_text)
-            if not expr:
-                return None
-            condition = _create_predicate(expr, f"Predicate: {condition_text}")
+            # Determine route: modifier first, then parsed route, then fail
+            determined_route = None
+            
+            # 1. Check modifier parameter first
+            if modifier:
+                for mod in modifier:
+                    if mod.lower() in ["see", "page"]:
+                        determined_route = mod.lower()
+                        break
+            
+            # 2. Use parsed route if no modifier route
+            if not determined_route and route:
+                determined_route = route.lower()
+            
+            # 3. Fail if no route specified
+            if not determined_route:
+                raise ValueError("If goal requires route specification. Use modifier=['see'] or modifier=['page'] or specify in command like 'if see: condition then: action'")
+            
+            if determined_route not in ["see", "page"]:
+                raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
 
             print(f"Success text: '{success_text}'")
             
@@ -1788,9 +1808,10 @@ class BrowserVisionBot:
 
             fail_desc = fail_goal.description if fail_goal else "(no fail action)"
             if_goal = IfGoal(
-                condition,
-                success_goal,
-                fail_goal,
+                condition_text=condition_text,
+                success_goal=success_goal,
+                fail_goal=fail_goal,
+                route=determined_route,
                 description=f"If {condition_text} then {success_goal.description} else {fail_desc}"
             )
             return if_goal

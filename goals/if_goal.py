@@ -1,11 +1,17 @@
 """
 IfGoal implementation for conditional goal execution.
+
+Now supports two distinct evaluation routes:
+- "see": Vision-based condition evaluation using screenshots
+- "page": Page-based condition evaluation using DOM/state detection
 """
 from __future__ import annotations
 
-from typing import Optional
-from .base import ConditionalGoal, Condition, BaseGoal, GoalResult, GoalStatus
+from typing import Optional, Dict, Any, Union
+from .base import ConditionalGoal, Condition, BaseGoal, GoalResult, GoalStatus, create_environment_condition
 
+# Type alias for JSON expressions
+JsonExpr = Union[Dict[str, Any], list, str, int, float, bool, None]
 
 class IfGoal(ConditionalGoal):
     """
@@ -36,29 +42,146 @@ class IfGoal(ConditionalGoal):
         ```
     """
     
-    def __init__(self, condition: Condition, success_goal: BaseGoal,
-                 fail_goal: Optional[BaseGoal], description: Optional[str] = None,
+    def __init__(self, condition_text: str, success_goal: BaseGoal,
+                 fail_goal: Optional[BaseGoal], route: str, description: Optional[str] = None,
                  max_retries: int = 3, **kwargs):
         """
-        Initialize an IfGoal.
+        Initialize an IfGoal with route-based condition evaluation.
         
         Args:
-            condition: The condition to evaluate
+            condition_text: Natural language condition to evaluate
             success_goal: Goal to run if condition is True
             fail_goal: Goal to run if condition is False
+            route: Route for condition evaluation ("see" or "page")
             description: Optional custom description. If None, auto-generates from condition and goals
             max_retries: Maximum number of retries allowed
             **kwargs: Additional arguments passed to BaseGoal
         """
+        if route not in ["see", "page"]:
+            raise ValueError(f"Invalid route '{route}'. Must be 'see' or 'page'")
+        
+        # Create condition based on route
+        condition = self._create_condition(condition_text, route)
+        
         if description is None:
             fail_desc = fail_goal.description if fail_goal else "(no fail action)"
-            description = f"If {condition.description} then {success_goal.description} else {fail_desc}"
+            route_info = f"[{route.upper()}]"
+            description = f"{route_info} If {condition_text} then {success_goal.description} else {fail_desc}"
         
         super().__init__(description, condition, success_goal, fail_goal, max_retries, **kwargs)
+        
+        # Store route and condition text for caching
+        self.route = route
+        self.condition_text = condition_text
+        self._condition_cache: Dict[str, Any] = {}  # Cache for converted conditions
 
     def set_goal_monitor(self, goal_monitor) -> None:
         """Set the goal monitor reference."""
         self.goal_monitor = goal_monitor
+
+    def _create_condition(self, condition_text: str, route: str) -> Condition:
+        """Create condition based on specified route"""
+        if route == "see":
+            return self._create_vision_condition(condition_text)
+        elif route == "page":
+            return self._create_page_condition(condition_text)
+        else:
+            raise ValueError(f"Invalid route: {route}")
+
+    def _create_vision_condition(self, condition_text: str) -> Condition:
+        """Create vision-based condition using screenshots and natural language"""
+        def evaluator(context) -> bool:
+            try:
+                page = context.page_reference
+                if not page:
+                    return False
+                
+                # Take screenshot
+                screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+                
+                # Convert condition to vision question (with caching)
+                question = self._convert_to_vision_question(condition_text)
+                
+                # Use vision model to answer
+                from ai_utils import answer_question_with_vision
+                result = answer_question_with_vision(question, screenshot)
+                
+                # Parse result
+                answer = str(result or "").lower().strip()
+                return answer in ['yes', 'true', '1']
+                
+            except Exception as e:
+                print(f"[IfGoal] Vision condition error: {e}")
+                return False
+        
+        return create_environment_condition(
+            f"Vision condition: {condition_text}",
+            evaluator
+        )
+
+    def _create_page_condition(self, condition_text: str) -> Condition:
+        """Create page-based condition using condition engine"""
+        def evaluator(context) -> bool:
+            try:
+                # Convert natural language to JSON DSL (with caching)
+                expr = self._convert_to_page_expression(condition_text)
+                if not expr:
+                    print(f"[IfGoal] Failed to convert condition to page expression: {condition_text}")
+                    return False
+                
+                # Use condition engine to evaluate
+                from goals.condition_engine import get_default_engine
+                engine = get_default_engine()
+                outcome = engine.evaluate(expr, context)
+                return outcome.value
+                
+            except Exception as e:
+                print(f"[IfGoal] Page condition error: {e}")
+                return False
+        
+        return create_environment_condition(
+            f"Page condition: {condition_text}",
+            evaluator
+        )
+
+    def _convert_to_vision_question(self, condition_text: str) -> str:
+        """Convert natural language condition to vision question (with caching)"""
+        cache_key = f"vision_question::{condition_text}"
+        if cache_key in self._condition_cache:
+            return self._condition_cache[cache_key]
+        
+        from ai_utils import generate_text
+        
+        prompt = f"""
+        Convert this condition into a yes/no question that can be answered by looking at a screenshot:
+        
+        Condition: {condition_text}
+        
+        Return only the question, no explanation.
+        """
+        
+        result = generate_text(
+            prompt=prompt,
+            system_prompt="Convert conditions to yes/no questions for vision analysis.",
+            reasoning_level="low"
+        )
+        
+        question = str(result or condition_text).strip()
+        self._condition_cache[cache_key] = question
+        return question
+
+    def _convert_to_page_expression(self, condition_text: str) -> Optional[JsonExpr]:
+        """Convert natural language condition to JSON DSL expression (with caching)"""
+        cache_key = f"page_expression::{condition_text}"
+        if cache_key in self._condition_cache:
+            return self._condition_cache[cache_key]
+        
+        from goals.condition_engine import compile_nl_to_expr
+        
+        expr = compile_nl_to_expr(condition_text)
+        if expr:
+            self._condition_cache[cache_key] = expr
+        return expr
     
     def evaluate(self, context) -> GoalResult:
         """
@@ -107,6 +230,7 @@ class IfGoal(ConditionalGoal):
                         "condition_type": self.condition.condition_type.value,
                         "condition_result": condition_result,
                         "active_goal": command_to_execute,
+                        "route": self.route,
                     },
                     next_actions=[command_to_execute]
                 )
@@ -127,6 +251,7 @@ class IfGoal(ConditionalGoal):
                         "condition_type": self.condition.condition_type.value,
                         "condition_result": condition_result,
                         "active_goal": None,
+                        "route": self.route,
                     }
                 )
             
@@ -135,7 +260,7 @@ class IfGoal(ConditionalGoal):
                 status=GoalStatus.FAILED,
                 confidence=0.0,
                 reasoning=f"Error evaluating IfGoal: {str(e)}",
-                evidence={"error": str(e), "condition_type": self.condition.condition_type.value}
+                evidence={"error": str(e), "condition_type": self.condition.condition_type.value, "route": self.route}
             )
 
     

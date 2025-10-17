@@ -99,27 +99,42 @@ def extract_navigation_intent(goal_description: str) -> Optional[str]:
 
 # ---------------- Structured Goal Syntax Parsers ----------------
 
-def parse_structured_if(text: str) -> Optional[tuple[str, str, Optional[str]]]:
-    """Parse explicit IF/THEN[/ELSE] syntax.
+def parse_structured_if(text: str) -> Optional[tuple[str, str, Optional[str], Optional[str]]]:
+    """Parse explicit IF/THEN[/ELSE] syntax with optional route specification.
 
     Supported forms (case-insensitive, flexible spacing):
     - "if: <condition> then: <success> else: <fail>"
+    - "if see: <condition> then: <success> else: <fail>"  # Force vision route
+    - "if page: <condition> then: <success> else: <fail>" # Force page route
     - "if <condition> then <success> else <fail>"
     - without else: "if: <condition> then: <success>"
-    Returns (condition, success_action, fail_action_or_None) or None if no match.
+    - without else: "if see: <condition> then: <success>"
+    - without else: "if page: <condition> then: <success>"
+    
+    Returns (condition, success_action, fail_action_or_None, route_or_None) or None if no match.
     """
     t = (text or "").strip()
     if not t:
         return None
     # Normalize whitespace
     t1 = re.sub(r"\s+", " ", t).strip()
-    # Regex with optional colons after keywords
-    m = re.match(r"(?i)^if\s*: ?(.+?)\s+then\s*: ?(.+?)(?:\s+else\s*: ?(.+))?$", t1)
+    
+    # Check for route specification
+    route_match = re.match(r"(?i)^if\s+(see|page)\s*:\s*(.+?)\s+then\s*:\s*(.+?)(?:\s+else\s*:\s*(.+))?$", t1)
+    if route_match:
+        route = route_match.group(1).lower()
+        cond = route_match.group(2).strip()
+        then = route_match.group(3).strip()
+        els = route_match.group(4).strip() if route_match.group(4) else None
+        return cond, then, els, route
+    
+    # Default parsing without route
+    m = re.match(r"(?i)^if\s*:\s*(.+?)\s+then\s*:\s*(.+?)(?:\s+else\s*:\s*(.+))?$", t1)
     if m:
         cond = m.group(1).strip()
         then = m.group(2).strip()
         els = m.group(3).strip() if m.group(3) else None
-        return cond, then, els
+        return cond, then, els, None
     return None
 
 
