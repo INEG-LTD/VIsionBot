@@ -12530,3 +12530,308 @@ Log File: bot_automation.log
     Details: {
   "goal_description": "click: the next button in the pagination control"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760715423
+Start Time: 2025-10-17T16:37:03.563550
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T16:37:05.721174] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T16:37:05.723468] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T16:37:05.838104] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T16:38:17.757868] INFO     SYSTEM       Defer pause ended (took 72032.6ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 72.033
+}
+[2025-10-17T16:38:17.764032] SUCCESS  GOAL         Goal completed: defer (took 72040.6ms) ✅
+[2025-10-17T16:38:18.023389] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 200px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 200px"
+}
+[2025-10-17T16:38:28.808693] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:38:28.811028] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:38:35.458597] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:38:35.462789] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:38:47.925158] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:38:47.931147] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:38:57.359606] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:38:57.364532] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:05.329170] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:05.333154] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:16.675839] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:16.680127] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:26.889734] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:26.893549] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:35.543113] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:35.547341] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:44.758598] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:44.763502] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:39:53.240075] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:39:53.244247] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:04.112062] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:04.115649] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:12.358563] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:12.363561] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:22.058288] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:22.062995] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:32.034357] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:32.038791] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:41.749665] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:41.754058] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:47.805365] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:47.810681] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:40:56.532443] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:40:56.536933] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:04.834737] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:04.839679] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:12.693841] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:12.698303] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:20.731312] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:20.736072] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:29.327665] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:29.331276] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:45.959487] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:45.963914] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:41:54.196232] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:41:54.200372] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:02.517415] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:02.521681] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:13.754567] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:13.759439] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:22.869422] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:22.873460] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:32.700769] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:32.704876] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:42.689497] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:42.694391] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:51.439448] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T16:42:51.444178] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T16:42:59.438741] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-17T16:42:59.442419] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 200px (took 281419.0ms) ✅
+    Details: {
+  "iterations": 29,
+  "outcome": "completed"
+}
+[2025-10-17T16:42:59.442894] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-17T16:44:04.603022] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 65160.2ms) ✅

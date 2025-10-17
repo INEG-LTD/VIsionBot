@@ -46,7 +46,7 @@ bot.act("defer")
 
 # # Scroll to the top of the page
 # bot.act("scroll: to top")
-bot.act("while: no pagination control is visible do: scroll: down 200px", additional_context="The pagination control must have a 'Previous' and 'Next' button")
+bot.act("while: pagination control with previous and next buttons is not visible do: scroll: down 200px", additional_context="The pagination control must have a 'Previous' and 'Next' button", modifier=["see"])
 bot.act("click: the next button in the pagination control", additional_context="The pagination control must have a 'Previous' and 'Next' button")
 # End the bot session (performs cleanup and terminates)
 gif_path = bot.end()

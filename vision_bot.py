@@ -656,6 +656,7 @@ class BrowserVisionBot:
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
         command_id: Optional[str] = None,
+        modifier: Optional[List[str]] = None,
         **kwargs
     ) -> bool:
         """
@@ -669,6 +670,7 @@ class BrowserVisionBot:
             skip_post_guard_refinement: Skip refinement after guard checks
             confirm_before_interaction: Require user confirmation before each action
             command_id: Optional command ID for tracking (auto-generated if not provided)
+            modifier: Optional list of modifier strings to pass to goals
         
         Returns:
             True if goal was achieved, False otherwise
@@ -740,7 +742,7 @@ class BrowserVisionBot:
             # Set up smart goal monitoring if enabled
             # Store kwargs temporarily for goal creation
             self._temp_goal_kwargs = kwargs
-            goal, transformed_goal_description = self._create_goal_from_description(goal_description)
+            goal, transformed_goal_description = self._create_goal_from_description(goal_description, modifier)
             self._temp_goal_kwargs = {}
 
             if isinstance(goal, WhileGoal):
@@ -1342,15 +1344,21 @@ class BrowserVisionBot:
     # -------------------- Public memory helpers (general) --------------------
     # Memory store methods removed - deduplication now handled by focus manager
 
-    def _create_goal_from_description(self, goal_description: str) -> tuple[BaseGoal, str]:
+    def _create_goal_from_description(self, goal_description: str, modifier: Optional[List[str]] = None) -> tuple[BaseGoal, str]:
         """Set up smart goals based on the goal description and return the updated description"""
         # 1) Structured syntax (explicit) takes precedence
         try:
             sw = parse_structured_while(goal_description)
             if sw:
                 print(f"🔁 WhileGoal (structured): '{sw}'")
-                cond_text, body_text = sw
-                wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text)
+                if len(sw) == 3:
+                    cond_text, body_text, route = sw
+                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, route, modifier)
+                else:
+                    # Old format without route
+                    cond_text, body_text = sw
+                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, None, modifier)
+                
                 if wg:
                     print(f"🔁 Created WhileGoal (structured): '{wg.description}'")
                     return wg, body_text
@@ -1495,18 +1503,35 @@ class BrowserVisionBot:
         #         return BaseGoal.make_ref_goal(goal_description, payload, False)
         return None
 
-    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str) -> Optional[WhileGoal]:
-        """Create WhileGoal from explicit condition/body parts."""
+    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[WhileGoal]:
+        """Create WhileGoal from explicit condition/body parts with route determination."""
         try:
-            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
-            expr = compile_nl_to_expr(cond_text)
-            if not expr:
-                return None
-            condition = _create_predicate(expr, f"Predicate: {cond_text}")
+            # Determine route: modifier first, then parsed route, then fail
+            determined_route = None
+            
+            # 1. Check modifier parameter first
+            if modifier:
+                for mod in modifier:
+                    if mod.lower() in ["see", "page"]:
+                        determined_route = mod.lower()
+                        break
+            
+            # 2. Use parsed route if no modifier route
+            if not determined_route and route:
+                determined_route = route.lower()
+            
+            # 3. Fail if no route specified
+            if not determined_route:
+                raise ValueError("While goal requires route specification. Use modifier=['see'] or modifier=['page'] or specify in command like 'while see: condition do: action'")
+            
+            if determined_route not in ["see", "page"]:
+                raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
+            
             wg = WhileGoal(
-                description=goal_description,
-                condition=condition,
+                condition_text=cond_text,
                 loop_prompt=body_text,
+                route=determined_route,
+                description=goal_description,
             )
             return wg
         except Exception as e:

@@ -245,27 +245,51 @@ def parse_datetime_command(text: str) -> Optional[tuple[str, Optional[str]]]:
     return _parse_value_target(text, "datetime")
 
 
-def parse_structured_while(text: str) -> Optional[tuple[str, str]]:
-    """Parse explicit WHILE/DO or DO/UNTIL syntax.
+def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str]]]:
+    """Parse explicit WHILE/DO syntax with optional route specification.
 
     Supported forms (case-insensitive, flexible spacing):
     - "while: <condition> do: <body>"
-    - "while <condition> do <body>"
+    - "while see: <condition> do: <body>"  # Force vision route
+    - "while page: <condition> do: <body>" # Force page route
     - "do: <body> until: <condition>" (or "repeat: <body> until: <condition>")
-    Returns (condition, body) or None if no match.
+    - "do: <body> until see: <condition>"  # Force vision route
+    - "do: <body> until page: <condition>" # Force page route
+    
+    Returns (condition, body, route) or None if no match.
     """
     t = (text or "").strip()
     if not t:
         return None
     t1 = re.sub(r"\s+", " ", t).strip()
-    m = re.match(r"(?i)^while\s*: ?(.+?)\s+do\s*: ?(.+)$", t1)
+    
+    # Check for route specification in while syntax
+    route_match = re.match(r"(?i)^while\s+(see|page)\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
+    if route_match:
+        route = route_match.group(1).lower()
+        condition = route_match.group(2).strip()
+        body = route_match.group(3).strip()
+        return condition, body, route
+    
+    # Check for route specification in do/until syntax
+    until_route_match = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s+(see|page)\s*:\s*(.+)$", t1)
+    if until_route_match:
+        body = until_route_match.group(1).strip()
+        route = until_route_match.group(2).lower()
+        condition = until_route_match.group(3).strip()
+        return condition, body, route
+    
+    # Default parsing without route
+    m = re.match(r"(?i)^while\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
     if m:
-        return m.group(1).strip(), m.group(2).strip()
-    m = re.match(r"(?i)^(?:do|repeat)\s*: ?(.+?)\s+until\s*: ?(.+)$", t1)
+        return m.group(1).strip(), m.group(2).strip(), None
+    
+    m = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s*:\s*(.+)$", t1)
     if m:
         body = m.group(1).strip()
         cond = m.group(2).strip()
-        return cond, body
+        return cond, body, None
+    
     return None
 
 
