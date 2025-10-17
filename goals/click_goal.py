@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from ai_utils import generate_model
-from utils.vision_resolver import score_element_against_instruction
 from .base import BaseGoal, GoalResult, GoalStatus, EvaluationTiming, GoalContext, InteractionType
 from .element_analyzer import ElementAnalyzer
 
@@ -132,9 +131,10 @@ class ClickGoal(BaseGoal):
                 evidence={"error": "Click execution failed"}
             )
         
-        # Analyze the clicked element
+        # Lazy loading: Only analyze element when actually needed for evaluation
         if not self.actual_element_info and self.actual_click_coordinates and self.element_analyzer:
             x, y = self.actual_click_coordinates
+            print(f"[ClickGoal] Lazy loading element analysis at ({x}, {y})")
             self.actual_element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
         
         if not self.actual_element_info:
@@ -223,9 +223,10 @@ class ClickGoal(BaseGoal):
                 }
             )
         
-        # Get AI description of the clicked element
+        # Lazy loading: Get AI description only when needed for evaluation
         try:
             if self.element_analyzer and context.current_state.screenshot:
+                print(f"[ClickGoal] Lazy loading AI description for element at {self.actual_click_coordinates}")
                 element_description = self.element_analyzer.get_element_description_with_ai(
                     self.actual_element_info,
                     context.current_state.screenshot,
@@ -334,9 +335,13 @@ class ClickGoal(BaseGoal):
             )
         
         try:
+            # Lazy loading: Only analyze element when needed for evaluation
+            element_info = None
+            
             # If a specific target selector was provided, prefer analyzing that element
             selector = planned_interaction.get('target_selector')
             if selector and self.element_analyzer:
+                print(f"[ClickGoal] Lazy loading element analysis by selector: {selector}")
                 element_info = self.element_analyzer.analyze_element_by_selector(selector)
                 if element_info:
                     print(f"[ClickGoal] Element info (by selector): {element_info}")
@@ -378,9 +383,11 @@ class ClickGoal(BaseGoal):
                             )
                     # If not clickable by selector, fall back to coordinate analysis below
             
-            # Get element info at the click coordinates
-            element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
-            print(f"[ClickGoal] Element info: {element_info}")
+            # Lazy loading: Only analyze by coordinates if selector analysis failed or wasn't available
+            if not element_info:
+                print(f"[ClickGoal] Lazy loading element analysis at coordinates ({x}, {y})")
+                element_info = self.element_analyzer.analyze_element_at_coordinates(x, y)
+                print(f"[ClickGoal] Element info: {element_info}")
             
             if not element_info or element_info.get("error"):
                 print(f"[ClickGoal] Could not analyze element at ({x}, {y}) before click")
@@ -587,48 +594,35 @@ class ClickGoal(BaseGoal):
         page_dimensions: Optional[Tuple[int, int]] = None,
     ) -> Dict[str, Any]:
         """
-        Primarily use natural-language evaluation; vision scores are retained as diagnostics only.
+        Use single AI evaluation method for element matching.
+        Simplified to avoid redundant vision scoring and fallback matching.
         """
-        score = 0
-        diag: Optional[Dict[str, Any]] = None
-        diag_reason = ""
-
-        if actual_element_info:
-            page_w = page_dimensions[0] if page_dimensions else None
-            page_h = page_dimensions[1] if page_dimensions else None
-            score, diag = score_element_against_instruction(
-                target_description,
-                actual_element_info,
-                page_w=page_w,
-                page_h=page_h,
-                mode="click",
-                interpretation_mode="semantic",
-            )
-            diag_parts: List[str] = [f"score={score}"]
-            if diag.get('role_match'):
-                diag_parts.append('role match')
-            if diag.get('purpose_score'):
-                diag_parts.append(f"purpose={diag['purpose_score']}")
-            if diag.get('matched_terms'):
-                diag_parts.append(f"terms={','.join(diag['matched_terms'])}")
-            acc_name = diag.get('accessible_name')
-            if acc_name:
-                diag_parts.append(f"name='{acc_name[:60]}'")
-            diag_reason = "; ".join(diag_parts)
-
         try:
             print(f"[GoalFramework] Evaluating element match: {actual_description} vs {target_description}")
+            
+            # Enhanced system prompt with element context
+            element_context = ""
+            if actual_element_info:
+                element_context = f"""
+                Element details:
+                - Type: {actual_element_info.get('elementType', 'unknown')}
+                - Text: {actual_element_info.get('text', '')[:100]}
+                - Clickable: {actual_element_info.get('isClickable', False)}
+                - Attributes: {str(actual_element_info.get('attributes', {}))[:200]}
+                """
+            
             system_prompt = f"""
             You are evaluating whether a clicked UI element matches the user's intent.
 
             User wanted to click: "{target_description}"
             Actually clicked: "{actual_description}"
-            Actually clicked element info: "{actual_element_info}"
+            {element_context}
 
             Determine if these match semantically. Consider:
             - Synonyms and similar terms (e.g., "button" vs "btn", "link" vs "anchor")
             - Partial matches (e.g., "first link" could match "navigation link")
             - Context and intent (e.g., "submit" could match "submit button" or "send button")
+            - Element functionality and purpose
 
             Provide your evaluation with confidence and reasoning.
             """
@@ -640,23 +634,11 @@ class ClickGoal(BaseGoal):
                 reasoning_level="medium"
             )
 
-            payload = result.model_dump()
-            if diag is not None:
-                payload.setdefault('vision_score', score)
-                payload.setdefault('vision_diagnostics', diag)
-                if diag_reason:
-                    payload['reasoning'] = f"{payload['reasoning']} | Vision: {diag_reason}"
-            return payload
+            return result.model_dump()
 
-        except Exception:
-            print("AI evaluation failed, falling back to simple matching")
-            result = self._simple_string_match(actual_description, target_description)
-            if diag is not None:
-                result.setdefault('vision_score', score)
-                result.setdefault('vision_diagnostics', diag)
-                if diag_reason:
-                    result['reasoning'] = f"{result['reasoning']} | Vision: {diag_reason}"
-            return result
+        except Exception as e:
+            print(f"AI evaluation failed: {e}, falling back to simple matching")
+            return self._simple_string_match(actual_description, target_description)
     
     def _simple_string_match(self, actual: str, target: str) -> Dict[str, Any]:
         """Simple fallback matching when AI is not available"""

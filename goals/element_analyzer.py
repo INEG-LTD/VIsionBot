@@ -13,6 +13,7 @@ class ElementAnalyzer:
     
     def __init__(self, page: Page):
         self.page = page
+        self._description_cache = {}  # Cache for AI-generated descriptions
     
     def analyze_element_at_coordinates(self, x: int, y: int) -> dict:
         """
@@ -81,19 +82,17 @@ class ElementAnalyzer:
                         elementType = `${tagName}[role=${role}]`;
                     }
 
-                    // Clickable heuristic (kept simple to match your shape)
-                    function isClickableEl(el, tg, rl, ty, st){
-                        if (!el) return false;
-                        if (tg === 'button' || tg === 'a') return true;
-                        if (tg === 'input' && ['button','submit','checkbox','radio'].includes(ty)) return true;
-                        if (rl === 'button' || rl === 'link') return true;
-                        if (st.cursor === 'pointer') return true;
-                        if (typeof el.onclick === 'function') return true;
-                        if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
-                        return false;
-                    }
-
-                    const isClickable = isClickableEl(element, tagName, role, type, style);
+                    // Use browser's native clickability detection
+                    const isClickable = (
+                        element.clickable || 
+                        element.tagName === 'BUTTON' || 
+                        element.tagName === 'A' ||
+                        (element.tagName === 'INPUT' && ['button','submit','checkbox','radio'].includes(type)) ||
+                        role === 'button' || 
+                        role === 'link' ||
+                        style.cursor === 'pointer' ||
+                        (element.hasAttribute('tabindex') && element.getAttribute('tabindex') !== '-1')
+                    );
 
                     return {
                         tagName,
@@ -145,17 +144,17 @@ class ElementAnalyzer:
                     for (const attr of element.attributes) {
                         attributes[attr.name] = attr.value;
                     }
-                    function isClickableEl(el, tg, rl, ty, st){
-                        if (!el) return false;
-                        if (tg === 'button' || tg === 'a') return true;
-                        if (tg === 'input' && ['button','submit','checkbox','radio'].includes(ty)) return true;
-                        if (rl === 'button' || rl === 'link') return true;
-                        if (st.cursor === 'pointer') return true;
-                        if (typeof el.onclick === 'function') return true;
-                        if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
-                        return false;
-                    }
-                    const isClickable = isClickableEl(element, tagName, role, type, style);
+                    // Use browser's native clickability detection
+                    const isClickable = (
+                        element.clickable || 
+                        element.tagName === 'BUTTON' || 
+                        element.tagName === 'A' ||
+                        (element.tagName === 'INPUT' && ['button','submit','checkbox','radio'].includes(type)) ||
+                        role === 'button' || 
+                        role === 'link' ||
+                        style.cursor === 'pointer' ||
+                        (element.hasAttribute('tabindex') && element.getAttribute('tabindex') !== '-1')
+                    );
                     return {
                         tagName,
                         elementType: role ? `${tagName}[role=${role}]` : (tagName === 'input' ? `${tagName}[${type || 'text'}]` : tagName),
@@ -180,8 +179,17 @@ class ElementAnalyzer:
         """
         Use AI to generate a natural description of the element.
         This helps with matching user intent to actual elements.
+        Uses caching to avoid duplicate AI calls for the same element.
         """
         try:
+            # Create cache key based on element properties and coordinates
+            cache_key = f"{x}_{y}_{hash(str(element_info.get('elementType', '')))}_{hash(str(element_info.get('text', ''))[:50])}"
+            
+            # Check cache first
+            if cache_key in self._description_cache:
+                print(f"[ElementAnalyzer] Using cached description for element at ({x}, {y})")
+                return self._description_cache[cache_key]
+            
             # Create a focused prompt about the specific element
             element_summary = f"""
             Element at coordinates ({x}, {y}):
@@ -211,18 +219,19 @@ class ElementAnalyzer:
                 reasoning_level="medium",
                 # image=screenshot
             )
-            print(f"[GoalFramework] Element description with AI: {description}")
+            description_str = str(description).strip()
             
-            return str(description).strip()
+            # Cache the result
+            self._description_cache[cache_key] = description_str
+            print(f"[GoalFramework] Element description with AI: {description_str}")
+            
+            return description_str
             
         except Exception as e:
             print(f"[ElementAnalyzer] Error in get_element_description_with_ai: {e}")
             # Fallback to basic description
             element_type = element_info.get('elementType', 'element')
             text = element_info.get('text', '')[:50]
-            print(f"[GoalFramework] Element description with fallback: {element_type} containing '{text}'")
-            if text:
-                return f"{element_type} containing '{text}'"
-            else:
-                print(f"[GoalFramework] Element description with fallback: {element_type}")
-                return element_type
+            fallback_desc = f"{element_type} containing '{text}'" if text else element_type
+            print(f"[GoalFramework] Element description with fallback: {fallback_desc}")
+            return fallback_desc

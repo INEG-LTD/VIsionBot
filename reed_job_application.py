@@ -36,10 +36,10 @@ bot.register_prompts([
         command_id="click_ios_job_action")
 
 # If cookie banner is visible, click the button to accept cookies
-# bot.on_new_page_load(["if: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
-# sign_in_without_password_commands(bot)
+bot.on_new_page_load(["if: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
+sign_in_without_password_commands(bot)
 
-bot.act("defer")
+# bot.act("defer")
 
 # Apply to all available jobs, then click pagination
 # bot.act("while: not at bottom of the page do: ref: click_ios_job_action")
