@@ -112,7 +112,6 @@ class TargetResolver:
                 model_object_type=IterationTargetsResponse,
                 system_prompt=system_prompt,
                 image=screenshot,
-                model="gpt-5-nano",
                 reasoning_level="medium"
             )
             
@@ -369,7 +368,6 @@ class TargetResolver:
                 model_object_type=TargetValidationResponse,
                 system_prompt=system_prompt,
                 image=screenshot,
-                model="gpt-5-nano",
                 reasoning_level="low"
             )
             

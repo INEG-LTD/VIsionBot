@@ -637,7 +637,6 @@ class ClickGoal(BaseGoal):
                 prompt="Evaluate if the clicked element matches the target description.",
                 model_object_type=ElementMatchEvaluation,
                 system_prompt=system_prompt,
-                model="gpt-5-mini",
                 reasoning_level="medium"
             )
 

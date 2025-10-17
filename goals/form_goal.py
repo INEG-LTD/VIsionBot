@@ -250,7 +250,6 @@ class FormFillGoal(BaseGoal):
                 model_object_type=FieldRelevance,
                 reasoning_level="medium",
                 system_prompt=system_prompt,
-                model="gpt-5-nano"
             )
             
             if result and result.relevant_field_indices:

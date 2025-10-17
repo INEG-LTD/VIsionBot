@@ -65,7 +65,6 @@ def run_tests(base_url: str = "http://127.0.0.1:5001", headless: bool = False, o
         # Initialize the simplified VisionBot
         bot = BrowserVisionBot(
             page=page,
-            model_name="gemini-2.5-flash-lite",
             max_attempts=5
         )
         
@@ -289,7 +288,6 @@ def test_new_action_types(base_url: str = "http://127.0.0.1:5001", headless: boo
         # Initialize the VisionBot
         bot = BrowserVisionBot(
             page=page,
-            model_name="gemini-2.5-flash-lite",
             max_attempts=3
         )
         

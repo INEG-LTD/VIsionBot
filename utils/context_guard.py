@@ -101,7 +101,7 @@ class ContextGuard:
             "Does the highlighted region satisfy the required surrounding context?"
         )
 
-        answer = answer_question_with_vision(question, screenshot, model="gpt-5-mini")
+        answer = answer_question_with_vision(question, screenshot)
         if answer is None:
             reason = "Vision model returned no decision"
             decision = GuardDecision(False, reason=reason)

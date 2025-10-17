@@ -439,7 +439,6 @@ class NavigationGoal(BaseGoal):
                 prompt="Analyze this webpage screenshot and determine if it matches the user's navigation intent.",
                 model_object_type=NavigationAnalysis,
                 system_prompt=system_prompt,
-                model="gpt-5-mini",
                 image=screenshot,
                 reasoning_level="medium"
             )

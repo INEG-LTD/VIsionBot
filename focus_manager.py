@@ -48,11 +48,12 @@ class FocusedElement:
 class FocusManager:
     """Focus manager using hybrid vision + DOM approach"""
     
-    def __init__(self, page: Page, page_utils: PageUtils, deduper: Optional[InteractionDeduper] = None):
+    def __init__(self, page: Page, page_utils: PageUtils, deduper: Optional[InteractionDeduper] = None, action_executor=None):
         self.page = page
         self.page_utils = page_utils
         self.overlay_manager = OverlayManager(page)
         self.deduper = deduper or InteractionDeduper()
+        self.action_executor = action_executor  # For scroll tracking
 
         # Focus state
         self.focus_stack: List[FocusedElement] = []
@@ -353,7 +354,6 @@ class FocusManager:
                 prompt=prompt,
                 reasoning_level="medium",
                 system_prompt="You are a UI element selection expert. Select element indices that best match the user's intent. Return only a JSON array of integers or empty array for no-focus.",
-                model="gpt-5-mini",
                 image=screenshot
             )
             
@@ -383,7 +383,11 @@ class FocusManager:
                     print("⚠️ Repeated duplicate selections detected, scrolling to break loop")
                     try:
                         if self.page_utils:
-                            self.page_utils.scroll_page()
+                            from action_executor import ScrollReason
+                            self.page_utils.scroll_page(
+                                reason=ScrollReason.DUPLICATE_REJECTION,
+                                action_executor=self.action_executor
+                            )
                     except Exception as scroll_error:
                         print(f"⚠️ Failed to scroll during duplicate loop break: {scroll_error}")
                     finally:

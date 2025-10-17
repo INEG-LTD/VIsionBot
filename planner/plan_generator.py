@@ -102,7 +102,6 @@ class PlanGenerator:
                 model_object_type=VisionPlan,
                 reasoning_level="medium",
                 system_prompt=system_prompt,
-                model="gpt-5-mini",
                 image=screenshot,
             )
             return plan
@@ -235,7 +234,6 @@ class PlanGenerator:
                 model_object_type=VisionPlan,
                 reasoning_level="medium",
                 system_prompt=system_prompt,
-                model="gpt-5-mini",
                 image=screenshot_with_overlays,
             )
             if plan and plan.action_steps:
@@ -558,7 +556,6 @@ class PlanGenerator:
                 prompt=prompt,
                 model_object_type=OverlaySelection,
                 reasoning_level="medium",
-                model="gpt-5-mini",
             )
         except Exception as e:
             print(f"[PlanGen][NL] LLM selection error: {e}")

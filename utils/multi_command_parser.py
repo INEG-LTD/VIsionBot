@@ -148,7 +148,6 @@ def _ai_parse_commands(prompt: str) -> List[str]:
             prompt=f"Parse these commands: {prompt}",
             system_prompt=system_prompt,
             reasoning_level="medium",
-            model="gpt-5-nano"
         )
         
         if not response:

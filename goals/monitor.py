@@ -278,37 +278,35 @@ class GoalMonitor:
         result = None
         
         if self.active_goal:
-            # Use the last evaluation if it exists, otherwise evaluate now
-            if self.active_goal._last_evaluation:
+            # For CONTINUOUS goals, always evaluate (don't use cache)
+            if self.active_goal.EVALUATION_TIMING == EvaluationTiming.CONTINUOUS:
+                try:
+                    context = self._build_goal_context()
+                    result = self.active_goal.evaluate(context)
+                    self.active_goal._last_evaluation = result
+                    
+                    # Check if this goal requested a retry during evaluation
+                    if self.active_goal.retry_requested:
+                        print(f"[GoalMonitor] Goal {self.active_goal} requested retry during continuous evaluation")
+                        
+                except Exception as e:
+                    error_result = GoalResult(
+                        status=GoalStatus.UNKNOWN,
+                        confidence=0.0,
+                        reasoning=f"Error evaluating goal: {e}",
+                        evidence={"error": str(e)}
+                    )
+                    result = error_result
+            # Use the last evaluation if it exists for non-CONTINUOUS goals
+            elif self.active_goal._last_evaluation:
                 result = self.active_goal._last_evaluation
             else:
-                # For CONTINUOUS goals, evaluate now
-                if self.active_goal.EVALUATION_TIMING == EvaluationTiming.CONTINUOUS:
-                    try:
-                        context = self._build_goal_context()
-                        result = self.active_goal.evaluate(context)
-                        self.active_goal._last_evaluation = result
-                        result = result
-                        
-                        # Check if this goal requested a retry during evaluation
-                        if self.active_goal.retry_requested:
-                            print(f"[GoalMonitor] Goal {self.active_goal} requested retry during continuous evaluation")
-                            
-                    except Exception as e:
-                        error_result = GoalResult(
-                            status=GoalStatus.UNKNOWN,
-                            confidence=0.0,
-                            reasoning=f"Error evaluating goal: {e}",
-                            evidence={"error": str(e)}
-                        )
-                        result = error_result
-                else:
-                    # For BEFORE/AFTER goals, return pending if no evaluation yet
-                    result = GoalResult(
-                        status=GoalStatus.PENDING,
-                        confidence=1.0,
-                        reasoning=f"Goal with {self.active_goal.EVALUATION_TIMING} timing waiting for appropriate evaluation trigger"
-                    )
+                # For BEFORE/AFTER goals, return pending if no evaluation yet
+                result = GoalResult(
+                    status=GoalStatus.PENDING,
+                    confidence=1.0,
+                    reasoning=f"Goal with {self.active_goal.EVALUATION_TIMING} timing waiting for appropriate evaluation trigger"
+                )
         
         return result
     

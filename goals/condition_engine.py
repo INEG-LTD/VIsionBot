@@ -22,7 +22,7 @@ import re
 from playwright.sync_api import Page
 
 from .base import Condition, GoalContext, create_environment_condition
-from ai_utils import generate_text, rewrite_condition_to_question, answer_question_with_vision
+from ai_utils import generate_text, rewrite_condition_to_question, answer_question_with_vision, get_default_model
 from utils.page_utils import PageUtils
 from element_detection.overlay_manager import OverlayManager
 from element_detection.element_detector import ElementDetector
@@ -241,7 +241,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just the current hour as a number between 0-23.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             if result:
@@ -268,7 +267,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just the current minute as a number between 0-59.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             if result:
@@ -295,7 +293,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekday.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             if result:
@@ -322,7 +319,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekend.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             if result:
@@ -363,7 +359,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="Extract the URL from the page information. Return only the URL.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             url = str(result or "").strip()
@@ -397,7 +392,6 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="Extract the page title from the page information. Return only the title.",
                 reasoning_level="low",
-                model="gpt-5-mini"
             )
             
             title = str(result or "").strip()
@@ -1024,7 +1018,7 @@ class ConditionEngine:
                 pass
             screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
 
-            det = ElementDetector(model_name="gemini-2.5-flash-lite")
+            det = ElementDetector(model_name=get_default_model())
             goal_desc = f"Find a visible button for label '{label}'"
             result = det.detect_elements_with_overlays(
                 goal_description=goal_desc,
@@ -1337,7 +1331,7 @@ class ConditionEngine:
                 prompt=prompt,
                 system_prompt="Answer with strict JSON only as {\"visible\": true|false}.",
                 reasoning_level="medium",
-                model="gpt-5-mini",
+
             )
             try:
                 parsed = _json.loads((result or "").strip())
@@ -1449,7 +1443,7 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
     )
     prompt = f"Condition: {condition_text}\nReturn only the JSON expression."
     try:
-        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system, reasoning_level="medium", model="gpt-5-mini")
+        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system, reasoning_level="medium")
         if not out:
             return None
         # Extract JSON

@@ -64,6 +64,7 @@ from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
+from ai_utils import set_default_model
 
 
 class BrowserVisionBot:
@@ -72,7 +73,7 @@ class BrowserVisionBot:
     def __init__(
         self,
         page: Page = None,
-        model_name: str = "gemini-2.0-flash",
+        model_name: str = "gpt-5-mini",
         max_attempts: int = 10,
         max_detailed_elements: int = 400,
         include_detailed_elements: bool = True,
@@ -83,6 +84,8 @@ class BrowserVisionBot:
     ):
         self.page = page
         self.model_name = model_name
+        # Set the centralized model configuration
+        set_default_model(model_name)
         self.max_attempts = max_attempts
         self.started = False
         # Controls for how much element detail to include in planning prompts
@@ -213,6 +216,10 @@ class BrowserVisionBot:
         
         # Initialize action executor with deduper, GIF recorder, and command ledger
         self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
+        
+        # Set action_executor on focus_manager for scroll tracking
+        self.focus_manager.action_executor = self.action_executor
+        
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
@@ -649,6 +656,7 @@ class BrowserVisionBot:
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
         command_id: Optional[str] = None,
+        **kwargs
     ) -> bool:
         """
         Main method to achieve a goal using vision-based automation
@@ -730,13 +738,17 @@ class BrowserVisionBot:
             self.goal_monitor.set_user_prompt(goal_description)
             
             # Set up smart goal monitoring if enabled
+            # Store kwargs temporarily for goal creation
+            self._temp_goal_kwargs = kwargs
             goal, transformed_goal_description = self._create_goal_from_description(goal_description)
+            self._temp_goal_kwargs = {}
 
             if isinstance(goal, WhileGoal):
                 return self._execute_while_loop(goal, start_time)
             
             if isinstance(goal, ForGoal):
                 return self._execute_for_loop(goal, start_time, parent_command_id=command_id)
+            
 
             if goal:
                 goal_description = transformed_goal_description
@@ -838,14 +850,34 @@ class BrowserVisionBot:
                     print("⚠️ Using fallback DOM signature (evaluation failed)")
                 sig_hash = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
                 
+                # Check if a small passive scroll occurred
+                is_small_scroll = self.page_utils.is_small_passive_scroll(
+                    page_info.scroll_y, page_info.scroll_x
+                )
+                
                 # Skip if DOM signature hasn't changed and no retry requested
                 retry_goal = self.goal_monitor.check_for_retry_request()
                 if sig_hash == self.last_dom_signature and not retry_goal:
                     print("⚠️ Same DOM signature as last attempt, scrolling to break loop")
                     print(f"   🔍 DOM signature: {sig_hash[:8]}...")
-                    print(f"   📊 Previous interactions count: {len(self.interaction_deduper.interactions) if hasattr(self, 'interaction_deduper') else 'unknown'}")
+                    print(f"   📊 Previous interactions count: {len(self.deduper.interacted_elements) if hasattr(self, 'deduper') and self.deduper else 'unknown'}")
                     print("   🎯 Reason: Page hasn't changed but goal needs new elements (likely due to deduplication)")
-                    self.page_utils.scroll_page()
+                    from action_executor import ScrollReason
+                    self.page_utils.scroll_page(
+                        reason=ScrollReason.DOM_UNCHANGED,
+                        action_executor=self.action_executor
+                    )
+                    continue
+                elif is_small_scroll:
+                    # # Small passive scroll detected - trigger intentional scroll to force DOM change
+                    # print("⚠️ Small passive scroll detected (< 100px), triggering intentional scroll")
+                    # print("   📏 Passive scroll amount detected")
+                    # print("   🎯 Forcing intentional scroll to ensure DOM signature changes")
+                    # from action_executor import ScrollReason
+                    # self.page_utils.scroll_page(
+                    #     reason=ScrollReason.DOM_UNCHANGED,
+                    #     action_executor=self.action_executor
+                    # )
                     continue
                 elif sig_hash == self.last_dom_signature and retry_goal:
                     print("🔄 Same DOM but retry requested - proceeding with retry attempt")
@@ -933,7 +965,11 @@ class BrowserVisionBot:
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
                     # to explore more of the page instead of waiting for duplicate screenshots
                     print("📜 Plan executed successfully, scrolling down to explore more content")
-                    self.page_utils.scroll_page()
+                    from action_executor import ScrollReason
+                    self.page_utils.scroll_page(
+                        reason=ScrollReason.EXPLORE_CONTENT,
+                        action_executor=self.action_executor
+                    )
                     continue
                 else:
                     # Plan execution failed - check if it was due to retry request
@@ -1679,46 +1715,67 @@ class BrowserVisionBot:
             self.goal_monitor.reset_retry_request()
 
     def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str]) -> Optional[IfGoal]:
-        """Create IfGoal from explicit parts - currently not implemented, use direct evaluation."""
+        """Create IfGoal from explicit parts."""
         try:
-            # TODO: Implement vision-based IfGoal with simple question API
-            # For now, we'll evaluate the condition directly and return the action
-            print(f"⚠️ Vision-based IfGoal not fully implemented, falling back to direct evaluation")
-            return None
+            from goals.condition_engine import compile_nl_to_expr, create_predicate_condition as _create_predicate
+            expr = compile_nl_to_expr(condition_text)
+            if not expr:
+                return None
+            condition = _create_predicate(expr, f"Predicate: {condition_text}")
+
+            print(f"Success text: '{success_text}'")
+            
+            # Handle reference commands differently - don't create goals for them
+            if success_text.strip().lower().startswith("ref:"):
+                # Create a simple placeholder goal for reference commands
+                from goals.base import BaseGoal
+                class RefPlaceholderGoal(BaseGoal):
+                    def __init__(self, description: str):
+                        super().__init__(description)
+                    def evaluate(self, context):
+                        return None  # Will be handled by _evaluate_if_goal
+                    def get_description(self, context):
+                        return self.description
+                success_goal = RefPlaceholderGoal(success_text)
+            else:
+                success_goal, _ = self._create_goal_from_description(success_text)
+                if not success_goal:
+                    return None
+            
+            print(f"🔀 Created success goal: '{success_goal.description}'")
+            
+            if fail_text and fail_text.strip():
+                if fail_text.strip().lower().startswith("ref:"):
+                    # Create a simple placeholder goal for reference commands
+                    from goals.base import BaseGoal
+                    class RefPlaceholderGoal(BaseGoal):
+                        def __init__(self, description: str):
+                            super().__init__(description)
+                        def evaluate(self, context):
+                            return None  # Will be handled by _evaluate_if_goal
+                        def get_description(self, context):
+                            return self.description
+                    fail_goal = RefPlaceholderGoal(fail_text)
+                else:
+                    fail_goal, _ = self._create_goal_from_description(fail_text)
+            else:
+                fail_goal = None
+
+            fail_desc = fail_goal.description if fail_goal else "(no fail action)"
+            if_goal = IfGoal(
+                condition,
+                success_goal,
+                fail_goal,
+                description=f"If {condition_text} then {success_goal.description} else {fail_desc}"
+            )
+            return if_goal
         except Exception as e:
-            print(f"⚠️ Error creating IfGoal: {e}")
+            print(f"⚠️ Error creating structured IfGoal: {e}")
             return None
-    
-    def _convert_condition_to_question(self, condition_text: str) -> str:
-        """Convert condition text to a yes/no question for vision."""
-        # Simple conversion - make it more natural for vision
-        condition_lower = condition_text.lower()
-        
-        # Common patterns
-        if "is visible" in condition_lower or "visible" in condition_lower:
-            # "a button is visible" -> "Is a button visible?"
-            if not condition_text.endswith("?"):
-                return f"Is {condition_text}?"
-            return condition_text
-        
-        elif "contains" in condition_lower or "has" in condition_lower:
-            # "page contains login" -> "Does the page contain login?"
-            if not condition_text.startswith("does"):
-                return f"Does {condition_text}?"
-            return condition_text
-        
-        elif "on " in condition_lower and ("page" in condition_lower or "site" in condition_lower):
-            # "on login page" -> "Are we on the login page?"
-            return f"Are we {condition_text}?"
-        
-        else:
-            # Default: just add "Is" at the beginning and "?" at the end
-            if not condition_text.endswith("?"):
-                return f"Is {condition_text}?"
-            return condition_text
+
 
     def _evaluate_if_goal(self, if_goal: IfGoal) -> tuple[Optional[BaseGoal], str]:
-        """Evaluate an IfGoal immediately and return the action to execute"""
+        """Evaluate a conditional goal immediately and return the active sub-goal and updated description"""
         try:
             # Create a basic context for evaluation
             from goals.base import GoalContext, BrowserState
@@ -1738,22 +1795,26 @@ class BrowserVisionBot:
                 page_reference=self.page
             )
             
-            # Evaluate the IfGoal
-            result = if_goal.evaluate(basic_context)
+            # Evaluate the condition first
+            if_goal.evaluate(basic_context)
             
-            if result.status == GoalStatus.PENDING and result.next_actions:
-                # Return the action to execute
-                action = result.next_actions[0]
-                print(f"🔀 IfGoal resolved to action: {action}")
-                return None, action
-            elif result.status == GoalStatus.ACHIEVED:
-                # No action needed
-                print(f"🔀 IfGoal: {result.reasoning}")
-                return None, ""
-            else:
-                # Failed or other status
-                print(f"🔀 IfGoal failed: {result.reasoning}")
-                return None, ""
+            if if_goal._last_condition_result:
+                success_goal = if_goal.success_goal
+                # If the success branch is a reference command, defer execution to act()
+                if hasattr(success_goal, 'description') and success_goal.description.strip().lower().startswith('ref:'):
+                    print(f"🔀 Success branch resolved to reference command: {success_goal.description} (execution deferred)")
+                    return None, success_goal.description
+                return success_goal, getattr(success_goal, 'description', '')
+
+            if if_goal.fail_goal:
+                fail_goal = if_goal.fail_goal
+                # If the fail branch is a reference command, defer execution to act()
+                if hasattr(fail_goal, 'description') and fail_goal.description.strip().lower().startswith('ref:'):
+                    print(f"🔀 Fail branch resolved to reference command: {fail_goal.description} (execution deferred)")
+                    return None, fail_goal.description
+                return fail_goal, fail_goal.description
+
+            return None, ""
                 
         except Exception as e:
             print(f"⚠️ Error evaluating IfGoal: {e}")

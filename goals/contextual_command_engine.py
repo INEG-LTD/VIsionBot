@@ -138,7 +138,6 @@ class ContextualCommandEngine:
                     model_object_type=CommandRewriteResponse,
                     system_prompt=system_prompt,
                     image=screenshot,
-                    model="gpt-5-nano",
                     reasoning_level="medium"
                 )
                 return response.rewritten_command
@@ -147,7 +146,6 @@ class ContextualCommandEngine:
                 response = generate_text(
                     prompt=prompt,
                     system_prompt=system_prompt,
-                    model="gpt-5-nano",
                     reasoning_level="medium"
                 )
                 return response.strip()
