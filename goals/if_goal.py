@@ -74,10 +74,27 @@ class IfGoal(ConditionalGoal):
         self.route = route
         self.condition_text = condition_text
         self._condition_cache: Dict[str, Any] = {}  # Cache for converted conditions
+        self._screenshot_cache: Dict[str, bytes] = {}  # Cache for screenshots
 
     def set_goal_monitor(self, goal_monitor) -> None:
         """Set the goal monitor reference."""
         self.goal_monitor = goal_monitor
+
+    def _get_cached_screenshot(self, context) -> bytes:
+        """Cache screenshots to avoid repeated generation"""
+        cache_key = f"screenshot::{context.current_state.url}_{context.current_state.timestamp}"
+        if cache_key not in self._screenshot_cache:
+            page = context.page_reference
+            if page:
+                self._screenshot_cache[cache_key] = page.screenshot(type="jpeg", quality=50, full_page=False)
+            else:
+                return None
+        return self._screenshot_cache[cache_key]
+
+    def _handle_condition_error(self, route: str, error: Exception) -> bool:
+        """Centralized error handling for both routes"""
+        print(f"[IfGoal] {route.title()} condition error: {error}")
+        return False
 
     def _create_condition(self, condition_text: str, route: str) -> Condition:
         """Create condition based on specified route"""
@@ -96,23 +113,24 @@ class IfGoal(ConditionalGoal):
                 if not page:
                     return False
                 
-                # Take screenshot
-                screenshot = page.screenshot(type="jpeg", quality=50, full_page=False)
+                # Use cached screenshot
+                screenshot = self._get_cached_screenshot(context)
+                if not screenshot:
+                    return False
                 
-                # Convert condition to vision question (with caching)
-                question = self._convert_to_vision_question(condition_text)
-                
-                # Use vision model to answer
+                # Single AI call combining question conversion and vision analysis
                 from ai_utils import answer_question_with_vision
-                result = answer_question_with_vision(question, screenshot)
+                result = answer_question_with_vision(
+                    f"Is {condition_text}? Answer yes or no.", 
+                    screenshot
+                )
                 
                 # Parse result
                 answer = str(result or "").lower().strip()
                 return answer in ['yes', 'true', '1']
                 
             except Exception as e:
-                print(f"[IfGoal] Vision condition error: {e}")
-                return False
+                return self._handle_condition_error("vision", e)
         
         return create_environment_condition(
             f"Vision condition: {condition_text}",
@@ -120,68 +138,70 @@ class IfGoal(ConditionalGoal):
         )
 
     def _create_page_condition(self, condition_text: str) -> Condition:
-        """Create page-based condition using condition engine"""
+        """Create page-based condition with simplified evaluation"""
         def evaluator(context) -> bool:
             try:
-                # Convert natural language to JSON DSL (with caching)
-                expr = self._convert_to_page_expression(condition_text)
-                if not expr:
-                    print(f"[IfGoal] Failed to convert condition to page expression: {condition_text}")
+                page = context.page_reference
+                if not page:
                     return False
                 
-                # Use condition engine to evaluate
-                from goals.condition_engine import get_default_engine
-                engine = get_default_engine()
-                outcome = engine.evaluate(expr, context)
-                return outcome.value
+                # Use simple text-based evaluation instead of complex condition engine
+                return self._evaluate_simple_condition(condition_text, page)
                 
             except Exception as e:
-                print(f"[IfGoal] Page condition error: {e}")
-                return False
+                return self._handle_condition_error("page", e)
         
         return create_environment_condition(
             f"Page condition: {condition_text}",
             evaluator
         )
 
-    def _convert_to_vision_question(self, condition_text: str) -> str:
-        """Convert natural language condition to vision question (with caching)"""
-        cache_key = f"vision_question::{condition_text}"
-        if cache_key in self._condition_cache:
-            return self._condition_cache[cache_key]
-        
-        from ai_utils import generate_text
-        
-        prompt = f"""
-        Convert this condition into a yes/no question that can be answered by looking at a screenshot:
-        
-        Condition: {condition_text}
-        
-        Return only the question, no explanation.
-        """
-        
-        result = generate_text(
-            prompt=prompt,
-            system_prompt="Convert conditions to yes/no questions for vision analysis.",
-            reasoning_level="low"
-        )
-        
-        question = str(result or condition_text).strip()
-        self._condition_cache[cache_key] = question
-        return question
+    def _evaluate_simple_condition(self, condition_text: str, page) -> bool:
+        """Simple text-based condition evaluation without complex condition engine"""
+        try:
+            # Get page content for text-based evaluation
+            page_content = page.content()
+            page_title = page.title()
+            page_url = page.url
+            
+            # Convert condition to lowercase for matching
+            condition_lower = condition_text.lower()
+            
+            # Simple text-based checks
+            if "visible" in condition_lower or "appears" in condition_lower:
+                # Check if text appears on page
+                search_text = condition_text.replace("visible", "").replace("appears", "").strip()
+                return search_text.lower() in page_content.lower()
+            
+            elif "contains" in condition_lower or "has" in condition_lower:
+                # Check if page contains specific text
+                search_text = condition_text.replace("contains", "").replace("has", "").strip()
+                return search_text.lower() in page_content.lower()
+            
+            elif "url" in condition_lower:
+                # Check URL-based conditions
+                if "login" in condition_lower:
+                    return "login" in page_url.lower()
+                elif "dashboard" in condition_lower:
+                    return "dashboard" in page_url.lower()
+                else:
+                    # Generic URL check
+                    search_text = condition_text.replace("url", "").strip()
+                    return search_text.lower() in page_url.lower()
+            
+            elif "title" in condition_lower:
+                # Check title-based conditions
+                search_text = condition_text.replace("title", "").strip()
+                return search_text.lower() in page_title.lower()
+            
+            else:
+                # Default: check if condition text appears anywhere on page
+                return condition_text.lower() in page_content.lower()
+                
+        except Exception as e:
+            print(f"[IfGoal] Simple condition evaluation error: {e}")
+            return False
 
-    def _convert_to_page_expression(self, condition_text: str) -> Optional[JsonExpr]:
-        """Convert natural language condition to JSON DSL expression (with caching)"""
-        cache_key = f"page_expression::{condition_text}"
-        if cache_key in self._condition_cache:
-            return self._condition_cache[cache_key]
-        
-        from goals.condition_engine import compile_nl_to_expr
-        
-        expr = compile_nl_to_expr(condition_text)
-        if expr:
-            self._condition_cache[cache_key] = expr
-        return expr
     
     def evaluate(self, context) -> GoalResult:
         """
