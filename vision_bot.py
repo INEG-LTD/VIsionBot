@@ -2088,7 +2088,15 @@ class BrowserVisionBot:
                         print(f"   ✅ Stored command {i} succeeded")
                     else:
                         print(f"   ❌ Stored command {i} failed")
+                        
+                        # If all_must_be_true is True and this command failed, abort immediately
+                        if all_must_be_true:
+                            print("🛑 Aborting execution due to failure (all_must_be_true=True)")
+                            summary_mode = "ALL must succeed"
+                            print(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → ❌ False (aborted after command {i})")
+                            return False
 
+                # If we get here, either all_must_be_true=False or all commands succeeded
                 final_result = all(results) if all_must_be_true else any(results)
                 summary_mode = "ALL must succeed" if all_must_be_true else "ANY success suffices"
                 print(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → {'✅ True' if final_result else '❌ False'}")
