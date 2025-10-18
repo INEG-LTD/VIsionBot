@@ -1,7 +1,7 @@
 from vision_bot import BrowserVisionBot
 
 # Initialize bot with GIF recording enabled
-bot = BrowserVisionBot(save_gif=True)
+bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano")
 bot.start()
 bot.goto("https://www.reed.co.uk/")
 bot.default_interpretation_mode = "semantic"
@@ -23,32 +23,37 @@ def sign_in_without_password_commands(bot: BrowserVisionBot):
 
 bot.register_prompts([
         "dedup: enable",
-        "click: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')",
+        "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')",
         "dedup: disable",
         "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)",
         "click: the button to submit the application (look for a button like 'Submit' or 'Submit Application' in modal)",
         "press: escape"
 ], "click_ios_job_action",
-        additional_context="look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
+        additional_context="the job listing will be in a card view. also look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
         target_context_guard="only click a job listing if it its card does NOT have an 'Applied' status or an applied tag",
         confirm_before_interaction=True,
         all_must_be_true=False,
         command_id="click_ios_job_action")
 
-# If cookie banner is visible, click the button to accept cookies
-bot.on_new_page_load(["if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
-sign_in_without_password_commands(bot)
+bot.register_prompts([
+        "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+], "click_ios_job_action_loop",
+        additional_context="look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
+        command_id="click_ios_job_action_loop")
 
-# bot.act("defer")
+# If cookie banner is visible, click the button to accept cookies
+bot.act("defer")
+# bot.on_new_page_load(["if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
+# sign_in_without_password_commands(bot)
 
 # Apply to all available jobs, then click pagination
-# bot.act("while: not at bottom of the page do: ref: click_ios_job_action")
+bot.act("while: not at bottom of the page do: ref: click_ios_job_action_loop", modifier=["page"])
 
 # # Scroll to the top of the page
-# bot.act("scroll: to top")
-bot.act("while: pagination control with previous and next buttons is not visible do: scroll: down 200px", additional_context="The pagination control must have a 'Previous' and 'Next' button", modifier=["see"])
+bot.act("scroll: to top")
+bot.act("while: pagination control with previous and next buttons is not visible do: scroll: down 600px", additional_context="The pagination control must have a 'Previous' and 'Next' button", modifier=["see"])
 bot.act("click: the next button in the pagination control", additional_context="The pagination control must have a 'Previous' and 'Next' button")
 # End the bot session (performs cleanup and terminates)
-gif_path = bot.end()
+bot.end()
 
 input("Press enter to continue")

@@ -216,6 +216,10 @@ class ConditionEngine:
         })
 
     def _call_function(self, name: str, args: Dict[str, Any], context: GoalContext, cache: FactCache) -> Any:
+        # Check if this is a page function that should use deterministic evaluation
+        if name.startswith("env.page."):
+            return self._call_page_function(name, args, context, cache)
+        
         fn = self.functions.get(name)
         if not fn:
             raise ValueError(f"Unknown function '{name}'")
@@ -228,6 +232,51 @@ class ConditionEngine:
         except Exception:
             pass
         return result
+    
+    def _call_page_function(self, name: str, args: Dict[str, Any], context: GoalContext, cache: FactCache) -> Any:
+        """Call deterministic page functions instead of AI-based ones."""
+        try:
+            from .page_functions import get_page_function_registry
+            registry = get_page_function_registry()
+            func = registry.get_function(name)
+            
+            if func:
+                page = self._page(context)
+                if not page:
+                    return self._get_fallback_value(name, context)
+                
+                result = func(page, args)
+                cache.add_trace({"call": name, "args": args, "result": result, "method": "javascript"})
+                return result
+            else:
+                # Fallback to original AI-based function if not found in registry
+                fn = self.functions.get(name)
+                if fn:
+                    result = fn({"args": args, "context": context, "cache": cache})
+                    cache.add_trace({"call": name, "args": args, "result": result, "method": "ai_fallback"})
+                    return result
+                else:
+                    raise ValueError(f"Unknown page function '{name}'")
+        except Exception as e:
+            cache.add_trace({"call": name, "args": args, "error": str(e), "method": "error"})
+            return self._get_fallback_value(name, context)
+    
+    def _get_fallback_value(self, name: str, context: GoalContext) -> Any:
+        """Get fallback values for page functions when page is not available."""
+        if name == "env.page.url":
+            return context.current_state.url or ""
+        elif name == "env.page.title":
+            return context.current_state.title or ""
+        elif name in ["env.page.scroll_y", "env.page.scroll_x"]:
+            return 0
+        elif name in ["env.page.viewport_height", "env.page.document_height"]:
+            return int(context.current_state.page_height) if context.current_state.page_height else 0
+        elif name in ["env.page.at_bottom", "env.page.at_top"]:
+            return False
+        elif name == "env.page.scroll_percentage":
+            return 0.0
+        else:
+            return None
 
     # ------------------------- System providers ----------------------------
     def _fn_system_hour(self, p: Dict[str, Any]) -> int:
@@ -1398,9 +1447,13 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
         "DSL operators: and/or/not, ==, !=, >, <, >=, <=, contains, regex, len, between, var, call.\n"
         "Use {\"var\": \"env.page.url\"} to access facts.\n"
         "Available calls (call.name):\n"
-        " - env.page.url, env.page.title, env.page.viewport_text, env.page.full_text (no args) - LLM-based\n"
-        " - env.page.scroll_y(), env.page.viewport_height(), env.page.document_height() - Vision-based\n"
-        " - env.page.at_bottom(threshold=px), env.page.at_top(threshold=px) - Vision-based\n"
+        " - env.page.url, env.page.title (no args) - JavaScript-based\n"
+        " - env.page.scroll_y(), env.page.scroll_x(), env.page.scroll_percentage() - JavaScript-based\n"
+        " - env.page.viewport_width(), env.page.viewport_height(), env.page.viewport_size() - JavaScript-based\n"
+        " - env.page.document_width(), env.page.document_height(), env.page.document_size() - JavaScript-based\n"
+        " - env.page.at_bottom(threshold=px), env.page.at_top(threshold=px) - JavaScript-based\n"
+        " - env.page.can_scroll_down(), env.page.can_scroll_up() - JavaScript-based\n"
+        " - env.page.viewport_text, env.page.full_text (no args) - Vision-based (AI fallback)\n"
         " - dom.exists(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
         " - dom.visible(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
         " - dom.count(description, within=page|viewport) - Vision-based, use natural language descriptions\n"
@@ -1434,11 +1487,17 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
         "{\"call\": {\"name\": \"env.page.at_bottom\"}}\n"
         "9) Not at bottom of the page:\n"
         "{\"not\": {\"call\": {\"name\": \"env.page.at_bottom\", \"args\": {\"threshold\": 120}}}}\n"
-        "10) Next button visible (pagination):\n"
+        "10) Scrolled more than 50% down:\n"
+        "{\">\": [ {\"call\": {\"name\": \"env.page.scroll_percentage\"}}, 0.5 ]}\n"
+        "11) Can scroll down:\n"
+        "{\"call\": {\"name\": \"env.page.can_scroll_down\"}}\n"
+        "12) Viewport is wide enough (>= 1200px):\n"
+        "{\">=\": [ {\"call\": {\"name\": \"env.page.viewport_width\"}}, 1200 ]}\n"
+        "13) Next button visible (pagination):\n"
         "{\"or\": [ {\"call\": {\"name\": \"dom.visible_button\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible_link\", \"args\": {\"label\": \"next\", \"within\": \"viewport\"}}}, {\"call\": {\"name\": \"dom.visible\", \"args\": {\"description\": \"next page button or link\", \"within\": \"viewport\"}}} ]}\n"
-        "11) Can't see exact text (quoted = exact match, unquoted = fuzzy match):\n"
+        "14) Can't see exact text (quoted = exact match, unquoted = fuzzy match):\n"
         "{\"not\": {\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"\\\"Proven L4 Autonomy\\\"\", \"within\": \"viewport\"}}}}\n"
-        "12) Can't see fuzzy text (semantic matching):\n"
+        "15) Can't see fuzzy text (semantic matching):\n"
         "{\"not\": {\"call\": {\"name\": \"ai.is_visible_nl\", \"args\": {\"query\": \"autonomous vehicle technology\", \"within\": \"viewport\"}}}}\n"
     )
     prompt = f"Condition: {condition_text}\nReturn only the JSON expression."

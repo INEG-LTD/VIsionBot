@@ -12835,3 +12835,1581 @@ Log File: bot_automation.log
   "goal_description": "click: the next button in the pagination control"
 }
 [2025-10-17T16:44:04.603022] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 65160.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760725971
+Start Time: 2025-10-17T19:32:51.260384
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:32:53.362097] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:32:53.368797] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:32:57.867042] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:32:57.867513] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726137
+Start Time: 2025-10-17T19:35:37.253132
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:35:38.534575] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:35:38.538424] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:35:41.549331] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:35:41.549798] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726176
+Start Time: 2025-10-17T19:36:16.194792
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:36:17.735763] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:36:17.756583] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:36:24.633598] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:36:24.633964] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726223
+Start Time: 2025-10-17T19:37:03.784052
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:37:05.229044] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:37:05.249008] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:37:09.082945] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:37:09.083586] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726257
+Start Time: 2025-10-17T19:37:37.609396
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:37:38.899527] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:37:38.917803] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:37:45.505693] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:37:45.506789] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726283
+Start Time: 2025-10-17T19:38:03.167684
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:38:04.404244] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:38:04.419184] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:38:10.077047] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:38:10.077479] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726336
+Start Time: 2025-10-17T19:38:56.688896
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:38:58.066844] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:38:58.070752] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:39:02.562050] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:39:02.562777] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726356
+Start Time: 2025-10-17T19:39:16.086605
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:39:17.286729] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:39:17.310355] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:39:24.191390] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:39:24.192115] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726385
+Start Time: 2025-10-17T19:39:45.015123
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:39:46.158380] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:39:46.166890] INFO     GOAL         Starting goal: if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:39:52.430474] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:39:52.430982] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726448
+Start Time: 2025-10-17T19:40:48.541526
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:40:50.028300] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:40:50.049444] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:40:54.352987] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:40:54.353725] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726494
+Start Time: 2025-10-17T19:41:34.406389
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:41:35.747821] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:41:35.778501] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:41:39.731952] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:41:39.732553] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760726576
+Start Time: 2025-10-17T19:42:56.018460
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T19:42:57.518270] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T19:42:57.537116] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T19:43:01.934341] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T19:43:01.934768] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728022
+Start Time: 2025-10-17T20:07:02.977685
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:07:05.128185] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:07:08.135275] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:07:08.139062] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:07:08.139397] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728095
+Start Time: 2025-10-17T20:08:15.095604
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:08:16.434265] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:08:19.439031] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:08:19.441312] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:08:19.441476] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728186
+Start Time: 2025-10-17T20:09:46.645653
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:09:48.473911] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:09:48.481733] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:09:53.479088] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:09:53.479438] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728345
+Start Time: 2025-10-17T20:12:25.425941
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:12:26.658642] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:12:26.658964] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T20:12:26.813337] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T20:12:36.061946] INFO     SYSTEM       Defer pause ended (took 9401.5ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 9.402
+}
+[2025-10-17T20:12:36.062371] SUCCESS  GOAL         Goal completed: defer (took 9403.4ms) ✅
+[2025-10-17T20:12:36.117611] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:13:29.097982] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 52980.4ms) ✅
+[2025-10-17T20:13:29.098375] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:13:29.098441] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728537
+Start Time: 2025-10-17T20:15:37.162857
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:15:38.505849] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:15:38.506211] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T20:15:38.646990] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T20:16:50.157417] INFO     SYSTEM       Defer pause ended (took 71650.3ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 71.65
+}
+[2025-10-17T20:16:50.158267] SUCCESS  GOAL         Goal completed: defer (took 71652.1ms) ✅
+[2025-10-17T20:16:50.222051] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:17:40.357780] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 50135.7ms) ✅
+[2025-10-17T20:17:40.358651] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:17:40.358883] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760728910
+Start Time: 2025-10-17T20:21:50.782700
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T20:21:52.145942] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T20:21:52.146249] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T20:21:52.255081] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T20:23:41.041549] INFO     SYSTEM       Defer pause ended (took 108894.4ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 108.894
+}
+[2025-10-17T20:23:41.042682] SUCCESS  GOAL         Goal completed: defer (took 108896.4ms) ✅
+[2025-10-17T20:23:41.112728] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:24:39.229048] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 58116.3ms) ✅
+[2025-10-17T20:24:39.229677] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T20:24:39.229800] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+[2025-10-17T20:27:05.574821] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 146345.0ms) ✅
+[2025-10-17T20:27:05.575188] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-17T20:27:49.237502] SUCCESS  GOAL         Goal completed: the search jobs button (took 43662.3ms) ✅
+[2025-10-17T20:27:49.237979] INFO     GOAL         Starting goal: if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-17T20:28:33.240196] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 44002.2ms) ✅
+[2025-10-17T20:28:33.245974] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:28:36.178573] INFO     GOAL         Starting goal: if see: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if see: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-17T20:28:40.576914] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-17T20:31:03.466376] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 142889.5ms) ✅
+[2025-10-17T20:31:03.466910] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-17T20:31:57.502418] SUCCESS  GOAL         Goal completed: the sign in without password button (took 54035.5ms) ✅
+[2025-10-17T20:31:57.502978] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T20:31:57.553217] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SBCNExXNmExSHE4NzdIUHVOUkZxTFdRVHBTcWE2NnFXYqFupWxvZ2luo3RpZNkgM2lfUGppU1BOemE5X1ZPSk9NRVNwXzFzdUYzLVdlWS2jY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=UEcwaDFfT1NLbnB5ZmdacURyWS1XNlFYQUlIVHd0S1R6LjRHQW5%2BOUNTVw%3D%3D&code_challenge=FvtMqU2XCVWwQy2L0XworCdYorArQf0kp5kfqzLMzYA&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-17T20:34:33.973098] INFO     SYSTEM       Defer pause ended (took 156469.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 156.47
+}
+[2025-10-17T20:34:33.977223] SUCCESS  GOAL         Goal completed: defer (took 156474.2ms) ✅
+[2025-10-17T20:34:34.105685] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T20:34:37.646499] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 200px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 200px"
+}
+[2025-10-17T20:34:47.478272] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:34:47.479793] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:34:55.791132] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:34:55.791996] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:04.169052] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:04.170630] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:12.874133] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:12.876325] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:20.238821] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:20.239832] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:29.110529] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:29.111688] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:39.477883] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:39.479187] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:48.356988] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:48.359194] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:35:58.033932] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:35:58.035057] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:06.652509] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:06.654422] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:16.978530] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:16.980514] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:24.865912] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:24.866276] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:36.323939] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:36.325359] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:46.368293] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:46.369216] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:36:57.486970] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:36:57.488361] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:05.722471] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:05.722948] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:14.835561] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:14.838053] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:23.948862] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:23.950076] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:35.521043] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:35.522483] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:43.815933] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:43.817112] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:37:53.338784] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:37:53.340544] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:38:01.196832] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:38:01.198951] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:38:10.024853] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:38:10.026542] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:38:31.866626] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:38:31.868718] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:41:46.031363] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:41:46.033623] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:41:55.519187] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:41:55.520252] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:42:03.335916] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:42:03.336296] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:42:12.826156] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:42:12.827038] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:42:21.004064] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-17T20:42:21.004929] INFO     GOAL         Starting goal: scroll: down 200px
+    Details: {
+  "goal_description": "scroll: down 200px"
+}
+[2025-10-17T20:42:34.282000] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-17T20:42:34.284302] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 200px (took 476637.8ms) ✅
+    Details: {
+  "iterations": 29,
+  "outcome": "completed"
+}
+[2025-10-17T20:42:34.284684] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-17T20:43:16.100011] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 41815.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760740332
+Start Time: 2025-10-17T23:32:12.535042
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T23:32:14.629384] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T23:32:14.629790] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T23:32:14.782460] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T23:32:19.563190] INFO     SYSTEM       Defer pause ended (took 4932.2ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 4.932
+}
+[2025-10-17T23:32:19.564230] SUCCESS  GOAL         Goal completed: defer (took 4934.4ms) ✅
+[2025-10-17T23:32:19.635323] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760740404
+Start Time: 2025-10-17T23:33:24.437604
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T23:33:25.793673] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T23:33:25.794149] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T23:33:25.957078] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T23:33:27.987618] INFO     SYSTEM       Defer pause ended (took 2192.2ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 2.192
+}
+[2025-10-17T23:33:27.988296] SUCCESS  GOAL         Goal completed: defer (took 2194.2ms) ✅
+[2025-10-17T23:33:28.062581] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T23:33:28.681425] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T23:33:28.682190] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760740435
+Start Time: 2025-10-17T23:33:55.153252
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-17T23:33:56.425351] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-17T23:33:56.426037] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T23:33:56.599424] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-17T23:33:59.567718] INFO     SYSTEM       Defer pause ended (took 3139.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 3.14
+}
+[2025-10-17T23:33:59.568581] SUCCESS  GOAL         Goal completed: defer (took 3142.6ms) ✅
+[2025-10-17T23:33:59.644950] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T23:34:48.336061] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 48691.1ms) ✅
+[2025-10-17T23:34:48.337567] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-17T23:34:48.337744] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+[2025-10-17T23:36:46.473593] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 118135.9ms) ✅
+[2025-10-17T23:36:46.475124] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-17T23:37:16.384454] SUCCESS  GOAL         Goal completed: the search jobs button (took 29909.4ms) ✅
+[2025-10-17T23:37:16.385429] INFO     GOAL         Starting goal: if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-17T23:37:59.534593] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 43149.2ms) ✅
+[2025-10-17T23:37:59.538362] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T23:38:02.267558] INFO     GOAL         Starting goal: if see: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if see: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-17T23:38:05.488274] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-17T23:39:04.092670] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 58604.4ms) ✅
+[2025-10-17T23:39:04.093415] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-17T23:39:38.429658] SUCCESS  GOAL         Goal completed: the sign in without password button (took 34336.3ms) ✅
+[2025-10-17T23:39:38.430120] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-17T23:39:38.471142] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SByblA3ZDBSOVNUUVNFWGV2azhZM2hGU0xUVjVzRXhmNKFupWxvZ2luo3RpZNkgNlpEVzVYRzM2UGQ5RjM2OC1QdUZ0Nl96eE1CeXB3QmKjY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=V2FIfnFMeC1vMGNNaVJYUFlqWlFVY3pVQUhJbzBDSC1HWDBsX1MtLmhqVg%3D%3D&code_challenge=quZlvKHQMm9x1EsmOpHCho5JjT1-LaipAjaPYfo1z_8&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-17T23:43:59.526490] INFO     SYSTEM       Defer pause ended (took 261096.2ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 261.096
+}
+[2025-10-17T23:43:59.527715] SUCCESS  GOAL         Goal completed: defer (took 261097.6ms) ✅
+[2025-10-17T23:43:59.644863] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-17T23:44:03.161356] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action"
+}
+[2025-10-17T23:44:18.981305] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-17T23:44:18.982342] INFO     GOAL         Starting goal: ref: click_ios_job_action
+    Details: {
+  "goal_description": "ref: click_ios_job_action"
+}
+[2025-10-17T23:44:18.982637] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-17T23:44:18.982816] INFO     SYSTEM       Deduplication enabled
+[2025-10-17T23:44:18.982944] INFO     GOAL         Starting goal: click: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-17T23:49:09.446906] ERROR    GOAL         Goal failed: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 290463.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-17T23:49:09.449794] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-17T23:49:09.449940] INFO     SYSTEM       Deduplication disabled
+[2025-10-17T23:49:09.450026] INFO     GOAL         Starting goal: click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)
+    Details: {
+  "goal_description": "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760775269
+Start Time: 2025-10-18T09:14:29.243092
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T09:14:30.761428] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T09:14:30.762126] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T09:14:30.762537] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T09:14:30.909468] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T09:14:34.418703] INFO     SYSTEM       Defer pause ended (took 3653.1ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 3.653
+}
+[2025-10-18T09:14:34.420139] SUCCESS  GOAL         Goal completed: defer (took 3657.7ms) ✅
+[2025-10-18T09:14:34.495846] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T09:15:13.203280] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 38707.4ms) ✅
+[2025-10-18T09:15:13.203952] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-18T09:15:13.204026] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+[2025-10-18T09:27:07.843859] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 714639.8ms) ✅
+[2025-10-18T09:27:07.846091] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-18T09:27:43.069245] SUCCESS  GOAL         Goal completed: the search jobs button (took 35223.2ms) ✅
+[2025-10-18T09:27:43.070057] INFO     GOAL         Starting goal: if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-18T09:28:24.009633] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 40939.6ms) ✅
+[2025-10-18T09:28:24.011457] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T09:28:27.879485] INFO     GOAL         Starting goal: if see: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if see: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-18T09:28:30.587067] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-18T09:29:27.117928] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 56530.9ms) ✅
+[2025-10-18T09:29:27.119873] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-18T09:30:05.088159] SUCCESS  GOAL         Goal completed: the sign in without password button (took 37968.3ms) ✅
+[2025-10-18T09:30:05.090493] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T09:30:05.139075] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SBWM1N5cWVLYU96WlM4eXJuY01CSkVCeVUyNHhXSzNMQ6FupWxvZ2luo3RpZNkgaG9qR19YZ1lKUVpnLWtBcUVybVVWR29nb3BKSWxnbTWjY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=SVRnYlVqMy1wZEptTEhqTG1LTUFGaDFhVTRnQzV4VHhmRVgwUmRuSFBiZg%3D%3D&code_challenge=TRnNE2E00athu5kQ5ynwgezBUHHkbQegoWJft9rTJBk&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-18T09:42:47.602261] INFO     SYSTEM       Defer pause ended (took 762511.4ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 762.511
+}
+[2025-10-18T09:42:47.607134] SUCCESS  GOAL         Goal completed: defer (took 762516.7ms) ✅
+[2025-10-18T09:42:47.800349] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T09:42:51.492352] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T09:43:03.958346] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T09:43:03.960164] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T09:43:03.960583] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer"
+}
+[2025-10-18T09:43:09.532878] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Ios Developer Jobs in London Or Remote | Reed.co.uk",
+  "page_url": "https://www.reed.co.uk/jobs/ios-developer-jobs-in-london-or-remote"
+}
+[2025-10-18T09:43:27.506949] INFO     SYSTEM       Defer pause ended (took 18052.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 18.053
+}
+[2025-10-18T09:43:27.508830] SUCCESS  GOAL         Goal completed: Defer action: Manual control active (took 23548.3ms) ✅
+[2025-10-18T09:43:33.307268] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-18T09:43:33.308346] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop (took 41816.0ms) ✅
+    Details: {
+  "iterations": 1,
+  "outcome": "completed"
+}
+[2025-10-18T09:43:33.308668] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-18T09:43:36.461137] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-18T09:43:41.658621] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T09:43:41.659475] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T09:43:48.654498] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T09:43:48.655931] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760777789
+Start Time: 2025-10-18T09:56:29.523201
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T09:56:31.471032] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T09:56:31.471549] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T09:56:31.471717] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T09:56:31.704280] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T09:56:31.704849] INFO     SYSTEM       Defer pause ended (took 231.4ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 0.231
+}
+[2025-10-18T09:56:31.705646] SUCCESS  GOAL         Goal completed: defer (took 233.9ms) ✅
+[2025-10-18T09:56:31.771768] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T09:57:07.604254] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 35832.5ms) ✅
+[2025-10-18T09:57:07.604738] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-18T09:57:07.604819] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+[2025-10-18T09:58:55.051085] SUCCESS  GOAL         Goal completed: type 'ios developer' into the what field and 'london or remote' into the where field (took 107446.3ms) ✅
+[2025-10-18T09:58:55.052860] INFO     GOAL         Starting goal: click: the search jobs button
+    Details: {
+  "goal_description": "click: the search jobs button"
+}
+[2025-10-18T09:59:29.043373] SUCCESS  GOAL         Goal completed: the search jobs button (took 33990.6ms) ✅
+[2025-10-18T09:59:29.043925] INFO     GOAL         Starting goal: if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)
+    Details: {
+  "goal_description": "if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)"
+}
+[2025-10-18T10:00:02.525250] SUCCESS  GOAL         Goal completed: Click action: the sign in button (look for a button like 'Sign in' or 'Login' in the page.) (took 33481.3ms) ✅
+[2025-10-18T10:00:02.528074] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T10:00:04.945130] INFO     GOAL         Starting goal: if see: on sign in page then: ref: sign_in_without_password_commands
+    Details: {
+  "goal_description": "if see: on sign in page then: ref: sign_in_without_password_commands"
+}
+[2025-10-18T10:00:07.268983] INFO     GOAL         Starting goal: form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.
+    Details: {
+  "goal_description": "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page."
+}
+[2025-10-18T10:01:11.239962] SUCCESS  GOAL         Goal completed: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page. (took 63971.0ms) ✅
+[2025-10-18T10:01:11.240531] INFO     GOAL         Starting goal: click: the sign in without password button
+    Details: {
+  "goal_description": "click: the sign in without password button"
+}
+[2025-10-18T10:01:51.459416] SUCCESS  GOAL         Goal completed: the sign in without password button (took 40218.9ms) ✅
+[2025-10-18T10:01:51.459963] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T10:01:51.507314] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Sign in - reed.co.uk",
+  "page_url": "https://secure.reed.co.uk/login?state=hKFo2SBuTDE4YkZkQ2JrUE0xVFgybUJnTUtpZzI2SmhJdWViaaFupWxvZ2luo3RpZNkgVXBXOUQxa01RTzBZeGJGT09scXpPa21oa0ZsLWlXMlijY2lk2SBUS2JBVXhQRUFEWEFYZGYyN05tWUp2MEtnNmFEZnJkdA&client=TKbAUxPEADXAXdf27NmYJv0Kg6aDfrdt&protocol=oauth2&scope=openid%20profile%20email%20offline_access&redirect_uri=https%3A%2F%2Fwww.reed.co.uk%2Fauthentication%2Flogin%2Fcallback&audience=https%3A%2F%2Fwww.reed.co.uk%2F&response_type=code&response_mode=query&nonce=ZTh%2BflU3S1RybUJRQnQ5OXYxblFvS0dDMzRFX0dtTGJsX0dYYVZ0Z2l%2BbA%3D%3D&code_challenge=-bbAYYqULmhofbt4YFIhdjKE7NqfmZaAz2LpebcwsDI&code_challenge_method=S256&auth0Client=eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjIuNC4xIn0%3D"
+}
+[2025-10-18T10:01:51.507607] INFO     SYSTEM       Defer pause ended (took 47.4ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 0.047
+}
+[2025-10-18T10:01:51.507696] SUCCESS  GOAL         Goal completed: defer (took 47.7ms) ✅
+[2025-10-18T10:01:51.546994] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:01:54.648925] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-18T10:01:54.649810] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop (took 3102.8ms) ✅
+    Details: {
+  "iterations": 0,
+  "outcome": "completed"
+}
+[2025-10-18T10:01:54.650010] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-18T10:01:58.223876] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-18T10:02:03.066092] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:03.067078] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:08.615160] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T10:02:14.175067] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:14.175767] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:18.328241] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-18T10:02:24.643786] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:24.644870] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:32.050403] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:32.050852] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:39.189082] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:39.189548] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:45.999006] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:45.999536] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:02:54.328721] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:02:54.329404] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:03:00.633678] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:03:00.634362] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:03:17.660380] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:03:17.661575] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:03:26.750444] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:03:26.751981] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:03:33.257083] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T10:03:33.257847] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T10:03:40.336274] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-18T10:03:40.337723] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 102113.9ms) ✅
+    Details: {
+  "iterations": 11,
+  "outcome": "completed"
+}
+[2025-10-18T10:03:40.337988] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-18T10:04:24.772601] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 44434.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760778317
+Start Time: 2025-10-18T10:05:17.696663
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T10:05:19.056322] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T10:05:19.056988] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T10:05:19.057322] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T10:05:19.164658] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T10:06:07.490491] INFO     SYSTEM       Defer pause ended (took 48431.6ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 48.432
+}
+[2025-10-18T10:06:07.493938] SUCCESS  GOAL         Goal completed: defer (took 48436.5ms) ✅
+[2025-10-18T10:06:07.735281] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:06:11.983755] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:06:11.984793] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:06:11.985116] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer"
+}
+[2025-10-18T10:06:18.834929] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Ios Developer Jobs in London Or Remote | Reed.co.uk",
+  "page_url": "https://www.reed.co.uk/jobs/ios-developer-jobs-in-london-or-remote"
+}
+[2025-10-18T10:06:30.577959] INFO     SYSTEM       Defer pause ended (took 11893.9ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 11.894
+}
+[2025-10-18T10:06:30.580549] SUCCESS  GOAL         Goal completed: Defer action: Manual control active (took 18595.4ms) ✅
+[2025-10-18T10:06:30.795862] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:06:30.796390] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:06:30.796485] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: defer"
+}
+[2025-10-18T10:06:37.392446] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Ios Developer Jobs in London Or Remote | Reed.co.uk",
+  "page_url": "https://www.reed.co.uk/jobs/ios-developer-jobs-in-london-or-remote"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760778463
+Start Time: 2025-10-18T10:07:43.348427
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T10:07:44.820666] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T10:07:44.822080] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T10:07:44.822323] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T10:07:44.931792] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T10:07:44.931946] INFO     SYSTEM       Defer pause ended (took 107.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 0.108
+}
+[2025-10-18T10:07:44.932037] SUCCESS  GOAL         Goal completed: defer (took 109.7ms) ✅
+[2025-10-18T10:07:44.992230] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:07:49.745722] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:07:49.746855] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:07:49.747142] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T10:07:56.570493] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-18T10:07:56.571729] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop (took 11579.5ms) ✅
+    Details: {
+  "iterations": 1,
+  "outcome": "completed"
+}
+[2025-10-18T10:07:56.571826] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-18T10:08:01.318066] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760778488
+Start Time: 2025-10-18T10:08:08.095739
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T10:08:09.296553] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T10:08:09.297357] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T10:08:09.297673] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T10:08:09.395925] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T10:08:47.157473] INFO     SYSTEM       Defer pause ended (took 37858.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 37.859
+}
+[2025-10-18T10:08:47.161867] SUCCESS  GOAL         Goal completed: defer (took 37864.2ms) ✅
+[2025-10-18T10:08:47.427853] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:08:52.124199] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:08:52.125160] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:08:52.125466] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T10:08:59.631634] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:08:59.633023] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:08:59.633125] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T10:09:11.142792] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:09:11.144496] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:09:11.144612] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T10:09:21.435542] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T10:09:21.436343] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T10:09:21.436573] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T10:09:26.719692] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T10:09:26.722267] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T10:09:26.722680] INFO     GOAL         Starting goal: click: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link (ignore links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760794943
+Start Time: 2025-10-18T14:42:23.862300
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T14:42:25.764703] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ANY) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T14:42:25.765563] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T14:42:25.765998] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T14:42:25.890847] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T14:44:00.337997] INFO     SYSTEM       Defer pause ended (took 94570.7ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 94.571
+}
+[2025-10-18T14:44:00.340752] SUCCESS  GOAL         Goal completed: defer (took 94574.8ms) ✅
+[2025-10-18T14:44:00.607827] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop"
+}
+[2025-10-18T14:44:06.459824] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T14:44:06.460744] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T14:44:06.460966] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T14:44:19.252619] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T14:44:19.253267] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T14:44:19.253452] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T14:44:32.782379] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T14:44:32.783554] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T14:44:32.783663] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T14:44:43.729791] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T14:44:43.731419] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T14:44:43.731544] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T14:44:49.475109] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T14:44:49.475586] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T14:44:49.475807] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
