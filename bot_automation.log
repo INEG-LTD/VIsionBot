@@ -14413,3 +14413,1133 @@ Log File: bot_automation.log
     Details: {
   "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760812624
+Start Time: 2025-10-18T19:37:04.663063
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T19:37:06.615305] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY)
+[2025-10-18T19:37:06.615534] INFO     SYSTEM       Registered 6 commands with ref ID: click_ios_job_action (mode=ALL) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T19:37:06.615615] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T19:37:06.615674] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T19:37:06.728056] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T19:43:53.038703] INFO     SYSTEM       Defer pause ended (took 406421.4ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 406.421
+}
+[2025-10-18T19:43:53.043978] SUCCESS  GOAL         Goal completed: defer (took 406428.2ms) ✅
+[2025-10-18T19:43:53.307241] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure"
+}
+[2025-10-18T19:43:59.449894] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:43:59.450367] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:43:59.450745] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:44:11.768539] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:44:11.768864] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:44:11.769087] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:44:29.999803] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:44:30.000880] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:44:30.001029] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:44:38.979471] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:44:38.981108] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:44:38.981451] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:44:38.981734] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:46:27.406540] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 108424.8ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T19:46:27.597869] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:46:27.598112] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:46:27.598252] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:46:34.589839] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:46:34.591517] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:46:34.591780] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:46:34.592021] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:46:35.138582] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 546.3ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T19:46:35.350270] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:46:35.350565] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:46:35.350681] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:46:42.002617] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:46:42.003476] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:46:42.003679] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:46:42.003853] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:47:47.042745] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 65038.9ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T19:47:47.245782] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:47:47.246092] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:47:47.246376] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:47:52.971083] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:47:52.973243] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:47:52.973783] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:47:52.974233] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:49:22.942590] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 89968.4ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T19:49:23.125632] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:49:23.125816] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:49:23.125931] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:49:28.778469] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:49:28.779307] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:49:28.779552] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:49:28.779764] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:49:29.328609] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 548.8ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T19:49:29.502223] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:49:29.502538] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:49:29.502647] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:49:41.374688] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:49:41.375088] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:49:41.375302] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:49:53.047653] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T19:49:53.048668] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T19:49:53.048788] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T19:49:58.048814] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T19:49:58.050017] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T19:49:58.050739] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T19:49:58.051348] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T19:51:06.337044] SUCCESS  GOAL         Goal completed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 68285.7ms) ✅
+[2025-10-18T19:51:06.338168] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-18T19:51:06.338279] INFO     SYSTEM       Deduplication disabled
+[2025-10-18T19:51:06.338353] INFO     GOAL         Starting goal: click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)
+    Details: {
+  "goal_description": "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)"
+}
+[2025-10-18T19:52:25.263219] ERROR    GOAL         Goal failed: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) (took 78924.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-18T19:52:25.412184] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-18T19:52:25.413383] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure (took 512106.2ms) ✅
+    Details: {
+  "iterations": 10,
+  "outcome": "completed"
+}
+[2025-10-18T19:52:25.413494] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-18T19:52:29.706940] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-18T19:52:35.960738] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-18T19:52:35.961494] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 6254.6ms) ✅
+    Details: {
+  "iterations": 0,
+  "outcome": "completed"
+}
+[2025-10-18T19:52:35.961747] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-18T19:52:41.263718] ERROR    GOAL         Goal failed: the next button in the pagination control (took 5302.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760815805
+Start Time: 2025-10-18T20:30:05.941066
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-18T20:30:08.089510] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-18T20:30:08.090216] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-18T20:30:08.090302] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-18T20:30:08.090353] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY)
+[2025-10-18T20:30:08.090413] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (additional_context, target_context_guard, confirm_before_interaction=True)
+[2025-10-18T20:30:08.090519] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-18T20:30:08.090599] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-18T20:30:08.256724] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-18T20:36:05.573901] INFO     SYSTEM       Defer pause ended (took 357482.3ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 357.482
+}
+[2025-10-18T20:36:05.579650] SUCCESS  GOAL         Goal completed: defer (took 357489.0ms) ✅
+[2025-10-18T20:36:06.168050] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure"
+}
+[2025-10-18T20:36:10.760609] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:36:10.760954] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:36:10.761177] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:36:21.038063] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:36:21.038493] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:36:21.038588] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:36:30.742929] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:36:30.743362] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:36:30.743557] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:36:40.061414] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:36:40.062472] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:36:40.062728] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:36:40.062959] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:37:56.110683] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 76047.7ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:37:56.281159] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:37:56.281385] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:37:56.281509] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:38:07.785304] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:38:07.785644] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:38:07.785749] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:38:12.802049] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:38:12.803249] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:38:12.803457] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:38:12.803643] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:39:22.438459] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 69634.8ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:39:22.634714] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:39:22.634937] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:39:22.635069] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:39:27.358422] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:39:27.359440] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:39:27.359599] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:39:27.359739] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:40:55.968937] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 88609.2ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:40:56.171023] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:40:56.171267] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:40:56.171441] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:41:01.768991] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:41:01.770150] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:41:01.770372] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:41:01.770524] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:41:02.318052] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 547.5ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:41:02.508199] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:41:02.508479] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:41:02.508578] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:41:07.497747] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:41:07.498489] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:41:07.498757] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:41:07.498963] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:42:22.871416] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 75372.4ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:42:23.095032] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:42:23.095253] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:42:23.095372] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:42:33.109005] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:42:33.110048] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:42:33.110363] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:42:33.110606] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:43:46.739116] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 73628.5ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:43:46.931775] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:43:46.932082] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:43:46.932219] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:43:54.726966] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:43:54.728007] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:43:54.728281] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:43:54.728532] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:43:54.765590] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 37.1ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:43:54.934041] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:43:54.934294] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:43:54.934537] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:44:06.263724] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:44:06.264148] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:44:06.264341] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:44:11.971466] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:44:11.972338] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:44:11.972602] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:44:11.972849] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:45:21.462291] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 69489.4ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:45:21.657487] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:45:21.657785] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:45:21.658037] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:45:27.093735] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:45:27.094971] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:45:27.095280] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:45:27.095518] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:45:27.637557] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 542.0ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:45:27.804000] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:45:27.804407] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:45:27.804517] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:45:34.361101] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:45:34.362206] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:45:34.362482] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:45:34.362796] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:46:49.118585] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 74755.8ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:46:49.279957] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:46:49.280143] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:46:49.280273] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:46:56.298734] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:46:56.299624] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:46:56.299914] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:46:56.300152] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:46:56.846313] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 546.2ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:46:57.009559] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:46:57.009972] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:46:57.010374] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:47:13.641993] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:47:13.642342] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:47:13.642549] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:47:19.531140] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:47:19.533140] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:47:19.533398] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:47:19.533595] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:48:19.808056] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 60274.5ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:48:19.999760] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:48:19.999983] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:48:20.000229] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:48:27.006873] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:48:27.007803] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:48:27.008110] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:48:27.008383] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:48:27.551317] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 542.9ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:48:27.716987] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:48:27.717416] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:48:27.717520] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:48:32.456213] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:48:32.457114] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:48:32.457380] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:48:32.457586] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:49:22.834994] SUCCESS  GOAL         Goal completed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 50377.4ms) ✅
+[2025-10-18T20:49:22.837960] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-18T20:49:22.838078] INFO     SYSTEM       Deduplication disabled
+[2025-10-18T20:49:22.838142] INFO     GOAL         Starting goal: ref: if_apply_to_job_command
+    Details: {
+  "goal_description": "ref: if_apply_to_job_command"
+}
+[2025-10-18T20:49:22.838222] INFO     GOAL         Starting goal: if see: an apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) then: ref: apply_to_job_command else: press: escape
+    Details: {
+  "goal_description": "if see: an apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) then: ref: apply_to_job_command else: press: escape"
+}
+[2025-10-18T20:49:31.833680] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:49:31.834231] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:49:31.834351] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:49:42.752554] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:49:42.754145] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:49:42.754286] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:49:53.111948] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:49:53.112998] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:49:53.113125] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:50:00.061791] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:50:00.062691] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:50:00.063020] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:50:00.063355] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:51:05.788007] SUCCESS  GOAL         Goal completed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 65724.7ms) ✅
+[2025-10-18T20:51:05.789725] INFO     GOAL         Starting goal: dedup: disable
+    Details: {
+  "goal_description": "dedup: disable"
+}
+[2025-10-18T20:51:05.789824] INFO     SYSTEM       Deduplication disabled
+[2025-10-18T20:51:05.789887] INFO     GOAL         Starting goal: ref: if_apply_to_job_command
+    Details: {
+  "goal_description": "ref: if_apply_to_job_command"
+}
+[2025-10-18T20:51:05.789966] INFO     GOAL         Starting goal: if see: an apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) then: ref: apply_to_job_command else: press: escape
+    Details: {
+  "goal_description": "if see: an apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) then: ref: apply_to_job_command else: press: escape"
+}
+[2025-10-18T20:51:16.795015] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:51:16.795672] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:51:16.795776] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:51:26.545381] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:51:26.546171] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:51:26.546312] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:51:30.522074] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:51:30.522671] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:51:30.522768] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:51:30.522854] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:52:47.110399] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 76587.5ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:52:47.185741] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:52:47.185963] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:52:47.186070] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:52:52.157152] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:52:52.158367] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:52:52.158686] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:52:52.158920] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:53:55.526544] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 63367.6ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:53:55.842876] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-18T20:53:55.844902] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-18T20:53:55.846188] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-18T20:54:00.114558] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-18T20:54:00.115503] INFO     SYSTEM       Deduplication enabled
+[2025-10-18T20:54:00.115788] INFO     GOAL         Starting goal: ref: click_job_command
+    Details: {
+  "goal_description": "ref: click_job_command"
+}
+[2025-10-18T20:54:00.116103] INFO     GOAL         Starting goal: click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')
+    Details: {
+  "goal_description": "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')"
+}
+[2025-10-18T20:54:00.657080] ERROR    GOAL         Goal failed: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote') (took 541.0ms) ❌
+    Details: {
+  "error": "Failed after 1 attempts"
+}
+[2025-10-18T20:54:00.739043] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-18T20:54:00.739357] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure (took 1074571.3ms) ✅
+    Details: {
+  "iterations": 26,
+  "outcome": "completed"
+}
+[2025-10-18T20:54:00.739450] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-18T20:54:05.181940] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-18T20:54:10.029699] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:10.031437] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:15.856073] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:15.857085] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:21.322496] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:21.324017] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:29.349383] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:29.350637] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:36.067225] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:36.068880] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:42.824997] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:42.826320] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:49.536475] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:49.537749] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:54:57.071599] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:54:57.073172] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:55:02.852184] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:55:02.854396] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:55:10.989583] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-18T20:55:10.990860] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-18T20:55:19.450902] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-18T20:55:19.453151] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 74271.3ms) ✅
+    Details: {
+  "iterations": 10,
+  "outcome": "completed"
+}
+[2025-10-18T20:55:19.453448] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-18T20:55:55.045597] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 35592.2ms) ✅

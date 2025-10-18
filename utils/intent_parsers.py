@@ -260,8 +260,8 @@ def parse_datetime_command(text: str) -> Optional[tuple[str, Optional[str]]]:
     return _parse_value_target(text, "datetime")
 
 
-def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str]]]:
-    """Parse explicit WHILE/DO syntax with optional route specification.
+def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str], Optional[bool]]]:
+    """Parse explicit WHILE/DO syntax with optional route specification and failure mode.
 
     Supported forms (case-insensitive, flexible spacing):
     - "while: <condition> do: <body>"
@@ -270,13 +270,24 @@ def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str]]
     - "do: <body> until: <condition>" (or "repeat: <body> until: <condition>")
     - "do: <body> until see: <condition>"  # Force vision route
     - "do: <body> until page: <condition>" # Force page route
+    - "while: <condition> do: <body> continue_on_failure"  # Continue on body failure
+    - "while: <condition> do: <body> fail_on_failure"  # Fail on body failure (default)
     
-    Returns (condition, body, route) or None if no match.
+    Returns (condition, body, route, fail_on_body_failure) or None if no match.
     """
     t = (text or "").strip()
     if not t:
         return None
     t1 = re.sub(r"\s+", " ", t).strip()
+    
+    # Extract failure mode flag if present
+    fail_on_body_failure = None
+    if t1.endswith(" continue_on_failure"):
+        fail_on_body_failure = False
+        t1 = t1[:-len(" continue_on_failure")].strip()
+    elif t1.endswith(" fail_on_failure"):
+        fail_on_body_failure = True
+        t1 = t1[:-len(" fail_on_failure")].strip()
     
     # Check for route specification in while syntax
     route_match = re.match(r"(?i)^while\s+(see|page)\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
@@ -284,7 +295,7 @@ def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str]]
         route = route_match.group(1).lower()
         condition = route_match.group(2).strip()
         body = route_match.group(3).strip()
-        return condition, body, route
+        return condition, body, route, fail_on_body_failure
     
     # Check for route specification in do/until syntax
     until_route_match = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s+(see|page)\s*:\s*(.+)$", t1)
@@ -292,18 +303,18 @@ def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str]]
         body = until_route_match.group(1).strip()
         route = until_route_match.group(2).lower()
         condition = until_route_match.group(3).strip()
-        return condition, body, route
+        return condition, body, route, fail_on_body_failure
     
     # Default parsing without route
     m = re.match(r"(?i)^while\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
     if m:
-        return m.group(1).strip(), m.group(2).strip(), None
+        return m.group(1).strip(), m.group(2).strip(), None, fail_on_body_failure
     
     m = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s*:\s*(.+)$", t1)
     if m:
         body = m.group(1).strip()
         cond = m.group(2).strip()
-        return cond, body, None
+        return cond, body, None, fail_on_body_failure
     
     return None
 

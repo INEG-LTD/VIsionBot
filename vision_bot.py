@@ -1364,7 +1364,11 @@ class BrowserVisionBot:
             sw = parse_structured_while(goal_description)
             if sw:
                 print(f"🔁 WhileGoal (structured): '{sw}'")
-                if len(sw) == 3:
+                if len(sw) == 4:
+                    cond_text, body_text, route, fail_on_body_failure = sw
+                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, route, modifier, fail_on_body_failure)
+                elif len(sw) == 3:
+                    # Backward compatibility for 3-tuple
                     cond_text, body_text, route = sw
                     wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, route, modifier)
                 else:
@@ -1524,7 +1528,7 @@ class BrowserVisionBot:
         #         return BaseGoal.make_ref_goal(goal_description, payload, False)
         return None
 
-    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[WhileGoal]:
+    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None, fail_on_body_failure: Optional[bool] = None) -> Optional[WhileGoal]:
         """Create WhileGoal from explicit condition/body parts with route determination."""
         try:
             # Determine route: modifier first, then parsed route, then fail
@@ -1548,8 +1552,10 @@ class BrowserVisionBot:
             if determined_route not in ["see", "page"]:
                 raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
             
-            # Get max_retries from temp kwargs if available
+            # Get max_retries and fail_on_body_failure from temp kwargs if available
             max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            if fail_on_body_failure is None:
+                fail_on_body_failure = getattr(self, '_temp_goal_kwargs', {}).get('fail_on_body_failure', True)
             
             wg = WhileGoal(
                 condition_text=cond_text,
@@ -1557,6 +1563,7 @@ class BrowserVisionBot:
                 route=determined_route,
                 description=goal_description,
                 max_retries=max_retries,
+                fail_on_body_failure=fail_on_body_failure,
             )
             return wg
         except Exception as e:
@@ -1757,11 +1764,17 @@ class BrowserVisionBot:
 
             body_result = bool(self.act(goal.loop_prompt))
             if not body_result:
-                duration_ms = (time.time() - start_time) * 1000
-                reason = f"Loop body failed on iteration {iterations}"
-                print(f"❌ {reason}")
-                self.logger.log_goal_failure(loop_description, reason, duration_ms)
-                return False
+                if goal.fail_on_body_failure:
+                    # Current behavior: fail entire loop
+                    duration_ms = (time.time() - start_time) * 1000
+                    reason = f"Loop body failed on iteration {iterations}"
+                    print(f"❌ {reason}")
+                    self.logger.log_goal_failure(loop_description, reason, duration_ms)
+                    return False
+                else:
+                    # New behavior: log warning but continue
+                    print(f"⚠️  Loop body failed on iteration {iterations}, continuing loop (fail_on_body_failure=False)")
+                    # Loop continues to next iteration
 
             # Reset goal monitor state before the next condition check
             if self.goal_monitor.active_goal:

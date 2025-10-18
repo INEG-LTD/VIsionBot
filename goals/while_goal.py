@@ -54,6 +54,7 @@ class WhileGoal(BaseGoal):
         else_prompt: Optional[str] = None,
         description: Optional[str] = None,
         max_iterations: int = 30,
+        fail_on_body_failure: bool = True,  # NEW: default True for backward compatibility
         **kwargs,
     ) -> None:
         if route not in ["see", "page"]:
@@ -66,6 +67,7 @@ class WhileGoal(BaseGoal):
         self.loop_prompt = loop_prompt
         self.route = route
         self.else_prompt = else_prompt
+        self.fail_on_body_failure = fail_on_body_failure
         self.progress = LoopProgress(iterations=0, last_condition_result=None, started_at=time.time(), loop_retries=0)
         self.max_iterations = max(1, int(max_iterations))
         
@@ -185,10 +187,12 @@ class WhileGoal(BaseGoal):
     def get_description(self, context: GoalContext) -> str:
         """Generate description with route information"""
         route_info = f"[{self.route.upper()}]"
+        failure_mode = "fail" if self.fail_on_body_failure else "continue"
+        
         if self.else_prompt:
-            return f"{route_info} While ({self.condition_text}) do: {self.loop_prompt} else: {self.else_prompt}"
+            return f"{route_info} While ({self.condition_text}) do: {self.loop_prompt} else: {self.else_prompt} [on_body_failure: {failure_mode}]"
         else:
-            return f"{route_info} While ({self.condition_text}) do: {self.loop_prompt}"
+            return f"{route_info} While ({self.condition_text}) do: {self.loop_prompt} [on_body_failure: {failure_mode}]"
 
     def evaluate(self, context: GoalContext) -> GoalResult:
         """Evaluate loop condition based on specified route"""

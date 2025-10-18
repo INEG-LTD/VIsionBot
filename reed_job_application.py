@@ -22,6 +22,20 @@ def sign_in_without_password_commands(bot: BrowserVisionBot):
         bot.act("if see: on sign in page then: ref: sign_in_without_password_commands")
 
 bot.register_prompts([
+        "click: the button to submit the application (look for a button like 'Submit' or 'Submit Application' in modal)",
+        "press: escape"
+], "submit_application_command", max_retries=1, max_attempts=1, all_must_be_true=False)
+
+bot.register_prompts([
+        "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)",
+        "if see: the button to submit the application (look for a button like 'Submit' or 'Submit Application' in modal) then: ref: submit_application_command else: press: escape"
+], "apply_to_job_command", max_retries=1, max_attempts=1, all_must_be_true=True)
+
+bot.register_prompts([
+        "if see: an apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid) then: ref: apply_to_job_command else: press: escape"
+], "if_apply_to_job_command", max_retries=1, max_attempts=1)
+
+bot.register_prompts([
         "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')",
 ], "click_job_command", max_retries=1, max_attempts=1)
 
@@ -29,9 +43,7 @@ bot.register_prompts([
         "dedup: enable",
         "ref: click_job_command",
         "dedup: disable",
-        "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)",
-        "click: the button to submit the application (look for a button like 'Submit' or 'Submit Application' in modal)",
-        "press: escape"
+        "ref: if_apply_to_job_command",
 ], "click_ios_job_action",
         additional_context="the job listing will be in a card view. also look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
         target_context_guard="only click a job listing if it its card does NOT have an 'Applied' status or an applied tag",
@@ -51,7 +63,7 @@ bot.act("defer")
 # sign_in_without_password_commands(bot)
 
 # Apply to all available jobs, then click pagination
-bot.act("while: not at bottom of the page do: ref: click_ios_job_action_loop", modifier=["page"])
+bot.act("while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure", modifier=["page"])
 
 # # Scroll to the top of the page
 bot.act("scroll: to top")
