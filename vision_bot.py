@@ -657,6 +657,8 @@ class BrowserVisionBot:
         confirm_before_interaction: bool = False,
         command_id: Optional[str] = None,
         modifier: Optional[List[str]] = None,
+        max_attempts: Optional[int] = None,
+        max_retries: Optional[int] = None,
         **kwargs
     ) -> bool:
         """
@@ -671,6 +673,8 @@ class BrowserVisionBot:
             confirm_before_interaction: Require user confirmation before each action
             command_id: Optional command ID for tracking (auto-generated if not provided)
             modifier: Optional list of modifier strings to pass to goals
+            max_attempts: Override bot's max_attempts for this command (None = use bot default)
+            max_retries: Override goal's max_retries for this command (None = use goal default)
         
         Returns:
             True if goal was achieved, False otherwise
@@ -777,9 +781,12 @@ class BrowserVisionBot:
             if simple_result is not None:
                 return simple_result
 
-            for attempt in range(self.max_attempts):
+            # Use custom max_attempts if provided, otherwise use bot's default
+            effective_max_attempts = max_attempts if max_attempts is not None else self.max_attempts
+            
+            for attempt in range(effective_max_attempts):
                 self.current_attempt = attempt + 1
-                print(f"\n--- Attempt {self.current_attempt}/{self.max_attempts} ---")
+                print(f"\n--- Attempt {self.current_attempt}/{effective_max_attempts} ---")
                 
                 # Show retry context at the start of each new attempt (but don't reset yet)
                 if attempt > 0:  # Don't reset on first attempt
@@ -990,11 +997,11 @@ class BrowserVisionBot:
                         continue
             
             duration_ms = (time.time() - start_time) * 1000
-            self.logger.log_goal_failure(goal_description, f"Failed after {self.max_attempts} attempts", duration_ms)
-            print(f"❌ Failed to achieve goal after {self.max_attempts} attempts")
+            self.logger.log_goal_failure(goal_description, f"Failed after {effective_max_attempts} attempts", duration_ms)
+            print(f"❌ Failed to achieve goal after {effective_max_attempts} attempts")
             self._print_goal_summary()
             # Mark command as failed
-            self.command_ledger.complete_command(command_id, success=False, error_message=f"Failed after {self.max_attempts} attempts")
+            self.command_ledger.complete_command(command_id, success=False, error_message=f"Failed after {effective_max_attempts} attempts")
             return False
         finally:
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
@@ -1066,6 +1073,8 @@ class BrowserVisionBot:
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
         command_id: Optional[str] = None,
+        max_attempts: Optional[int] = None,
+        max_retries: Optional[int] = None,
     ) -> bool:
         """
         Register multiple commands for later reference and execution.
@@ -1079,6 +1088,8 @@ class BrowserVisionBot:
             target_context_guard: Guard condition description applied to each stored prompt
             skip_post_guard_refinement: Whether to skip post-plan guard refinement when executing stored prompts
             confirm_before_interaction: Whether to require confirmation before each stored interaction
+            max_attempts: Override bot's max_attempts for each command in this ref (None = use bot default)
+            max_retries: Override goal's max_retries for each command in this ref (None = use goal default)
             
         Returns:
             True if commands were registered successfully, False otherwise
@@ -1110,6 +1121,8 @@ class BrowserVisionBot:
                 "target_context_guard": target_context_guard,
                 "skip_post_guard_refinement": bool(skip_post_guard_refinement),
                 "confirm_before_interaction": bool(confirm_before_interaction),
+                "max_attempts": max_attempts,
+                "max_retries": max_retries,
             }
             mode = "ALL" if all_must_be_true else "ANY"
             extra_parts = []
@@ -1446,27 +1459,30 @@ class BrowserVisionBot:
         """Create a specific goal from a single keyword and payload."""
         k = (keyword or "").lower().strip()
         p = (payload or "").strip()
+        
+        # Get max_retries from temp kwargs if available
+        max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
 
         if k == "press":
             keys = p or extract_press_target(p)
             if keys:
-                return PressGoal(description=f"Press action: {keys}", target_keys=keys)
+                return PressGoal(description=f"Press action: {keys}", target_keys=keys, max_retries=max_retries)
         if k == "scroll":
             if p:
-                return ScrollGoal(description=f"Scroll action: {p}", user_request=p)
+                return ScrollGoal(description=f"Scroll action: {p}", user_request=p, max_retries=max_retries)
             else:
-                return ScrollGoal(description="Scroll action: down", user_request="scroll down")
+                return ScrollGoal(description="Scroll action: down", user_request="scroll down", max_retries=max_retries)
         if k == "click":
             target = p or extract_click_target(p)
             if target:
-                return ClickGoal(description=f"Click action: {target}", target_description=target)
+                return ClickGoal(description=f"Click action: {target}", target_description=target, max_retries=max_retries)
         if k == "navigate":
             target = p
             if target:
-                return NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target)
+                return NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target, max_retries=max_retries)
         if k == "form":
             desc = p or "Fill the form"
-            return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True)
+            return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True, max_retries=max_retries)
         if k == "back":
             import re as _re
             steps = 1
@@ -1479,7 +1495,7 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False)
+            return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
         if k == "forward":
             import re as _re
             steps = 1
@@ -1492,10 +1508,10 @@ class BrowserVisionBot:
                 start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
-            return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False)
+            return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
         if k == "defer":
             message = p or "Manual control active"
-            return DeferGoal(description=f"Defer action: {message}", prompt=message)
+            return DeferGoal(description=f"Defer action: {message}", prompt=message, max_retries=max_retries)
         # if k == "ref":
         #     goal_description = keyword + ": " + payload
         #     print(f"🔄 Handling ref command: '{goal_description}'")
@@ -1532,11 +1548,15 @@ class BrowserVisionBot:
             if determined_route not in ["see", "page"]:
                 raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
             
+            # Get max_retries from temp kwargs if available
+            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            
             wg = WhileGoal(
                 condition_text=cond_text,
                 loop_prompt=body_text,
                 route=determined_route,
                 description=goal_description,
+                max_retries=max_retries,
             )
             return wg
         except Exception as e:
@@ -1567,12 +1587,16 @@ class BrowserVisionBot:
             # Parse break conditions
             break_conds = [break_conditions] if break_conditions else []
             
+            # Get max_retries from temp kwargs if available
+            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            
             for_goal = ForGoal(
                 iteration_mode=iteration_mode,
                 iteration_target=target,
                 loop_prompt=loop_body,
                 break_conditions=break_conds,
-                description=f"For loop: {iteration_mode} iteration of '{iteration_target}'"
+                description=f"For loop: {iteration_mode} iteration of '{iteration_target}'",
+                max_retries=max_retries,
             )
             
             return for_goal
@@ -1807,12 +1831,17 @@ class BrowserVisionBot:
                 fail_goal = None
 
             fail_desc = fail_goal.description if fail_goal else "(no fail action)"
+            
+            # Get max_retries from temp kwargs if available
+            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            
             if_goal = IfGoal(
                 condition_text=condition_text,
                 success_goal=success_goal,
                 fail_goal=fail_goal,
                 route=determined_route,
-                description=f"If {condition_text} then {success_goal.description} else {fail_desc}"
+                description=f"If {condition_text} then {success_goal.description} else {fail_desc}",
+                max_retries=max_retries,
             )
             return if_goal
         except Exception as e:
@@ -2052,6 +2081,8 @@ class BrowserVisionBot:
                 ref_target_context_guard = ref_entry.get("target_context_guard")
                 ref_skip_post_guard_refinement = ref_entry.get("skip_post_guard_refinement", True)
                 ref_confirm_before_interaction = ref_entry.get("confirm_before_interaction", False)
+                ref_max_attempts = ref_entry.get("max_attempts")
+                ref_max_retries = ref_entry.get("max_retries")
                 stored_command_id = ref_entry.get("command_id")  # Get the original command ID
 
                 if not stored_prompts:
@@ -2081,6 +2112,8 @@ class BrowserVisionBot:
                             skip_post_guard_refinement=ref_skip_post_guard_refinement,
                             confirm_before_interaction=ref_confirm_before_interaction,
                             command_id=child_cmd_id,  # Pass child ID
+                            max_attempts=ref_max_attempts,  # Pass custom max_attempts
+                            max_retries=ref_max_retries,    # Pass custom max_retries
                         )
                     )
                     results.append(success)

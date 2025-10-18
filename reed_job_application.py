@@ -22,8 +22,12 @@ def sign_in_without_password_commands(bot: BrowserVisionBot):
         bot.act("if see: on sign in page then: ref: sign_in_without_password_commands")
 
 bot.register_prompts([
-        "dedup: enable",
         "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')",
+], "click_job_command", max_retries=1, max_attempts=1)
+
+bot.register_prompts([
+        "dedup: enable",
+        "ref: click_job_command",
         "dedup: disable",
         "click: the apply button (look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid)",
         "click: the button to submit the application (look for a button like 'Submit' or 'Submit Application' in modal)",
@@ -32,13 +36,13 @@ bot.register_prompts([
         additional_context="the job listing will be in a card view. also look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
         target_context_guard="only click a job listing if it its card does NOT have an 'Applied' status or an applied tag",
         confirm_before_interaction=True,
-        all_must_be_true=False,
+        all_must_be_true=True,
         command_id="click_ios_job_action")
 
 bot.register_prompts([
         "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
 ], "click_ios_job_action_loop",
-        additional_context="look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
+        additional_context="look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc. ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote'. ignore jobs like 'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Software Engineer', 'Senior Software Engineer', 'Junior Software Engineer', etc",
         command_id="click_ios_job_action_loop")
 
 # If cookie banner is visible, click the button to accept cookies

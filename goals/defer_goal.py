@@ -14,10 +14,10 @@ class DeferGoal(BaseGoal):
 
     EVALUATION_TIMING = EvaluationTiming.CONTINUOUS
 
-    def __init__(self, description: str, prompt: Optional[str] = None) -> None:
+    def __init__(self, description: str, prompt: Optional[str] = None, max_retries: int = 0) -> None:
         super().__init__(
             description=description,
-            max_retries=0,
+            max_retries=max_retries,
             needs_detection=False,
             needs_plan=False,
         )
