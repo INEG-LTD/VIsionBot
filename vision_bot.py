@@ -74,6 +74,7 @@ class BrowserVisionBot:
         self,
         page: Page = None,
         model_name: str = "gpt-5-mini",
+        reasoning_level: str = "medium",
         max_attempts: int = 10,
         max_detailed_elements: int = 400,
         include_detailed_elements: bool = True,
@@ -84,8 +85,12 @@ class BrowserVisionBot:
     ):
         self.page = page
         self.model_name = model_name
+        self.reasoning_level = reasoning_level
         # Set the centralized model configuration
         set_default_model(model_name)
+        # Set the centralized reasoning level configuration
+        from ai_utils import set_default_reasoning_level
+        set_default_reasoning_level(reasoning_level)
         self.max_attempts = max_attempts
         self.started = False
         # Controls for how much element detail to include in planning prompts

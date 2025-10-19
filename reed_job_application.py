@@ -1,7 +1,7 @@
 from vision_bot import BrowserVisionBot
 
-# Initialize bot with GIF recording enabled
-bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano")
+# Initialize bot with GIF recording enabled and high reasoning level
+bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano", reasoning_level="high")
 bot.start()
 bot.goto("https://www.reed.co.uk/")
 bot.default_interpretation_mode = "semantic"

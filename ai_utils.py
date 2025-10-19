@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 # Centralized model configuration
 _DEFAULT_MODEL = "gpt-5-mini"
+_DEFAULT_REASONING_LEVEL = "medium"
 
 def set_default_model(model_name: str) -> None:
     """Set the default model to use throughout the application"""
@@ -16,12 +17,24 @@ def get_default_model() -> str:
     """Get the current default model"""
     return _DEFAULT_MODEL
 
+def set_default_reasoning_level(reasoning_level: str) -> None:
+    """Set the default reasoning level to use throughout the application"""
+    global _DEFAULT_REASONING_LEVEL
+    _DEFAULT_REASONING_LEVEL = reasoning_level
+
+def get_default_reasoning_level() -> str:
+    """Get the current default reasoning level"""
+    return _DEFAULT_REASONING_LEVEL
+
 client = genai.Client(api_key="AIzaSyAU6PHwVlJJV5kogd4Es9hNf2Xy74fAOiA")
 client_gpt = OpenAI(api_key="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")
 
-def generate_text_gemini(prompt: str, system_prompt: str = "", image = None, multi_image = None, model: str = None) -> str:
+def generate_text_gemini(prompt: str, system_prompt: str = "", image = None, multi_image = None, model: str = None, thinking_budget: int = None) -> str:
     if model is None:
         model = get_default_model()
+    if thinking_budget is None:
+        thinking_budget = 100  # Default medium reasoning
+        
     contents = [prompt]
     if image:
         # Handle both bytes and genai.types.Part objects
@@ -33,11 +46,15 @@ def generate_text_gemini(prompt: str, system_prompt: str = "", image = None, mul
             if isinstance(image, bytes):
                 image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
             contents.append(image)
+    
+    thinking_config = genai.types.ThinkingConfig(thinking_budget=thinking_budget)
+    
     response = client.models.generate_content(
         model=model,
         contents=contents,
         config=genai.types.GenerateContentConfig(
             system_instruction=system_prompt,
+            thinking_config=thinking_config
         )
     )
     return response.text
@@ -49,7 +66,7 @@ def generate_text_gpt_with_cost(
     multi_image: list[bytes] = None,
     image_detail: str = "low",
     model: str = None,
-    reasoning_level: str = "low",
+    reasoning_level: str = None,
 ):
     """
     Returns (output_text, cost_usd, usage_dict).
@@ -61,6 +78,8 @@ def generate_text_gpt_with_cost(
     """
     if model is None:
         model = get_default_model()
+    if reasoning_level is None:
+        reasoning_level = get_default_reasoning_level()
 
     import base64
 
@@ -143,7 +162,7 @@ def generate_text_gpt_with_cost(
         "total_tokens": _get(usage, "total_tokens"),
     }
 
-def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = None) -> str:
+def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = None, model: str = None) -> str:
     return generate_text_gpt_with_cost(
         prompt=prompt, 
         system_prompt=system_prompt, 
@@ -152,9 +171,12 @@ def generate_text_gpt(prompt: str, system_prompt: str = "", image: bytes = None,
         image_detail=image_detail, 
         model=model, reasoning_level=reasoning_level)[0]
 
-def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = None) -> str:
+def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = None, model: str = None) -> str:
     if model is None:
         model = get_default_model()
+    if reasoning_level is None:
+        reasoning_level = get_default_reasoning_level()
+        
     if model.startswith("gpt"):
         return generate_text_gpt(
             prompt=prompt, 
@@ -164,11 +186,19 @@ def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, mul
             image_detail=image_detail, 
             reasoning_level=reasoning_level, model=model)
     elif model.startswith("gemini"):
+        # Map reasoning level to thinking budget
+        thinking_budget_mapping = {
+            "low": 0,
+            "medium": 100,
+            "high": 200
+        }
+        thinking_budget = thinking_budget_mapping.get(reasoning_level, 100)
         return generate_text_gemini(
             prompt=prompt, 
             system_prompt=system_prompt, 
             image=image, 
             multi_image=multi_image, 
+            thinking_budget=thinking_budget,
             model=model)
     else:
         raise ValueError(f"Invalid model: {model}")
@@ -199,11 +229,13 @@ def answer_question_with_vision(
     screenshot: Optional[Union[bytes, list[bytes]]],
     *,
     model: str = None,
-    reasoning_level: str = "medium",
+    reasoning_level: str = None,
 ) -> Optional[bool]:
     """Use a vision-capable model to answer a yes/no question about the screenshot(s)."""
     if model is None:
         model = get_default_model()
+    if reasoning_level is None:
+        reasoning_level = get_default_reasoning_level()
     question = (question or "").strip()
     if not screenshot or not question:
         return None
@@ -254,7 +286,7 @@ def generate_model_gpt_with_cost(
     multi_image: list[bytes] = None,
     image_detail: str = "low",
     model: str = None,
-    reasoning_level: str = "low",
+    reasoning_level: str = None,
 ) -> Tuple[Any, float, dict]:
     """
     Returns (parsed_result, cost_usd, usage_dict).
@@ -266,6 +298,8 @@ def generate_model_gpt_with_cost(
     """
     if model is None:
         model = get_default_model()
+    if reasoning_level is None:
+        reasoning_level = get_default_reasoning_level()
 
     import base64
 
@@ -366,9 +400,12 @@ def generate_model_gpt_with_cost(
         "total_tokens": _get(usage, "total_tokens"),
     }
 
-def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image = None, multi_image = None, thinking_level: str = "none", model: str = None) -> BaseModel:
+def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image = None, multi_image = None, thinking_budget: int = None, model: str = None) -> BaseModel:
     if model is None:
         model = get_default_model()
+    if thinking_budget is None:
+        thinking_budget = 100  # Default medium reasoning
+        
     contents = []
     if image:
         # Handle both bytes and genai.types.Part objects
@@ -381,7 +418,8 @@ def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseMode
                 image = genai.types.Part.from_bytes(data=image, mime_type="image/png")
             contents.append(image)
     contents.append(prompt)
-    thinking_config=genai.types.ThinkingConfig(thinking_budget=0) if thinking_level == "none" else genai.types.ThinkingConfig(thinking_budget=100)
+    
+    thinking_config = genai.types.ThinkingConfig(thinking_budget=thinking_budget)
     
     response = client.models.generate_content(
         model=model,
@@ -395,7 +433,7 @@ def generate_model_gemini(prompt: str, model_object_type: Optional[Type[BaseMode
     )
     return response.parsed
 
-def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = None) -> BaseModel:
+def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = None, model: str = None) -> BaseModel:
     return generate_model_gpt_with_cost(
         prompt, 
         model_object_type=model_object_type, 
@@ -406,9 +444,12 @@ def generate_model_gpt(prompt: str, model_object_type: Optional[Type[BaseModel]]
         model=model, 
         reasoning_level=reasoning_level)[0]
 
-def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = "medium", model: str = None) -> BaseModel:
+def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = None, system_prompt: str = "", image: bytes = None, multi_image: list[bytes] = None, image_detail: str = "low", reasoning_level: str = None, model: str = None) -> BaseModel:
     if model is None:
         model = get_default_model()
+    if reasoning_level is None:
+        reasoning_level = get_default_reasoning_level()
+        
     if model.startswith("gpt"):
         return generate_model_gpt(
             prompt=prompt, 
@@ -418,13 +459,20 @@ def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = N
             multi_image=multi_image, 
             image_detail=image_detail, reasoning_level=reasoning_level, model=model)
     elif model.startswith("gemini"):
+        # Map reasoning level to thinking budget
+        thinking_budget_mapping = {
+            "low": 0,
+            "medium": 100,
+            "high": 200
+        }
+        thinking_budget = thinking_budget_mapping.get(reasoning_level, 100)
         return generate_model_gemini(
             prompt=prompt, 
             model_object_type=model_object_type, 
             system_prompt=system_prompt, 
             image=image, 
             multi_image=multi_image, 
-            thinking_level=reasoning_level, 
+            thinking_budget=thinking_budget, 
             model=model)
     else:
         raise ValueError(f"Invalid model: {model}")
