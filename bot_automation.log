@@ -18598,3 +18598,382 @@ Log File: bot_automation.log
   "goal_description": "click: the next button in the pagination control"
 }
 [2025-10-19T22:17:21.026933] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 14913.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760965073
+Start Time: 2025-10-20T13:57:53.406051
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T13:57:55.880268] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T13:57:55.885355] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T13:57:55.885494] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T13:57:55.885650] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T13:57:55.885863] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T13:57:55.885929] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T13:57:55.886041] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-20T13:57:56.047072] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T14:00:29.196279] INFO     SYSTEM       Defer pause ended (took 153307.9ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 153.308
+}
+[2025-10-20T14:00:29.209878] SUCCESS  GOAL         Goal completed: defer (took 153323.8ms) ✅
+[2025-10-20T14:00:29.518077] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure"
+}
+[2025-10-20T14:00:34.620329] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:00:34.621408] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:00:34.621620] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:00:41.420659] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:00:41.428293] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:00:41.428665] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:00:48.627768] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:00:48.636166] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:00:48.636283] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:00:55.239194] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:00:55.249123] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:00:55.249513] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:01.863178] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:01.864258] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:01.864375] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:11.657868] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:11.659592] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:11.659719] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:20.828463] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:20.829476] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:20.829629] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:26.726584] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:26.728393] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:26.728532] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:32.889474] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:32.891177] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:32.891293] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:39.373478] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:39.375382] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:39.375490] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:46.178818] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:46.180330] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:46.180438] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:51.591288] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:51.593165] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:51.593315] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:01:59.576896] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:01:59.578671] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:01:59.578793] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:02:04.659969] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-20T14:02:04.660922] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure (took 95142.9ms) ✅
+    Details: {
+  "iterations": 13,
+  "outcome": "completed"
+}
+[2025-10-20T14:02:04.661084] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-20T14:02:07.040243] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-20T14:02:17.835187] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:17.838199] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:02:25.168943] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:25.172199] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:02:30.797267] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:30.800328] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:02:36.685777] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:36.689705] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:02:45.612126] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:45.615745] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:02:52.242690] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:02:52.246098] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:03:00.901612] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:03:00.905282] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:03:07.352455] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:03:07.355206] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:03:13.653999] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:03:13.657952] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:03:20.198772] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:03:20.200013] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:03:26.534950] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-20T14:03:26.538666] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 79498.4ms) ✅
+    Details: {
+  "iterations": 10,
+  "outcome": "completed"
+}
+[2025-10-20T14:03:26.539143] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-20T14:03:46.550848] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 20011.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760965548
+Start Time: 2025-10-20T14:05:48.136774
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T14:05:52.118465] INFO     GOAL         Starting goal: click: the search button
+    Details: {
+  "goal_description": "click: the search button"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760965606
+Start Time: 2025-10-20T14:06:46.645826
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T14:06:50.294331] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-20T14:06:50.341880] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Google",
+  "page_url": "https://www.google.com/"
+}
+[2025-10-20T14:06:56.691716] INFO     SYSTEM       Defer pause ended (took 6395.5ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 6.395
+}
+[2025-10-20T14:06:56.695973] SUCCESS  GOAL         Goal completed: defer (took 6401.7ms) ✅
+[2025-10-20T14:06:56.753980] INFO     GOAL         Starting goal: click: the search button
+    Details: {
+  "goal_description": "click: the search button"
+}
+[2025-10-20T14:07:26.565484] SUCCESS  GOAL         Goal completed: the search button (took 29811.5ms) ✅
+[2025-10-20T14:07:27.571843] INFO     GOAL         Starting goal: click: the lucky button
+    Details: {
+  "goal_description": "click: the lucky button"
+}
+[2025-10-20T14:07:29.171808] ERROR    GOAL         Goal failed: the lucky button (took 1600.0ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+[2025-10-20T14:07:31.317636] INFO     GOAL         Starting goal: click any link
+    Details: {
+  "goal_description": "click any link"
+}

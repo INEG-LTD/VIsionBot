@@ -194,6 +194,13 @@ class BrowserVisionBot:
         self.last_screenshot_hash = None
         self.last_dom_signature = None
         
+        # Screenshot and overlay caching for performance optimization
+        self._cached_screenshot_with_overlays = None
+        self._cached_overlay_data = None
+        self._cached_dom_signature = None
+        self._cached_focus_context = None
+        self._pre_dedup_element_data = []
+        
         # Initialize components
         self.goal_monitor: GoalMonitor = GoalMonitor(page)
         self.overlay_manager = OverlayManager(page)
@@ -898,6 +905,11 @@ class BrowserVisionBot:
                     print(f"   🔍 DOM signature: {sig_hash[:8]}...")
                 if sig_hash != self.last_dom_signature:
                     print(f"🔄 DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
+                    # Invalidate cache when DOM changes
+                    self._cached_screenshot_with_overlays = None
+                    self._cached_overlay_data = None
+                    self._cached_dom_signature = None
+                    print("🗑️ Invalidated screenshot and overlay cache")
                 self.last_dom_signature = sig_hash
                 
                 # Decide whether detection will be needed to avoid an extra screenshot
@@ -1280,13 +1292,30 @@ class BrowserVisionBot:
             return plan
 
         # Step 1: Number interactive elements (respecting focus context)
-        print("🔢 Numbering interactive elements...")
-        element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive")
+        # Check if we can use cached overlay data
+        current_focus_context = self.focus_manager.get_current_focus_context()
+        can_use_cache = (
+            self._cached_dom_signature == self.last_dom_signature and
+            self._cached_overlay_data is not None and
+            self._cached_screenshot_with_overlays is not None and
+            current_focus_context == getattr(self, '_cached_focus_context', None)
+        )
         
-        # Filter elements based on current focus context
-        if self.focus_manager.get_current_focus_context():
-            print("🎯 Filtering elements based on current focus context...")
-            element_data = self._filter_elements_by_focus(element_data)
+        if can_use_cache:
+            print("⚡ Using cached overlay data and screenshot (DOM unchanged)")
+            element_data = self._cached_overlay_data
+        else:
+            print("🔢 Numbering interactive elements...")
+            element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive")
+            
+            # Filter elements based on current focus context
+            if current_focus_context:
+                print("🎯 Filtering elements based on current focus context...")
+                element_data = self._filter_elements_by_focus(element_data)
+            
+            # Store the filtered data (before dedup) for potential caching
+            self._pre_dedup_element_data = element_data.copy() if element_data else []
+            self._cached_focus_context = current_focus_context
 
         # Filter out interacted elements if dedup is enabled
         if self.deduper and self.deduper.dedup_enabled:
@@ -1334,8 +1363,20 @@ class BrowserVisionBot:
             return None
 
         # Step 2: Take screenshot with numbered overlays visible (JPEG for speed)
-        # Lower quality for model-bound overlay screenshot
-        screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
+        # Use cached screenshot if available, otherwise capture new one
+        if can_use_cache:
+            screenshot_with_overlays = self._cached_screenshot_with_overlays
+        else:
+            # Lower quality for model-bound overlay screenshot
+            print("📸 Capturing screenshot with overlays...")
+            screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
+            
+            # Cache the screenshot and pre-dedup overlay data for future use
+            # We cache pre-dedup data because dedup state changes with interactions
+            self._cached_screenshot_with_overlays = screenshot_with_overlays
+            self._cached_overlay_data = self._pre_dedup_element_data.copy() if hasattr(self, '_pre_dedup_element_data') else element_data.copy()
+            self._cached_dom_signature = self.last_dom_signature
+            print(f"💾 Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
 
         # Step 3: Generate plan with element indices (and optional filtered overlay list)
         plan = self.plan_generator.create_plan_with_element_indices(
