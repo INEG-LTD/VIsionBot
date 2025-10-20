@@ -289,7 +289,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just the current hour as a number between 0-23.",
-                reasoning_level="low",
             )
             
             if result:
@@ -315,7 +314,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just the current minute as a number between 0-59.",
-                reasoning_level="low",
             )
             
             if result:
@@ -341,7 +339,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekday.",
-                reasoning_level="low",
             )
             
             if result:
@@ -367,7 +364,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="You are a time assistant. Answer with just 'yes' or 'no' for whether today is a weekend.",
-                reasoning_level="low",
             )
             
             if result:
@@ -407,7 +403,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="Extract the URL from the page information. Return only the URL.",
-                reasoning_level="low",
             )
             
             url = str(result or "").strip()
@@ -440,7 +435,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="Extract the page title from the page information. Return only the title.",
-                reasoning_level="low",
             )
             
             title = str(result or "").strip()
@@ -1379,7 +1373,6 @@ class ConditionEngine:
             result = generate_text(
                 prompt=prompt,
                 system_prompt="Answer with strict JSON only as {\"visible\": true|false}.",
-                reasoning_level="medium",
 
             )
             try:
@@ -1502,7 +1495,7 @@ def compile_nl_to_expr(condition_text: str) -> Optional[JsonExpr]:
     )
     prompt = f"Condition: {condition_text}\nReturn only the JSON expression."
     try:
-        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system, reasoning_level="medium")
+        out = generate_text(prompt=prompt, system_prompt=dsl_guide + "\n" + system)
         if not out:
             return None
         # Extract JSON

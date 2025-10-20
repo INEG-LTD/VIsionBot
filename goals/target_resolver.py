@@ -112,7 +112,6 @@ class TargetResolver:
                 model_object_type=IterationTargetsResponse,
                 system_prompt=system_prompt,
                 image=screenshot,
-                reasoning_level="medium"
             )
             
             return response
@@ -368,7 +367,6 @@ class TargetResolver:
                 model_object_type=TargetValidationResponse,
                 system_prompt=system_prompt,
                 image=screenshot,
-                reasoning_level="low"
             )
             
             return response

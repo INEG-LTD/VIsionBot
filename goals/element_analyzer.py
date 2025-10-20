@@ -216,7 +216,6 @@ class ElementAnalyzer:
             description = generate_text(
                 prompt="Describe this UI element naturally and concisely.",
                 system_prompt=system_prompt,
-                reasoning_level="medium",
                 # image=screenshot
             )
             description_str = str(description).strip()

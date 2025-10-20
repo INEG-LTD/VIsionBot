@@ -1,7 +1,7 @@
 from vision_bot import BrowserVisionBot
 
 # Initialize bot with GIF recording enabled and high reasoning level
-bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano", reasoning_level="high")
+bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano", reasoning_level="low")
 bot.start()
 bot.goto("https://www.reed.co.uk/")
 bot.default_interpretation_mode = "semantic"
@@ -37,7 +37,9 @@ bot.register_prompts([
 
 bot.register_prompts([
         "click: an ios job listing button/link eg 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc (ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote')",
-], "click_job_command", max_retries=1, max_attempts=1)
+], "click_job_command", 
+        additional_context="if the element about to be clicked has a 'Applied' status or an applied tag, then ignore it. only job listings that have 'IOS' in the job title are valid, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc. ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote'. ignore jobs like 'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Software Engineer', 'Senior Software Engineer', 'Junior Software Engineer', etc",
+        max_retries=1, max_attempts=1)
 
 bot.register_prompts([
         "dedup: enable",
@@ -45,16 +47,15 @@ bot.register_prompts([
         "dedup: disable",
         "ref: if_apply_to_job_command",
 ], "click_ios_job_action",
-        additional_context="the job listing will be in a card view. also look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc",
-        target_context_guard="only click a job listing if it its card does NOT have an 'Applied' status or an applied tag",
+        target_context_guard="only click a job listing if it its card does NOT have an 'Applied' status or an applied tag and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote')",
         confirm_before_interaction=True,
         all_must_be_true=True,
         command_id="click_ios_job_action")
 
 bot.register_prompts([
-        "if see: there is an ios job listing card without an 'Applied' status or an applied tag then: ref: click_ios_job_action else: scroll: down 600px"
+        "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
 ], "click_ios_job_action_loop",
-        additional_context="look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc. ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote'. ignore jobs like 'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Software Engineer', 'Senior Software Engineer', 'Junior Software Engineer', etc",
+        additional_context="if the element about to be clicked has a 'Applied' status or an applied tag, then ignore it. only job listings that have 'IOS' in the job title are valid, e.g 'IOS Developer', 'Senior IOS Developer', 'Junior IOS Developer', etc. ignore generic links like 'ios jobs' or 'ios developer jobs' or 'ios developer jobs in london' or 'ios developer jobs in remote'. ignore jobs like 'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Software Engineer', 'Senior Software Engineer', 'Junior Software Engineer', etc",
         command_id="click_ios_job_action_loop")
 
 # If cookie banner is visible, click the button to accept cookies

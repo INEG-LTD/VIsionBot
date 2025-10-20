@@ -184,7 +184,7 @@ def generate_text(prompt: str, system_prompt: str = "", image: bytes = None, mul
             image=image, 
             multi_image=multi_image, 
             image_detail=image_detail, 
-            reasoning_level=reasoning_level, model=model)
+            model=model, reasoning_level=reasoning_level)
     elif model.startswith("gemini"):
         # Map reasoning level to thinking budget
         thinking_budget_mapping = {
@@ -264,7 +264,6 @@ def answer_question_with_vision(
             system_prompt=system_prompt,
             image=image,
             multi_image=multi_image,
-            reasoning_level=reasoning_level,
             model=model,
         ).strip().lower()
     except Exception:
@@ -457,7 +456,7 @@ def generate_model(prompt: str, model_object_type: Optional[Type[BaseModel]] = N
             system_prompt=system_prompt, 
             image=image, 
             multi_image=multi_image, 
-            image_detail=image_detail, reasoning_level=reasoning_level, model=model)
+            image_detail=image_detail, model=model, reasoning_level=reasoning_level)
     elif model.startswith("gemini"):
         # Map reasoning level to thinking budget
         thinking_budget_mapping = {

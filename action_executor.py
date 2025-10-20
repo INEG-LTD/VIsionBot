@@ -1329,12 +1329,24 @@ class ActionExecutor:
             # First try to find by overlay number (preferred)
             for element in elements.elements:
                 if element.overlay_number == step.overlay_index and element.box_2d:
-                    center_x, center_y = get_gemini_box_2d_center_pixels(
-                        element.box_2d, page_info.width, page_info.height
-                    )
-                    if center_x > 0 or center_y > 0:
-                        print(f"[Exec][coords] Using overlay #{step.overlay_index} center=({center_x},{center_y}) from box={element.box_2d}")
-                        return center_x, center_y
+                    # ADD THIS: Validate coordinates before using them
+                    if len(element.box_2d) == 4:
+                        y_min, x_min, y_max, x_max = element.box_2d
+                        if (0 <= y_min <= 1000 and 0 <= x_min <= 1000 and 
+                            0 <= y_max <= 1000 and 0 <= x_max <= 1000 and
+                            y_min < y_max and x_min < x_max):
+                            center_x, center_y = get_gemini_box_2d_center_pixels(
+                                element.box_2d, page_info.width, page_info.height
+                            )
+                            if center_x > 0 or center_y > 0:
+                                print(f"[Exec][coords] Using overlay #{step.overlay_index} center=({center_x},{center_y}) from box={element.box_2d}")
+                                return center_x, center_y
+                        else:
+                            print(f"[Exec][coords] Skipping overlay #{step.overlay_index} with invalid coordinates: {element.box_2d}")
+                            continue
+                    else:
+                        print(f"[Exec][coords] Skipping overlay #{step.overlay_index} with malformed coordinates: {element.box_2d}")
+                        continue
             # Fallback to array index (legacy support)
             if 0 <= step.overlay_index < len(elements.elements):
                 element = elements.elements[step.overlay_index]

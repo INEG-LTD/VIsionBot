@@ -631,7 +631,6 @@ class ClickGoal(BaseGoal):
                 prompt="Evaluate if the clicked element matches the target description.",
                 model_object_type=ElementMatchEvaluation,
                 system_prompt=system_prompt,
-                reasoning_level="medium"
             )
 
             return result.model_dump()

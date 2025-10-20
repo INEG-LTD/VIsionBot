@@ -3,7 +3,7 @@ Plan generation utilities extracted from BrowserVisionBot.
 """
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import re
 from datetime import datetime
 
@@ -91,16 +91,20 @@ class PlanGenerator:
         DETECTED ELEMENTS: {[elem.model_dump() for elem in detected_elements.elements]}
         {goal_context}{dedup_section}
         {f"REQUIRED CONTEXT GUARD: {target_context_guard}" if target_context_guard else ""}
+        {f"ADDITIONAL CONTEXT: {additional_context}" if additional_context else ""}
 
         CRITICAL INSTRUCTIONS:
         {instructions_text}
         """
 
         try:
+            user_prompt = "Create a plan to achieve the goal using the detected elements."
+            if additional_context:
+                user_prompt += f"\n\nAdditional context to consider: {additional_context}"
+                
             plan: VisionPlan = generate_model(
-                prompt="Create a plan to achieve the goal using the detected elements.",
+                prompt=user_prompt,
                 model_object_type=VisionPlan,
-                reasoning_level="medium",
                 system_prompt=system_prompt,
                 image=screenshot,
             )
@@ -181,6 +185,8 @@ class PlanGenerator:
             "Treat user instructions as casual guidance from a teammate; choose the action that a careful human would naturally take to fulfil the request.",
             "Assume that everything needed to fulfil the goal is visible on the page.",
             "Do not assume a secondary action is needed to fulfil the goal. Eg. If the goal is to click a button and the button is, do not click a secondary button you think is needed to fulfil the goal.",
+            "Do not click elements to 'trigger' or 'open' other content unless explicitly requested. Focus only on what is currently visible and directly actionable.",
+            "If the goal can be achieved by analyzing or working with what's currently visible, do not generate click actions to navigate elsewhere.",
             "Use the overlay numbers exactly when referring to targets.",
             "Prefer elements that match the active goal descriptions and pending tasks.",
             "Use specialized actions when appropriate:\n           - HANDLE_SELECT, HANDLE_UPLOAD, HANDLE_DATETIME, PRESS, BACK, FORWARD, STOP",
@@ -209,6 +215,7 @@ class PlanGenerator:
         AVAILABLE ELEMENTS (numbered overlays):
         {chr(10).join(elements_list_lines[:500])}
         {dedup_section}
+        {f"ADDITIONAL CONTEXT: {additional_context}" if additional_context else ""}
 
         INSTRUCTIONS:
         {instructions_text}
@@ -229,10 +236,13 @@ class PlanGenerator:
         """
 
         try:
+            user_prompt = f"Create a plan to achieve the goal: '{goal_description}' using the numbered elements."
+            if additional_context:
+                user_prompt += f"\n\nAdditional context to consider: {additional_context}"
+            
             plan: VisionPlan = generate_model(
-                prompt=f"Create a plan to achieve the goal: '{goal_description}' using the numbered elements.",
+                prompt=user_prompt,
                 model_object_type=VisionPlan,
-                reasoning_level="medium",
                 system_prompt=system_prompt,
                 image=screenshot_with_overlays,
             )
@@ -555,7 +565,6 @@ class PlanGenerator:
             selection = generate_model(
                 prompt=prompt,
                 model_object_type=OverlaySelection,
-                reasoning_level="medium",
             )
         except Exception as e:
             print(f"[PlanGen][NL] LLM selection error: {e}")
@@ -706,6 +715,22 @@ class PlanGenerator:
         return PageElements(elements=detected_elements)
 
     def _rank_elements(self, element_data: List[Dict[str, Any]], goal_text: str) -> List[Dict[str, Any]]:
+        # Filter out elements with invalid coordinates first
+        valid_elements = []
+        for e in element_data:
+            coords = e.get('normalizedCoords', [])
+            if len(coords) == 4:
+                y_min, x_min, y_max, x_max = coords
+                # Check if coordinates are within valid range (0-1000)
+                if (0 <= y_min <= 1000 and 0 <= x_min <= 1000 and 
+                    0 <= y_max <= 1000 and 0 <= x_max <= 1000 and
+                    y_min < y_max and x_min < x_max):
+                    valid_elements.append(e)
+                else:
+                    print(f"[PlanGen] Filtering out element #{e.get('index')} with invalid coordinates: {coords}")
+            else:
+                print(f"[PlanGen] Filtering out element #{e.get('index')} with missing coordinates")
+        
         def score_elem(e: Dict[str, Any]) -> int:
             s = 0
             txt = (e.get('textContent') or e.get('description') or "").lower()
@@ -722,7 +747,8 @@ class PlanGenerator:
             if (e.get('ariaLabel') or '').strip():
                 s += 1
             return -s  # sort ascending by negative to get high score first
-        return sorted(list(element_data or []), key=score_elem)
+        
+        return sorted(valid_elements, key=score_elem)
 
     def _build_element_detail_line(self, elem: Dict[str, Any], page_info: PageInfo) -> str:
         idx = elem.get('index')

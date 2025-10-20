@@ -77,7 +77,6 @@ class ElementDetector:
             response = generate_model(
                 prompt=user_prompt,
                 model_object_type=PageElements,
-                reasoning_level="none",
                 system_prompt=system_prompt,
                 model=self.model_name,
                 image=screenshot

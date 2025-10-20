@@ -352,7 +352,6 @@ class FocusManager:
 
             response = generate_text(
                 prompt=prompt,
-                reasoning_level="medium",
                 system_prompt="You are a UI element selection expert. Select element indices that best match the user's intent. Return only a JSON array of integers or empty array for no-focus.",
                 image=screenshot
             )

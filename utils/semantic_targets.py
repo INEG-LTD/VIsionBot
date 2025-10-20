@@ -154,7 +154,6 @@ Use lowercase strings without punctuation. Keep lists small (<=5 items each).
             prompt=user_prompt,
             system_prompt=system_prompt,
             model_object_type=_InterpretationModel,
-            reasoning_level="low",
         )
         return interpretation
     except Exception:

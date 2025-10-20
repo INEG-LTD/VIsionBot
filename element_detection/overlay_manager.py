@@ -64,7 +64,7 @@ class OverlayManager:
             }}
 
             // Function to create a numbered overlay
-            function createNumberedOverlay(element, index) {{
+            function createNumberedOverlay(element, index, coords) {{
                 const rect = element.getBoundingClientRect();
                 // Tag the element so we can re-locate it later by overlay index
                 try {{ element.setAttribute('data-automation-overlay-index', String(index)); }} catch (e) {{}}
@@ -107,15 +107,10 @@ class OverlayManager:
                 document.body.appendChild(border);
                 document.body.appendChild(label);
                 
-                // Return element info with normalized coordinates (serialize only plain data)
+                // Return element info with pre-calculated normalized coordinates
                 return {{
                     index: index,
-                    normalizedCoords: [
-                        Math.round((rect.top / viewportHeight) * 1000),     // y_min
-                        Math.round((rect.left / viewportWidth) * 1000),     // x_min  
-                        Math.round((rect.bottom / viewportHeight) * 1000),  // y_max
-                        Math.round((rect.right / viewportWidth) * 1000)     // x_max
-                    ],
+                    normalizedCoords: coords,
                     description: element.tagName.toLowerCase() + 
                                 (element.textContent ? ': ' + element.textContent.trim().substring(0, 50) : '') +
                                 (element.placeholder ? ' [' + element.placeholder + ']' : '') +
@@ -222,6 +217,22 @@ class OverlayManager:
                 if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportHeight || rect.left >= viewportWidth) {{
                     return;
                 }}
+
+                // Calculate normalized coordinates and validate them
+                const normalizedCoords = [
+                    Math.round((rect.top / viewportHeight) * 1000),     // y_min
+                    Math.round((rect.left / viewportWidth) * 1000),     // x_min  
+                    Math.round((rect.bottom / viewportHeight) * 1000),  // y_max
+                    Math.round((rect.right / viewportWidth) * 1000)     // x_max
+                ];
+
+                // Skip elements with invalid coordinates (negative or out of bounds)
+                if (normalizedCoords[0] < 0 || normalizedCoords[1] < 0 || 
+                    normalizedCoords[2] > 1000 || normalizedCoords[3] > 1000 ||
+                    normalizedCoords[0] > 1000 || normalizedCoords[1] > 1000) {{
+                    // Skip this element silently - coordinates are invalid
+                    return;
+                }}
                 
                 // Only in interactive mode, drop tiny elements
                 if (!INCLUDE_ALL) {{
@@ -230,7 +241,7 @@ class OverlayManager:
                     }}
                 }}
                 
-                elementData.push(createNumberedOverlay(element, index));
+                elementData.push(createNumberedOverlay(element, index, normalizedCoords));
                 index++;
             }});
             

@@ -440,7 +440,6 @@ class NavigationGoal(BaseGoal):
                 model_object_type=NavigationAnalysis,
                 system_prompt=system_prompt,
                 image=screenshot,
-                reasoning_level="medium"
             )
             
             print(f"[NavigationGoal] AI analysis result: {result}")

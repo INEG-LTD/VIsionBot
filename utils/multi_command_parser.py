@@ -147,7 +147,6 @@ def _ai_parse_commands(prompt: str) -> List[str]:
         response = generate_text(
             prompt=f"Parse these commands: {prompt}",
             system_prompt=system_prompt,
-            reasoning_level="medium",
         )
         
         if not response:

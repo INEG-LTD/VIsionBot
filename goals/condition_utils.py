@@ -54,7 +54,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and determine if the requested element exists on the page. Return only 'true' or 'false'.",
             )
             
@@ -118,7 +117,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and determine if the requested element is visible. Return only 'true' or 'false'.",
             )
             
@@ -182,7 +180,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and determine if the requested text is present on the page. Return only 'true' or 'false'.",
             )
             
@@ -257,7 +254,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and determine if the specified form field has a value. Return only 'true' or 'false'.",
             )
             
@@ -322,7 +318,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and count the specified elements. Return only 'true' or 'false'.",
             )
             
@@ -387,7 +382,6 @@ Response format: Only return "true" or "false", nothing else.
             response = generate_text(
                 prompt=prompt,
                 image=screenshot,
-                reasoning_level="medium",
                 system_prompt="You are a web page analyzer. Look at the screenshot and count the specified elements. Return only 'true' or 'false'.",
             )
             
@@ -493,7 +487,7 @@ def mathematical_condition(expression: str, description: Optional[str] = None) -
             # Call AI to evaluate the expression
             response = generate_text(
                 prompt=prompt,
-                reasoning_level="medium",  # Simple mathematical evaluation
+  # Simple mathematical evaluation
                 system_prompt="You are a mathematical expression evaluator. Return only 'true' or 'false'.",
             )
             
@@ -633,7 +627,6 @@ If the condition cannot be parsed or doesn't match any available types, return:
             # Call AI to analyze the condition
             response = generate_text(
                 prompt=prompt,
-                reasoning_level="medium",
                 system_prompt="You are a condition parser. Analyze natural language conditions and return JSON with the appropriate condition type and parameters.",
             )
             

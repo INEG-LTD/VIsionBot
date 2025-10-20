@@ -214,7 +214,6 @@ def resolve_back_target(
             prompt=prompt,
             model_object_type=BackTargetSelection,
             system_prompt=system,
-            reasoning_level="medium",
         )
         selected_index = int(getattr(model_out, 'selected_index', -1) or -1)
         steps_back = int(getattr(model_out, 'steps_back', 0) or 0)
@@ -335,7 +334,6 @@ def resolve_forward_target(
             prompt=prompt,
             model_object_type=ForwardTargetSelection,
             system_prompt=system,
-            reasoning_level="medium",
         )
         selected_index = int(getattr(model_out, 'selected_index', -1) or -1)
         steps_forward = int(getattr(model_out, 'steps_forward', 0) or 0)

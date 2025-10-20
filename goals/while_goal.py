@@ -164,7 +164,6 @@ class WhileGoal(BaseGoal):
         result = generate_text(
             prompt=prompt,
             system_prompt="Convert conditions to yes/no questions for vision analysis.",
-            reasoning_level="low"
         )
         
         question = str(result or condition_text).strip()

@@ -248,7 +248,6 @@ class FormFillGoal(BaseGoal):
             result = generate_model(
                 prompt="Analyze the form fields and determine which ones are relevant to the user's goal.",
                 model_object_type=FieldRelevance,
-                reasoning_level="medium",
                 system_prompt=system_prompt,
             )
             
