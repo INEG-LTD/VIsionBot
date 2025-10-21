@@ -26,11 +26,22 @@ class SelectHandler:
         print(f"    Debug: elements count = {len(elements.elements)}")
         print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
-        if step.overlay_index is None or step.overlay_index >= len(elements.elements):
-            print(f"    ❌ Invalid target element index: {step.overlay_index} (max: {len(elements.elements) - 1})")
-            raise ValueError(f"Invalid target element index {step.overlay_index} for select field (elements count: {len(elements.elements)})")
+        if step.overlay_index is None:
+            print("    ❌ No overlay index provided")
+            raise ValueError("No overlay index provided for select field")
         
-        element = elements.elements[step.overlay_index]
+        # Find element by overlay_number instead of array index
+        element = None
+        for elem in elements.elements:
+            if elem.overlay_number == step.overlay_index:
+                element = elem
+                break
+        
+        if element is None:
+            available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
+            print(f"    ❌ No element found with overlay number {step.overlay_index}")
+            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+            raise ValueError(f"No element found with overlay number {step.overlay_index} for select field")
         x, y = self._get_click_coordinates(step, elements, page_info)
         target_description = element.description or element.element_label or element.element_type
         selector_hint: Optional[str] = None
@@ -84,14 +95,16 @@ class SelectHandler:
             return int(step.x), int(step.y)
         
         if step.overlay_index is not None:
-            if 0 <= step.overlay_index < len(elements.elements):
-                element = elements.elements[step.overlay_index]
-                if element.box_2d:
-                    center_x, center_y = get_gemini_box_2d_center_pixels(
-                        element.box_2d, page_info.width, page_info.height
-                    )
-                    if center_x > 0 or center_y > 0:
-                        return center_x, center_y
+            # Find element by overlay_number instead of array index
+            for element in elements.elements:
+                if element.overlay_number == step.overlay_index:
+                    if element.box_2d:
+                        center_x, center_y = get_gemini_box_2d_center_pixels(
+                            element.box_2d, page_info.width, page_info.height
+                        )
+                        if center_x > 0 or center_y > 0:
+                            return center_x, center_y
+                    break
         
         return None, None
     
@@ -211,6 +224,21 @@ class SelectHandler:
 
             if step.select_option_text:
                 opt = step.select_option_text
+                
+                # Debug: List all available options
+                available_options = self.page.evaluate("""
+                    (sel) => {
+                        const select = document.querySelector(sel);
+                        if (!select) return [];
+                        return Array.from(select.options || []).map(opt => ({
+                            value: opt.value,
+                            text: opt.textContent?.trim(),
+                            label: opt.label?.trim()
+                        }));
+                    }
+                """, query_selector)
+                print(f"    🔍 Available options: {available_options}")
+                
                 try:
                     self.page.select_option(query_selector, label=opt)
                     print(f"    ✅ Selected '{opt}' via selector {query_selector}")
@@ -223,6 +251,16 @@ class SelectHandler:
                     return
                 except Exception:
                     print(f"    ⚠️ select_option by value failed for '{opt}'")
+                
+                # Try partial matching
+                try:
+                    for option in available_options:
+                        if option['text'] and opt.lower() in option['text'].lower():
+                            self.page.select_option(query_selector, value=option['value'])
+                            print(f"    ✅ Selected '{option['text']}' (partial match for '{opt}')")
+                            return
+                except Exception as e:
+                    print(f"    ⚠️ Partial matching failed: {e}")
 
             # Fallback: pick first non-disabled option different from placeholder
             selected = self.page.evaluate("""

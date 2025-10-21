@@ -31,6 +31,9 @@ class InteractionType(str, Enum):
     TYPE = "type"
     SCROLL = "scroll"
     PRESS = "press"
+    SELECT = "select"
+    UPLOAD = "upload"
+    DATETIME = "datetime"
     NAVIGATION = "navigation"
     PAGE_LOAD = "page_load"
     ELEMENT_APPEAR = "element_appear"
@@ -39,11 +42,62 @@ class InteractionType(str, Enum):
 
 
 class EvaluationTiming(str, Enum):
-    """When a goal should be evaluated relative to interactions"""
-    BEFORE = "before"           # Evaluate before interaction occurs
-    AFTER = "after"             # Evaluate after interaction completes
-    BOTH = "both"               # Evaluate both before and after
-    CONTINUOUS = "continuous"   # Evaluate continuously (polling-based)
+    """
+    When a goal should be evaluated relative to interactions.
+    
+    This enum defines the different timing strategies for goal evaluation,
+    each suited for different types of goals and use cases.
+    """
+    BEFORE = "before"
+    """
+    Evaluate before interaction occurs.
+    
+    Use for:
+    - Goals that need to check conditions before taking action
+    - Validation goals that prevent actions if conditions aren't met
+    - Pre-flight checks that determine if an action should proceed
+    
+    Example: "Check if user is logged in before clicking the profile button"
+    """
+    
+    AFTER = "after"
+    """
+    Evaluate after interaction completes.
+    
+    Use for:
+    - Goals that verify the result of an action
+    - One-time actions that complete immediately
+    - Goals that check if an action was successful
+    
+    Example: "Verify the page loaded correctly after navigation"
+    """
+    
+    BOTH = "both"
+    """
+    Evaluate both before and after interactions.
+    
+    Use for:
+    - Goals that need to track state changes
+    - Goals that monitor the full lifecycle of an action
+    - Complex goals that need pre and post validation
+    
+    Example: "Monitor form submission - check form is valid before submit, verify success after"
+    """
+    
+    CONTINUOUS = "continuous"
+    """
+    Evaluate continuously (polling-based).
+    
+    Use for:
+    - Goals that monitor ongoing conditions
+    - Goals that wait for specific states to change
+    - Goals that need to respond to dynamic changes
+    - Goals that may take time to complete
+    
+    Important: Must use _completed flag to prevent re-execution of blocking operations.
+    
+    Example: "Wait until element appears", "Monitor for error messages", "Defer until user input"
+    """
 
 
 @dataclass
@@ -124,9 +178,15 @@ class BaseGoal(ABC):
     
     Goals monitor browser interactions and state changes to determine
     when a user's objective has been achieved.
+    
+    Evaluation Timing:
+        Subclasses should override EVALUATION_TIMING to specify when they want
+        to be evaluated. See EvaluationTiming enum for detailed documentation
+        on when to use each timing type (BEFORE, AFTER, BOTH, CONTINUOUS).
     """
     
     # Subclasses should override this to specify when they want to be evaluated
+    # See EvaluationTiming enum for detailed documentation on timing options
     EVALUATION_TIMING: EvaluationTiming = EvaluationTiming.AFTER
     
     def __init__(self, description: str, max_retries: int = 3, needs_detection: bool = True, needs_plan: bool = True, **kwargs):

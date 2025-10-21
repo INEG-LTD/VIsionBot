@@ -1,50 +1,42 @@
 """
-Form Fill Goal - Monitors and validates form completion.
+Form Fill Goal - Evaluates form field interactions before they happen.
 """
 from __future__ import annotations
 
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
-from playwright.sync_api import Page
+from pydantic import BaseModel, Field
 
+from ai_utils import generate_model
 from .base import BaseGoal, GoalResult, GoalStatus, GoalContext, EvaluationTiming
-from utils.vision_resolver import rank_elements_against_instruction
+
+
+class ElementMatchEvaluation(BaseModel):
+    """Result of evaluating if a form field matches the target description"""
+    is_match: bool = Field(description="Whether the form field matches the target")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the match assessment")
+    reasoning: str = Field(description="Explanation of why this match determination was made")
 
 
 class FormFillGoal(BaseGoal):
     """
-    Goal that monitors form filling and validates field completion.
+    Goal that evaluates form field interactions before they happen.
     
-    This goal can evaluate in two modes:
-    1. After field input - validates each field as it's filled
-    2. After submit attempt - validates entire form and handles errors
+    This goal evaluates planned form interactions (type, select, upload) to ensure
+    the correct form field is being targeted before the interaction occurs.
     """
     
-    EVALUATION_TIMING = EvaluationTiming.BOTH
+    EVALUATION_TIMING = EvaluationTiming.BEFORE
     
     def __init__(
         self, 
         description: str,
-        required_fields: Optional[List[str]] = None,
-        trigger_on_submit: bool = True,
-        trigger_on_field_input: bool = True,
         **kwargs
     ):
         super().__init__(description, **kwargs)
-        self.required_fields = required_fields or []  # Specific fields to monitor
-        self.trigger_on_submit = trigger_on_submit
-        self.trigger_on_field_input = trigger_on_field_input
-        
-        # State tracking
-        self.detected_fields: List[Dict[str, Any]] = []
-        self.field_values: Dict[str, str] = {}
-        self.submit_button_available = False
-        self.next_button_available = False
-        self.form_errors: List[str] = []
-        self.last_field_check = 0
     
     def evaluate(self, context: GoalContext) -> GoalResult:
-        """Evaluate form completion status"""
+        """Evaluate form field interaction before it happens"""
         
         page = context.page_reference
         if not page:
@@ -54,598 +46,339 @@ class FormFillGoal(BaseGoal):
                 reasoning="No page reference available for form evaluation"
             )
         
-        # Detect current form elements
-        self.detected_fields = self.detect_elements_on_page(page, self.description)
+        # Check if we have planned interaction data (pre-interaction evaluation)
+        planned_interaction = getattr(context, 'planned_interaction', None)
+        if planned_interaction and planned_interaction.get('interaction_type') in ['type', 'select', 'upload']:
+            return self._evaluate_planned_form_interaction(context, planned_interaction)
         
-        # Filter to get relevant fields for this goal
-        relevant_fields = self._filter_relevant_fields(context, self.detected_fields)
-        
-        # Update field values for relevant fields only
-        self._update_field_values(page, relevant_fields)
-        
-        # Detect form errors
-        form_errors = self._detect_form_errors(page)
-        
-        # Detect submit/next buttons
-        submit_info = self._detect_submit_and_next_buttons(page)
-        
-        # Count relevant form fields (input, select, textarea only)
-        relevant_form_fields = [f for f in relevant_fields if f['tagName'] in ['input', 'select', 'textarea']]
-        filled_relevant_fields = [f for f in relevant_form_fields if f.get('isFilled')]
-        
-        print("🔍 Form Analysis:")
-        print(f"   📝 Total fields detected: {len(self.detected_fields)}")
-        print(f"   🎯 Relevant fields for goal: {len(relevant_form_fields)}")
-        print(f"   ✅ Relevant fields filled: {len(filled_relevant_fields)}")
-        print(f"   🚫 Form errors: {len(form_errors)}")
-        print(f"   📤 Submit available: {submit_info['submit_available']}")
-        print(f"   ➡️  Next available: {submit_info['next_available']}")
-        
-        # Show field details for debugging
-        if relevant_form_fields:
-            print("   📋 Relevant field details:")
-            for field in relevant_form_fields:
-                field_name = field.get('name', field.get('id', field.get('placeholder', 'unnamed')))
-                field_type = field.get('type', 'text')
-                is_filled = field.get('isFilled', False)
-                status = "✅" if is_filled else "⏳"
-                print(f"      {status} {field_name} ({field_type})")
-        
-        # Determine evaluation based on interaction type and trigger settings
-        last_interaction = context.all_interactions[-1] if context.all_interactions else None
-        
-        if last_interaction and last_interaction.interaction_type.value == "click":
-            # After click - check if it was submit/next button
-            if self.trigger_on_submit:
-                return self._evaluate_after_click(context, form_errors, submit_info, relevant_fields)
-            else:
-                # Submit trigger disabled, return pending
-                return GoalResult(
-                    status=GoalStatus.PENDING,
-                    confidence=0.5,
-                    reasoning="Click interaction occurred but submit trigger is disabled for this goal"
-                )
-        elif last_interaction and last_interaction.interaction_type.value == "type":
-            # After typing - check field completion
-            if self.trigger_on_field_input:
-                return self._evaluate_after_field_input(context, form_errors, submit_info, relevant_fields)
-            else:
-                # Field input trigger disabled, return pending
-                return GoalResult(
-                    status=GoalStatus.PENDING,
-                    confidence=0.5,
-                    reasoning="Field input occurred but field input trigger is disabled for this goal"
-                )
-        else:
-            # General evaluation - always allowed
-            return self._evaluate_general_state(context, form_errors, submit_info, relevant_fields)
-    
-    def _update_field_values(self, page: Page, relevant_fields: List[Dict[str, Any]]) -> None:
-        """Update the current values of relevant fields only"""
-        self.field_values = {}
-        
-        for field in relevant_fields:
-            if field['tagName'] in ['input', 'select', 'textarea']:
-                coords = field['coordinates']
-                value = self.get_field_value_at_coordinates(page, coords['x'], coords['y'])
-                self.field_values[field.get('name', f"field_{field['index']}")] = value
-                field['currentValue'] = value
-                field['isFilled'] = bool(value and value.strip())
-                field['isRelevant'] = True  # Mark as relevant to this goal
-    
-    def _filter_relevant_fields(self, context: GoalContext, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter fields to only include those relevant to the goal description using AI"""
-        if not all_fields:
-            return []
-
-        # Try deterministic vision-based matching first (fast path)
-        vision_fields = self._vision_filter_relevant_fields(context, all_fields)
-        if vision_fields:
-            return vision_fields
-        
-        # Use AI to determine field relevance
-        relevant_fields = self._ai_filter_relevant_fields(all_fields)
-        
-        print(f"   🎯 AI filtered to {len(relevant_fields)} relevant fields out of {len(all_fields)} total")
-        return relevant_fields
-
-    def _vision_filter_relevant_fields(self, context: GoalContext, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Use deterministic vision heuristics to pick relevant form fields when possible."""
-        page_w = context.current_state.page_width if context and context.current_state else None
-        page_h = context.current_state.page_height if context and context.current_state else None
-
-        if self.required_fields:
-            selected_indices: List[int] = []
-            for requirement in self.required_fields:
-                ranked = rank_elements_against_instruction(
-                    requirement,
-                    all_fields,
-                    page_w=page_w,
-                    page_h=page_h,
-                    mode="field",
-                    interpretation_mode="semantic",
-                )
-                if not ranked:
-                    continue
-                idx, score, diag = ranked[0]
-                if score < 5:
-                    continue
-                if idx not in selected_indices:
-                    selected_indices.append(idx)
-                field = all_fields[idx]
-                field_name = field.get('name') or field.get('id') or field.get('placeholder') or field.get('textContent') or 'unnamed'
-                print(f"   🎯 Vision matched '{requirement}' -> field index {idx} ({field_name}) [score={score:.1f}]")
-            if selected_indices:
-                return [all_fields[i] for i in selected_indices]
-
-        # If no explicit requirements, pick high-scoring matches from the goal description itself
-        ranked = rank_elements_against_instruction(
-            self.description,
-            all_fields,
-            page_w=page_w,
-            page_h=page_h,
-            mode="field",
-            interpretation_mode="semantic",
+        # No planned interaction - return pending
+        return GoalResult(
+            status=GoalStatus.PENDING,
+            confidence=1.0,
+            reasoning="No form interaction planned yet",
+            next_actions=["Wait for form interaction to be planned"]
         )
-        strong_candidates = [item for item in ranked if item[1] >= 6][: min(3, len(all_fields))]
-        if strong_candidates:
-            indices = [idx for idx, _, _ in strong_candidates]
-            for idx, score, _ in strong_candidates:
-                field = all_fields[idx]
-                field_name = field.get('name') or field.get('id') or field.get('placeholder') or field.get('textContent') or 'unnamed'
-                print(f"   🎯 Vision highlighted field index {idx} ({field_name}) from goal description [score={score:.1f}]")
-            return [all_fields[i] for i in indices]
-
-        return []
-
-    def _ai_filter_relevant_fields(self, all_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Use AI to determine which fields are relevant to the goal"""
+    
+    
+    def _evaluate_element_match(
+        self,
+        actual_description: str,
+        target_description: str,
+        actual_element_info: Optional[Dict[str, Any]] = None,
+        page_dimensions: Optional[Tuple[int, int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Use AI evaluation method for form field matching.
+        Customized for form fields with specific context about field types, labels, and purpose.
+        """
         try:
-            from ai_utils import generate_model
-            from pydantic import BaseModel, Field
+            print(f"[FormGoal] Evaluating form field match: {actual_description} vs {target_description}")
             
-            # Create a simple model for AI response
-            class FieldRelevance(BaseModel):
-                relevant_field_indices: List[int] = Field(description="List of field indices that are relevant to the goal")
-                reasoning: str = Field(description="Brief explanation of why these fields were selected")
-            
-            # Prepare field information for AI
-            field_descriptions = []
-            for i, field in enumerate(all_fields):
-                field_info = {
-                    "index": i,
-                    "tagName": field.get('tagName', ''),
-                    "type": field.get('type', ''),
-                    "name": field.get('name', ''),
-                    "id": field.get('id', ''),
-                    "placeholder": field.get('placeholder', ''),
-                    "ariaLabel": field.get('ariaLabel', ''),
-                    "className": field.get('className', ''),
-                    "textContent": field.get('textContent', ''),
-                    "value": field.get('value', ''),
-                    "required": field.get('required', False)
-                }
-                field_descriptions.append(field_info)
+            # Enhanced system prompt with form field context
+            element_context = ""
+            if actual_element_info:
+                element_context = f"""
+                Form field details:
+                - Type: {actual_element_info.get('elementType', 'unknown')}
+                - Field type: {actual_element_info.get('type', 'text')}
+                - Name: {actual_element_info.get('name', '')}
+                - ID: {actual_element_info.get('id', '')}
+                - Placeholder: {actual_element_info.get('placeholder', '')}
+                - Label: {actual_element_info.get('ariaLabel', '')}
+                - Text content: {actual_element_info.get('text', '')[:100]}
+                - Required: {actual_element_info.get('required', False)}
+                - Attributes: {str(actual_element_info.get('attributes', {}))[:200]}
+                """
             
             system_prompt = f"""
-            You are an expert at analyzing web forms and determining which fields are relevant to specific user goals.
-            
-            USER GOAL: "{self.description}"
-            
-            AVAILABLE FIELDS: {field_descriptions}
-            
-            Instructions:
-            1. Analyze the user goal to understand what they want to accomplish
-            2. Identify which form fields are directly relevant to achieving this goal
-            3. Consider field names, types, placeholders, labels, and context
-            4. Be precise - only include fields that are directly needed for the goal
-            5. If the goal is general (like "fill the form"), include all fields
-            6. If the goal is specific (like "set the time"), only include relevant fields
-            
-            Return the indices of relevant fields and explain your reasoning.
+            You are evaluating whether a form field matches the user's intent for form filling.
+
+            User wants to fill: "{target_description}"
+            Form field found: "{actual_description}"
+            {element_context}
+
+            Determine if these match semantically for form filling purposes. Consider:
+            - Field names, labels, and placeholders (e.g., "email" could match "email address" or "e-mail")
+            - Field types and purposes (e.g., "date" could match "birth date" or "appointment date")
+            - Synonyms and similar terms (e.g., "name" vs "full name", "phone" vs "telephone")
+            - Context and intent (e.g., "contact information" could match "phone number" field)
+            - Form field functionality and purpose
+            - Required vs optional field status
+
+            For form fields, be more flexible with matching since users often describe fields in general terms
+            while the actual field might have more specific labels or names.
+
+            Provide your evaluation with confidence and reasoning.
             """
-            
+
             result = generate_model(
-                prompt="Analyze the form fields and determine which ones are relevant to the user's goal.",
-                model_object_type=FieldRelevance,
+                prompt="Evaluate if the form field matches the target description for form filling.",
+                model_object_type=ElementMatchEvaluation,
                 system_prompt=system_prompt,
             )
-            
-            if result and result.relevant_field_indices:
-                relevant_fields = []
-                for index in result.relevant_field_indices:
-                    if 0 <= index < len(all_fields):
-                        relevant_fields.append(all_fields[index])
-                        print(f"   ✅ AI selected field {index}: {all_fields[index].get('name', all_fields[index].get('id', all_fields[index].get('placeholder', 'unnamed')))}")
-                
-                print(f"   🤖 AI reasoning: {result.reasoning}")
-                return relevant_fields
-            else:
-                print("   ⚠️ AI couldn't determine field relevance, using all fields as fallback")
-                return all_fields
-                
+
+            return result.model_dump()
+
         except Exception as e:
-            print(f"   ⚠️ AI field filtering failed: {e}, using all fields as fallback")
-            return all_fields
+            print(f"AI evaluation failed: {e}, falling back to simple matching")
+            return self._simple_string_match(actual_description, target_description)
     
-    def _detect_form_errors(self, page: Page) -> List[str]:
-        """Detect form validation errors on the page"""
-        try:
-            js_code = """
-            (function() {
-                const errors = [];
-                
-                // Common error selectors
-                const errorSelectors = [
-                    '.error', '.field-error', '.form-error', '.validation-error',
-                    '.alert-danger', '.text-danger', '.is-invalid', '.has-error',
-                    '[role="alert"]', '.error-message', '.field-validation-error'
-                ];
-                
-                errorSelectors.forEach(selector => {
-                    const errorElements = document.querySelectorAll(selector);
-                    errorElements.forEach(element => {
-                        const text = element.textContent?.trim();
-                        if (text && text.length > 0 && 
-                            getComputedStyle(element).display !== 'none' &&
-                            getComputedStyle(element).visibility !== 'hidden') {
-                            errors.push({
-                                text: text,
-                                selector: selector,
-                                visible: true
-                            });
-                        }
-                    });
-                });
-                
-                // Also check for invalid input states
-                const invalidInputs = document.querySelectorAll('input:invalid, select:invalid, textarea:invalid');
-                invalidInputs.forEach(input => {
-                    const label = document.querySelector(`label[for="${input.id}"]`);
-                    const fieldName = label?.textContent || input.name || input.placeholder || 'Unknown field';
-                    errors.push({
-                        text: `${fieldName} is invalid`,
-                        selector: 'input:invalid',
-                        visible: true,
-                        fieldName: fieldName
-                    });
-                });
-                
-                return errors;
-            })();
-            """
-            
-            errors = page.evaluate(js_code)
-            self.form_errors = [error['text'] for error in (errors or [])]
-            return self.form_errors
-            
-        except Exception as e:
-            print(f"⚠️ Error detecting form errors: {e}")
-            return []
-    
-    def _detect_submit_and_next_buttons(self, page: Page) -> Dict[str, Any]:
-        """Detect submit and next buttons and their availability"""
-        try:
-            js_code = """
-            (function() {
-                let submitButton = null;
-                let nextButton = null;
-                
-                // Check all buttons
-                const allButtons = document.querySelectorAll('button, input[type="submit"], [role="button"]');
-                allButtons.forEach(button => {
-                    const text = button.textContent?.toLowerCase() || '';
-                    const className = button.className.toLowerCase();
-                    const type = button.type || '';
-                    
-                    // Check if it's a submit button
-                    if (type === 'submit' || 
-                        text.includes('submit') || 
-                        text.includes('send') ||
-                        className.includes('submit')) {
-                        
-                        const rect = button.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            submitButton = {
-                                element: button,
-                                text: button.textContent?.trim() || '',
-                                disabled: button.disabled,
-                                visible: getComputedStyle(button).display !== 'none',
-                                coordinates: {
-                                    x: Math.round(rect.left + rect.width / 2),
-                                    y: Math.round(rect.top + rect.height / 2)
-                                }
-                            };
-                        }
-                    }
-                    
-                    // Check if it's a next button
-                    if (text.includes('next') || 
-                        text.includes('continue') ||
-                        className.includes('next')) {
-                        
-                        const rect = button.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            nextButton = {
-                                element: button,
-                                text: button.textContent?.trim() || '',
-                                disabled: button.disabled,
-                                visible: getComputedStyle(button).display !== 'none',
-                                coordinates: {
-                                    x: Math.round(rect.left + rect.width / 2),
-                                    y: Math.round(rect.top + rect.height / 2)
-                                }
-                            };
-                        }
-                    }
-                });
-                
-                return {
-                    submitButton: submitButton,
-                    nextButton: nextButton,
-                    submit_available: submitButton && !submitButton.disabled && submitButton.visible,
-                    next_available: nextButton && !nextButton.disabled && nextButton.visible
-                };
-            })();
-            """
-            
-            result = page.evaluate(js_code)
-            return result or {
-                'submit_available': False,
-                'next_available': False,
-                'submitButton': None,
-                'nextButton': None
-            }
-            
-        except Exception as e:
-            print(f"⚠️ Error detecting submit/next buttons: {e}")
-            return {
-                'submit_available': False,
-                'next_available': False,
-                'submitButton': None,
-                'nextButton': None
-            }
-    
-    def _evaluate_after_click(self, context: GoalContext, form_errors: List[str], submit_info: Dict[str, Any], relevant_fields: List[Dict[str, Any]]) -> GoalResult:
-        """Evaluate form state after a click interaction"""
+    def _simple_string_match(self, actual: str, target: str) -> Dict[str, Any]:
+        """Simple fallback matching when AI is not available"""
+        actual_lower = actual.lower()
+        target_lower = target.lower()
         
-        # First, check for success indicators regardless of submit button detection
-        # This handles cases where form submission navigated to a new page
-        if self._detect_form_success(context.page_reference):
-            print("   🎉 Form submission success detected!")
+        # Exact match
+        if actual_lower == target_lower:
+            return {"is_match": True, "confidence": 1.0, "reasoning": "Exact match"}
+        
+        # Substring match
+        if target_lower in actual_lower or actual_lower in target_lower:
+            return {"is_match": True, "confidence": 0.8, "reasoning": "Substring match"}
+        
+        # Word overlap
+        actual_words = set(actual_lower.split())
+        target_words = set(target_lower.split())
+        overlap = actual_words & target_words
+        
+        if overlap and len(overlap) >= len(target_words) * 0.5:
+            return {
+                "is_match": True, 
+                "confidence": 0.6, 
+                "reasoning": f"Word overlap: {overlap}"
+            }
+        
+        return {"is_match": False, "confidence": 0.9, "reasoning": "No significant match found"}
+    
+    def _evaluate_planned_form_interaction(self, context: GoalContext, planned_interaction: Dict[str, Any]) -> GoalResult:
+        """
+        Evaluate a planned form interaction before it happens.
+        This checks if the target form field matches the goal's requirements.
+        """
+        coordinates = planned_interaction.get('coordinates')
+        if not coordinates:
             return GoalResult(
-                status=GoalStatus.ACHIEVED,
-                confidence=0.9,
-                reasoning="Form submitted successfully - detected success indicators on current page",
-                evidence={"form_errors": form_errors, "success_detected": True}
+                status=GoalStatus.UNKNOWN,
+                confidence=0.1,
+                reasoning="No coordinates provided for planned form interaction"
             )
         
-        # Check if the click was on a submit button (for cases where we're still on the form page)
-        last_interaction = context.all_interactions[-1]
-        click_coords = last_interaction.coordinates
+        x, y = coordinates
+        interaction_type = planned_interaction.get('interaction_type', 'type')
+        target_description = planned_interaction.get('target_description', '')
         
-        # Check if submit button was clicked
-        was_submit_clicked = False
-        if click_coords and submit_info.get('submitButton'):
-            was_submit_clicked = self._was_submit_clicked(click_coords, submit_info)
+        print(f"[FormGoal] Evaluating planned {interaction_type} interaction at ({x}, {y}) for '{target_description}'")
         
-        # If submit button was clicked, check for success indicators
-        if was_submit_clicked:
-            print("   📤 Submit button was clicked, checking for success...")
-            
-            # Check for form errors after submit
-            if form_errors:
-                # Request retry if we haven't exceeded max retries and there are fixable errors
-                if self.can_retry() and len(form_errors) <= 3:  # Only retry for a few errors
-                    retry_reason = f"Form has validation errors: {'; '.join(form_errors[:3])}"
+        # Get element info at the planned coordinates
+        try:
+            element_info = self.get_element_info_at_coordinates(context.page_reference, x, y)
+            if not element_info:
+                # Request retry if we can't analyze the element
+                if self.can_retry():
+                    retry_reason = f"Could not analyze form field at coordinates ({x}, {y}) - element analysis failed"
                     if self.request_retry(retry_reason):
                         return GoalResult(
                             status=GoalStatus.PENDING,
-                            confidence=0.7,
-                            reasoning=f"Form submitted but has validation errors, requesting retry: {'; '.join(form_errors[:3])}",
-                            evidence={"form_errors": form_errors, "retry_requested": True, "retry_count": self.retry_count},
-                            next_actions=["Retry plan generation to fix validation errors"]
+                            confidence=0.3,
+                            reasoning=f"Could not analyze form field at ({x}, {y}), requesting retry",
+                            evidence={
+                                "coordinates": (x, y),
+                                "retry_requested": True,
+                                "retry_count": self.retry_count
+                            },
+                            next_actions=["Retry plan generation to find valid form field"]
                         )
                 
                 return GoalResult(
-                    status=GoalStatus.PENDING,
-                    confidence=0.7,
-                    reasoning=f"Form submitted but has validation errors: {'; '.join(form_errors[:3])}",
-                    evidence={"form_errors": form_errors},
-                    next_actions=["Fix validation errors and resubmit"]
+                    status=GoalStatus.FAILED,
+                    confidence=0.3,
+                    reasoning=f"Could not analyze form field at ({x}, {y}) and max retries exceeded",
+                    evidence={
+                        "coordinates": (x, y),
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
+                    }
                 )
             
-            # No clear success or error - might be processing
-            return GoalResult(
-                status=GoalStatus.PENDING,
-                confidence=0.5,
-                reasoning="Form submitted, waiting for response or checking for success indicators",
-                evidence={"form_errors": form_errors}
-            )
-        
-        # If next button was clicked, continue monitoring
-        elif submit_info['next_available'] and self._was_next_clicked(click_coords, submit_info):
-            print("   ➡️ Next button was clicked, continuing form monitoring...")
+            # Create element description for matching
+            element_description = self._create_element_description(element_info)
             
-            unfilled_fields = [f for f in relevant_fields if not f.get('isFilled') and f['tagName'] in ['input', 'select', 'textarea']]
+            # Check if this is a form field
+            if element_info.get('tagName', '').lower() not in ['input', 'select', 'textarea']:
+                # Request retry if it's not a form field
+                if self.can_retry():
+                    retry_reason = f"Element at ({x}, {y}) is not a form field (tag: {element_info.get('tagName', 'unknown')}) - need to find form field"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=0.9,
+                            reasoning=f"Element at ({x}, {y}) is not a form field, requesting retry",
+                            evidence={
+                                "coordinates": (x, y),
+                                "element_info": element_info,
+                                "retry_requested": True,
+                                "retry_count": self.retry_count
+                            },
+                            next_actions=["Retry plan generation to find form field"]
+                        )
+                
+                return GoalResult(
+                    status=GoalStatus.FAILED,
+                    confidence=0.9,
+                    reasoning=f"Element at ({x}, {y}) is not a form field and max retries exceeded",
+                    evidence={
+                        "coordinates": (x, y),
+                        "element_info": element_info,
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
+                    }
+                )
             
-            return GoalResult(
-                status=GoalStatus.PENDING,
-                confidence=0.6,
-                reasoning=f"Moved to next form step, {len(unfilled_fields)} fields still need filling",
-                evidence={"unfilled_fields": len(unfilled_fields), "form_errors": form_errors}
-            )
-        
-        # Other click - continue monitoring
-        return GoalResult(
-            status=GoalStatus.PENDING,
-            confidence=0.4,
-            reasoning="Click interaction completed, continuing form monitoring",
-            evidence={"form_errors": form_errors}
-        )
-    
-    def _evaluate_after_field_input(self, context: GoalContext, form_errors: List[str], submit_info: Dict[str, Any], relevant_fields: List[Dict[str, Any]]) -> GoalResult:
-        """Evaluate form state after field input"""
-        
-        # Count filled vs unfilled relevant fields
-        total_fields = len([f for f in relevant_fields if f['tagName'] in ['input', 'select', 'textarea']])
-        filled_fields = len([f for f in relevant_fields if f.get('isFilled')])
-        
-        print(f"   📊 Field Progress: {filled_fields}/{total_fields} fields filled")
-        
-        # If all relevant fields are filled, mark as achieved regardless of form errors
-        if filled_fields == total_fields and total_fields > 0:
-            return GoalResult(
-                status=GoalStatus.ACHIEVED,
-                confidence=0.9,
-                reasoning=f"All {total_fields} relevant fields are filled - goal completed",
-                evidence={
-                    "filled_fields": filled_fields,
-                    "total_fields": total_fields,
-                    "submit_available": submit_info['submit_available'],
-                    "form_errors": len(form_errors)
-                },
-                next_actions=["Goal completed - relevant fields filled"] if not form_errors else ["Goal completed - relevant fields filled (form has validation errors on other fields)"]
-            )
-        
-        # Still filling fields
-        elif filled_fields < total_fields:
-            unfilled_count = total_fields - filled_fields
-            return GoalResult(
-                status=GoalStatus.PENDING,
-                confidence=0.5,
-                reasoning=f"Form filling in progress: {filled_fields}/{total_fields} fields completed, {unfilled_count} remaining",
-                evidence={
-                    "filled_fields": filled_fields,
-                    "total_fields": total_fields,
-                    "unfilled_count": unfilled_count
-                }
-            )
-        
-        # No fields detected
-        else:
-            return GoalResult(
-                status=GoalStatus.UNKNOWN,
-                confidence=0.2,
-                reasoning="No form fields detected on current page",
-                evidence={"total_fields": total_fields}
-            )
-    
-    def _evaluate_general_state(self, context: GoalContext, form_errors: List[str], submit_info: Dict[str, Any], relevant_fields: List[Dict[str, Any]]) -> GoalResult:
-        """General form state evaluation"""
-        
-        total_fields = len([f for f in relevant_fields if f['tagName'] in ['input', 'select', 'textarea']])
-        filled_fields = len([f for f in relevant_fields if f.get('isFilled')])
-        
-        # Check overall completion - prioritize relevant field completion
-        if total_fields > 0:
-            completion_ratio = filled_fields / total_fields
+            # Evaluate if the form field matches the target description
+            page_dims = (
+                context.current_state.page_width,
+                context.current_state.page_height,
+            ) if context.current_state else None
             
-            # If all relevant fields are filled, mark as achieved regardless of form errors
-            if completion_ratio >= 1.0:
+            match_result = self._evaluate_element_match(
+                element_description,
+                target_description,
+                element_info,
+                page_dims,
+            )
+            
+            if match_result["is_match"]:
                 return GoalResult(
                     status=GoalStatus.ACHIEVED,
-                    confidence=0.9,
-                    reasoning=f"All {total_fields} relevant fields are filled - goal completed",
+                    confidence=match_result["confidence"],
+                    reasoning=f"Form field '{element_description}' matches target '{target_description}' - ready for interaction",
                     evidence={
-                        "filled_fields": filled_fields,
-                        "total_fields": total_fields,
-                        "form_errors": len(form_errors)
-                    },
-                    next_actions=["Goal completed - relevant fields filled"] if not form_errors else ["Goal completed - relevant fields filled (form has validation errors on other fields)"]
+                        "target_field": element_description,
+                        "target_description": target_description,
+                        "coordinates": coordinates,
+                        "element_info": element_info,
+                        "match_reasoning": match_result["reasoning"],
+                        "evaluation_timing": "pre_interaction"
+                    }
                 )
             else:
-                # If there are form errors but not all relevant fields are filled, mention both
-                if form_errors:
-                    return GoalResult(
-                        status=GoalStatus.PENDING,
-                        confidence=0.5,
-                        reasoning=f"Form filling in progress: {filled_fields}/{total_fields} relevant fields completed. Form has validation errors on other fields.",
-                        evidence={"form_errors": form_errors, "filled_fields": filled_fields, "total_fields": total_fields},
-                        next_actions=["Continue filling relevant fields"]
-                    )
-                else:
-                    return GoalResult(
-                        status=GoalStatus.PENDING,
-                        confidence=0.4,
-                        reasoning=f"Form filling in progress: {filled_fields}/{total_fields} relevant fields completed"
-                    )
-        
-        return GoalResult(
-            status=GoalStatus.UNKNOWN,
-            confidence=0.2,
-            reasoning="No clear form structure detected"
-        )
-    
-    def _was_submit_clicked(self, click_coords: Optional[tuple], submit_info: Dict[str, Any]) -> bool:
-        """Check if the last click was on the submit button"""
-        if not click_coords or not submit_info.get('submitButton'):
-            return False
-        
-        submit_coords = submit_info['submitButton']['coordinates']
-        click_x, click_y = click_coords
-        submit_x, submit_y = submit_coords['x'], submit_coords['y']
-        
-        # Check if click was within submit button area (allow some tolerance)
-        distance = ((click_x - submit_x) ** 2 + (click_y - submit_y) ** 2) ** 0.5
-        return distance < 50  # Within 50 pixels
-    
-    def _was_next_clicked(self, click_coords: Optional[tuple], submit_info: Dict[str, Any]) -> bool:
-        """Check if the last click was on the next button"""
-        if not click_coords or not submit_info.get('nextButton'):
-            return False
-        
-        next_coords = submit_info['nextButton']['coordinates']
-        click_x, click_y = click_coords
-        next_x, next_y = next_coords['x'], next_coords['y']
-        
-        # Check if click was within next button area
-        distance = ((click_x - next_x) ** 2 + (click_y - next_y) ** 2) ** 0.5
-        return distance < 50  # Within 50 pixels
-    
-    def _detect_form_success(self, page: Page) -> bool:
-        """Detect if form submission was successful"""
-        try:
-            js_code = """
-            (function() {
-                // Look for success indicators
-                const successSelectors = [
-                    '.success', '.alert-success', '.text-success', '.confirmation',
-                    '.thank-you', '.submitted', '.complete', '[role="status"]'
-                ];
+                # Request retry if the form field doesn't match
+                if self.can_retry():
+                    retry_reason = f"Form field '{element_description}' does not match target '{target_description}' - {match_result['reasoning']}"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=match_result["confidence"],
+                            reasoning=f"Form field doesn't match target, requesting retry: {match_result['reasoning']}",
+                            evidence={
+                                "target_field": element_description,
+                                "target_description": target_description,
+                                "coordinates": (x, y),
+                                "element_info": element_info,
+                                "match_reasoning": match_result["reasoning"],
+                                "retry_requested": True,
+                                "retry_count": self.retry_count
+                            },
+                            next_actions=["Retry plan generation to find correct form field"]
+                        )
                 
-                for (const selector of successSelectors) {
-                    const elements = document.querySelectorAll(selector);
-                    for (const element of elements) {
-                        const text = element.textContent?.toLowerCase() || '';
-                        if ((text.includes('success') || 
-                             text.includes('thank you') || 
-                             text.includes('submitted') ||
-                             text.includes('complete')) &&
-                            getComputedStyle(element).display !== 'none') {
-                            return true;
-                        }
+                return GoalResult(
+                    status=GoalStatus.FAILED,
+                    confidence=match_result["confidence"],
+                    reasoning=f"Form field '{element_description}' does not match target '{target_description}' and max retries exceeded - {match_result['reasoning']}",
+                    evidence={
+                        "target_field": element_description,
+                        "target_description": target_description,
+                        "coordinates": (x, y),
+                        "element_info": element_info,
+                        "match_reasoning": match_result["reasoning"],
+                        "retry_count": self.retry_count,
+                        "max_retries_exceeded": True
                     }
-                }
+                )
                 
-                // Check for URL change that might indicate success
-                const url = window.location.href.toLowerCase();
-                if (url.includes('success') || 
-                    url.includes('thank-you') || 
-                    url.includes('confirmation') ||
-                    url.includes('complete')) {
-                    return true;
-                }
+        except Exception as e:
+            return GoalResult(
+                status=GoalStatus.UNKNOWN,
+                confidence=0.1,
+                reasoning=f"Error evaluating planned form interaction: {e}",
+                evidence={"error": str(e)}
+            )
+    
+    def _create_element_description(self, element_info: Dict[str, Any]) -> str:
+        """Create a description of the form field element"""
+        element_type = element_info.get('elementType', 'form field')
+        field_name = element_info.get('name', '')
+        field_id = element_info.get('id', '')
+        placeholder = element_info.get('placeholder', '')
+        label = element_info.get('ariaLabel', '')
+        field_type = element_info.get('type', 'text')
+        
+        # Build description from available information
+        description_parts = [element_type]
+        
+        if field_name:
+            description_parts.append(f"named '{field_name}'")
+        elif field_id:
+            description_parts.append(f"with id '{field_id}'")
+        elif placeholder:
+            description_parts.append(f"with placeholder '{placeholder}'")
+        elif label:
+            description_parts.append(f"labeled '{label}'")
+        
+        if field_type and field_type != 'text':
+            description_parts.append(f"of type '{field_type}'")
+        
+        return " ".join(description_parts)
+    
+    def get_element_info_at_coordinates(self, page, x: int, y: int) -> Optional[Dict[str, Any]]:
+        """Get element information at the specified coordinates"""
+        try:
+            # Use JavaScript to get element info at coordinates
+            js_code = f"""
+            (function() {{
+                const element = document.elementFromPoint({x}, {y});
+                if (!element) return null;
                 
-                return false;
-            })();
+                const rect = element.getBoundingClientRect();
+                const computedStyle = getComputedStyle(element);
+                
+                return {{
+                    tagName: element.tagName.toLowerCase(),
+                    elementType: element.tagName.toLowerCase(),
+                    type: element.type || '',
+                    name: element.name || '',
+                    id: element.id || '',
+                    placeholder: element.placeholder || '',
+                    ariaLabel: element.getAttribute('aria-label') || '',
+                    className: element.className || '',
+                    textContent: element.textContent || '',
+                    value: element.value || '',
+                    required: element.required || false,
+                    isClickable: computedStyle.pointerEvents !== 'none' && 
+                                computedStyle.display !== 'none' && 
+                                computedStyle.visibility !== 'hidden',
+                    coordinates: {{
+                        x: Math.round(rect.left + rect.width / 2),
+                        y: Math.round(rect.top + rect.height / 2)
+                    }},
+                    attributes: {{
+                        type: element.type,
+                        name: element.name,
+                        id: element.id,
+                        placeholder: element.placeholder,
+                        'aria-label': element.getAttribute('aria-label'),
+                        class: element.className
+                    }}
+                }};
+            }})();
             """
             
-            return page.evaluate(js_code) or False
+            return page.evaluate(js_code)
             
         except Exception as e:
-            print(f"⚠️ Error detecting form success: {e}")
-            return False
+            print(f"Error getting element info at coordinates ({x}, {y}): {e}")
+            return None
     
     def get_description(self, context: GoalContext) -> str:
         """

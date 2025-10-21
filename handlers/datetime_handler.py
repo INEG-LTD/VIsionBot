@@ -30,17 +30,22 @@ class DateTimeHandler:
         
         element_selector = None
         detected_element = None
-        if step.overlay_index is not None and step.overlay_index < len(elements.elements):
-            detected_element = elements.elements[step.overlay_index]
+        
+        # Find element by overlay_number instead of array index
+        if step.overlay_index is not None:
+            for elem in elements.elements:
+                if elem.overlay_number == step.overlay_index:
+                    detected_element = elem
+                    break
 
         # Get coordinates from the action step or element
         if step.x is not None and step.y is not None:
             x, y = int(step.x), int(step.y)
             print(f"    Using coordinates from step: ({x}, {y})")
-        elif step.overlay_index is not None and step.overlay_index < len(elements.elements):
+        elif step.overlay_index is not None and detected_element is not None:
             # Get coordinates from element
             from vision_utils import get_gemini_box_2d_center_pixels
-            element = elements.elements[step.overlay_index]
+            element = detected_element
             if element.box_2d:
                 x, y = get_gemini_box_2d_center_pixels(
                     element.box_2d, page_info.width, page_info.height
@@ -49,8 +54,10 @@ class DateTimeHandler:
             else:
                 raise ValueError("Could not determine coordinates for datetime field")
         else:
-            print(f"    ❌ Invalid target element index: {step.overlay_index} (max: {len(elements.elements) - 1})")
-            raise ValueError(f"Invalid target element index {step.overlay_index} for datetime field (elements count: {len(elements.elements)})")
+            available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
+            print(f"    ❌ No element found with overlay number {step.overlay_index}")
+            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+            raise ValueError(f"No element found with overlay number {step.overlay_index} for datetime field")
         
         # Validate and clamp coordinates
         x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)

@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from playwright.sync_api import Page
-from models import ActionStep, PageElements, PageInfo, DetectedElement
+from models import ActionStep, PageElements, PageInfo
 from utils import SelectorUtils
 from vision_utils import validate_and_clamp_coordinates, get_gemini_box_2d_center_pixels
 
@@ -26,11 +26,22 @@ class UploadHandler:
         print(f"    Debug: elements count = {len(elements.elements)}")
         print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
-        if step.overlay_index is None or step.overlay_index >= len(elements.elements):
-            print(f"    ❌ Invalid target element index: {step.overlay_index} (max: {len(elements.elements) - 1})")
-            raise ValueError(f"Invalid target element index {step.overlay_index} for upload field (elements count: {len(elements.elements)})")
+        if step.overlay_index is None:
+            print("    ❌ No overlay index provided")
+            raise ValueError("No overlay index provided for upload field")
         
-        element = elements.elements[step.overlay_index]
+        # Find element by overlay_number instead of array index
+        element = None
+        for elem in elements.elements:
+            if elem.overlay_number == step.overlay_index:
+                element = elem
+                break
+        
+        if element is None:
+            available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
+            print(f"    ❌ No element found with overlay number {step.overlay_index}")
+            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+            raise ValueError(f"No element found with overlay number {step.overlay_index} for upload field")
         target_description = element.description or element.element_label or element.element_type
         if not step.upload_file_path:
             raise ValueError("Upload action is missing a file path to upload")
@@ -69,14 +80,16 @@ class UploadHandler:
             return int(step.x), int(step.y)
         
         if step.overlay_index is not None:
-            if 0 <= step.overlay_index < len(elements.elements):
-                element = elements.elements[step.overlay_index]
-                if element.box_2d:
-                    center_x, center_y = get_gemini_box_2d_center_pixels(
-                        element.box_2d, page_info.width, page_info.height
-                    )
-                    if center_x > 0 or center_y > 0:
-                        return center_x, center_y
+            # Find element by overlay_number instead of array index
+            for element in elements.elements:
+                if element.overlay_number == step.overlay_index:
+                    if element.box_2d:
+                        center_x, center_y = get_gemini_box_2d_center_pixels(
+                            element.box_2d, page_info.width, page_info.height
+                        )
+                        if center_x > 0 or center_y > 0:
+                            return center_x, center_y
+                    break
         
         return None, None
     

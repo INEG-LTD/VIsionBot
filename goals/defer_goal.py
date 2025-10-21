@@ -10,7 +10,14 @@ from .base import BaseGoal, GoalResult, GoalStatus, EvaluationTiming, GoalContex
 
 
 class DeferGoal(BaseGoal):
-    """Goal that hands control back to the user until they press Enter."""
+    """
+    Goal that hands control back to the user until they press Enter.
+    
+    Uses CONTINUOUS evaluation timing because:
+    - It needs to be evaluated multiple times during the goal monitoring cycle
+    - The _completed flag prevents re-execution of the input() operation
+    - It's a blocking operation that waits for user input
+    """
 
     EVALUATION_TIMING = EvaluationTiming.CONTINUOUS
 
@@ -111,3 +118,74 @@ class DeferGoal(BaseGoal):
             label = key.replace("_", " ").title()
             parts.append(f"{label}: {value}")
         return " | ".join(parts)
+
+
+class TimedSleepGoal(BaseGoal):
+    """
+    Goal that pauses automation for a specific number of seconds using time.sleep().
+    
+    Uses CONTINUOUS evaluation timing because:
+    - It needs to be evaluated multiple times during the goal monitoring cycle
+    - The _completed flag prevents re-execution of the sleep operation
+    - Follows the same pattern as DeferGoal for consistency
+    """
+
+    EVALUATION_TIMING = EvaluationTiming.CONTINUOUS  # Evaluate continuously like DeferGoal
+
+    def __init__(self, description: str, delay_seconds: int, prompt: Optional[str] = None, max_retries: int = 0) -> None:
+        super().__init__(
+            description=description,
+            max_retries=max_retries,
+            needs_detection=False,
+            needs_plan=False,
+        )
+        self.delay_seconds = delay_seconds
+        self.prompt_message = (prompt or "").strip() or f"Pausing for {delay_seconds} seconds..."
+        self._logger = get_logger()
+        self._completed = False
+
+    def evaluate(self, context: GoalContext) -> GoalResult:
+        """Execute the sleep and return immediately."""
+        
+        if not self._completed:
+            print(f"[TimedSleep] Pausing for {self.delay_seconds} seconds...")
+            
+            # Log the start
+            self._logger.log(
+                LogLevel.INFO,
+                LogCategory.SYSTEM,
+                "Timed sleep started",
+                details={"delay_seconds": self.delay_seconds, "prompt": self.prompt_message or ""},
+            )
+            
+            # Show countdown while sleeping
+            for remaining in range(self.delay_seconds, 0, -1):
+                print(f"[TimedSleep] {remaining} seconds remaining...", end='\r')
+                time.sleep(1)
+            
+            print("\n[TimedSleep] Sleep completed!")
+            
+            # Mark as completed
+            self._completed = True
+            
+            # Log the end
+            self._logger.log(
+                LogLevel.INFO,
+                LogCategory.SYSTEM,
+                "Timed sleep ended",
+                details={"delay_seconds": self.delay_seconds},
+                duration_ms=self.delay_seconds * 1000,
+                success=True,
+            )
+
+        # Always return ACHIEVED after completion (like DeferGoal)
+        evidence = {"delay_seconds": self.delay_seconds}
+        return GoalResult(
+            status=GoalStatus.ACHIEVED,
+            confidence=1.0,
+            reasoning=f"Timed sleep completed after {self.delay_seconds} seconds.",
+            evidence=evidence,
+        )
+
+    def get_description(self, context: GoalContext) -> str:
+        return f"Sleep for {self.delay_seconds} seconds"

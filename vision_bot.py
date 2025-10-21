@@ -40,6 +40,7 @@ from goals import (
     ForwardGoal,
     DeferGoal,
 )
+from goals.defer_goal import TimedSleepGoal
 # from goals.condition_engine import create_predicate_condition as create_predicate
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
@@ -545,6 +546,11 @@ class BrowserVisionBot:
                                 goals_to_restore = saved_goal if isinstance(saved_goal, list) else [saved_goal]
                                 for g in goals_to_restore:
                                     try:
+                                        # Only restore goals that haven't been completed
+                                        # Check if goal has a _completed attribute and if it's False
+                                        if hasattr(g, '_completed') and g._completed:
+                                            print(f"🔄 Skipping restoration of completed goal: {g}")
+                                            continue
                                         self.goal_monitor.add_goal(g)
                                     except Exception:
                                         pass
@@ -978,6 +984,8 @@ class BrowserVisionBot:
                         print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
                         # Don't reset retry requests here - let them persist for the next iteration
                         continue
+                    
+                    print(f"🔍 Goal result: {goal_result}")
                     
                     if goal_result.status == GoalStatus.ACHIEVED:
                         duration_ms = (time.time() - start_time) * 1000
@@ -1560,8 +1568,23 @@ class BrowserVisionBot:
                 start_index, start_url = 0, (self.page.url if self.page else "")
             return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
         if k == "defer":
-            message = p or "Manual control active"
-            return DeferGoal(description=f"Defer action: {message}", prompt=message, max_retries=max_retries)
+            # Check if payload contains a number (timed defer)
+            import re
+            number_match = re.match(r'^(\d+)(?:\s+(.*))?$', p.strip() if p else "")
+            if number_match:
+                delay_seconds = int(number_match.group(1))
+                custom_message = number_match.group(2) if number_match.group(2) else None
+                # For timed defer, return a special goal that uses time.sleep
+                return TimedSleepGoal(
+                    description=f"Timed defer action: {delay_seconds} seconds",
+                    delay_seconds=delay_seconds,
+                    prompt=custom_message,
+                    max_retries=max_retries
+                )
+            else:
+                # Regular defer (manual control)
+                message = p or "Manual control active"
+                return DeferGoal(description=f"Defer action: {message}", prompt=message, max_retries=max_retries)
         # if k == "ref":
         #     goal_description = keyword + ": " + payload
         #     print(f"🔄 Handling ref command: '{goal_description}'")

@@ -329,6 +329,24 @@ class ActionExecutor:
                 elif step.action == ActionType.PRESS:
                     step_success = self._execute_press(step)
                 elif step.action == ActionType.HANDLE_SELECT:
+                    # Get coordinates for the select element first
+                    x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
+                    
+                    # Record planned interaction with goal monitor and get pre-interaction evaluations
+                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                        InteractionType.SELECT,
+                        coordinates=(x, y) if x is not None and y is not None else None,
+                        target_description=step.select_option_text,
+                        select_option_text=step.select_option_text,
+                    )
+                    
+                    # Check for retry requests from goals immediately after evaluation
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
+                        print("🔄 Goals have requested retry - aborting current plan execution")
+                        print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        return False
+                    
                     if confirm_before_interaction:
                         self._confirm_interaction_visual(
                             action_label="select",
@@ -340,7 +358,37 @@ class ActionExecutor:
                         )
                     self.select_handler.handle_select_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
+                    
+                    # Record the select interaction
+                    self.goal_monitor.record_interaction(
+                        InteractionType.SELECT,
+                        coordinates=(step.x, step.y) if step.x and step.y else None,
+                        target_element_info={
+                            "overlay_index": step.overlay_index,
+                            "select_option_text": step.select_option_text,
+                        },
+                        text_input=step.select_option_text,
+                        success=step_success,
+                    )
                 elif step.action == ActionType.HANDLE_UPLOAD:
+                    # Get coordinates for the upload element first
+                    x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
+                    
+                    # Record planned interaction with goal monitor and get pre-interaction evaluations
+                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                        InteractionType.UPLOAD,
+                        coordinates=(x, y) if x is not None and y is not None else None,
+                        target_description=step.upload_file_path,
+                        upload_file_path=step.upload_file_path,
+                    )
+                    
+                    # Check for retry requests from goals immediately after evaluation
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
+                        print("🔄 Goals have requested retry - aborting current plan execution")
+                        print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        return False
+                    
                     if confirm_before_interaction:
                         self._confirm_interaction_visual(
                             action_label="upload",
@@ -364,6 +412,18 @@ class ActionExecutor:
                         )
                     self.datetime_handler.handle_datetime_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
+                    
+                    # Record the select interaction
+                    self.goal_monitor.record_interaction(
+                        InteractionType.DATETIME,
+                        coordinates=(step.x, step.y) if step.x and step.y else None,
+                        target_element_info={
+                            "overlay_index": step.overlay_index,
+                            "select_option_text": step.select_option_text,
+                        },
+                        text_input=step.select_option_text,
+                        success=step_success,
+                    )
                 elif step.action == ActionType.BACK:
                     step_success = self._execute_back()
                 elif step.action == ActionType.FORWARD:
@@ -799,6 +859,21 @@ class ActionExecutor:
         # Get coordinates for the element to type into
         x, y = self._get_click_coordinates(step, elements, page_info)
         box = None
+        
+        # Record planned interaction with goal monitor and get pre-interaction evaluations
+        pre_evaluations = self.goal_monitor.record_planned_interaction(
+            InteractionType.TYPE,
+            coordinates=(x, y) if x is not None and y is not None else None,
+            target_description=step.text_to_type,
+            text_to_type=step.text_to_type,
+        )
+        
+        # Check for retry requests from goals immediately after evaluation
+        retry_goal = self.goal_monitor.check_for_retry_request()
+        if retry_goal:
+            print("🔄 Goals have requested retry - aborting current plan execution")
+            print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+            return False
         
         # Trigger pre-action hooks early, before any interactions
         self._trigger_pre_action_hooks(

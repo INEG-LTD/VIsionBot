@@ -18977,3 +18977,1369 @@ Log File: bot_automation.log
     Details: {
   "goal_description": "click any link"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760967252
+Start Time: 2025-10-20T14:34:12.435127
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T14:34:14.645504] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T14:34:14.646628] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T14:34:14.646996] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T14:34:14.647077] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T14:34:14.647158] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T14:34:14.647270] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T14:34:14.647395] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-20T14:34:14.818754] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T14:34:56.289532] INFO     SYSTEM       Defer pause ended (took 41640.7ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 41.641
+}
+[2025-10-20T14:34:56.292070] SUCCESS  GOAL         Goal completed: defer (took 41644.7ms) ✅
+[2025-10-20T14:34:56.447882] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure"
+}
+[2025-10-20T14:34:59.314471] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-20T14:34:59.316151] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure (took 2868.3ms) ✅
+    Details: {
+  "iterations": 0,
+  "outcome": "completed"
+}
+[2025-10-20T14:34:59.316305] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-20T14:35:03.482691] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-20T14:35:14.963139] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-20T14:35:14.974071] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 11491.4ms) ✅
+    Details: {
+  "iterations": 0,
+  "outcome": "completed"
+}
+[2025-10-20T14:35:14.974483] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760967448
+Start Time: 2025-10-20T14:37:28.551888
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T14:37:30.055730] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T14:37:30.056346] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T14:37:30.056451] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T14:37:30.056526] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T14:37:30.056591] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T14:37:30.056665] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T14:37:30.056739] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-20T14:37:30.189044] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T14:38:07.764212] INFO     SYSTEM       Defer pause ended (took 37706.3ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 37.706
+}
+[2025-10-20T14:38:07.768733] SUCCESS  GOAL         Goal completed: defer (took 37711.9ms) ✅
+[2025-10-20T14:38:08.015193] INFO     GOAL         Starting goal: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure
+    Details: {
+  "goal_description": "while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure"
+}
+[2025-10-20T14:38:10.277450] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:10.278616] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:10.278809] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:17.855340] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:17.857125] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:17.857262] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:24.261102] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:24.262687] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:24.262861] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:30.318752] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:30.320357] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:30.320472] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:36.857283] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:36.858637] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:36.858850] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:45.605196] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:45.606887] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:45.607116] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:53.254786] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:53.255679] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:53.255882] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:38:59.557696] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:38:59.559298] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:38:59.559398] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:39:07.680837] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:39:07.682548] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:39:07.682766] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:39:13.661212] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:39:13.662329] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:39:13.662460] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:39:20.275678] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:39:20.276751] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:39:20.276953] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:39:25.495073] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:39:25.496615] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:39:25.496725] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:39:31.877422] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = True
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": true
+}
+[2025-10-20T14:39:31.878315] INFO     GOAL         Starting goal: ref: click_ios_job_action_loop
+    Details: {
+  "goal_description": "ref: click_ios_job_action_loop"
+}
+[2025-10-20T14:39:31.878432] INFO     GOAL         Starting goal: if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px
+    Details: {
+  "goal_description": "if see: there is an ios job listing card without an 'Applied' label near it and has 'IOS' in the job title and is not plural (e.g 'IOS Developers' or 'IOS Developer Jobs in London' or 'IOS Developer Jobs in Remote') then: ref: click_ios_job_action else: scroll: down 600px"
+}
+[2025-10-20T14:43:09.771475] INFO     CONDITION    Condition evaluated: Page condition: not at bottom of the page = False
+    Details: {
+  "condition": "Page condition: not at bottom of the page",
+  "result": false
+}
+[2025-10-20T14:43:09.781407] SUCCESS  GOAL         Goal completed: while: not at bottom of the page do: ref: click_ios_job_action_loop continue_on_failure (took 301766.2ms) ✅
+    Details: {
+  "iterations": 13,
+  "outcome": "completed"
+}
+[2025-10-20T14:43:09.781546] INFO     GOAL         Starting goal: scroll: to top
+    Details: {
+  "goal_description": "scroll: to top"
+}
+[2025-10-20T14:43:14.001463] INFO     GOAL         Starting goal: while: pagination control with previous and next buttons is not visible do: scroll: down 600px
+    Details: {
+  "goal_description": "while: pagination control with previous and next buttons is not visible do: scroll: down 600px"
+}
+[2025-10-20T14:43:19.024721] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:19.027950] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:43:27.243640] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:27.246803] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:43:35.619844] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:35.622992] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:43:42.691981] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:42.695855] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:43:50.368121] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:50.372194] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:43:56.812697] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:43:56.816143] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:44:02.372133] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:44:02.376833] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:44:08.349546] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:44:08.352074] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:44:14.426261] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:44:14.430040] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:44:20.878295] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = True
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": true
+}
+[2025-10-20T14:44:20.881395] INFO     GOAL         Starting goal: scroll: down 600px
+    Details: {
+  "goal_description": "scroll: down 600px"
+}
+[2025-10-20T14:44:33.985628] INFO     CONDITION    Condition evaluated: Vision condition: pagination control with previous and next buttons is not visible = False
+    Details: {
+  "condition": "Vision condition: pagination control with previous and next buttons is not visible",
+  "result": false
+}
+[2025-10-20T14:44:33.990240] SUCCESS  GOAL         Goal completed: while: pagination control with previous and next buttons is not visible do: scroll: down 600px (took 79988.8ms) ✅
+    Details: {
+  "iterations": 10,
+  "outcome": "completed"
+}
+[2025-10-20T14:44:33.990819] INFO     GOAL         Starting goal: click: the next button in the pagination control
+    Details: {
+  "goal_description": "click: the next button in the pagination control"
+}
+[2025-10-20T14:44:51.868280] SUCCESS  GOAL         Goal completed: the next button in the pagination control (took 17877.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760970473
+Start Time: 2025-10-20T15:27:53.882730
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:27:56.003581] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:27:56.005027] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:27:56.005144] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:27:56.005252] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:27:56.005316] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:27:56.005429] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:27:56.005493] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-20T15:27:56.151826] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760970505
+Start Time: 2025-10-20T15:28:25.135718
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:28:27.314094] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:28:27.315251] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:28:27.315461] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:28:27.315601] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:28:27.315815] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:28:27.315940] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:28:27.335513] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:28:30.265976] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:28:30.268489] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760970602
+Start Time: 2025-10-20T15:30:02.312732
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:30:04.369778] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:30:04.371031] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:30:04.371165] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:30:04.371245] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:30:04.371293] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:30:04.371336] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:30:04.396168] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:30:07.331450] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:30:07.332897] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760970733
+Start Time: 2025-10-20T15:32:13.368902
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:32:15.715755] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:32:15.716986] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:32:15.717185] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:32:15.717386] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:32:15.717528] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:32:15.717623] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:32:15.722635] INFO     GOAL         Starting goal: if see: a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:32:18.388182] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:32:18.389495] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760970806
+Start Time: 2025-10-20T15:33:26.799638
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:33:28.958825] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:33:28.960678] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:33:28.960848] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:33:28.960936] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:33:28.960993] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:33:28.961050] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:33:28.976415] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:33:33.590579] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:33:33.592529] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971058
+Start Time: 2025-10-20T15:37:38.717742
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:37:40.874795] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:37:40.875808] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:37:40.875903] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:37:40.875968] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:37:40.876018] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:37:40.876070] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:37:40.904986] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:37:44.095851] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:37:44.096981] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971093
+Start Time: 2025-10-20T15:38:13.073471
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:38:15.004113] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:38:15.005117] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:38:15.005438] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:38:15.005630] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:38:15.005757] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:38:15.005931] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:38:15.026092] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:38:17.718729] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:38:17.720664] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971121
+Start Time: 2025-10-20T15:38:41.748841
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:38:43.202982] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:38:43.204480] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:38:43.204621] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:38:43.204902] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:38:43.205198] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:38:43.205538] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:38:43.207256] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T15:38:45.297139] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T15:38:45.298089] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971587
+Start Time: 2025-10-20T15:46:27.519129
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:46:29.750588] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:46:29.752220] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:46:29.752366] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:46:29.752473] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:46:29.752566] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:46:29.752631] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:46:29.752810] INFO     GOAL         Starting goal: defer 5 Waiting for page to fully load
+    Details: {
+  "goal_description": "defer 5 Waiting for page to fully load"
+}
+[2025-10-20T15:46:29.925314] INFO     SYSTEM       Timed defer pause started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Waiting for page to fully load",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T15:46:29.925510] INFO     SYSTEM       Timed defer pause ended (took 171.3ms) ✅
+    Details: {
+  "defer_prompt": "Waiting for page to fully load",
+  "delay_seconds": 5,
+  "defer_duration_seconds": 0.171
+}
+[2025-10-20T15:46:29.926786] SUCCESS  GOAL         Goal completed: 5 Waiting for page to fully load (took 174.0ms) ✅
+[2025-10-20T15:46:30.066388] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971624
+Start Time: 2025-10-20T15:47:04.553873
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:47:07.135944] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:47:07.137638] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:47:07.137744] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:47:07.137800] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:47:07.137854] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:47:07.138136] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:47:07.138574] INFO     GOAL         Starting goal: defer 55 Waiting for page to fully load
+    Details: {
+  "goal_description": "defer 55 Waiting for page to fully load"
+}
+[2025-10-20T15:47:07.308709] INFO     SYSTEM       Timed defer pause started
+    Details: {
+  "delay_seconds": 55,
+  "prompt": "Waiting for page to fully load",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T15:47:07.310662] INFO     SYSTEM       Timed defer pause ended (took 168.6ms) ✅
+    Details: {
+  "defer_prompt": "Waiting for page to fully load",
+  "delay_seconds": 55,
+  "defer_duration_seconds": 0.169
+}
+[2025-10-20T15:47:07.310851] SUCCESS  GOAL         Goal completed: 55 Waiting for page to fully load (took 172.4ms) ✅
+[2025-10-20T15:47:07.441455] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971645
+Start Time: 2025-10-20T15:47:25.869812
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:47:27.141108] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:47:27.142823] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:47:27.143205] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:47:27.143594] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:47:27.143803] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:47:27.143982] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:47:27.144235] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T15:47:27.247189] INFO     SYSTEM       Timed defer pause started
+    Details: {
+  "delay_seconds": 55,
+  "prompt": "Pausing for 55 seconds...",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+[2025-10-20T15:47:27.252168] INFO     SYSTEM       Timed defer pause ended (took 106.0ms) ✅
+    Details: {
+  "defer_prompt": "Pausing for 55 seconds...",
+  "delay_seconds": 55,
+  "defer_duration_seconds": 0.106
+}
+[2025-10-20T15:47:27.255785] SUCCESS  GOAL         Goal completed: 55 (took 111.6ms) ✅
+[2025-10-20T15:47:27.441779] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760971772
+Start Time: 2025-10-20T15:49:32.221301
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T15:49:34.316150] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T15:49:34.317689] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T15:49:34.317806] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T15:49:34.317945] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T15:49:34.317996] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T15:49:34.318050] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T15:49:34.318132] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T15:49:34.446476] INFO     SYSTEM       Timed defer pause started
+    Details: {
+  "delay_seconds": 55,
+  "prompt": "Pausing for 55 seconds...",
+  "page_title": "Jobs and Recruitment on Reed.co.uk, the UK's #1 job site",
+  "page_url": "https://www.reed.co.uk/"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760973527
+Start Time: 2025-10-20T16:18:47.108426
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:18:49.161152] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:18:49.162540] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:18:49.162880] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:18:49.163195] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:18:49.163374] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:18:49.163545] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:18:49.163779] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T16:18:51.628215] ERROR    GOAL         Goal failed: 55 (took 2464.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-20T16:18:51.630265] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760974146
+Start Time: 2025-10-20T16:29:06.310333
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:29:08.586904] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:29:08.588305] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:29:08.588779] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:29:08.589232] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:29:08.589375] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:29:08.589525] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:29:08.589710] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T16:29:11.049540] ERROR    GOAL         Goal failed: 55 (took 2459.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-20T16:29:11.052487] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760974214
+Start Time: 2025-10-20T16:30:14.542543
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:30:16.001450] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:30:16.003341] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:30:16.004398] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:30:16.004530] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:30:16.004686] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:30:16.005174] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:30:16.005381] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T16:30:18.702889] ERROR    GOAL         Goal failed: 55 (took 2697.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-20T16:30:18.706761] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760974632
+Start Time: 2025-10-20T16:37:12.610773
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:37:14.626574] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:37:14.628021] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:37:14.628359] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:37:14.628570] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:37:14.628680] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:37:14.628850] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:37:14.629021] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760974778
+Start Time: 2025-10-20T16:39:38.255072
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:39:40.243421] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:39:40.244798] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:39:40.244902] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:39:40.244974] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:39:40.245042] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:39:40.245109] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:39:40.245195] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T16:39:42.834702] ERROR    GOAL         Goal failed: 55 (took 2589.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-20T16:39:42.837629] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760974800
+Start Time: 2025-10-20T16:40:00.150443
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T16:40:01.754863] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T16:40:01.757107] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T16:40:01.757419] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T16:40:01.757591] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T16:40:01.757688] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T16:40:01.757771] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T16:40:01.757840] INFO     GOAL         Starting goal: defer 55
+    Details: {
+  "goal_description": "defer 55"
+}
+[2025-10-20T16:40:01.847610] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 55,
+  "prompt": "Pausing for 55 seconds..."
+}
+[2025-10-20T16:40:57.068912] INFO     SYSTEM       Timed sleep ended (took 55000.0ms) ✅
+    Details: {
+  "delay_seconds": 55
+}
+[2025-10-20T16:40:57.073162] SUCCESS  GOAL         Goal completed: 55 (took 55315.3ms) ✅
+[2025-10-20T16:40:57.142887] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 55,
+  "prompt": "Pausing for 55 seconds..."
+}
+[2025-10-20T16:41:52.362456] INFO     SYSTEM       Timed sleep ended (took 55000.0ms) ✅
+    Details: {
+  "delay_seconds": 55
+}
+[2025-10-20T16:41:52.379891] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760977223
+Start Time: 2025-10-20T17:20:23.356418
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:20:25.516828] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:20:25.517916] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:20:25.517979] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:20:25.518027] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:20:25.518063] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:20:25.518100] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:20:25.518155] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+[2025-10-20T17:20:25.626542] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:20:30.643270] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:20:30.647195] SUCCESS  GOAL         Goal completed: 5 (took 5129.0ms) ✅
+[2025-10-20T17:20:30.712681] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:20:35.732816] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:20:35.735754] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760977717
+Start Time: 2025-10-20T17:28:37.029280
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:28:39.237964] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:28:39.238751] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:28:39.238840] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:28:39.239047] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:28:39.239179] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:28:39.239388] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:28:39.239494] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+[2025-10-20T17:28:39.392530] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:28:44.406581] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:28:44.410706] SUCCESS  GOAL         Goal completed: 5 (took 5171.2ms) ✅
+[2025-10-20T17:28:44.474081] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760978402
+Start Time: 2025-10-20T17:40:02.930269
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:40:04.992343] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:40:04.993900] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:40:04.994121] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:40:04.994219] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:40:04.994275] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:40:04.994385] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:40:04.994452] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+[2025-10-20T17:40:05.119151] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:40:10.142764] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:40:10.145918] SUCCESS  GOAL         Goal completed: 5 (took 5151.4ms) ✅
+[2025-10-20T17:40:10.212480] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:40:15.233871] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:40:15.238439] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760978423
+Start Time: 2025-10-20T17:40:23.073597
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:40:24.353418] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:40:24.354906] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:40:24.354999] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:40:24.355057] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:40:24.355118] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:40:24.355179] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:40:24.355327] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760978573
+Start Time: 2025-10-20T17:42:53.974828
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760979049
+Start Time: 2025-10-20T17:50:49.318904
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:50:51.510700] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:50:51.511998] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:50:51.512118] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:50:51.512178] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:50:51.512226] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:50:51.512273] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:50:51.512424] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+[2025-10-20T17:50:51.690220] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:50:56.715450] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:50:56.719623] SUCCESS  GOAL         Goal completed: 5 (took 5207.2ms) ✅
+[2025-10-20T17:50:56.784514] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-20T17:51:17.816504] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 21032.0ms) ✅
+[2025-10-20T17:51:17.820120] INFO     SYSTEM       Registered 3 commands with ref ID: sign_in_without_password_commands (mode=ANY)
+[2025-10-20T17:51:17.825025] INFO     GOAL         Starting goal: form: type 'ios developer' into the what field and 'london or remote' into the where field
+    Details: {
+  "goal_description": "form: type 'ios developer' into the what field and 'london or remote' into the where field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760979171
+Start Time: 2025-10-20T17:52:51.138139
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T17:52:52.718315] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T17:52:52.720474] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T17:52:52.720844] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T17:52:52.721164] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T17:52:52.721466] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T17:52:52.721625] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T17:52:52.721832] INFO     GOAL         Starting goal: defer 5
+    Details: {
+  "goal_description": "defer 5"
+}
+[2025-10-20T17:52:52.882607] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Pausing for 5 seconds..."
+}
+[2025-10-20T17:52:57.904030] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T17:52:57.907090] SUCCESS  GOAL         Goal completed: 5 (took 5185.3ms) ✅
+[2025-10-20T17:52:57.971169] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760984891
+Start Time: 2025-10-20T19:28:11.336477
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T19:28:13.940883] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-20T19:28:13.944054] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-20T19:28:13.944508] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-20T19:28:13.944805] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-20T19:28:13.945205] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-20T19:28:13.945383] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-20T19:28:13.945700] INFO     GOAL         Starting goal: defer 5 Waiting for page to load
+    Details: {
+  "goal_description": "defer 5 Waiting for page to load"
+}
+[2025-10-20T19:28:14.090447] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 5,
+  "prompt": "Waiting for page to load"
+}
+[2025-10-20T19:28:19.108108] INFO     SYSTEM       Timed sleep ended (took 5000.0ms) ✅
+    Details: {
+  "delay_seconds": 5
+}
+[2025-10-20T19:28:19.112194] SUCCESS  GOAL         Goal completed: 5 Waiting for page to load (took 5166.5ms) ✅
+[2025-10-20T19:28:19.194247] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760986443
+Start Time: 2025-10-20T19:54:03.367465
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T19:54:05.947302] INFO     GOAL         Starting goal: form: select 'Mastercard' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Mastercard' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760987306
+Start Time: 2025-10-20T20:08:26.543916
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:08:29.418185] INFO     GOAL         Starting goal: form: select 'Mastercard' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Mastercard' from the credit card type dropdown"
+}
+[2025-10-20T20:10:10.247123] ERROR    GOAL         Goal failed: select 'Mastercard' from the credit card type dropdown (took 100829.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760987554
+Start Time: 2025-10-20T20:12:34.826344
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:12:36.802708] INFO     GOAL         Starting goal: form: select 'Mastercard' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Mastercard' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760987736
+Start Time: 2025-10-20T20:15:36.000597
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:15:38.350976] INFO     GOAL         Starting goal: form: select 'Mastercard' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Mastercard' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760988997
+Start Time: 2025-10-20T20:36:37.396974
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:36:40.202650] INFO     GOAL         Starting goal: form: select 'Mastercard' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Mastercard' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760989131
+Start Time: 2025-10-20T20:38:51.939873
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:38:54.598490] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760989292
+Start Time: 2025-10-20T20:41:32.377586
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:41:35.421921] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760989368
+Start Time: 2025-10-20T20:42:48.423303
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:42:50.383762] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760989595
+Start Time: 2025-10-20T20:46:35.871909
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T20:46:38.635359] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760993708
+Start Time: 2025-10-20T21:55:08.300043
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T21:55:10.794351] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1760995109
+Start Time: 2025-10-20T22:18:29.289866
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-20T22:18:31.790024] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761037566
+Start Time: 2025-10-21T10:06:06.198809
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T10:06:08.854205] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761038764
+Start Time: 2025-10-21T10:26:04.009421
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T10:26:06.563935] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761039377
+Start Time: 2025-10-21T10:36:17.772664
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T10:36:20.436620] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761039650
+Start Time: 2025-10-21T10:40:50.265493
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T10:40:52.785018] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761042303
+Start Time: 2025-10-21T11:25:03.994847
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T11:25:06.536508] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761044688
+Start Time: 2025-10-21T12:04:48.377667
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T12:04:50.775220] INFO     GOAL         Starting goal: form: select 'Master Card' from the credit card type dropdown
+    Details: {
+  "goal_description": "form: select 'Master Card' from the credit card type dropdown"
+}
+[2025-10-21T12:05:32.751232] SUCCESS  GOAL         Goal completed: select 'Master Card' from the credit card type dropdown (took 41976.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761046881
+Start Time: 2025-10-21T12:41:21.159381
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T12:41:23.883451] INFO     GOAL         Starting goal: form: set the card expiration date to '12/2025'
+    Details: {
+  "goal_description": "form: set the card expiration date to '12/2025'"
+}
+[2025-10-21T12:42:23.053400] SUCCESS  GOAL         Goal completed: set the card expiration date to '12/2025' (took 59170.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761047022
+Start Time: 2025-10-21T12:43:42.156103
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T12:43:44.887326] INFO     GOAL         Starting goal: form: set the card expiration year to '2025'
+    Details: {
+  "goal_description": "form: set the card expiration year to '2025'"
+}
+[2025-10-21T12:44:56.859981] SUCCESS  GOAL         Goal completed: set the card expiration year to '2025' (took 71972.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761047405
+Start Time: 2025-10-21T12:50:05.990485
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T12:50:08.879344] INFO     GOAL         Starting goal: form: tick checkbox 1
+    Details: {
+  "goal_description": "form: tick checkbox 1"
+}
+[2025-10-21T12:50:44.555325] ERROR    GOAL         Goal failed: tick checkbox 1 (took 35676.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}

@@ -173,6 +173,45 @@ class GoalMonitor:
                     except Exception as e:
                         print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
+        elif interaction_type in (InteractionType.SELECT, InteractionType.TYPE, InteractionType.UPLOAD):
+            coordinates = kwargs.get('coordinates')
+            if coordinates:
+                # Add screenshot to kwargs for pre-interaction evaluation
+                try:
+                    screenshot = self._capture_current_state().screenshot
+                    kwargs['screenshot'] = screenshot
+                except Exception:
+                    pass
+                
+                # Create planned interaction data
+                planned_interaction_data = {
+                    'interaction_type': interaction_type,
+                    'coordinates': coordinates,
+                    'screenshot': kwargs.get('screenshot'),
+                    'target_description': kwargs.get('target_description', ''),
+                    **kwargs
+                }
+                
+                # Evaluate goals that want BEFORE or BOTH timing
+                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                    try:
+                        # Create context with planned interaction data
+                        context = self._build_goal_context()
+                        context.planned_interaction = planned_interaction_data
+                        
+                        # Evaluate the goal
+                        result = self.active_goal.evaluate(context)
+                        pre_interaction_results = result
+                        self.active_goal._last_evaluation = result
+                        print(f"[GoalMonitor] Pre-interaction evaluation: {self.active_goal} -> {result.status}")
+                        
+                        # If goal is achieved before interaction, note it
+                        if result.status == GoalStatus.ACHIEVED:
+                            print(f"[GoalMonitor] Goal achieved before interaction: {self.active_goal}")
+                            
+                    except Exception as e:
+                        print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
+        
         return pre_interaction_results
     
     def check_for_retry_request(self) -> BaseGoal:
