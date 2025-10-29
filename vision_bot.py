@@ -28,6 +28,9 @@ from goals import (
     ClickGoal,
     GoalStatus,
     FormFillGoal,
+    TypeGoal,
+    DateGoal,
+    SelectGoal,
     NavigationGoal,
     IfGoal,
     WhileGoal,
@@ -892,7 +895,8 @@ class BrowserVisionBot:
                     from action_executor import ScrollReason
                     self.page_utils.scroll_page(
                         reason=ScrollReason.DOM_UNCHANGED,
-                        action_executor=self.action_executor
+                        action_executor=self.action_executor,
+                        amount=50
                     )
                     continue
                 elif is_small_scroll:
@@ -1541,6 +1545,18 @@ class BrowserVisionBot:
         if k == "form":
             desc = p or "Fill the form"
             return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True, max_retries=max_retries)
+        if k == "type":
+            target = p or extract_click_target(p)
+            if target:
+                return TypeGoal(description=f"Type in: {target}", target_description=target, max_retries=max_retries)
+        if k == "date":
+            target = p or extract_click_target(p)
+            if target:
+                return DateGoal(description=f"Set date: {target}", target_description=target, max_retries=max_retries)
+        if k == "select":
+            target = p or extract_click_target(p)
+            if target:
+                return SelectGoal(description=f"Select: {target}", target_description=target, max_retries=max_retries)
         if k == "back":
             import re as _re
             steps = 1

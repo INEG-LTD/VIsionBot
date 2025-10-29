@@ -173,7 +173,7 @@ class GoalMonitor:
                     except Exception as e:
                         print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
-        elif interaction_type in (InteractionType.SELECT, InteractionType.TYPE, InteractionType.UPLOAD):
+        elif interaction_type in (InteractionType.SELECT, InteractionType.TYPE, InteractionType.DATETIME):
             coordinates = kwargs.get('coordinates')
             if coordinates:
                 # Add screenshot to kwargs for pre-interaction evaluation

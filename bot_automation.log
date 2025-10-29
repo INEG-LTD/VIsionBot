@@ -20343,3 +20343,2976 @@ Log File: bot_automation.log
     Details: {
   "error": "Failed after 10 attempts"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761048121
+Start Time: 2025-10-21T13:02:01.853987
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T13:02:04.796804] INFO     GOAL         Starting goal: form: tick checkbox 1
+    Details: {
+  "goal_description": "form: tick checkbox 1"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761048450
+Start Time: 2025-10-21T13:07:30.738425
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T13:07:33.923613] INFO     GOAL         Starting goal: form: tick checkbox 1
+    Details: {
+  "goal_description": "form: tick checkbox 1"
+}
+[2025-10-21T13:08:21.319145] SUCCESS  GOAL         Goal completed: tick checkbox 1 (took 47395.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761059990
+Start Time: 2025-10-21T16:19:50.204469
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T16:19:53.279647] INFO     GOAL         Starting goal: form: select 'Going' from the 'Confirm last field is disabled' radio button
+    Details: {
+  "goal_description": "form: select 'Going' from the 'Confirm last field is disabled' radio button"
+}
+[2025-10-21T16:20:28.038795] SUCCESS  GOAL         Goal completed: select 'Going' from the 'Confirm last field is disabled' radio button (took 34759.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761078373
+Start Time: 2025-10-21T21:26:13.277852
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T21:26:16.386241] INFO     GOAL         Starting goal: form: select 'Going' from the 'Confirm last field is disabled' radio button
+    Details: {
+  "goal_description": "form: select 'Going' from the 'Confirm last field is disabled' radio button"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761078382
+Start Time: 2025-10-21T21:26:22.163478
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-21T21:26:23.693723] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-21T21:26:23.695105] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-21T21:26:23.695347] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-21T21:26:23.695425] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-21T21:26:23.695492] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-21T21:26:23.695629] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-21T21:26:23.695739] INFO     GOAL         Starting goal: defer 3
+    Details: {
+  "goal_description": "defer 3"
+}
+[2025-10-21T21:26:23.871279] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 3,
+  "prompt": "Pausing for 3 seconds..."
+}
+[2025-10-21T21:26:26.880994] INFO     SYSTEM       Timed sleep ended (took 3000.0ms) ✅
+    Details: {
+  "delay_seconds": 3
+}
+[2025-10-21T21:26:26.886293] SUCCESS  GOAL         Goal completed: 3 (took 3188.5ms) ✅
+[2025-10-21T21:26:26.954971] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-21T21:26:56.061965] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 29107.0ms) ✅
+[2025-10-21T21:26:56.063410] INFO     GOAL         Starting goal: click: the register cv button
+    Details: {
+  "goal_description": "click: the register cv button"
+}
+[2025-10-21T21:27:16.900717] SUCCESS  GOAL         Goal completed: the register cv button (took 20837.3ms) ✅
+[2025-10-21T21:27:16.905306] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-21T21:29:42.784812] INFO     GOAL         Starting goal: form: type '8aemg@tiffincrane.com' into the email input field
+    Details: {
+  "goal_description": "form: type '8aemg@tiffincrane.com' into the email input field"
+}
+[2025-10-21T21:30:02.093120] SUCCESS  GOAL         Goal completed: type '8aemg@tiffincrane.com' into the email input field (took 19308.5ms) ✅
+[2025-10-21T21:30:02.095354] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-21T21:30:03.910300] INFO     GOAL         Starting goal: form: type 'Password123$' into the password input field
+    Details: {
+  "goal_description": "form: type 'Password123$' into the password input field"
+}
+[2025-10-21T21:30:26.877743] SUCCESS  GOAL         Goal completed: type 'Password123$' into the password input field (took 22967.5ms) ✅
+[2025-10-21T21:30:26.880492] INFO     GOAL         Starting goal: click: the continue button
+    Details: {
+  "goal_description": "click: the continue button"
+}
+[2025-10-21T21:30:50.529671] SUCCESS  GOAL         Goal completed: the continue button (took 23649.2ms) ✅
+[2025-10-21T21:30:50.530955] INFO     GOAL         Starting goal: defer 3
+    Details: {
+  "goal_description": "defer 3"
+}
+[2025-10-21T21:30:50.563657] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 3,
+  "prompt": "Pausing for 3 seconds..."
+}
+[2025-10-21T21:30:53.574443] INFO     SYSTEM       Timed sleep ended (took 3000.0ms) ✅
+    Details: {
+  "delay_seconds": 3
+}
+[2025-10-21T21:30:53.578546] SUCCESS  GOAL         Goal completed: 3 (took 3047.6ms) ✅
+[2025-10-21T21:30:53.632775] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-21T21:30:55.824882] INFO     GOAL         Starting goal: click: the button to choose a cv
+    Details: {
+  "goal_description": "click: the button to choose a cv"
+}
+[2025-10-21T21:31:20.481369] SUCCESS  GOAL         Goal completed: the button to choose a cv (took 24656.5ms) ✅
+[2025-10-21T21:31:20.483331] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-21T21:31:22.290810] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-21T21:31:22.357720] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobseeker Registration",
+  "page_url": "https://www.reed.co.uk/application?returnTo=%2Faccount%2Fsigninstep2"
+}
+[2025-10-21T21:31:57.666128] INFO     SYSTEM       Defer pause ended (took 35371.1ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 35.371
+}
+[2025-10-21T21:31:57.671008] SUCCESS  GOAL         Goal completed: defer (took 35380.2ms) ✅
+[2025-10-21T21:31:57.727152] INFO     GOAL         Starting goal: form: type 'Chris' into the first name input field
+    Details: {
+  "goal_description": "form: type 'Chris' into the first name input field"
+}
+[2025-10-21T21:32:20.519123] SUCCESS  GOAL         Goal completed: type 'Chris' into the first name input field (took 22792.0ms) ✅
+[2025-10-21T21:32:20.521484] INFO     GOAL         Starting goal: form: type 'Reed' into the last name input field
+    Details: {
+  "goal_description": "form: type 'Reed' into the last name input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761092013
+Start Time: 2025-10-22T01:13:33.282741
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T01:13:35.331711] INFO     SYSTEM       Registered 2 commands with ref ID: submit_application_command (mode=ANY)
+[2025-10-22T01:13:35.333189] INFO     SYSTEM       Registered 2 commands with ref ID: apply_to_job_command (mode=ALL)
+[2025-10-22T01:13:35.333289] INFO     SYSTEM       Registered 1 commands with ref ID: if_apply_to_job_command (mode=ANY)
+[2025-10-22T01:13:35.333351] INFO     SYSTEM       Registered 1 commands with ref ID: click_job_command (mode=ANY) (additional_context)
+[2025-10-22T01:13:35.333422] INFO     SYSTEM       Registered 4 commands with ref ID: click_ios_job_action (mode=ALL) (target_context_guard, confirm_before_interaction=True)
+[2025-10-22T01:13:35.333474] INFO     SYSTEM       Registered 1 commands with ref ID: click_ios_job_action_loop (mode=ANY) (additional_context)
+[2025-10-22T01:13:35.333598] INFO     GOAL         Starting goal: defer 3
+    Details: {
+  "goal_description": "defer 3"
+}
+[2025-10-22T01:13:35.515682] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 3,
+  "prompt": "Pausing for 3 seconds..."
+}
+[2025-10-22T01:13:38.533365] INFO     SYSTEM       Timed sleep ended (took 3000.0ms) ✅
+    Details: {
+  "delay_seconds": 3
+}
+[2025-10-22T01:13:38.535858] SUCCESS  GOAL         Goal completed: 3 (took 3202.3ms) ✅
+[2025-10-22T01:13:38.599073] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-22T01:14:07.025109] SUCCESS  GOAL         Goal completed: Click action: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner) (took 28426.0ms) ✅
+[2025-10-22T01:14:07.026953] INFO     GOAL         Starting goal: click: the register cv button
+    Details: {
+  "goal_description": "click: the register cv button"
+}
+[2025-10-22T01:14:27.654712] SUCCESS  GOAL         Goal completed: the register cv button (took 20627.8ms) ✅
+[2025-10-22T01:14:27.658079] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-22T01:25:55.980576] INFO     GOAL         Starting goal: form: type 'tahiq@tiffincrane.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'tahiq@tiffincrane.com' into the email input field"
+}
+[2025-10-22T01:26:16.635880] SUCCESS  GOAL         Goal completed: type 'tahiq@tiffincrane.com' into the email input field (took 20656.0ms) ✅
+[2025-10-22T01:26:16.638359] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-22T01:26:19.156637] INFO     GOAL         Starting goal: form: type 'Password1234$' into the password input field
+    Details: {
+  "goal_description": "form: type 'Password1234$' into the password input field"
+}
+[2025-10-22T01:26:44.241165] SUCCESS  GOAL         Goal completed: type 'Password1234$' into the password input field (took 25084.6ms) ✅
+[2025-10-22T01:26:44.242745] INFO     GOAL         Starting goal: click: the continue button
+    Details: {
+  "goal_description": "click: the continue button"
+}
+[2025-10-22T01:27:16.613703] SUCCESS  GOAL         Goal completed: the continue button (took 32371.0ms) ✅
+[2025-10-22T01:27:16.615228] INFO     GOAL         Starting goal: defer 3
+    Details: {
+  "goal_description": "defer 3"
+}
+[2025-10-22T01:27:16.651578] INFO     SYSTEM       Timed sleep started
+    Details: {
+  "delay_seconds": 3,
+  "prompt": "Pausing for 3 seconds..."
+}
+[2025-10-22T01:27:19.662855] INFO     SYSTEM       Timed sleep ended (took 3000.0ms) ✅
+    Details: {
+  "delay_seconds": 3
+}
+[2025-10-22T01:27:19.664029] SUCCESS  GOAL         Goal completed: 3 (took 3048.8ms) ✅
+[2025-10-22T01:27:19.704335] INFO     GOAL         Starting goal: if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)
+    Details: {
+  "goal_description": "if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"
+}
+[2025-10-22T01:27:22.786039] INFO     GOAL         Starting goal: click: the button to choose a cv
+    Details: {
+  "goal_description": "click: the button to choose a cv"
+}
+[2025-10-22T01:27:43.844637] SUCCESS  GOAL         Goal completed: the button to choose a cv (took 21058.6ms) ✅
+[2025-10-22T01:27:43.846651] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-22T01:27:43.885040] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Jobseeker Registration",
+  "page_url": "https://www.reed.co.uk/application?returnTo=%2Faccount%2Fsigninstep2"
+}
+[2025-10-22T01:28:28.543449] INFO     SYSTEM       Defer pause ended (took 44696.6ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 44.697
+}
+[2025-10-22T01:28:28.547581] SUCCESS  GOAL         Goal completed: defer (took 44700.9ms) ✅
+[2025-10-22T01:28:28.597708] INFO     GOAL         Starting goal: form: type 'Chris' into the first name input field
+    Details: {
+  "goal_description": "form: type 'Chris' into the first name input field"
+}
+[2025-10-22T01:28:46.166614] SUCCESS  GOAL         Goal completed: type 'Chris' into the first name input field (took 17568.9ms) ✅
+[2025-10-22T01:28:46.168994] INFO     GOAL         Starting goal: form: type 'Reed' into the last name input field
+    Details: {
+  "goal_description": "form: type 'Reed' into the last name input field"
+}
+[2025-10-22T01:29:02.839399] SUCCESS  GOAL         Goal completed: type 'Reed' into the last name input field (took 16670.4ms) ✅
+[2025-10-22T01:29:02.841123] INFO     GOAL         Starting goal: form: type '07400000000' into the contact number input field
+    Details: {
+  "goal_description": "form: type '07400000000' into the contact number input field"
+}
+[2025-10-22T01:29:24.824353] SUCCESS  GOAL         Goal completed: type '07400000000' into the contact number input field (took 21983.2ms) ✅
+[2025-10-22T01:29:24.826706] INFO     GOAL         Starting goal: form: select 'United Kingdom' from the country dropdown
+    Details: {
+  "goal_description": "form: select 'United Kingdom' from the country dropdown"
+}
+[2025-10-22T01:29:43.226091] SUCCESS  GOAL         Goal completed: select 'United Kingdom' from the country dropdown (took 18399.4ms) ✅
+[2025-10-22T01:29:43.227465] INFO     GOAL         Starting goal: form: type 'London' into the city input field
+    Details: {
+  "goal_description": "form: type 'London' into the city input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761131203
+Start Time: 2025-10-22T12:06:43.491608
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T12:06:48.358975] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761131327
+Start Time: 2025-10-22T12:08:47.474356
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T12:08:48.702815] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761132489
+Start Time: 2025-10-22T12:28:09.173669
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T12:28:11.463339] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T12:33:50.904049] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 339440.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761132854
+Start Time: 2025-10-22T12:34:14.120714
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T12:34:15.906938] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T12:37:06.864564] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 170957.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761135003
+Start Time: 2025-10-22T13:10:03.299887
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T13:10:05.293873] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761135824
+Start Time: 2025-10-22T13:23:44.720869
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T13:23:46.865765] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T13:28:28.431195] ERROR    GOAL         Goal failed: type 'email@email.com' into the email input field (took 281565.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761137544
+Start Time: 2025-10-22T13:52:24.255471
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T13:52:26.251765] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761137714
+Start Time: 2025-10-22T13:55:14.839504
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T13:55:16.923578] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T13:58:39.274685] ERROR    GOAL         Goal failed: type 'email@email.com' into the email input field (took 202351.2ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761137992
+Start Time: 2025-10-22T13:59:52.171699
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T13:59:53.966227] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T14:03:23.255578] ERROR    GOAL         Goal failed: type 'email@email.com' into the email input field (took 209289.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761138294
+Start Time: 2025-10-22T14:04:54.123449
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T14:04:55.461068] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T14:08:55.313501] ERROR    GOAL         Goal failed: type 'email@email.com' into the email input field (took 239852.4ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761138785
+Start Time: 2025-10-22T14:13:05.054097
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T14:13:06.655036] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T14:15:54.743110] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 168088.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761139509
+Start Time: 2025-10-22T14:25:09.938537
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T14:25:11.553414] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T14:28:42.871513] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 211318.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761161792
+Start Time: 2025-10-22T20:36:32.376197
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-22T20:36:33.682239] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-22T20:37:18.688191] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 45006.0ms) ✅
+[2025-10-22T20:37:18.690254] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-22T20:38:03.802168] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 45111.9ms) ✅
+[2025-10-22T20:38:03.804343] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-22T20:38:41.493804] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 37689.5ms) ✅
+[2025-10-22T20:38:41.494817] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-22T20:41:04.153872] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 142659.1ms) ✅
+[2025-10-22T20:41:04.165052] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-22T20:41:39.712858] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 35547.8ms) ✅
+[2025-10-22T20:41:39.715189] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-22T20:42:52.962821] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 73247.7ms) ✅
+[2025-10-22T20:42:52.964939] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-22T20:43:33.751277] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 40786.3ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761227062
+Start Time: 2025-10-23T14:44:22.473296
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-23T14:44:24.810741] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-23T14:45:28.050420] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 63239.7ms) ✅
+[2025-10-23T14:45:28.062152] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-23T14:46:12.193097] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 44131.0ms) ✅
+[2025-10-23T14:46:12.195833] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-23T14:46:54.220499] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 42024.7ms) ✅
+[2025-10-23T14:46:54.223453] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-23T14:49:20.196291] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 145972.8ms) ✅
+[2025-10-23T14:49:20.199590] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-23T14:50:08.287604] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 48088.0ms) ✅
+[2025-10-23T14:50:08.303314] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-23T14:51:24.248633] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 75945.3ms) ✅
+[2025-10-23T14:51:24.264467] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-23T14:52:21.065186] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 56800.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761228148
+Start Time: 2025-10-23T15:02:28.155371
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-23T15:02:29.862139] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-23T15:03:04.102733] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 34240.6ms) ✅
+[2025-10-23T15:03:04.107580] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-23T15:03:44.607374] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 40499.8ms) ✅
+[2025-10-23T15:03:44.611501] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-23T15:04:25.968765] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 41357.3ms) ✅
+[2025-10-23T15:04:25.970974] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761251765
+Start Time: 2025-10-23T21:36:05.084275
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-23T21:36:07.207169] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-23T21:36:32.769850] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 25562.7ms) ✅
+[2025-10-23T21:36:32.784518] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-23T21:36:55.149234] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 22364.7ms) ✅
+[2025-10-23T21:36:55.160913] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-23T21:37:14.677073] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 19516.2ms) ✅
+[2025-10-23T21:37:14.689909] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-23T21:39:18.841924] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 124152.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-23T21:39:18.850537] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-23T21:40:32.935261] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 74084.7ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-23T21:40:32.939303] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-23T21:40:57.383689] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 24444.4ms) ✅
+[2025-10-23T21:40:57.387720] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-23T21:41:26.191776] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 28804.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761500540
+Start Time: 2025-10-26T17:42:20.088857
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T17:42:25.043689] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T17:42:50.653092] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 25609.5ms) ✅
+[2025-10-26T17:42:50.656537] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T17:43:08.988950] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 18332.5ms) ✅
+[2025-10-26T17:43:08.992109] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T17:43:30.325461] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 21333.4ms) ✅
+[2025-10-26T17:43:30.328971] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761500739
+Start Time: 2025-10-26T17:45:39.112864
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T17:45:40.616586] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T17:45:57.785937] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 17169.5ms) ✅
+[2025-10-26T17:45:57.790070] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T17:46:17.319861] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 19529.8ms) ✅
+[2025-10-26T17:46:17.322560] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761500890
+Start Time: 2025-10-26T17:48:10.767511
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T17:48:13.079452] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T17:48:35.064896] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 21985.4ms) ✅
+[2025-10-26T17:48:35.067399] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T17:48:54.746031] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 19678.7ms) ✅
+[2025-10-26T17:48:54.748936] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T17:49:30.462484] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 35713.6ms) ✅
+[2025-10-26T17:49:30.464171] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-26T17:51:10.483641] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 100019.5ms) ✅
+[2025-10-26T17:51:10.486262] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-26T17:52:08.688938] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 58202.7ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T17:52:08.691123] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-26T17:52:36.053964] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 27362.9ms) ✅
+[2025-10-26T17:52:36.055991] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-26T17:52:57.085671] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 21029.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761502559
+Start Time: 2025-10-26T18:15:59.614083
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T18:16:01.322411] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T18:16:21.747442] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 20425.0ms) ✅
+[2025-10-26T18:16:21.752807] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T18:16:44.863629] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 23110.9ms) ✅
+[2025-10-26T18:16:44.866597] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T18:17:04.159361] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 19292.8ms) ✅
+[2025-10-26T18:17:04.165025] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761503262
+Start Time: 2025-10-26T18:27:42.025180
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T18:27:43.975119] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T18:28:08.427451] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 24452.4ms) ✅
+[2025-10-26T18:28:08.430850] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T18:28:38.122878] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 29692.1ms) ✅
+[2025-10-26T18:28:38.125085] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T18:30:36.415649] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 118290.6ms) ✅
+[2025-10-26T18:30:36.421322] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761503447
+Start Time: 2025-10-26T18:30:47.658232
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T18:30:48.755589] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T18:31:08.541627] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 19786.1ms) ✅
+[2025-10-26T18:31:08.545831] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T18:31:29.878617] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 21332.8ms) ✅
+[2025-10-26T18:31:29.882150] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T18:31:41.454847] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 65033.6ms) ✅
+[2025-10-26T18:31:41.461167] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-26T18:31:49.079927] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 19197.8ms) ✅
+[2025-10-26T18:31:49.084122] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-26T18:33:14.067187] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 92606.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T18:33:14.068938] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-26T18:33:28.376017] ERROR    GOAL         Goal failed: type 'email@email.com' into the email input field (took 14307.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T18:33:28.377387] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761503802
+Start Time: 2025-10-26T18:36:42.226577
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T18:36:43.841742] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T18:37:09.192806] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 25351.1ms) ✅
+[2025-10-26T18:37:09.196138] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T18:37:27.434167] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 18238.1ms) ✅
+[2025-10-26T18:37:27.436984] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T18:39:25.979863] ERROR    GOAL         Goal failed: select 'coffee' in the favorite drink checkbox field (took 118542.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T18:39:25.995344] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761503976
+Start Time: 2025-10-26T18:39:36.236392
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T18:39:37.493159] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T18:39:56.198939] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 18706.2ms) ✅
+[2025-10-26T18:39:56.201021] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T18:40:20.017287] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 23816.3ms) ✅
+[2025-10-26T18:40:20.020429] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761507559
+Start Time: 2025-10-26T19:39:19.919246
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T19:39:22.090450] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T19:39:55.049373] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 32958.9ms) ✅
+[2025-10-26T19:39:55.055093] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T19:40:29.792961] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 34737.9ms) ✅
+[2025-10-26T19:40:29.797763] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T19:41:00.357412] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 30559.7ms) ✅
+[2025-10-26T19:41:00.362013] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-26T19:42:55.757555] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 115395.6ms) ✅
+[2025-10-26T19:42:55.762490] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-26T19:44:58.990632] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 123228.2ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T19:44:58.998124] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-26T19:45:36.053668] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 37055.6ms) ✅
+[2025-10-26T19:45:36.068693] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-26T19:46:14.029377] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 37960.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761513274
+Start Time: 2025-10-26T21:14:34.016844
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:14:36.251288] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T21:15:01.627078] ERROR    GOAL         Goal failed: type 'chris' into the name input field (took 25375.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T21:15:01.629434] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761513305
+Start Time: 2025-10-26T21:15:05.378286
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:15:06.763516] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761513322
+Start Time: 2025-10-26T21:15:22.151642
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:15:24.059470] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T21:15:47.913854] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 23854.4ms) ✅
+[2025-10-26T21:15:47.917794] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T21:16:05.360675] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 17443.0ms) ✅
+[2025-10-26T21:16:05.364112] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761513574
+Start Time: 2025-10-26T21:19:34.917062
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:19:37.573635] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T21:19:59.445142] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 21871.8ms) ✅
+[2025-10-26T21:19:59.449133] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T21:20:15.675592] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 16226.5ms) ✅
+[2025-10-26T21:20:15.680064] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761514018
+Start Time: 2025-10-26T21:26:58.629339
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:27:00.869401] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T21:27:20.358584] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 19489.2ms) ✅
+[2025-10-26T21:27:20.361173] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T21:27:37.220272] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 16859.1ms) ✅
+[2025-10-26T21:27:37.224117] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T21:29:36.714678] ERROR    GOAL         Goal failed: select 'coffee' in the favorite drink checkbox field (took 119490.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T21:29:36.725498] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-26T21:31:12.661083] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 95935.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T21:31:12.676501] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-26T21:31:38.519555] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 25843.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T21:31:38.521351] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-26T21:31:59.013711] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 20492.4ms) ✅
+[2025-10-26T21:31:59.015915] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-26T21:32:18.015371] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 18999.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761514384
+Start Time: 2025-10-26T21:33:04.546984
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:33:06.416213] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:33:44.641743] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 38225.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761514444
+Start Time: 2025-10-26T21:34:04.683351
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:34:06.402954] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:34:44.563516] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 38160.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761514501
+Start Time: 2025-10-26T21:35:01.452693
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761514532
+Start Time: 2025-10-26T21:35:32.001258
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:35:33.892652] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:37:36.960731] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 123068.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515381
+Start Time: 2025-10-26T21:49:41.868678
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:49:44.031039] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:51:56.206180] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 132175.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515540
+Start Time: 2025-10-26T21:52:20.076961
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:52:23.316265] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:54:08.671794] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 105355.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515681
+Start Time: 2025-10-26T21:54:41.682291
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:54:44.409307] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:55:07.231948] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 22822.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515756
+Start Time: 2025-10-26T21:55:56.014179
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:55:58.260164] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:56:18.971788] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 20712.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515817
+Start Time: 2025-10-26T21:56:57.327352
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:56:59.538551] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:59:05.615027] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 126076.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761515963
+Start Time: 2025-10-26T21:59:23.193867
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T21:59:26.626780] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T21:59:48.278317] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 21651.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761516028
+Start Time: 2025-10-26T22:00:28.352519
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T22:00:30.126247] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T22:02:55.668655] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 145542.4ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761516204
+Start Time: 2025-10-26T22:03:24.323730
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T22:03:26.475348] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T22:05:16.782213] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 110306.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761516327
+Start Time: 2025-10-26T22:05:27.285062
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T22:05:29.104554] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-26T22:06:08.420556] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 39316.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761516428
+Start Time: 2025-10-26T22:07:08.132700
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-26T22:07:10.395163] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-26T22:07:38.307967] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 27912.8ms) ✅
+[2025-10-26T22:07:38.312043] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-26T22:07:56.426306] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 18114.3ms) ✅
+[2025-10-26T22:07:56.429037] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-26T22:10:01.338425] ERROR    GOAL         Goal failed: select 'coffee' in the favorite drink checkbox field (took 124909.4ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T22:10:01.349490] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-26T22:11:12.221037] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 70871.5ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T22:11:12.234150] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-26T22:11:31.991126] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 19757.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-26T22:11:31.993707] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-26T22:11:49.319725] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 17326.0ms) ✅
+[2025-10-26T22:11:49.322244] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-26T22:12:07.899077] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 18576.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761526088
+Start Time: 2025-10-27T00:48:08.328516
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T00:48:10.512445] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T00:48:35.286863] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 24774.4ms) ✅
+[2025-10-27T00:48:35.291219] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T00:48:54.984571] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 19693.4ms) ✅
+[2025-10-27T00:48:54.989901] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761526266
+Start Time: 2025-10-27T00:51:06.792517
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T00:51:09.526883] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T00:51:29.978301] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 20451.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761526320
+Start Time: 2025-10-27T00:52:00.255961
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T00:52:01.708257] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T00:52:18.748648] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 17040.4ms) ✅
+[2025-10-27T00:52:18.751909] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T00:52:39.045188] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 20293.3ms) ✅
+[2025-10-27T00:52:39.048729] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-27T00:52:57.369454] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 18320.8ms) ✅
+[2025-10-27T00:52:57.372453] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-27T00:54:00.593667] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 63221.2ms) ✅
+[2025-10-27T00:54:00.597512] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-27T00:54:36.056505] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 35459.0ms) ✅
+[2025-10-27T00:54:36.060708] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-27T00:55:22.909729] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 46849.1ms) ✅
+[2025-10-27T00:55:22.913626] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-27T00:55:46.294379] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 23380.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761558816
+Start Time: 2025-10-27T09:53:36.031628
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T09:53:38.019350] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T09:54:01.981907] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 23962.5ms) ✅
+[2025-10-27T09:54:01.997238] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T09:54:22.539881] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 20542.7ms) ✅
+[2025-10-27T09:54:22.543991] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761564971
+Start Time: 2025-10-27T11:36:11.366679
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T11:36:13.706217] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T11:38:29.570688] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 135864.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761565118
+Start Time: 2025-10-27T11:38:38.496643
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T11:38:39.962328] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T11:40:52.468841] ERROR    GOAL         Goal failed: select coffee in the favorite drink checkbox field (took 132506.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761565301
+Start Time: 2025-10-27T11:41:41.877853
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T11:41:43.845573] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T11:42:07.866319] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 24021.0ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761565357
+Start Time: 2025-10-27T11:42:37.792489
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T11:42:39.100906] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T11:42:59.265598] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 20164.8ms) ✅
+[2025-10-27T11:42:59.271753] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T11:43:21.109220] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 21837.5ms) ✅
+[2025-10-27T11:43:21.115557] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-27T11:43:43.887966] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 22772.4ms) ✅
+[2025-10-27T11:43:43.890812] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-27T11:45:13.839958] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 89949.2ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-27T11:45:13.843021] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-27T11:45:47.629904] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 33786.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-27T11:45:47.633517] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-27T11:46:12.175844] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 24542.3ms) ✅
+[2025-10-27T11:46:12.179686] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-27T11:46:36.492023] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 24312.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761566241
+Start Time: 2025-10-27T11:57:21.705060
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T11:57:23.596845] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T11:58:02.135498] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 38538.7ms) ✅
+[2025-10-27T11:58:02.140170] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T11:58:25.844244] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 23704.1ms) ✅
+[2025-10-27T11:58:25.865450] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-27T11:58:50.352845] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 24487.4ms) ✅
+[2025-10-27T11:58:50.368288] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761567781
+Start Time: 2025-10-27T12:23:01.122400
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T12:23:03.137786] INFO     GOAL         Starting goal: form: type chris into the name input field
+    Details: {
+  "goal_description": "form: type chris into the name input field"
+}
+[2025-10-27T12:23:29.590511] SUCCESS  GOAL         Goal completed: type chris into the name input field (took 26452.8ms) ✅
+[2025-10-27T12:23:29.596595] INFO     GOAL         Starting goal: form: type password into the password input field
+    Details: {
+  "goal_description": "form: type password into the password input field"
+}
+[2025-10-27T12:23:58.455448] SUCCESS  GOAL         Goal completed: type password into the password input field (took 28858.9ms) ✅
+[2025-10-27T12:23:58.461087] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T12:24:34.137393] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 35676.3ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761573824
+Start Time: 2025-10-27T14:03:44.621343
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T14:03:46.371580] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T14:04:27.158476] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 40786.9ms) ✅
+[2025-10-27T14:04:27.165569] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T14:04:59.556905] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 32391.4ms) ✅
+[2025-10-27T14:04:59.563504] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-27T14:05:59.955850] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 60392.4ms) ✅
+[2025-10-27T14:05:59.970938] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761596969
+Start Time: 2025-10-27T20:29:29.824175
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T20:29:32.026507] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-27T20:29:59.315055] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 27288.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761598632
+Start Time: 2025-10-27T20:57:12.366689
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-27T20:57:14.435724] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-27T20:57:34.792479] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 20356.7ms) ✅
+[2025-10-27T20:57:34.797804] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-27T20:57:54.357765] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 19560.0ms) ✅
+[2025-10-27T20:57:54.362399] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-27T20:58:12.844607] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 18482.2ms) ✅
+[2025-10-27T20:58:12.851058] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761643264
+Start Time: 2025-10-28T09:21:04.342238
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:21:06.516719] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-28T09:21:29.409547] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 22892.9ms) ✅
+[2025-10-28T09:21:29.409853] INFO     GOAL         Starting goal: form: select blue as my favorite color
+    Details: {
+  "goal_description": "form: select blue as my favorite color"
+}
+[2025-10-28T09:22:31.983935] SUCCESS  GOAL         Goal completed: select blue as my favorite color (took 62574.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761643384
+Start Time: 2025-10-28T09:23:04.173080
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:23:05.596172] INFO     GOAL         Starting goal: form: select blue as my favorite color
+    Details: {
+  "goal_description": "form: select blue as my favorite color"
+}
+[2025-10-28T09:23:31.182122] SUCCESS  GOAL         Goal completed: select blue as my favorite color (took 25586.0ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761643461
+Start Time: 2025-10-28T09:24:21.552639
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:24:23.174563] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-28T09:24:40.085317] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 16910.8ms) ✅
+[2025-10-28T09:24:40.089489] INFO     GOAL         Starting goal: form: select blue as my favorite color
+    Details: {
+  "goal_description": "form: select blue as my favorite color"
+}
+[2025-10-28T09:25:23.844473] SUCCESS  GOAL         Goal completed: select blue as my favorite color (took 43755.0ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761643539
+Start Time: 2025-10-28T09:25:39.247810
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:25:41.333489] INFO     GOAL         Starting goal: form: type chris into the name input field
+    Details: {
+  "goal_description": "form: type chris into the name input field"
+}
+[2025-10-28T09:26:02.863729] SUCCESS  GOAL         Goal completed: type chris into the name input field (took 21530.3ms) ✅
+[2025-10-28T09:26:02.868009] INFO     GOAL         Starting goal: form: type password into the password input field
+    Details: {
+  "goal_description": "form: type password into the password input field"
+}
+[2025-10-28T09:26:21.904215] SUCCESS  GOAL         Goal completed: type password into the password input field (took 19036.2ms) ✅
+[2025-10-28T09:26:21.909145] INFO     GOAL         Starting goal: form: select coffee in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select coffee in the favorite drink checkbox field"
+}
+[2025-10-28T09:26:37.161713] SUCCESS  GOAL         Goal completed: select coffee in the favorite drink checkbox field (took 15252.6ms) ✅
+[2025-10-28T09:26:37.165999] INFO     GOAL         Starting goal: form: select blue as my favorite color
+    Details: {
+  "goal_description": "form: select blue as my favorite color"
+}
+[2025-10-28T09:27:31.426763] SUCCESS  GOAL         Goal completed: select blue as my favorite color (took 54260.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761643835
+Start Time: 2025-10-28T09:30:35.723941
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:30:37.850208] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T09:30:58.807546] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 20957.4ms) ✅
+[2025-10-28T09:30:58.811489] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T09:31:16.672374] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 17860.9ms) ✅
+[2025-10-28T09:31:16.677262] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T09:31:48.989214] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 32312.0ms) ✅
+[2025-10-28T09:31:48.991097] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T09:32:32.387609] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 43396.5ms) ✅
+[2025-10-28T09:32:32.393081] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:33:55.020614] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 82627.6ms) ✅
+[2025-10-28T09:33:55.026016] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T09:34:15.627670] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 20601.7ms) ✅
+[2025-10-28T09:34:15.632716] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761644323
+Start Time: 2025-10-28T09:38:43.551710
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:38:45.598043] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T09:39:07.403400] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 21805.5ms) ✅
+[2025-10-28T09:39:07.407588] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T09:39:30.648940] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 23241.4ms) ✅
+[2025-10-28T09:39:30.654154] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T09:39:47.486936] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 16832.8ms) ✅
+[2025-10-28T09:39:47.490764] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T09:40:12.144713] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 24654.0ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761644428
+Start Time: 2025-10-28T09:40:28.779308
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:40:30.908625] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T09:40:50.146513] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 19237.9ms) ✅
+[2025-10-28T09:40:50.149364] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T09:41:07.186320] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 17037.0ms) ✅
+[2025-10-28T09:41:07.190614] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T09:41:27.451867] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 20261.3ms) ✅
+[2025-10-28T09:41:27.455929] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T09:41:50.060567] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 22604.7ms) ✅
+[2025-10-28T09:41:50.063337] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:43:01.849503] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 71786.2ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T09:43:01.866707] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T09:43:22.636719] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 20770.0ms) ✅
+[2025-10-28T09:43:22.641447] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T09:43:46.429778] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 23788.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761644639
+Start Time: 2025-10-28T09:43:59.942864
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:44:01.366246] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:45:28.058173] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 86691.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761644755
+Start Time: 2025-10-28T09:45:55.583707
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:45:57.849687] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:47:46.740531] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 108890.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761644881
+Start Time: 2025-10-28T09:48:01.335510
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:48:02.692188] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T09:48:18.059215] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 15367.0ms) ✅
+[2025-10-28T09:48:18.064182] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T09:48:39.503666] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 21439.5ms) ✅
+[2025-10-28T09:48:39.508839] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T09:48:56.744262] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 17235.4ms) ✅
+[2025-10-28T09:48:56.746005] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T09:49:39.021119] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 42275.1ms) ✅
+[2025-10-28T09:49:39.023809] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:50:53.810168] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 74786.4ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T09:50:53.814806] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T09:51:13.235339] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 19420.6ms) ✅
+[2025-10-28T09:51:13.239564] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T09:51:33.348231] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 20108.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645107
+Start Time: 2025-10-28T09:51:47.937951
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:51:49.386005] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:53:11.086225] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 81700.3ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645254
+Start Time: 2025-10-28T09:54:14.400873
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:54:15.860210] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T09:54:34.196827] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 18336.7ms) ✅
+[2025-10-28T09:54:34.198597] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T09:54:55.777622] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 21579.0ms) ✅
+[2025-10-28T09:54:55.781822] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T09:55:15.813107] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 20031.3ms) ✅
+[2025-10-28T09:55:15.815771] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T09:56:09.683156] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 53867.4ms) ✅
+[2025-10-28T09:56:09.687514] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:57:12.186757] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 62499.2ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T09:57:12.205222] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T09:57:31.325309] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 19120.1ms) ✅
+[2025-10-28T09:57:31.330410] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T09:57:50.581808] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 19251.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645485
+Start Time: 2025-10-28T09:58:05.222749
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T09:58:06.621471] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T09:59:26.873099] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 80252.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645616
+Start Time: 2025-10-28T10:00:16.779727
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:00:18.215428] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:00:37.879176] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 19663.8ms) ✅
+[2025-10-28T10:00:37.883659] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:01:02.061467] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 24177.8ms) ✅
+[2025-10-28T10:01:02.065764] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:01:22.452964] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 20387.2ms) ✅
+[2025-10-28T10:01:22.456247] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645752
+Start Time: 2025-10-28T10:02:32.947376
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:02:34.493814] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:02:46.227729] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 83771.5ms) ✅
+[2025-10-28T10:02:46.231939] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:03:27.131010] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 52637.2ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+[2025-10-28T10:03:52.274179] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 66042.3ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:03:52.277083] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761645845
+Start Time: 2025-10-28T10:04:05.271470
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:04:06.777349] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:04:11.182738] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 18905.6ms) ✅
+[2025-10-28T10:04:11.184414] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:04:28.239060] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 21461.7ms) ✅
+[2025-10-28T10:04:28.243705] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:04:32.019815] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 20835.4ms) ✅
+[2025-10-28T10:04:46.130482] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 17886.8ms) ✅
+[2025-10-28T10:04:46.135274] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:05:07.635798] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 21500.5ms) ✅
+[2025-10-28T10:05:07.637997] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:06:15.961438] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 68323.4ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+[2025-10-28T10:06:15.965038] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:06:53.999610] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 38034.6ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+[2025-10-28T10:06:54.002888] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:07:17.827819] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 23825.0ms) ✅
+[2025-10-28T10:07:17.832370] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:07:40.371236] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 22538.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646105
+Start Time: 2025-10-28T10:08:25.896039
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:08:27.353071] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:09:00.677925] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 33324.9ms) ✅
+[2025-10-28T10:09:00.683121] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:09:42.019389] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 41336.3ms) ✅
+[2025-10-28T10:09:42.022861] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:10:11.595216] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 29572.4ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646243
+Start Time: 2025-10-28T10:10:43.242573
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:10:44.644595] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:11:07.091180] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 22446.6ms) ✅
+[2025-10-28T10:11:07.094911] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:11:22.494609] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 15399.7ms) ✅
+[2025-10-28T10:11:22.498434] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:11:41.561777] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 19063.4ms) ✅
+[2025-10-28T10:11:41.564401] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:12:57.192441] ERROR    GOAL         Goal failed: select 'blue' as my favorite color (took 75628.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:12:57.208324] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:13:23.558461] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 26350.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:13:23.561835] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:13:43.472419] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 19910.6ms) ✅
+[2025-10-28T10:13:43.475080] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:14:04.667570] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 21192.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646459
+Start Time: 2025-10-28T10:14:19.356696
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646472
+Start Time: 2025-10-28T10:14:32.326769
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646486
+Start Time: 2025-10-28T10:14:46.654136
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646509
+Start Time: 2025-10-28T10:15:09.089458
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:15:10.899695] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:15:28.327550] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 17427.9ms) ✅
+[2025-10-28T10:15:28.332582] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:15:46.350667] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 18018.1ms) ✅
+[2025-10-28T10:15:46.353509] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:16:02.427264] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 16073.8ms) ✅
+[2025-10-28T10:16:02.430555] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:16:41.022423] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 38591.9ms) ✅
+[2025-10-28T10:16:41.027802] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:17:28.516792] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 47489.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:17:28.532523] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:17:44.090038] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 15557.5ms) ✅
+[2025-10-28T10:17:44.093077] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:17:59.248755] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 15155.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646695
+Start Time: 2025-10-28T10:18:15.284429
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:18:17.120675] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:18:41.160299] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 24039.6ms) ❌
+    Details: {
+  "error": "Failed after 2 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646753
+Start Time: 2025-10-28T10:19:13.158891
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:19:14.885369] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:19:29.355529] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 14470.2ms) ✅
+[2025-10-28T10:19:29.360743] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:19:46.414429] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 17053.7ms) ✅
+[2025-10-28T10:19:46.416068] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:19:59.155459] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 12739.4ms) ✅
+[2025-10-28T10:19:59.159840] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:20:25.805681] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 26645.9ms) ✅
+[2025-10-28T10:20:25.809029] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:21:08.607360] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 42798.4ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:21:08.610064] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:21:29.192135] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 20582.1ms) ✅
+[2025-10-28T10:21:29.195941] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:21:48.063480] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 18867.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761646934
+Start Time: 2025-10-28T10:22:14.390931
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:22:15.632497] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:22:30.632324] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 15000.2ms) ✅
+[2025-10-28T10:22:30.635668] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:22:42.841523] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 12205.9ms) ✅
+[2025-10-28T10:22:42.845668] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:22:56.027105] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 13181.5ms) ✅
+[2025-10-28T10:22:56.030577] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:23:54.589461] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 58558.9ms) ✅
+[2025-10-28T10:23:54.594138] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:24:33.779930] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 39185.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:24:33.783998] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:24:49.569277] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 15785.3ms) ✅
+[2025-10-28T10:24:49.572545] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:25:08.676033] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 19103.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761647138
+Start Time: 2025-10-28T10:25:38.714883
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:25:40.023010] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:25:55.231506] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 15208.6ms) ✅
+[2025-10-28T10:25:55.236378] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:26:11.142190] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 15905.9ms) ✅
+[2025-10-28T10:26:11.147163] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:26:22.781079] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 11633.9ms) ✅
+[2025-10-28T10:26:22.785458] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:27:13.694671] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 50909.2ms) ✅
+[2025-10-28T10:27:13.700082] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:27:52.387877] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 38687.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T10:27:52.393404] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:28:07.446646] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 15053.3ms) ✅
+[2025-10-28T10:28:07.451508] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:28:23.653467] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 16202.0ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761647334
+Start Time: 2025-10-28T10:28:54.860420
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:28:56.534310] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:29:11.145328] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 14611.0ms) ✅
+[2025-10-28T10:29:11.146247] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:29:25.304629] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 14158.4ms) ✅
+[2025-10-28T10:29:25.305926] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:29:42.410929] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 17105.0ms) ✅
+[2025-10-28T10:29:42.412045] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:30:28.695268] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 46283.2ms) ✅
+[2025-10-28T10:30:28.696674] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:30:48.356793] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 19660.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761648421
+Start Time: 2025-10-28T10:47:01.950883
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:47:03.958694] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:47:46.630126] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 42671.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761648514
+Start Time: 2025-10-28T10:48:34.074883
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:48:35.452519] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:49:03.086115] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 27633.7ms) ✅
+[2025-10-28T10:49:03.089387] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:49:18.399275] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 15309.9ms) ✅
+[2025-10-28T10:49:18.403440] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:49:40.899474] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 22496.1ms) ✅
+[2025-10-28T10:49:40.902394] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:50:06.564154] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 25661.8ms) ✅
+[2025-10-28T10:50:06.567685] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:50:54.472202] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 47904.5ms) ❌
+    Details: {
+  "error": "Failed after 5 attempts"
+}
+[2025-10-28T10:50:54.475698] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:51:10.866090] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 16390.4ms) ✅
+[2025-10-28T10:51:10.870728] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:51:29.287528] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 18416.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761648714
+Start Time: 2025-10-28T10:51:54.893020
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:51:57.781371] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:52:27.162363] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 29381.0ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761648789
+Start Time: 2025-10-28T10:53:09.034727
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:53:10.387248] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:53:32.751407] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 22364.2ms) ✅
+[2025-10-28T10:53:32.757183] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:53:58.259321] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 25502.2ms) ✅
+[2025-10-28T10:53:58.263757] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:54:13.800334] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 15536.6ms) ✅
+[2025-10-28T10:54:13.803791] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T10:54:49.352017] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 35548.3ms) ✅
+[2025-10-28T10:54:49.356865] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:55:36.974460] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 47617.6ms) ❌
+    Details: {
+  "error": "Failed after 8 attempts"
+}
+[2025-10-28T10:55:36.979273] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T10:56:15.415715] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 38436.4ms) ✅
+[2025-10-28T10:56:15.418894] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T10:56:38.851485] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 23432.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649013
+Start Time: 2025-10-28T10:56:53.654493
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:56:56.644337] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T10:57:27.444091] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 30799.9ms) ❌
+    Details: {
+  "error": "Failed after 2 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649088
+Start Time: 2025-10-28T10:58:08.467192
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T10:58:09.848705] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T10:58:32.695763] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 22847.1ms) ✅
+[2025-10-28T10:58:32.699876] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T10:58:49.207708] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 16507.8ms) ✅
+[2025-10-28T10:58:49.211317] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T10:59:12.705220] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 23493.9ms) ✅
+[2025-10-28T10:59:12.708399] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T11:00:50.101290] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 97392.9ms) ✅
+[2025-10-28T11:00:50.120561] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:01:39.021165] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 48900.6ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T11:01:39.028693] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T11:02:03.657599] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 24628.9ms) ✅
+[2025-10-28T11:02:03.661625] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T11:02:38.911991] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 35250.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649390
+Start Time: 2025-10-28T11:03:10.214128
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:03:11.680060] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T11:03:34.175444] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 22495.4ms) ✅
+[2025-10-28T11:03:34.180422] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T11:03:56.888749] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 22708.4ms) ✅
+[2025-10-28T11:03:56.893844] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T11:04:16.348137] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 19454.3ms) ✅
+[2025-10-28T11:04:16.351784] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T11:04:50.760909] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 34409.2ms) ✅
+[2025-10-28T11:04:50.764718] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:06:07.567792] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 76803.1ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+[2025-10-28T11:06:07.586077] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T11:06:30.400290] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 22814.2ms) ✅
+[2025-10-28T11:06:30.403844] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T11:06:46.117886] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 15714.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649622
+Start Time: 2025-10-28T11:07:02.225480
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:07:03.678612] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:07:31.673259] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 27994.9ms) ❌
+    Details: {
+  "error": "Failed after 3 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649682
+Start Time: 2025-10-28T11:08:02.905237
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:08:04.161593] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:09:07.083336] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 62921.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649758
+Start Time: 2025-10-28T11:09:18.881065
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:09:20.255193] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:10:35.835960] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 75580.8ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649845
+Start Time: 2025-10-28T11:10:45.361786
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:10:46.656297] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:11:57.642176] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 70986.0ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761649930
+Start Time: 2025-10-28T11:12:10.512160
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:12:11.749878] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:13:14.036563] ERROR    GOAL         Goal failed: select 'yes' in the 'do you like automation?' select field (took 62286.9ms) ❌
+    Details: {
+  "error": "Failed after 10 attempts"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761650023
+Start Time: 2025-10-28T11:13:43.026114
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:13:44.422688] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:14:14.619781] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 30197.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761650100
+Start Time: 2025-10-28T11:15:00.215287
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:15:01.626920] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T11:15:18.473618] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 16846.8ms) ✅
+[2025-10-28T11:15:18.478543] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T11:15:32.239624] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 13761.1ms) ✅
+[2025-10-28T11:15:32.243699] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T11:15:49.912072] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 17668.4ms) ✅
+[2025-10-28T11:15:49.916003] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T11:16:07.446418] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 17530.4ms) ✅
+[2025-10-28T11:16:07.467312] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:16:34.041718] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 26574.4ms) ✅
+[2025-10-28T11:16:34.061657] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+[2025-10-28T11:17:14.840690] SUCCESS  GOAL         Goal completed: type 'email@email.com' into the email input field (took 40779.1ms) ✅
+[2025-10-28T11:17:14.856274] INFO     GOAL         Starting goal: form: type 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "form: type 'testing my bot' into the message input field"
+}
+[2025-10-28T11:17:33.588594] SUCCESS  GOAL         Goal completed: type 'testing my bot' into the message input field (took 18732.3ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761652053
+Start Time: 2025-10-28T11:47:33.080195
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T11:47:34.851030] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T11:47:51.200208] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 16349.2ms) ✅
+[2025-10-28T11:47:51.218704] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T11:48:12.788425] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 21569.8ms) ✅
+[2025-10-28T11:48:12.810524] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-28T11:48:35.915703] SUCCESS  GOAL         Goal completed: select 'coffee' in the favorite drink checkbox field (took 23105.2ms) ✅
+[2025-10-28T11:48:35.938501] INFO     GOAL         Starting goal: form: select 'blue' as my favorite color
+    Details: {
+  "goal_description": "form: select 'blue' as my favorite color"
+}
+[2025-10-28T11:49:30.893545] SUCCESS  GOAL         Goal completed: select 'blue' as my favorite color (took 54955.1ms) ✅
+[2025-10-28T11:49:30.897369] INFO     GOAL         Starting goal: form: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "form: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-28T11:49:56.982724] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 26085.4ms) ✅
+[2025-10-28T11:49:56.985445] INFO     GOAL         Starting goal: form: type 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "form: type 'email@email.com' into the email input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761654465
+Start Time: 2025-10-28T12:27:45.021485
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T12:27:46.897587] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T12:28:14.626287] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 27728.7ms) ✅
+[2025-10-28T12:28:14.626832] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T12:28:46.396845] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 31770.0ms) ✅
+[2025-10-28T12:28:46.397240] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761660069
+Start Time: 2025-10-28T14:01:09.154586
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-28T14:01:11.404689] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-28T14:02:11.264720] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 59860.3ms) ✅
+[2025-10-28T14:02:11.265111] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-28T14:03:07.173826] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 55908.7ms) ✅
+[2025-10-28T14:03:07.174828] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761696799
+Start Time: 2025-10-29T00:13:19.969006
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T00:13:21.964806] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-29T00:14:00.532982] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 38568.2ms) ✅
+[2025-10-29T00:14:00.533551] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-29T00:14:43.325275] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 42791.7ms) ✅
+[2025-10-29T00:14:43.325704] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761762770
+Start Time: 2025-10-29T18:32:50.227727
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T18:32:56.072014] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-29T18:33:50.244428] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 54172.4ms) ✅
+[2025-10-29T18:33:50.245718] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-29T18:34:34.325745] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 44080.1ms) ✅
+[2025-10-29T18:34:34.326490] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761766671
+Start Time: 2025-10-29T19:37:51.790565
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T19:37:53.823939] INFO     GOAL         Starting goal: dedup: enable
+    Details: {
+  "goal_description": "dedup: enable"
+}
+[2025-10-29T19:37:53.824770] INFO     SYSTEM       Deduplication enabled
+[2025-10-29T19:37:53.824944] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-10-29T19:37:54.053883] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Ios Developer Jobs - Ios Developer Vacancies | Reed.co.uk",
+  "page_url": "https://www.reed.co.uk/jobs/ios-developer-jobs"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761766682
+Start Time: 2025-10-29T19:38:02.455998
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T19:38:03.511996] INFO     GOAL         Starting goal: form: type 'chris' into the name input field
+    Details: {
+  "goal_description": "form: type 'chris' into the name input field"
+}
+[2025-10-29T19:38:49.057175] SUCCESS  GOAL         Goal completed: type 'chris' into the name input field (took 45545.2ms) ✅
+[2025-10-29T19:38:49.057732] INFO     GOAL         Starting goal: form: type 'password' into the password input field
+    Details: {
+  "goal_description": "form: type 'password' into the password input field"
+}
+[2025-10-29T19:39:43.565349] SUCCESS  GOAL         Goal completed: type 'password' into the password input field (took 54507.6ms) ✅
+[2025-10-29T19:39:43.565808] INFO     GOAL         Starting goal: form: select 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "form: select 'coffee' in the favorite drink checkbox field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761766883
+Start Time: 2025-10-29T19:41:23.394344
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T19:41:24.960210] INFO     GOAL         Starting goal: type: 'chris' into the name input field
+    Details: {
+  "goal_description": "type: 'chris' into the name input field"
+}
+[2025-10-29T19:41:24.962515] INFO     GOAL         Starting goal: type: 'password' into the password input field
+    Details: {
+  "goal_description": "type: 'password' into the password input field"
+}
+[2025-10-29T19:41:24.962859] INFO     GOAL         Starting goal: click: 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "click: 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-29T19:42:19.473345] SUCCESS  GOAL         Goal completed: 'coffee' in the favorite drink checkbox field (took 54510.5ms) ✅
+[2025-10-29T19:42:19.474594] INFO     GOAL         Starting goal: click: 'blue' as my favorite color
+    Details: {
+  "goal_description": "click: 'blue' as my favorite color"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1761767108
+Start Time: 2025-10-29T19:45:08.723037
+Log File: bot_automation.log
+================================================================================
+
+[2025-10-29T19:45:09.754878] INFO     GOAL         Starting goal: type: 'chris' into the name input field
+    Details: {
+  "goal_description": "type: 'chris' into the name input field"
+}
+[2025-10-29T19:45:56.257227] SUCCESS  GOAL         Goal completed: 'chris' into the name input field (took 46502.4ms) ✅
+[2025-10-29T19:45:56.257952] INFO     GOAL         Starting goal: type: 'password' into the password input field
+    Details: {
+  "goal_description": "type: 'password' into the password input field"
+}
+[2025-10-29T19:46:40.567912] SUCCESS  GOAL         Goal completed: 'password' into the password input field (took 44310.0ms) ✅
+[2025-10-29T19:46:40.569015] INFO     GOAL         Starting goal: click: 'coffee' in the favorite drink checkbox field
+    Details: {
+  "goal_description": "click: 'coffee' in the favorite drink checkbox field"
+}
+[2025-10-29T19:47:27.774647] SUCCESS  GOAL         Goal completed: 'coffee' in the favorite drink checkbox field (took 47205.6ms) ✅
+[2025-10-29T19:47:27.775120] INFO     GOAL         Starting goal: click: 'blue' as my favorite color
+    Details: {
+  "goal_description": "click: 'blue' as my favorite color"
+}
+[2025-10-29T19:48:20.024923] SUCCESS  GOAL         Goal completed: 'blue' as my favorite color (took 52249.8ms) ✅
+[2025-10-29T19:48:20.025401] INFO     GOAL         Starting goal: select: select 'yes' in the 'do you like automation?' select field
+    Details: {
+  "goal_description": "select: select 'yes' in the 'do you like automation?' select field"
+}
+[2025-10-29T19:50:20.621201] SUCCESS  GOAL         Goal completed: select 'yes' in the 'do you like automation?' select field (took 120595.8ms) ✅
+[2025-10-29T19:50:20.622420] INFO     GOAL         Starting goal: type: 'email@email.com' into the email input field
+    Details: {
+  "goal_description": "type: 'email@email.com' into the email input field"
+}
+[2025-10-29T19:51:03.590687] SUCCESS  GOAL         Goal completed: 'email@email.com' into the email input field (took 42968.3ms) ✅
+[2025-10-29T19:51:03.591523] INFO     GOAL         Starting goal: type: 'testing my bot' into the message input field
+    Details: {
+  "goal_description": "type: 'testing my bot' into the message input field"
+}
+[2025-10-29T19:51:41.306640] SUCCESS  GOAL         Goal completed: 'testing my bot' into the message input field (took 37715.1ms) ✅

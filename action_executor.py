@@ -401,6 +401,24 @@ class ActionExecutor:
                     self.upload_handler.handle_upload_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
                 elif step.action == ActionType.HANDLE_DATETIME:
+                    # Get coordinates for the datetime element first
+                    x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
+                    
+                    # Record planned interaction with goal monitor and get pre-interaction evaluations
+                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                        InteractionType.DATETIME,
+                        coordinates=(x, y) if x is not None and y is not None else None,
+                        target_description=step.datetime_value or "date field",
+                        datetime_value=step.datetime_value,
+                    )
+                    
+                    # Check for retry requests from goals immediately after evaluation
+                    retry_goal = self.goal_monitor.check_for_retry_request()
+                    if retry_goal:
+                        print("🔄 Goals have requested retry - aborting current plan execution")
+                        print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        return False
+                    
                     if confirm_before_interaction:
                         self._confirm_interaction_visual(
                             action_label="datetime",
@@ -413,15 +431,15 @@ class ActionExecutor:
                     self.datetime_handler.handle_datetime_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
                     
-                    # Record the select interaction
+                    # Record the datetime interaction
                     self.goal_monitor.record_interaction(
                         InteractionType.DATETIME,
                         coordinates=(step.x, step.y) if step.x and step.y else None,
                         target_element_info={
                             "overlay_index": step.overlay_index,
-                            "select_option_text": step.select_option_text,
+                            "datetime_value": step.datetime_value,
                         },
-                        text_input=step.select_option_text,
+                        text_input=step.datetime_value,
                         success=step_success,
                     )
                 elif step.action == ActionType.BACK:

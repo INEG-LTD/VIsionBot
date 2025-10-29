@@ -26,6 +26,9 @@ from .element_analyzer import ElementAnalyzer
 from .click_goal import ClickGoal
 from .navigation_goal import NavigationGoal
 from .form_goal import FormFillGoal
+from .type_goal import TypeGoal
+from .date_goal import DateGoal
+from .select_goal import SelectGoal
 from .if_goal import IfGoal
 from .press_goal import PressGoal
 from .scroll_goal import ScrollGoal
@@ -58,6 +61,9 @@ __all__ = [
     "ClickGoal",
     "NavigationGoal", 
     "FormFillGoal",
+    "TypeGoal",
+    "DateGoal",
+    "SelectGoal",
     "IfGoal",
     "PressGoal",
     "ScrollGoal",
