@@ -26,28 +26,54 @@ class SelectHandler:
         print(f"    Debug: elements count = {len(elements.elements)}")
         print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
-        if step.overlay_index is None:
-            print("    ❌ No overlay index provided")
-            raise ValueError("No overlay index provided for select field")
-        
-        # Find element by overlay_number instead of array index
-        element = None
-        for elem in elements.elements:
-            if elem.overlay_number == step.overlay_index:
-                element = elem
-                break
-        
-        if element is None:
-            available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
-            print(f"    ❌ No element found with overlay number {step.overlay_index}")
-            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
-            raise ValueError(f"No element found with overlay number {step.overlay_index} for select field")
+        # Get coordinates - prioritize step coordinates, then try overlay_index
         x, y = self._get_click_coordinates(step, elements, page_info)
-        target_description = element.description or element.element_label or element.element_type
-        selector_hint: Optional[str] = None
-
+        
+        if x is None or y is None:
+            # If we don't have coordinates and no overlay_index, we can't proceed
+            if step.overlay_index is None:
+                print("    ❌ No overlay index or coordinates provided")
+                raise ValueError("No overlay index or coordinates provided for select field")
+            
+            # Try to find element by overlay_index to get coordinates
+            element = None
+            for elem in elements.elements:
+                if elem.overlay_number == step.overlay_index:
+                    element = elem
+                    break
+            
+            if element is None:
+                available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
+                print(f"    ❌ No element found with overlay number {step.overlay_index}")
+                print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+                raise ValueError(f"No element found with overlay number {step.overlay_index} for select field")
+            
+            # Try to get coordinates from element box
+            if element.box_2d:
+                x, y = get_gemini_box_2d_center_pixels(
+                    element.box_2d, page_info.width, page_info.height
+                )
+        
         if x is None or y is None:
             raise ValueError("Could not determine coordinates for select field")
+        
+        # Get element info for description (if available)
+        element = None
+        if step.overlay_index is not None:
+            for elem in elements.elements:
+                if elem.overlay_number == step.overlay_index:
+                    element = elem
+                    break
+        
+        target_description = (
+            element.description if element else None
+        ) or (
+            element.element_label if element else None
+        ) or (
+            element.element_type if element else None
+        ) or "select field"
+        
+        selector_hint: Optional[str] = None
 
         # Validate and clamp coordinates
         x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
@@ -207,23 +233,38 @@ class SelectHandler:
     
     def _handle_traditional_select(
         self,
-        element: DetectedElement,
+        element: Optional[DetectedElement],
         step: ActionStep,
         page_info: PageInfo,
         selector_hint: Optional[str] = None,
     ) -> None:
-        """Handle traditional HTML select element"""
+        """Handle traditional HTML select element using Playwright's native selectOption API"""
         try:
+            # Get the selector for the select element
             query_selector = selector_hint
-            if not query_selector and element.box_2d:
+            if not query_selector and element and element.box_2d:
                 cx, cy = get_gemini_box_2d_center_pixels(element.box_2d, page_info.width, page_info.height)
                 query_selector = self.selector_utils.get_element_selector_from_coordinates(cx, cy)
 
             if not query_selector:
                 query_selector = 'select'
 
+            # Create locator for the select element
+            select_locator = self.page.locator(query_selector)
+            
+            # Check if select exists and is visible
+            try:
+                count = select_locator.count()
+                if count == 0:
+                    print(f"    ⚠️ No select element found with selector: {query_selector}")
+                    raise ValueError(f"Select element not found: {query_selector}")
+            except Exception as e:
+                print(f"    ⚠️ Error locating select element: {e}")
+                raise
+
+            # If we have a specific option to select
             if step.select_option_text:
-                opt = step.select_option_text
+                opt = step.select_option_text.strip()
                 
                 # Debug: List all available options
                 available_options = self.page.evaluate("""
@@ -233,65 +274,122 @@ class SelectHandler:
                         return Array.from(select.options || []).map(opt => ({
                             value: opt.value,
                             text: opt.textContent?.trim(),
-                            label: opt.label?.trim()
+                            label: opt.label?.trim(),
+                            index: opt.index
                         }));
                     }
                 """, query_selector)
                 print(f"    🔍 Available options: {available_options}")
                 
+                # Try Playwright's native selectOption API
+                # 1. Try by label (recommended - most common)
                 try:
-                    self.page.select_option(query_selector, label=opt)
-                    print(f"    ✅ Selected '{opt}' via selector {query_selector}")
+                    select_locator.select_option(label=opt)
+                    print(f"    ✅ Selected '{opt}' by label via selectOption")
                     return
-                except Exception:
-                    print(f"    ⚠️ select_option by label failed for '{opt}', trying text matching")
-                try:
-                    self.page.select_option(query_selector, value=opt)
-                    print(f"    ✅ Selected value '{opt}' via selector {query_selector}")
-                    return
-                except Exception:
-                    print(f"    ⚠️ select_option by value failed for '{opt}'")
-                
-                # Try partial matching
-                try:
-                    for option in available_options:
-                        if option['text'] and opt.lower() in option['text'].lower():
-                            self.page.select_option(query_selector, value=option['value'])
-                            print(f"    ✅ Selected '{option['text']}' (partial match for '{opt}')")
-                            return
                 except Exception as e:
-                    print(f"    ⚠️ Partial matching failed: {e}")
+                    print(f"    ⚠️ selectOption by label failed for '{opt}': {e}")
+                
+                # 2. Try by value
+                try:
+                    select_locator.select_option(value=opt)
+                    print(f"    ✅ Selected '{opt}' by value via selectOption")
+                    return
+                except Exception as e:
+                    print(f"    ⚠️ selectOption by value failed for '{opt}': {e}")
+                
+                # 3. Try by index (if opt is a number)
+                try:
+                    index = int(opt)
+                    select_locator.select_option(index=index)
+                    print(f"    ✅ Selected option at index {index} via selectOption")
+                    return
+                except (ValueError, Exception):
+                    pass
+                
+                # 4. Try partial matching on text/label
+                for option in available_options:
+                    option_text = option.get('text') or option.get('label') or ''
+                    option_value = option.get('value') or ''
+                    
+                    if opt.lower() in option_text.lower() or opt.lower() == option_value.lower():
+                        try:
+                            select_locator.select_option(value=option_value)
+                            print(f"    ✅ Selected '{option_text}' (partial match for '{opt}') via selectOption")
+                            return
+                        except Exception as e:
+                            print(f"    ⚠️ Failed to select matched option: {e}")
+                            continue
+                
+                print(f"    ⚠️ Could not select '{opt}' using any method")
+                raise ValueError(f"Option '{opt}' not found in select element")
 
-            # Fallback: pick first non-disabled option different from placeholder
-            selected = self.page.evaluate("""
-                (sel) => {
-                    const select = document.querySelector(sel);
-                    if (!select) return null;
-                    const options = Array.from(select.options || []);
-                    for (let i = 0; i < options.length; i++) {
-                        const opt = options[i];
-                        if (opt.disabled) continue;
-                        if (i === 0 && opt.value === '') continue;
-                        select.value = opt.value;
-                        select.dispatchEvent(new Event('input', { bubbles: true }));
-                        select.dispatchEvent(new Event('change', { bubbles: true }));
-                        return { value: opt.value, text: opt.textContent };
+            # Fallback: pick first non-disabled option (if no specific option provided)
+            # Use Playwright's native API for this too
+            try:
+                # Get first available option
+                first_option = self.page.evaluate("""
+                    (sel) => {
+                        const select = document.querySelector(sel);
+                        if (!select) return null;
+                        const options = Array.from(select.options || []);
+                        for (let i = 0; i < options.length; i++) {
+                            const opt = options[i];
+                            if (opt.disabled) continue;
+                            if (i === 0 && opt.value === '' && opt.textContent.trim() === '') continue;
+                            return { value: opt.value, text: opt.textContent?.trim(), index: i };
+                        }
+                        return null;
                     }
-                    return null;
-                }
-            """, query_selector)
-
-            if selected:
-                print(f"    ✅ Selected option '{selected['text']}' via DOM fallback")
-            else:
-                print("    ⚠️ No suitable option found to select")
+                """, query_selector)
+                
+                if first_option:
+                    try:
+                        # Try to select by value first
+                        select_locator.select_option(value=first_option['value'])
+                        print(f"    ✅ Selected option '{first_option['text']}' via selectOption fallback")
+                        return
+                    except Exception:
+                        # Fallback to index
+                        select_locator.select_option(index=first_option['index'])
+                        print(f"    ✅ Selected option '{first_option['text']}' by index via selectOption fallback")
+                        return
+                else:
+                    print("    ⚠️ No suitable option found to select")
+            
+            except Exception as e:
+                print(f"    ⚠️ Fallback selection failed: {e}")
+                # Final fallback: use evaluate to set value directly
+                selected = self.page.evaluate("""
+                    (sel) => {
+                        const select = document.querySelector(sel);
+                        if (!select) return null;
+                        const options = Array.from(select.options || []);
+                        for (let i = 0; i < options.length; i++) {
+                            const opt = options[i];
+                            if (opt.disabled) continue;
+                            if (i === 0 && opt.value === '') continue;
+                            select.value = opt.value;
+                            select.dispatchEvent(new Event('input', { bubbles: true }));
+                            select.dispatchEvent(new Event('change', { bubbles: true }));
+                            return { value: opt.value, text: opt.textContent };
+                        }
+                        return null;
+                    }
+                """, query_selector)
+                
+                if selected:
+                    print(f"    ✅ Selected option '{selected['text']}' via DOM fallback")
+                else:
+                    print("    ⚠️ No suitable option found to select")
             
         except Exception as e:
             print(f"    ❌ Traditional select handling failed: {e}")
+            raise
 
     def _handle_custom_select(
         self,
-        element: DetectedElement,
+        element: Optional[DetectedElement],
         step: ActionStep,
         page_info: PageInfo,
         selector_hint: Optional[str] = None,
