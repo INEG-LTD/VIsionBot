@@ -767,6 +767,9 @@ class BrowserVisionBot:
             # Set up smart goal monitoring if enabled
             # Store kwargs temporarily for goal creation
             self._temp_goal_kwargs = kwargs
+            # Add max_retries to kwargs if provided, so goals can use it
+            if max_retries is not None:
+                self._temp_goal_kwargs['max_retries'] = max_retries
             goal, transformed_goal_description = self._create_goal_from_description(goal_description, modifier)
             self._temp_goal_kwargs = {}
 
