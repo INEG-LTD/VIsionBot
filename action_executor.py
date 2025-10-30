@@ -332,11 +332,18 @@ class ActionExecutor:
                     # Get coordinates for the select element first
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
+                    # Use the goal's target_description for field matching (not the option value)
+                    # The option value is separate and used for the actual selection
+                    target_description = step.select_option_text
+                    if self.goal_monitor.active_goal and hasattr(self.goal_monitor.active_goal, 'target_description'):
+                        # For SelectGoal, use the field description (not the option value) for matching
+                        target_description = self.goal_monitor.active_goal.target_description
+                    
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
                     pre_evaluations = self.goal_monitor.record_planned_interaction(
                         InteractionType.SELECT,
                         coordinates=(x, y) if x is not None and y is not None else None,
-                        target_description=step.select_option_text,
+                        target_description=target_description,
                         select_option_text=step.select_option_text,
                     )
                     
