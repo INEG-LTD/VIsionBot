@@ -234,7 +234,7 @@ class NavigationGoal(BaseGoal):
                 return None
             
             # Extract href from element at coordinates
-            target_url = page.evaluate("""
+            target_url = page.evaluate(r"""
             (coords) => {
                 const x = coords.x;
                 const y = coords.y;
@@ -305,7 +305,8 @@ class NavigationGoal(BaseGoal):
             time.sleep(2)
             
             # Analyze the loaded page
-            analysis = self._analyze_tab_page(preview_tab, target_url)
+            base_knowledge = context.base_knowledge if hasattr(context, 'base_knowledge') else None
+            analysis = self._analyze_tab_page(preview_tab, target_url, base_knowledge=base_knowledge)
             
             return analysis
             
@@ -321,7 +322,7 @@ class NavigationGoal(BaseGoal):
                 except Exception as e:
                     print(f"[NavigationGoal] Error closing preview tab: {e}")
     
-    def _analyze_tab_page(self, tab_page, target_url: str) -> Optional[Dict[str, Any]]:
+    def _analyze_tab_page(self, tab_page, target_url: str, base_knowledge: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """
         Analyze a page in a tab (either preview tab or Ctrl+Click tab).
         This is the common analysis function used by different preview methods.
@@ -343,7 +344,8 @@ class NavigationGoal(BaseGoal):
                 target_url=target_url,
                 navigation_intent=self.navigation_intent,
                 page_title=page_title,
-                visible_text=visible_text
+                visible_text=visible_text,
+                base_knowledge=base_knowledge
             )
             
             return analysis
@@ -375,12 +377,14 @@ class NavigationGoal(BaseGoal):
             print(f"[NavigationGoal] Current page: {current_title} at {current_url}")
             
             # Analyze current page as if it's the target
+            base_knowledge = context.base_knowledge if hasattr(context, 'base_knowledge') else None
             analysis = self._analyze_page_with_ai(
                 screenshot=screenshot,
                 target_url=current_url,
                 navigation_intent=self.navigation_intent,
                 page_title=current_title,
-                visible_text=visible_text
+                visible_text=visible_text,
+                base_knowledge=base_knowledge
             )
             
             if analysis:
@@ -401,7 +405,8 @@ class NavigationGoal(BaseGoal):
         target_url: str, 
         navigation_intent: str,
         page_title: str = "",
-        visible_text: str = ""
+        visible_text: str = "",
+        base_knowledge: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Use AI to analyze if the previewed page matches the navigation intent.
@@ -409,6 +414,14 @@ class NavigationGoal(BaseGoal):
         try:
             # Truncate visible text for prompt efficiency
             text_preview = visible_text[:1000] + "..." if len(visible_text) > 1000 else visible_text
+            
+            # Build base knowledge section if provided
+            base_knowledge_section = ""
+            if base_knowledge:
+                base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide evaluation):\n"
+                for i, knowledge in enumerate(base_knowledge, 1):
+                    base_knowledge_section += f"{i}. {knowledge}\n"
+                base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining if navigation matches intent. They override general matching assumptions.\n"
             
             system_prompt = f"""
             You are analyzing a webpage to determine if it matches a user's navigation intent.
@@ -419,7 +432,7 @@ class NavigationGoal(BaseGoal):
             
             Page Text Preview:
             {text_preview}
-            
+            {base_knowledge_section}
             Look at the webpage screenshot and the provided context to determine:
             1. Does this page match what the user is looking for based on their navigation intent?
             2. What is the main purpose and content of this page?
@@ -431,6 +444,7 @@ class NavigationGoal(BaseGoal):
             - Navigation elements and page structure
             - Whether this looks like the intended destination
             - How well the page content aligns with the user's stated intent
+            - Base knowledge rules (if provided above) that may make matching more lenient or specific
             
             Be thorough in your analysis and provide clear reasoning.
             """

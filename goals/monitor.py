@@ -32,6 +32,7 @@ class GoalMonitor:
         self.url_pointer: int = 0
         self.session_start_time = time.time()
         self.element_analyzer = ElementAnalyzer(page)
+        self.base_knowledge: List[str] = []  # Base knowledge rules that guide goal evaluation
         
         # Initialize with current state
         self._capture_initial_state()
@@ -39,6 +40,10 @@ class GoalMonitor:
     def set_user_prompt(self, user_prompt: str) -> None:
         """Set the user prompt"""
         self.user_prompt = user_prompt
+    
+    def set_base_knowledge(self, base_knowledge: List[str]) -> None:
+        """Set base knowledge rules that guide goal evaluation"""
+        self.base_knowledge = base_knowledge or []
     
     def add_goal(self, goal: BaseGoal) -> None:
         """Add a goal to be monitored"""
@@ -90,7 +95,7 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                if self.active_goal and self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
                     try:
                         # Create context with planned interaction data
                         context = self._build_goal_context()
@@ -120,7 +125,7 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                if self.active_goal and self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
                     try:
                         # Create context with planned interaction data
                         context = self._build_goal_context()
@@ -154,7 +159,7 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                if self.active_goal and self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
                     try:
                         # Create context with planned interaction data
                         context = self._build_goal_context()
@@ -193,7 +198,7 @@ class GoalMonitor:
                 }
                 
                 # Evaluate goals that want BEFORE or BOTH timing
-                if self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                if self.active_goal and self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
                     try:
                         # Create context with planned interaction data
                         context = self._build_goal_context()
@@ -212,6 +217,14 @@ class GoalMonitor:
                     except Exception as e:
                         print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
+        # Always return a GoalResult, even if no evaluation occurred
+        if pre_interaction_results is None:
+            # Return a default PENDING result when no goal evaluation occurred
+            return GoalResult(
+                status=GoalStatus.PENDING,
+                confidence=1.0,
+                reasoning="No goal evaluation required for this interaction"
+            )
         return pre_interaction_results
     
     def check_for_retry_request(self) -> BaseGoal:
@@ -411,7 +424,8 @@ class GoalMonitor:
             url_history=self.url_history.copy(),
             page_changes=self.state_history.copy(),
             session_duration=time.time() - self.session_start_time,
-            page_reference=self.page  # Provide page access for advanced goals
+            page_reference=self.page,  # Provide page access for advanced goals
+            base_knowledge=self.base_knowledge.copy()  # Include base knowledge for goal evaluation
         )
         # Attach pointer dynamically for consumers that expect it
         try:

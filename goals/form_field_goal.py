@@ -108,6 +108,7 @@ class FormFieldGoal(BaseGoal):
         actual_description: str,
         target_description: str,
         actual_element_info: Optional[Dict[str, Any]] = None,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Use LLM to evaluate if form field matches target description"""
         try:
@@ -126,18 +127,27 @@ class FormFieldGoal(BaseGoal):
                 - Required: {actual_element_info.get('required', False)}
                 """
             
+            # Build base knowledge section if provided
+            base_knowledge_section = ""
+            if base_knowledge:
+                base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide evaluation):\n"
+                for i, knowledge in enumerate(base_knowledge, 1):
+                    base_knowledge_section += f"{i}. {knowledge}\n"
+                base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining if elements match. They override general matching assumptions.\n"
+            
             system_prompt = f"""
             You are evaluating whether a form field matches the user's intent.
 
             User wants to interact with: "{target_description}"
             Form field found: "{actual_description}"
             {element_context}
-
+            {base_knowledge_section}
             Determine if these match semantically. Consider:
             - Field names, labels, placeholders (e.g., "email" matches "email address")
             - Field types and purposes (e.g., "date" matches "birth date" or "appointment date")
             - Synonyms and similar terms (e.g., "name" vs "full name", "phone" vs "telephone")
             - Context and intent
+            - Base knowledge rules (if provided above) that may make matching more lenient or specific
 
             Return your evaluation with confidence and reasoning.
             """
@@ -249,7 +259,8 @@ class FormFieldGoal(BaseGoal):
             match_result = self._evaluate_element_match(
                 element_description,
                 target_description,
-                element_info
+                element_info,
+                base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
             )
             
             if match_result["is_match"]:

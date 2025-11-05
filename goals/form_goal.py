@@ -66,6 +66,7 @@ class FormFillGoal(BaseGoal):
         target_description: str,
         actual_element_info: Optional[Dict[str, Any]] = None,
         page_dimensions: Optional[Tuple[int, int]] = None,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Use AI evaluation method for form field matching.
@@ -90,13 +91,21 @@ class FormFillGoal(BaseGoal):
                 - Attributes: {str(actual_element_info.get('attributes', {}))[:200]}
                 """
             
+            # Build base knowledge section if provided
+            base_knowledge_section = ""
+            if base_knowledge:
+                base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide evaluation):\n"
+                for i, knowledge in enumerate(base_knowledge, 1):
+                    base_knowledge_section += f"{i}. {knowledge}\n"
+                base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining if elements match. They override general matching assumptions.\n"
+            
             system_prompt = f"""
             You are evaluating whether a form field matches the user's intent for form filling.
 
             User wants to fill: "{target_description}"
             Form field found: "{actual_description}"
             {element_context}
-
+            {base_knowledge_section}
             Determine if these match semantically for form filling purposes. Consider:
             - Field names, labels, and placeholders (e.g., "email" could match "email address" or "e-mail")
             - Field types and purposes (e.g., "date" could match "birth date" or "appointment date")
@@ -104,6 +113,7 @@ class FormFillGoal(BaseGoal):
             - Context and intent (e.g., "contact information" could match "phone number" field)
             - Form field functionality and purpose
             - Required vs optional field status
+            - Base knowledge rules (if provided above) that may make matching more lenient or specific
 
             For form fields, be more flexible with matching since users often describe fields in general terms
             while the actual field might have more specific labels or names.
@@ -245,6 +255,7 @@ class FormFillGoal(BaseGoal):
                 target_description,
                 element_info,
                 page_dims,
+                base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
             )
             
             if match_result["is_match"]:

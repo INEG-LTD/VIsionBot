@@ -79,7 +79,8 @@ class PressGoal(BaseGoal):
             )
         
         # Evaluate if the correct keys were pressed (fallback)
-        return self._evaluate_key_match(self.actual_keys, self.target_keys)
+        base_knowledge = context.base_knowledge if hasattr(context, 'base_knowledge') else None
+        return self._evaluate_key_match(self.actual_keys, self.target_keys, base_knowledge=base_knowledge)
     
     def _evaluate_planned_press(self, context: GoalContext, planned_interaction: Dict[str, Any]) -> GoalResult:
         """Evaluate a planned key press before it happens"""
@@ -97,14 +98,15 @@ class PressGoal(BaseGoal):
         self.record_planned_press(planned_keys)
         
         # Evaluate if the planned keys match the target
-        result = self._evaluate_key_match(planned_keys, self.target_keys)
+        base_knowledge = context.base_knowledge if hasattr(context, 'base_knowledge') else None
+        result = self._evaluate_key_match(planned_keys, self.target_keys, base_knowledge=base_knowledge)
         
         # For BEFORE timing, we want to validate the planned action
         # If keys match, return ACHIEVED (ready to proceed)
         # If keys don't match, return FAILED (should retry with correct keys)
         return result
     
-    def _evaluate_key_match(self, actual_keys: str, target_keys: str) -> GoalResult:
+    def _evaluate_key_match(self, actual_keys: str, target_keys: str, base_knowledge: Optional[List[str]] = None) -> GoalResult:
         """Evaluate if the actual keys match the target keys"""
         if not actual_keys:
             return GoalResult(
@@ -118,6 +120,14 @@ class PressGoal(BaseGoal):
         actual_normalized = self._normalize_key_string(actual_keys)
         target_normalized = self._normalize_key_string(target_keys)
         
+        # Build base knowledge section if provided
+        base_knowledge_section = ""
+        if base_knowledge:
+            base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide evaluation):\n"
+            for i, knowledge in enumerate(base_knowledge, 1):
+                base_knowledge_section += f"{i}. {knowledge}\n"
+            base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining if keys match. They override general matching assumptions.\n"
+        
         # Use AI to evaluate the match
         try:
             evaluation = generate_model(
@@ -126,13 +136,14 @@ class PressGoal(BaseGoal):
                 
                 Target keys: "{target_keys}"
                 Actual keys: "{actual_keys}"
-                
+                {base_knowledge_section}
                 Determine if the actual keys match the target keys. Consider:
                 1. Exact matches (e.g., "enter" = "enter")
                 2. Equivalent keys (e.g., "return" = "enter", "cmd+c" = "ctrl+c" on different platforms)
                 3. Key combinations (e.g., "ctrl+c" should match "control+c")
                 4. Case insensitivity
                 5. Whitespace differences
+                6. Base knowledge rules (if provided above) that may make matching more lenient or specific
                 
                 Return your evaluation.
                 """,

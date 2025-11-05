@@ -61,7 +61,7 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None):
+    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None, preferred_click_method: str = "programmatic"):
         self.page = page
         self.goal_monitor = goal_monitor
         self.page_utils = page_utils
@@ -70,9 +70,20 @@ class ActionExecutor:
         self.command_ledger = command_ledger or CommandLedger()
         self.last_failure_reason: Optional[str] = None
         
+        # Click method configuration
+        if preferred_click_method not in ["programmatic", "mouse"]:
+            raise ValueError(f"preferred_click_method must be 'programmatic' or 'mouse', got '{preferred_click_method}'")
+        self.preferred_click_method = preferred_click_method  # "programmatic" or "mouse"
+        
         # Scroll tracking
         self.last_scroll_occurred: bool = False
         self.last_scroll_reason: Optional[ScrollReason] = None
+        
+        # Click retry tracking: track previous clicks to detect when page hasn't changed
+        self.last_click_selector: Optional[str] = None
+        self.last_click_url: Optional[str] = None
+        self.last_click_dom_signature: Optional[str] = None
+        self.last_click_method: str = preferred_click_method
         
         # Initialize specialized handlers
         self.datetime_handler = DateTimeHandler(page, goal_monitor)
@@ -764,10 +775,17 @@ class ActionExecutor:
                 page_info=page_info,
             )
 
+        # Capture screenshot before resolving click target for vision-based child detection
+        screenshot_for_click = None
+        try:
+            screenshot_for_click = self.page.screenshot(type="jpeg", quality=50, full_page=False)
+        except Exception:
+            pass
+        
         target_selector = None
         if allow_refinement:
             try:
-                rx, ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box)
+                rx, ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box, screenshot=screenshot_for_click)
                 if rx is not None and ry is not None and (rx != x or ry != y):
                     print(f"  Adjusted click target to ({rx}, {ry}) from ({x}, {y}) for clickable element")
                     x, y = rx, ry
@@ -775,7 +793,7 @@ class ActionExecutor:
                 target_selector = None
         else:
             try:
-                _rx, _ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box)
+                _rx, _ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box, screenshot=screenshot_for_click)
             except Exception:
                 target_selector = None
 
@@ -794,17 +812,32 @@ class ActionExecutor:
             return False
         
         # Check if the goal was achieved before the click (informational only)
-        if pre_evaluations.status == GoalStatus.ACHIEVED:
+        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before click (pre-eval)! Proceeding with click as requested.")
             print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations.status == GoalStatus.FAILED:
+        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this click may not achieve the target:")
             print(f"   ❌ {pre_evaluations.reasoning}")
             # Continue with click anyway - the user's plan should be executed
         
+        # Determine preferred click method (use preferred method, but switch if retry detected)
+        preferred_method = self.preferred_click_method
+        current_url = self.page.url
+        current_dom_sig = self._get_simple_dom_signature()
+        
+        # Check if this is a retry: same selector, same URL, same DOM signature
+        # If so, switch to the alternative method
+        if target_selector:
+            if (self.last_click_selector == target_selector and 
+                self.last_click_url == current_url and 
+                self.last_click_dom_signature == current_dom_sig):
+                # Switch to alternative method for retry
+                preferred_method = "programmatic" if self.preferred_click_method == "mouse" else "mouse"
+                print(f"  🔄 Retry detected: same element, page unchanged. Switching to {preferred_method} click method")
+        
         # print(f"Elements: {elements.model_dump_json()}")
         # print(f"Step: {step.model_dump_json()}")
-        print(f"  Clicking at ({x}, {y})")
+        print(f"  Clicking at ({x}, {y}) using {preferred_method} click (with fallback)")
         
         # Record interaction for GIF if recorder is available
         if self.gif_recorder:
@@ -832,14 +865,69 @@ class ActionExecutor:
                 action_description=f"Click on element at ({x}, {y})"
             )
         
+        # Perform the click with fallback
+        success = False
+        error_msg = None
+        click_method_used = None
+        
+        # Try preferred method first
         try:
-            self.page.mouse.click(x, y)
-            success = True
-            error_msg = None
+            if preferred_method == "programmatic" and target_selector:
+                # Try programmatic click via selector
+                try:
+                    element = self.page.locator(target_selector).first
+                    element.click(timeout=5000)
+                    print(f"  ✅ Programmatically clicked element: {target_selector}")
+                    success = True
+                    click_method_used = "programmatic"
+                except Exception as selector_error:
+                    print(f"  ⚠️ Programmatic click failed ({selector_error}), trying mouse click fallback")
+                    # Fallback to mouse click
+                    try:
+                        self.page.mouse.click(x, y)
+                        success = True
+                        click_method_used = "mouse"
+                        print("  ✅ Fallback mouse click succeeded")
+                    except Exception as mouse_error:
+                        error_msg = f"Both programmatic ({selector_error}) and mouse ({mouse_error}) clicks failed"
+            else:
+                # Try mouse click first
+                try:
+                    self.page.mouse.click(x, y)
+                    success = True
+                    click_method_used = "mouse"
+                except Exception as mouse_error:
+                    print(f"  ⚠️ Mouse click failed ({mouse_error}), trying programmatic click fallback")
+                    # Fallback to programmatic click if selector available
+                    if target_selector:
+                        try:
+                            element = self.page.locator(target_selector).first
+                            element.click(timeout=5000)
+                            success = True
+                            click_method_used = "programmatic"
+                            print("  ✅ Fallback programmatic click succeeded")
+                        except Exception as selector_error:
+                            error_msg = f"Both mouse ({mouse_error}) and programmatic ({selector_error}) clicks failed"
+                    else:
+                        error_msg = f"Mouse click failed ({mouse_error}) and no selector available for fallback"
         except Exception as e:
-            success = False
             error_msg = str(e)
-            print(f"  ❌ Click failed: {e}")
+        
+        if not success:
+            print(f"  ❌ Click failed: {error_msg}")
+        
+        # Update tracking: capture page state after click to detect if it changed
+        if target_selector and click_method_used:
+            # Wait a moment for page to potentially change
+            time.sleep(0.1)
+            new_url = self.page.url
+            new_dom_sig = self._get_simple_dom_signature()
+            
+            # Update tracking for next retry check
+            self.last_click_selector = target_selector
+            self.last_click_url = new_url
+            self.last_click_dom_signature = new_dom_sig
+            self.last_click_method = click_method_used
         
         # Record actual interaction with goal monitor
         self.goal_monitor.record_interaction(
@@ -1145,10 +1233,10 @@ class ActionExecutor:
             return False
         
         # Check if the goal was achieved before the scroll (informational only)
-        if pre_evaluations.status == GoalStatus.ACHIEVED:
+        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before scroll (pre-eval)! Proceeding with scroll as requested.")
             print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations.status == GoalStatus.FAILED:
+        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this scroll may not achieve the target:")
             print(f"   ❌ {pre_evaluations.reasoning}")
             # Continue with scroll anyway - the user's plan should be executed
@@ -1266,10 +1354,10 @@ class ActionExecutor:
             return False
         
         # Check if the goal was achieved before the press (informational only)
-        if pre_evaluations.status == GoalStatus.ACHIEVED:
+        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
             print("🎯 Goal achieved before key press (pre-eval)! Proceeding with press as requested.")
             print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations.status == GoalStatus.FAILED:
+        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
             print("⚠️ Goal evaluation suggests this key press may not achieve the target:")
             print(f"   ❌ {pre_evaluations.reasoning}")
         
@@ -1317,6 +1405,21 @@ class ActionExecutor:
         """Parse a key string and execute the key press(es)"""
         # Normalize the key string
         keys_string = keys_string.lower().strip()
+        
+        # Handle comma-separated keys (multiple keys to press sequentially)
+        if ',' in keys_string:
+            keys_list = [k.strip() for k in keys_string.split(',')]
+            for key in keys_list:
+                self._parse_and_press_keys(key)  # Recursively handle each key
+            return
+        
+        # Normalize common key name variations
+        # Handle "arrow_down", "arrowdown", "arrow_down" -> "down"
+        if keys_string.startswith('arrow'):
+            # Remove "arrow" prefix and normalize
+            key_part = keys_string.replace('arrow', '').replace('_', '').strip()
+            if key_part in ['up', 'down', 'left', 'right']:
+                keys_string = key_part
         
         # Handle common key combinations
         if '+' in keys_string:
@@ -1617,15 +1720,29 @@ class ActionExecutor:
             pass
         return x, y
 
-    def _resolve_click_target(self, x: int, y: int, page_info: PageInfo, normalized_box=None) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    def _resolve_click_target(self, x: int, y: int, page_info: PageInfo, normalized_box=None, screenshot: Optional[bytes] = None) -> Tuple[Optional[int], Optional[int], Optional[str]]:
         """Resolve a clickable element near a point/region and mark it with a temporary selector.
-
+        
+        Uses vision + DOM approach: vision provides guidance on what to look for, DOM finds it.
+        
+        Args:
+            x, y: Click coordinates
+            page_info: Page information
+            normalized_box: Optional normalized box coordinates
+            screenshot: Optional screenshot for vision-based click target identification
+        
         Returns (rx, ry, selector) where selector is a CSS selector to the marked element.
         """
         import random
         token = f"auto-{int(time.time()*1000)}-{random.randint(1000,9999)}"
+        
+        # Use vision to identify what element tag should be clicked at these coordinates
+        vision_tag_hint = None
+        if screenshot:
+            vision_tag_hint = self._get_vision_tag_hint(x, y, screenshot, page_info, normalized_box)
+        
         js = r"""
-        ({ x, y, region, token }) => {
+        ({ x, y, region, token, visionTagHint }) => {
           function isClickable(el) {
             if (!el || el.nodeType !== 1) return false;
             const tag = el.tagName.toLowerCase();
@@ -1644,6 +1761,32 @@ class ActionExecutor:
           }
           function findClickableFromPoint(px, py){
             let el = document.elementFromPoint(px, py);
+            
+            // If vision suggested a specific tag, try to find that tag first (even if not directly clickable)
+            if (visionTagHint) {
+              let cur = el;
+              // Walk up the tree looking for the vision-suggested tag
+              while (cur && cur !== document.body) {
+                if (cur.tagName && cur.tagName.toLowerCase() === visionTagHint) {
+                  // Found the vision-suggested tag - check if it's clickable or inside a clickable parent
+                  if (isClickable(cur)) {
+                    return cur;
+                  }
+                  // Check if it's inside a clickable parent (like h3 inside <a>)
+                  let parent = cur.parentElement;
+                  while (parent && parent !== document.body) {
+                    if (isClickable(parent)) {
+                      // Return the vision-suggested child, not the parent
+                      return cur;
+                    }
+                    parent = parent.parentElement;
+                  }
+                }
+                cur = cur.parentElement;
+              }
+            }
+            
+            // Fallback to standard clickable element detection
             let cur = el;
             while (cur && cur !== document.body && !isClickable(cur)) cur = cur.parentElement;
             if (cur && isClickable(cur)) return cur;
@@ -1706,24 +1849,97 @@ class ActionExecutor:
           return null;
         }
         """
+        # Use DOM to find clickable elements (with vision tag hint if available)
         try:
-            result = self.page.evaluate(js, {"x": x, "y": y, "region": normalized_box, "token": token})
+            result = self.page.evaluate(js, {"x": x, "y": y, "region": normalized_box, "token": token, "visionTagHint": vision_tag_hint})
             if isinstance(result, dict) and 'x' in result and 'y' in result:
                 rx, ry = int(result['x']), int(result['y'])
                 rx = max(0, min(page_info.width - 1, rx))
                 ry = max(0, min(page_info.height - 1, ry))
+                selector = result.get('selector')
+                tag = result.get('tag')
+                
                 try:
-                    tag = result.get('tag')
                     if tag:
-                        print(f"  Refinement found clickable <{tag}> at ({rx}, {ry})")
+                        vision_note = f" (vision suggested: {vision_tag_hint})" if vision_tag_hint and tag == vision_tag_hint else ""
+                        print(f"  Refinement found clickable <{tag}> at ({rx}, {ry}){vision_note}")
                 except Exception:
                     pass
-                selector = result.get('selector')
                 return rx, ry, selector
         except Exception:
             pass
         return x, y, None
+    
+    def _get_vision_tag_hint(self, x: int, y: int, screenshot: bytes, page_info: PageInfo, normalized_box=None) -> Optional[str]:
+        """Use vision to identify what HTML tag should be clicked at the given coordinates."""
+        try:
+            from ai_utils import generate_text
+            
+            # Calculate region bounds for context
+            if normalized_box and len(normalized_box) == 4:
+                vw, vh = page_info.width, page_info.height
+                y_min = int(normalized_box[0] / 1000.0 * vh)
+                x_min = int(normalized_box[1] / 1000.0 * vw)
+                y_max = int(normalized_box[2] / 1000.0 * vh)
+                x_max = int(normalized_box[3] / 1000.0 * vw)
+            else:
+                w, h = 220, 140
+                x_min = max(0, x - w // 2)
+                x_max = min(page_info.width - 1, x + w // 2)
+                y_min = max(0, y - h // 2)
+                y_max = min(page_info.height - 1, y + h // 2)
+            
+            prompt = f"""
+Look at this screenshot. At coordinates ({x}, {y}) in the viewport, identify what HTML element should be clicked.
 
+Context:
+- Click target region: approximately ({x_min}, {y_min}) to ({x_max}, {y_max})
+- Center point: ({x}, {y})
+
+For search result links (like Google search results), the actual clickable element is often a heading (h3) inside a link wrapper, not the link itself.
+
+Question: What HTML tag should be clicked at this location? (e.g., "h3", "a", "button", "div")
+
+Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or "a" or "button"
+"""
+            
+            response = generate_text(
+                prompt=prompt,
+                image=screenshot,
+                system_prompt="You are analyzing a webpage to identify the HTML tag of the clickable element. Return only the tag name in lowercase."
+            )
+            
+            if not response:
+                return None
+            
+            tag = response.strip().lower().replace('<', '').replace('>', '').split()[0] if response.strip() else None
+            
+            # Validate it's a reasonable tag name
+            if tag and len(tag) < 10 and tag.replace('-', '').replace('_', '').isalnum():
+                return tag
+            
+            return None
+        except Exception as e:
+            print(f"  ⚠️ Vision tag hint failed: {e}")
+            return None
+
+    def _get_simple_dom_signature(self) -> str:
+        """Get a simple DOM signature for change detection (URL + element count)"""
+        try:
+            import hashlib
+            url = self.page.url
+            # Get element count as a simple DOM change indicator
+            element_count = self.page.evaluate("() => document.querySelectorAll('*').length")
+            sig_src = f"{url}|{element_count}"
+            return hashlib.md5(sig_src.encode("utf-8")).hexdigest()
+        except Exception:
+            # Fallback to just URL
+            try:
+                import hashlib
+                return hashlib.md5(self.page.url.encode("utf-8")).hexdigest()
+            except Exception:
+                return "unknown"
+    
     def _execute_stop(self, step: ActionStep) -> bool:
         """Execute a stop action - returns True to indicate successful stop"""
         print("🛑 STOP action executed - terminating automation")
@@ -1770,8 +1986,6 @@ class ActionExecutor:
                     self.deduper.mark_element_as_interacted(element_dict, interaction_type)
                     recorded_interaction = True
                     break
-                else:
-                    print(f"❌ No element found with overlay index {step.overlay_index} to mark as interacted with")
 
         if not recorded_interaction:
             action_value = ''
@@ -1802,4 +2016,7 @@ class ActionExecutor:
                 'rect': rect_data,
             }
             self.deduper.mark_element_as_interacted(fallback_dict, interaction_type)
-            print(f"❌ No element found with overlay index {step.overlay_index} to mark as interacted with")
+            # This is expected when overlay_index references an element not in detected_elements
+            # We use fallback tracking with coordinates instead
+            if step.overlay_index is not None:
+                print(f"ℹ️ Overlay index {step.overlay_index} not in detected_elements, using fallback tracking")

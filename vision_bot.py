@@ -69,6 +69,7 @@ from utils.semantic_targets import SemanticTarget, build_semantic_target
 from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
 from ai_utils import set_default_model
+from agent import AgentController
 
 
 class BrowserVisionBot:
@@ -197,6 +198,7 @@ class BrowserVisionBot:
         self.current_attempt = 0
         self.last_screenshot_hash = None
         self.last_dom_signature = None
+        self._agent_mode = False  # Flag to track if we're in agent mode (disables DOM unchanged scroll check)
         
         # Screenshot and overlay caching for performance optimization
         self._cached_screenshot_with_overlays = None
@@ -762,6 +764,10 @@ class BrowserVisionBot:
             # Reset goal monitor state for fresh start
             self.goal_monitor.reset_retry_request()
             
+            # Reset DOM signature for new goal - don't check against previous goal's signature
+            # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
+            self.last_dom_signature = None
+            
             self.goal_monitor.set_user_prompt(goal_description)
             
             # Set up smart goal monitoring if enabled
@@ -770,6 +776,9 @@ class BrowserVisionBot:
             # Add max_retries to kwargs if provided, so goals can use it
             if max_retries is not None:
                 self._temp_goal_kwargs['max_retries'] = max_retries
+            # Add allow_non_clickable_clicks if provided
+            if 'allow_non_clickable_clicks' in kwargs:
+                self._temp_goal_kwargs['allow_non_clickable_clicks'] = kwargs['allow_non_clickable_clicks']
             goal, transformed_goal_description = self._create_goal_from_description(goal_description, modifier)
             self._temp_goal_kwargs = {}
 
@@ -889,8 +898,9 @@ class BrowserVisionBot:
                 )
                 
                 # Skip if DOM signature hasn't changed and no retry requested
+                # Disable this check in agent mode (agent handles its own retry logic)
                 retry_goal = self.goal_monitor.check_for_retry_request()
-                if sig_hash == self.last_dom_signature and not retry_goal:
+                if sig_hash == self.last_dom_signature and not retry_goal and not self._agent_mode:
                     print("⚠️ Same DOM signature as last attempt, scrolling to break loop")
                     print(f"   🔍 DOM signature: {sig_hash[:8]}...")
                     print(f"   📊 Previous interactions count: {len(self.deduper.interacted_elements) if hasattr(self, 'deduper') and self.deduper else 'unknown'}")
@@ -902,6 +912,10 @@ class BrowserVisionBot:
                         amount=50
                     )
                     continue
+                elif sig_hash == self.last_dom_signature and not retry_goal and self._agent_mode:
+                    # In agent mode, just log and continue (don't scroll)
+                    print("ℹ️ Same DOM signature as last attempt (agent mode - check disabled)")
+                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
                 elif is_small_scroll:
                     # # Small passive scroll detected - trigger intentional scroll to force DOM change
                     # print("⚠️ Small passive scroll detected (< 100px), triggering intentional scroll")
@@ -1005,21 +1019,42 @@ class BrowserVisionBot:
                     
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
                     # to explore more of the page instead of waiting for duplicate screenshots
-                    print("📜 Plan executed successfully, scrolling down to explore more content")
-                    from action_executor import ScrollReason
-                    self.page_utils.scroll_page(
-                        reason=ScrollReason.EXPLORE_CONTENT,
-                        action_executor=self.action_executor
-                    )
-                    continue
+                    # Disable auto-scroll in agent mode (agent handles its own navigation)
+                    if not self._agent_mode:
+                        print("📜 Plan executed successfully, scrolling down to explore more content")
+                        from action_executor import ScrollReason
+                        self.page_utils.scroll_page(
+                            reason=ScrollReason.EXPLORE_CONTENT,
+                            action_executor=self.action_executor
+                        )
+                        continue
+                    else:
+                        print("📜 Plan executed successfully (agent mode - auto-scroll disabled)")
+                        continue
                 else:
                     # Plan execution failed - check if it was due to retry request
                     retry_goal = self.goal_monitor.check_for_retry_request()
                     if retry_goal:
-                        print("🔄 Plan execution aborted due to retry request - regenerating plan")
-                        # Don't reset retry requests here - let them persist for the next iteration
-                        # The retry state will be used to inform the next plan generation
-                        continue
+                        # Check if max retries have been reached
+                        if retry_goal.retry_count >= retry_goal.max_retries:
+                            # Disable auto-scroll in agent mode (agent handles its own navigation)
+                            if not self._agent_mode:
+                                print(f"⚠️ Max retries ({retry_goal.max_retries}) reached for {retry_goal}. Scrolling to explore more content.")
+                                from action_executor import ScrollReason
+                                self.page_utils.scroll_page(
+                                    reason=ScrollReason.EXPLORE_CONTENT,
+                                    action_executor=self.action_executor
+                                )
+                            else:
+                                print(f"⚠️ Max retries ({retry_goal.max_retries}) reached for {retry_goal} (agent mode - auto-scroll disabled)")
+                            # Reset retry state so we can try fresh on next attempt
+                            retry_goal.reset_retry_state()
+                            continue
+                        else:
+                            print("🔄 Plan execution aborted due to retry request - regenerating plan")
+                            # Don't reset retry requests here - let them persist for the next iteration
+                            # The retry state will be used to inform the next plan generation
+                            continue
                     else:
                         failure_reason = getattr(self.action_executor, "last_failure_reason", None)
                         if failure_reason:
@@ -1053,6 +1088,50 @@ class BrowserVisionBot:
                         print(f"🔄 Auto-processed {executed_count} queued actions")
                 except Exception as e:
                     print(f"⚠️ Error processing action queue: {e}")
+
+    def agentic_mode(self, user_prompt: str, max_iterations: int = 50, track_ineffective_actions: bool = True, base_knowledge: Optional[List[str]] = None) -> bool:
+        """
+        Run agentic mode (Step 1: Basic Reactive Agent).
+        
+        This is a basic implementation that:
+        - Observes browser state
+        - Checks simple completion criteria
+        - Generates and executes actions reactively
+        - Repeats until task is complete or max iterations reached
+        
+        Args:
+            user_prompt: High-level user request (e.g., "click the submit button", "navigate to google.com")
+            max_iterations: Maximum number of iterations before giving up (default: 50)
+            track_ineffective_actions: If True, track and avoid repeating actions that didn't yield page changes.
+                                       Default: True (recommended for better performance)
+            base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
+                           These rules influence what actions the agent takes.
+                           Example: ["just press enter after you've typed a search term into a search field"]
+            
+        Returns:
+            True if task completed successfully, False otherwise
+            
+        Example:
+            bot.start()
+            bot.page.goto("https://example.com")
+            success = bot.agentic_mode(
+                "search for python tutorials",
+                base_knowledge=["just press enter after you've typed a search term into a search field"]
+            )
+        """
+        # Set agent mode flag
+        self._agent_mode = True
+        try:
+            controller = AgentController(self, track_ineffective_actions=track_ineffective_actions, base_knowledge=base_knowledge)
+            controller.max_iterations = max_iterations
+            
+            result = controller.run_agentic_mode(user_prompt)
+        finally:
+            # Reset agent mode flag when done
+            self._agent_mode = False
+        
+        # Return boolean for compatibility
+        return result.status == GoalStatus.ACHIEVED
 
     def goto(self, url: str, timeout: int = 2000) -> None:
         """Go to a URL"""
@@ -1291,6 +1370,9 @@ class BrowserVisionBot:
         if not needs_detection:
             print("🚫 Skipping element detection - goal doesn't require it")
             # Create action plan without element detection
+            # In agent mode, limit to 1 step for strict action execution
+            max_steps = 1 if self._agent_mode else None
+            
             plan = self.plan_generator.create_plan(
                 goal_description=goal_description,
                 additional_context=additional_context,
@@ -1303,6 +1385,7 @@ class BrowserVisionBot:
                 command_history=self.command_history,
                 dedup_context=dedup_context,
                 target_context_guard=target_context_guard,
+                max_steps=max_steps,
             )
             return plan
 
@@ -1394,21 +1477,25 @@ class BrowserVisionBot:
             print(f"💾 Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
 
         # Step 3: Generate plan with element indices (and optional filtered overlay list)
+        # In agent mode, limit to 1 step for strict action execution
+        max_steps = 1 if self._agent_mode else None
+        
         plan = self.plan_generator.create_plan_with_element_indices(
             goal_description=goal_description,
             additional_context=additional_context,
             element_data=element_data,
             screenshot_with_overlays=screenshot_with_overlays,
             page_info=page_info,
-                active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
-                retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
-                page=self.page,
-                command_history=self.command_history,
-                interpretation_mode=current_mode,
-                semantic_hint=semantic_hint,
-                dedup_context=dedup_context,
-                target_context_guard=target_context_guard,
-            )
+            active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
+            retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
+            page=self.page,
+            command_history=self.command_history,
+            interpretation_mode=current_mode,
+            semantic_hint=semantic_hint,
+            dedup_context=dedup_context,
+            target_context_guard=target_context_guard,
+            max_steps=max_steps,
+        )
 
         # Step 4: Clean up overlays after plan generation
         self.overlay_manager.remove_overlays()
@@ -1525,8 +1612,9 @@ class BrowserVisionBot:
         k = (keyword or "").lower().strip()
         p = (payload or "").strip()
         
-        # Get max_retries from temp kwargs if available
-        max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+        # Get kwargs from temp kwargs if available
+        temp_kwargs = getattr(self, '_temp_goal_kwargs', {})
+        max_retries = temp_kwargs.get('max_retries', 3)
 
         if k == "press":
             keys = p or extract_press_target(p)
@@ -1540,7 +1628,7 @@ class BrowserVisionBot:
         if k == "click":
             target = p or extract_click_target(p)
             if target:
-                return ClickGoal(description=f"Click action: {target}", target_description=target, max_retries=max_retries)
+                return ClickGoal(description=f"Click action: {target}", target_description=target, **temp_kwargs)
         if k == "navigate":
             target = p
             if target:

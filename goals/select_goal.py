@@ -102,7 +102,8 @@ class SelectGoal(FormFieldGoal):
             match_result = self._evaluate_element_match(
                 element_description,
                 target_description,
-                element_info
+                element_info,
+                base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
             )
             
             if match_result["is_match"]:

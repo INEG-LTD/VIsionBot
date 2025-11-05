@@ -38,6 +38,7 @@ class ClickGoal(BaseGoal):
         self.click_attempted = False
         self.click_successful = False
         self.element_analyzer: Optional[ElementAnalyzer] = None
+        self.allow_non_clickable_clicks = kwargs.get('allow_non_clickable_clicks', False)  # Configurable: allow clicking non-clickable elements
         
         # Track failed attempts to avoid retrying the same coordinates/elements
         self.failed_coordinates: List[Tuple[int, int]] = []
@@ -173,55 +174,59 @@ class ClickGoal(BaseGoal):
         # Check if the clicked element was actually clickable
         is_clickable = self.actual_element_info.get('isClickable', False)
         if not is_clickable:
-            # Get element description for tracking
-            element_description = ""
-            try:
-                if self.element_analyzer and context.current_state.screenshot:
-                    element_description = self.element_analyzer.get_element_description_with_ai(
-                        self.actual_element_info,
-                        context.current_state.screenshot,
-                        *self.actual_click_coordinates
-                    )
-                else:
+            if self.allow_non_clickable_clicks:
+                # Allow clicking non-clickable elements when configured
+                print(f"[ClickGoal] Clicked element at {self.actual_click_coordinates} is not clickable, but allow_non_clickable_clicks=True - proceeding anyway")
+            else:
+                # Get element description for tracking
+                element_description = ""
+                try:
+                    if self.element_analyzer and context.current_state.screenshot:
+                        element_description = self.element_analyzer.get_element_description_with_ai(
+                            self.actual_element_info,
+                            context.current_state.screenshot,
+                            *self.actual_click_coordinates
+                        )
+                    else:
+                        element_description = self._create_fallback_description(self.actual_element_info)
+                except Exception:
                     element_description = self._create_fallback_description(self.actual_element_info)
-            except Exception:
-                element_description = self._create_fallback_description(self.actual_element_info)
-            
-            # Record this failed attempt
-            self.record_failed_attempt(self.actual_click_coordinates, element_description, "Clicked element was not clickable")
-            
-            # Request retry if we haven't exceeded max retries
-            if self.can_retry():
-                retry_reason = f"Clicked element at {self.actual_click_coordinates} was not clickable - need to find clickable element"
-                if self.request_retry(retry_reason):
+                
+                # Record this failed attempt
+                self.record_failed_attempt(self.actual_click_coordinates, element_description, "Clicked element was not clickable")
+                
+                # Request retry if we haven't exceeded max retries
+                if self.can_retry():
+                    retry_reason = f"Clicked element at {self.actual_click_coordinates} was not clickable - need to find clickable element"
+                    if self.request_retry(retry_reason):
+                        return GoalResult(
+                            status=GoalStatus.PENDING,
+                            confidence=0.9,
+                            reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable, requesting retry",
+                            evidence={
+                                "coordinates": self.actual_click_coordinates,
+                                "element_info": self.actual_element_info,
+                                "is_clickable": is_clickable,
+                                "retry_requested": True,
+                                "retry_count": self.retry_count,
+                                "retry_context": self.get_retry_context()
+                            },
+                            next_actions=["Retry plan generation to find clickable element"]
+                        )
+                
+                    # Max retries exceeded, fail the goal
                     return GoalResult(
-                        status=GoalStatus.PENDING,
+                        status=GoalStatus.FAILED,
                         confidence=0.9,
-                        reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable, requesting retry",
+                        reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable and max retries exceeded",
                         evidence={
                             "coordinates": self.actual_click_coordinates,
                             "element_info": self.actual_element_info,
                             "is_clickable": is_clickable,
-                            "retry_requested": True,
                             "retry_count": self.retry_count,
-                            "retry_context": self.get_retry_context()
-                        },
-                        next_actions=["Retry plan generation to find clickable element"]
+                            "max_retries_exceeded": True
+                        }
                     )
-            
-            # Max retries exceeded, fail the goal
-            return GoalResult(
-                status=GoalStatus.FAILED,
-                confidence=0.9,
-                reasoning=f"Clicked element at {self.actual_click_coordinates} was not clickable and max retries exceeded",
-                evidence={
-                    "coordinates": self.actual_click_coordinates,
-                    "element_info": self.actual_element_info,
-                    "is_clickable": is_clickable,
-                    "retry_count": self.retry_count,
-                    "max_retries_exceeded": True
-                }
-            )
         
         # Lazy loading: Get AI description only when needed for evaluation
         try:
@@ -246,6 +251,7 @@ class ClickGoal(BaseGoal):
                 self.target_description,
                 self.actual_element_info,
                 page_dims,
+                base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
             )
             
             if match_result["is_match"]:
@@ -365,6 +371,7 @@ class ClickGoal(BaseGoal):
                             self.target_description,
                             element_info,
                             page_dims,
+                            base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
                         )
                         if match_result["is_match"]:
                             return GoalResult(
@@ -430,53 +437,57 @@ class ClickGoal(BaseGoal):
             # Check if element is clickable
             is_clickable = element_info.get('isClickable', False)
             if not is_clickable:
-                print(f"[ClickGoal] Element at ({x}, {y}) is not clickable")
-                
-                # Get element description for tracking
-                element_description = ""
-                screenshot = planned_interaction.get('screenshot')
-                if screenshot:
-                    try:
-                        element_description = self.element_analyzer.get_element_description_with_ai(
-                            element_info, screenshot, x, y
-                        )
-                    except Exception:
-                        element_description = self._create_fallback_description(element_info)
+                if self.allow_non_clickable_clicks:
+                    # Allow clicking non-clickable elements when configured
+                    print(f"[ClickGoal] Element at ({x}, {y}) is not clickable, but allow_non_clickable_clicks=True - proceeding anyway")
                 else:
-                    element_description = self._create_fallback_description(element_info)
-                
-                # Record this failed attempt
-                self.record_failed_attempt((x, y), element_description, "Element is not clickable")
-                
-                # Request retry if we haven't exceeded max retries
-                if self.can_retry():
-                    retry_reason = f"Element at ({x}, {y}) is not clickable - need to find a clickable element"
-                    if self.request_retry(retry_reason):
-                        return GoalResult(
-                            status=GoalStatus.PENDING,
-                            confidence=0.9,
-                            reasoning=f"Element at ({x}, {y}) is not clickable, requesting retry to find clickable element",
-                            evidence={
-                                "coordinates": (x, y),
-                                "element_info": element_info,
-                                "is_clickable": is_clickable,
-                                "retry_requested": True,
-                                "retry_count": self.retry_count,
-                                "retry_context": self.get_retry_context()
-                            },
-                            next_actions=["Retry plan generation to find clickable element"]
-                        )
-                
-                # Max retries exceeded, fail the goal
-                return GoalResult(
-                    status=GoalStatus.FAILED,
-                    confidence=0.9,
-                    reasoning=f"Element at ({x}, {y}) is not clickable and max retries exceeded",
-                    evidence={
-                        "coordinates": (x, y),
-                        "element_info": element_info,
-                        "is_clickable": is_clickable,
-                        "retry_count": self.retry_count,
+                    print(f"[ClickGoal] Element at ({x}, {y}) is not clickable")
+                    
+                    # Get element description for tracking
+                    element_description = ""
+                    screenshot = planned_interaction.get('screenshot')
+                    if screenshot:
+                        try:
+                            element_description = self.element_analyzer.get_element_description_with_ai(
+                                element_info, screenshot, x, y
+                            )
+                        except Exception:
+                            element_description = self._create_fallback_description(element_info)
+                    else:
+                        element_description = self._create_fallback_description(element_info)
+                    
+                    # Record this failed attempt
+                    self.record_failed_attempt((x, y), element_description, "Element is not clickable")
+                    
+                    # Request retry if we haven't exceeded max retries
+                    if self.can_retry():
+                        retry_reason = f"Element at ({x}, {y}) is not clickable - need to find a clickable element"
+                        if self.request_retry(retry_reason):
+                            return GoalResult(
+                                status=GoalStatus.PENDING,
+                                confidence=0.9,
+                                reasoning=f"Element at ({x}, {y}) is not clickable, requesting retry to find clickable element",
+                                evidence={
+                                    "coordinates": (x, y),
+                                    "element_info": element_info,
+                                    "is_clickable": is_clickable,
+                                    "retry_requested": True,
+                                    "retry_count": self.retry_count,
+                                    "retry_context": self.get_retry_context()
+                                },
+                                next_actions=["Retry plan generation to find clickable element"]
+                            )
+                    
+                    # Max retries exceeded, fail the goal
+                    return GoalResult(
+                        status=GoalStatus.FAILED,
+                        confidence=0.9,
+                        reasoning=f"Element at ({x}, {y}) is not clickable and max retries exceeded",
+                        evidence={
+                            "coordinates": (x, y),
+                            "element_info": element_info,
+                            "is_clickable": is_clickable,
+                            "retry_count": self.retry_count,
                         "max_retries_exceeded": True
                     }
                 )
@@ -504,6 +515,7 @@ class ClickGoal(BaseGoal):
                 self.target_description,
                 element_info,
                 page_dims,
+                base_knowledge=context.base_knowledge if hasattr(context, 'base_knowledge') else None
             )
             
             if match_result["is_match"]:
@@ -592,6 +604,7 @@ class ClickGoal(BaseGoal):
         target_description: str,
         actual_element_info: Optional[Dict[str, Any]] = None,
         page_dimensions: Optional[Tuple[int, int]] = None,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Use single AI evaluation method for element matching.
@@ -611,18 +624,27 @@ class ClickGoal(BaseGoal):
                 - Attributes: {str(actual_element_info.get('attributes', {}))[:200]}
                 """
             
+            # Build base knowledge section if provided
+            base_knowledge_section = ""
+            if base_knowledge:
+                base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide evaluation):\n"
+                for i, knowledge in enumerate(base_knowledge, 1):
+                    base_knowledge_section += f"{i}. {knowledge}\n"
+                base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining if elements match. They override general matching assumptions.\n"
+            
             system_prompt = f"""
             You are evaluating whether a clicked UI element matches the user's intent.
 
             User wanted to click: "{target_description}"
             Actually clicked: "{actual_description}"
             {element_context}
-
+            {base_knowledge_section}
             Determine if these match semantically. Consider:
             - Synonyms and similar terms (e.g., "button" vs "btn", "link" vs "anchor")
             - Partial matches (e.g., "first link" could match "navigation link")
             - Context and intent (e.g., "submit" could match "submit button" or "send button")
             - Element functionality and purpose
+            - Base knowledge rules (if provided above) that may make matching more lenient or specific
 
             Provide your evaluation with confidence and reasoning.
             """

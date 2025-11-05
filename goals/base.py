@@ -157,6 +157,8 @@ class GoalContext:
     planned_interaction: Optional[Dict[str, Any]] = None
     # Browser access for advanced goals (like navigation preview)
     page_reference: Optional[Page] = None  # Playwright Page object
+    # Base knowledge rules that guide goal evaluation
+    base_knowledge: List[str] = field(default_factory=list)
 
 
 class GoalResult(BaseModel):

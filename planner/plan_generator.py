@@ -32,9 +32,11 @@ class PlanGenerator:
         *,
         include_detailed_elements: bool = True,
         max_detailed_elements: int = 400,
+        max_steps: Optional[int] = None,
     ) -> None:
         self.include_detailed_elements = include_detailed_elements
         self.max_detailed_elements = max_detailed_elements
+        self.max_steps = max_steps  # Maximum number of steps to generate (None = no limit, uses default 1-3)
 
     # -------------------- Public API --------------------
     def create_plan(
@@ -51,6 +53,7 @@ class PlanGenerator:
         command_history: Optional[List[str]] = None,
         dedup_context: Optional[Dict[str, Any]] = None,
         target_context_guard: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ) -> Optional[VisionPlan]:
         """Create an action plan using the already-detected elements list."""
         print(f"[PlanGen] create_plan goal='{goal_description}' url={page_info.url}\n")
@@ -69,12 +72,18 @@ class PlanGenerator:
         )
 
         dedup_block, dedup_instruction_lines = self._build_dedup_context_block(dedup_context)
+        # Determine max_steps: use method parameter if provided, otherwise use instance default, otherwise default to 3
+        effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else 3)
+        
         instructions = [
             "Focus ONLY on the ACTIVE GOAL DESCRIPTIONS above. Prioritize fields or targets marked as pending.",
             "Do not re-complete fields already marked as completed (✅).",
             "Use specialized actions for select/upload/datetime/press/back/forward/stop when appropriate.",
-            "Return 1-3 action steps that move directly toward finishing the goal.",
         ]
+        if effective_max_steps == 1:
+            instructions.append("Return EXACTLY 1 action step that directly accomplishes the goal. Do NOT add preparatory steps like clicking to focus or additional actions. Only do exactly what the action demands.")
+        else:
+            instructions.append(f"Return 1-{effective_max_steps} action steps that move directly toward finishing the goal.")
         if target_context_guard:
             instructions.append(
                 f"Only include action steps targeting elements whose immediate surrounding context satisfies: {target_context_guard}."
@@ -108,6 +117,14 @@ class PlanGenerator:
                 system_prompt=system_prompt,
                 image=screenshot,
             )
+            if plan and plan.action_steps:
+                # Enforce max_steps limit strictly
+                effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else None)
+                if effective_max_steps is not None and len(plan.action_steps) > effective_max_steps:
+                    print(f"[PlanGen] ⚠️ Plan generated {len(plan.action_steps)} steps, limiting to {effective_max_steps} step(s) as required")
+                    plan.action_steps = plan.action_steps[:effective_max_steps]
+                    # Update reasoning to reflect the limitation
+                    plan.reasoning = f"(Limited to {effective_max_steps} step(s)) {plan.reasoning}"
             return plan
         except Exception as e:
             print(f"❌ Error creating plan: {e}")
@@ -129,9 +146,11 @@ class PlanGenerator:
         semantic_hint: Optional[SemanticTarget] = None,
         dedup_context: Optional[Dict[str, Any]] = None,
         target_context_guard: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ) -> Optional[VisionPlan]:
         """Create a plan leveraging overlay indices to refer to elements precisely."""
         print(f"[PlanGen] create_plan_with_element_indices goal='{goal_description}' url={page_info.url}")
+        print(f"[PlanGen] Received {len(element_data) if element_data else 0} element(s) for planning")
 
         element_data = element_data or []
 
@@ -177,10 +196,15 @@ class PlanGenerator:
         # Build available elements list
         elements_list_lines: List[str] = []
 
+        # Log how many elements will be included in detailed context
         detailed_list = self._build_detailed_element_context(element_data, page_info, f"{goal_description} {additional_context}")
+        print(f"[PlanGen] Including {len(detailed_list)} element(s) in detailed context (max: {self.max_detailed_elements})")
         elements_list_lines.append("\nDETAILED ELEMENTS (top candidates):\n" + "\n".join(detailed_list))
 
         dedup_block, dedup_instruction_lines = self._build_dedup_context_block(dedup_context)
+        # Determine max_steps: use method parameter if provided, otherwise use instance default, otherwise default to 3
+        effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else 3)
+        
         instructions = [
             "Treat user instructions as casual guidance from a teammate; choose the action that a careful human would naturally take to fulfil the request.",
             "Assume that everything needed to fulfil the goal is visible on the page.",
@@ -190,8 +214,11 @@ class PlanGenerator:
             "Use the overlay numbers exactly when referring to targets.",
             "Prefer elements that match the active goal descriptions and pending tasks.",
             "Use specialized actions when appropriate:\n           - HANDLE_SELECT, HANDLE_UPLOAD, HANDLE_DATETIME, PRESS, BACK, FORWARD, STOP",
-            "Return 1-3 precise action steps.",
         ]
+        if effective_max_steps == 1:
+            instructions.append("Return EXACTLY 1 action step that directly accomplishes the goal. Do NOT add preparatory steps like clicking to focus, typing, or additional actions. Only do exactly what the action demands. For example, if the goal is 'type: yahoo finance', only return a TYPE action - do NOT add a CLICK action to focus first.")
+        else:
+            instructions.append(f"Return 1-{effective_max_steps} precise action steps.")
         if preferred_overlay is not None:
             instructions.append(
                 "If a VISION PRESELECTED TARGET is supplied, choose it unless it clearly conflicts with the goal."
@@ -247,6 +274,14 @@ class PlanGenerator:
                 image=screenshot_with_overlays,
             )
             if plan and plan.action_steps:
+                # Enforce max_steps limit strictly
+                effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else None)
+                if effective_max_steps is not None and len(plan.action_steps) > effective_max_steps:
+                    print(f"[PlanGen] ⚠️ Plan generated {len(plan.action_steps)} steps, limiting to {effective_max_steps} step(s) as required")
+                    plan.action_steps = plan.action_steps[:effective_max_steps]
+                    # Update reasoning to reflect the limitation
+                    plan.reasoning = f"(Limited to {effective_max_steps} step(s)) {plan.reasoning}"
+                
                 # if preferred_overlay is not None:
                 #     self._apply_preferred_overlay(plan, preferred_overlay, element_data)
                 detected_elements = self.convert_indices_to_elements(plan.action_steps, element_data)
