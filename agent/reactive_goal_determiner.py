@@ -201,18 +201,35 @@ Your job is to look at the screenshot ({screenshot_note}) and decide:
 {exploration_rules}
 {base_knowledge_section}
 CRITICAL RULES:
-1. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
-2. Determine ONE action at a time - be reactive, not pre-planned
-3. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
-4. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
-5. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
-6. Format actions as executable commands:
+1. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, or collecting data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
+   - Examples: "extract the price" → "extract: price"
+   - Examples: "get the stock price" → "extract: stock price"  
+   - Examples: "find the current price" → "extract: current price"
+   - Examples: "collect product information" → "extract: product information"
+   - **CRITICAL: If data is already visible on the page and the user wants it extracted, use "extract:" immediately. Do not click/type/scroll unless needed to make the data visible first.**
+2. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
+3. Determine ONE action at a time - be reactive, not pre-planned
+4. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
+5. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
+6. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
+7. Format actions as executable commands:
+   - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price"
    - **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be specific** - e.g., "click: Google Search button", "click: first article link titled 'Introduction'", "click: search suggestion 'yahoo finance' link", "click: Accept all cookies button". NEVER use vague terms like 'first element', 'that button', or ambiguous text without element type like "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.).
    - **For TYPE commands: MUST include element type** - e.g., "type: John Doe in name input field", "type: john@example.com in email input field". NEVER use vague terms like 'the field' or 'it'.
    - **For PRESS commands: MUST be brief** - just the key name (e.g., "press: Enter", "press: Escape", "press: Tab"). Do NOT add descriptions or context.
-7. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
+8. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
 
 AVAILABLE COMMANDS:
+- extract: <description>  (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
+  **PRIORITY COMMAND**: Use this when user wants to extract/collect data from the page.
+  **When to use**: 
+    - If data is already visible → use "extract:" immediately
+    - If data needs page interaction first → do that, then use "extract:"
+  **Examples**:
+    - "extract: stock price" (when price is visible)
+    - "extract: current and after market price" (when both prices are visible)
+    - "extract: product name and price" (when product info is visible)
+  This triggers automatic extraction using the bot's extract function.
 - scroll: <direction>  (e.g., "scroll: down", "scroll: up") - {"Use this ONLY in exploration mode" if is_exploring else "Use if needed elements aren't visible"}
 {"- DO NOT use type/click commands in exploration mode - element is not in viewport yet" if is_exploring else ""}
 {"- type: <value> in <specific field description>  (e.g., \"type: John Doe in name field\", \"type: john@example.com in email input field\") - Only use when NOT in exploration mode" if not is_exploring else ""}
@@ -323,6 +340,16 @@ WHAT'S BEEN DONE:
 {exploration_context if exploration_context else ""}{"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
 
+**EXTRACTION DETECTION**:
+- Check if the user prompt contains extraction keywords: "extract", "get", "find", "note", "collect", "gather", "retrieve", "pull", "fetch"
+- If yes, determine:
+  1. Is the data already visible on the page? → Use "extract: <description>" immediately
+  2. Does the page need interaction first (click, scroll, type)? → Do that first, then use "extract: <description>"
+  3. What specific data needs extracting? → Use that in the extract command
+- Example: User says "extract the current and after market price of the stock"
+  - If prices are visible → Action: "extract: current and after market price"
+  - If prices are not visible → First navigate/interact, then "extract: current and after market price"
+
 INSTRUCTIONS:
 1. Look at the screenshot - {"it shows the FULL PAGE" if is_exploring else "it shows ONLY the current viewport (what's visible now)"}
 2. Determine ONE action to take RIGHT NOW based on:
@@ -334,6 +361,21 @@ INSTRUCTIONS:
    {"- **IMPORTANT: Apply the BASE KNOWLEDGE rules above when they are relevant to the current situation**" if self.base_knowledge else ""}
 
 3. Format the action as an executable command:
+   **For EXTRACT commands: PRIORITY when user wants data extracted**
+   - **CRITICAL: If the user prompt contains extraction requests (extract, get, find, note, collect, gather, retrieve, pull, fetch), you MUST generate an "extract:" command once the required data is visible on the page.**
+   - Format: "extract: <what to extract>" (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
+   - **Workflow**: 
+     1. First, ensure the page shows the data (click buttons, navigate, scroll if needed)
+     2. Then, once the data is visible, use "extract: <description>" to extract it
+     3. The extract function will automatically run and capture the data
+   - Examples:
+     * User says "extract the price" → Action: "extract: price"
+     * User says "get the stock price" → Action: "extract: stock price"
+     * User says "find current and after market price" → Action: "extract: current and after market price"
+     * User says "collect product information" → Action: "extract: product information"
+   - **DO NOT use click/type/scroll when extraction is the goal and data is already visible**
+   - **DO use extract: when data is visible, even if other actions were needed first**
+   
    **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be descriptive**
    - NEVER use vague terms: "first element", "that button", "the field", "it", "this"
    - NEVER use ambiguous text without element type: "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.)

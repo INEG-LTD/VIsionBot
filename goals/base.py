@@ -39,6 +39,7 @@ class InteractionType(str, Enum):
     ELEMENT_APPEAR = "element_appear"
     ELEMENT_DISAPPEAR = "element_disappear"
     CONTEXT_GUARD = "context_guard"
+    EXTRACT = "extract"
 
 
 class EvaluationTiming(str, Enum):
@@ -137,6 +138,8 @@ class Interaction:
     after_state: Optional[BrowserState] = None
     success: bool = True
     error_message: Optional[str] = None
+    extracted_data: Optional[Dict[str, Any]] = None  # For EXTRACT interactions
+    extraction_prompt: Optional[str] = None  # The prompt used for extraction
     
     def __post_init__(self):
         if self.timestamp == 0:

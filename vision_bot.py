@@ -10,7 +10,7 @@ import time
 import traceback
 import uuid
 import re
-from typing import Any, Optional, List, Dict, Tuple
+from typing import Any, Optional, List, Dict, Tuple, Union, Type
 
 from playwright.sync_api import Browser, Page, Playwright
 
@@ -42,6 +42,7 @@ from goals import (
     BackGoal,
     ForwardGoal,
     DeferGoal,
+    ExtractGoal,
 )
 from goals.defer_goal import TimedSleepGoal
 # from goals.condition_engine import create_predicate_condition as create_predicate
@@ -70,6 +71,8 @@ from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
 from ai_utils import set_default_model
 from agent import AgentController
+from agent.agent_result import AgentResult
+from pydantic import BaseModel, Field
 
 
 class BrowserVisionBot:
@@ -209,6 +212,8 @@ class BrowserVisionBot:
         
         # Initialize components
         self.goal_monitor: GoalMonitor = GoalMonitor(page)
+        # Set bot reference in goal monitor for goals that need it
+        self.goal_monitor.bot_reference = self
         self.overlay_manager = OverlayManager(page)
         self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
@@ -755,6 +760,26 @@ class BrowserVisionBot:
             if ref_result is not None:
                 self.command_ledger.complete_command(command_id, success=ref_result)
                 return ref_result
+            
+            # Check for extract commands
+            if goal_description.strip().lower().startswith("extract:"):
+                extraction_prompt = goal_description.replace("extract:", "").strip()
+                print(f"📊 Extraction command: {extraction_prompt}")
+                
+                try:
+                    # Perform extraction
+                    result = self.extract(
+                        prompt=extraction_prompt,
+                        output_format="json",
+                        scope="viewport"
+                    )
+                    print(f"✅ Extraction completed: {result}")
+                    self.command_ledger.complete_command(command_id, success=True)
+                    return True
+                except Exception as e:
+                    print(f"❌ Extraction failed: {e}")
+                    self.command_ledger.complete_command(command_id, success=False)
+                    return False
 
             # Clear any existing goals before starting a new goal
             if self.goal_monitor.active_goal:
@@ -1089,7 +1114,7 @@ class BrowserVisionBot:
                 except Exception as e:
                     print(f"⚠️ Error processing action queue: {e}")
 
-    def agentic_mode(self, user_prompt: str, max_iterations: int = 50, track_ineffective_actions: bool = True, base_knowledge: Optional[List[str]] = None) -> bool:
+    def agentic_mode(self, user_prompt: str, max_iterations: int = 50, track_ineffective_actions: bool = True, base_knowledge: Optional[List[str]] = None) -> AgentResult:
         """
         Run agentic mode (Step 1: Basic Reactive Agent).
         
@@ -1098,9 +1123,10 @@ class BrowserVisionBot:
         - Checks simple completion criteria
         - Generates and executes actions reactively
         - Repeats until task is complete or max iterations reached
+        - Automatically extracts data when extraction is needed
         
         Args:
-            user_prompt: High-level user request (e.g., "click the submit button", "navigate to google.com")
+            user_prompt: High-level user request (e.g., "click the submit button", "navigate to google.com", "extract product price")
             max_iterations: Maximum number of iterations before giving up (default: 50)
             track_ineffective_actions: If True, track and avoid repeating actions that didn't yield page changes.
                                        Default: True (recommended for better performance)
@@ -1109,15 +1135,31 @@ class BrowserVisionBot:
                            Example: ["just press enter after you've typed a search term into a search field"]
             
         Returns:
-            True if task completed successfully, False otherwise
+            AgentResult object containing:
+            - success: Whether the task completed successfully
+            - extracted_data: Dictionary of extracted data (key: extraction prompt, value: extracted result)
+            - reasoning: Explanation of the result
+            - confidence: Confidence score (0.0-1.0)
             
         Example:
+            # Basic usage
             bot.start()
             bot.page.goto("https://example.com")
-            success = bot.agentic_mode(
-                "search for python tutorials",
-                base_knowledge=["just press enter after you've typed a search term into a search field"]
+            result = bot.agentic_mode("search for python tutorials")
+            if result.success:
+                print("Task completed!")
+            
+            # With extraction
+            result = bot.agentic_mode(
+                "navigate to amazon.com, search for 'laptop', extract the first product name and price"
             )
+            if result.success:
+                print(f"Product: {result.extracted_data.get('first product name')}")
+                print(f"Price: {result.extracted_data.get('price')}")
+            
+            # Access extracted data
+            for prompt, data in result.extracted_data.items():
+                print(f"{prompt}: {data}")
         """
         # Set agent mode flag
         self._agent_mode = True
@@ -1125,13 +1167,297 @@ class BrowserVisionBot:
             controller = AgentController(self, track_ineffective_actions=track_ineffective_actions, base_knowledge=base_knowledge)
             controller.max_iterations = max_iterations
             
-            result = controller.run_agentic_mode(user_prompt)
+            goal_result = controller.run_agentic_mode(user_prompt)
+            
+            # Create and return AgentResult with extracted data
+            return AgentResult(goal_result, controller.extracted_data)
         finally:
             # Reset agent mode flag when done
             self._agent_mode = False
+
+    def extract(
+        self,
+        prompt: str,
+        output_format: str = "json",
+        model_schema: Optional[Type[BaseModel]] = None,
+        scope: str = "viewport",
+        element_description: Optional[str] = None,
+        max_retries: int = 2,
+        confidence_threshold: float = 0.7,
+    ) -> Union[str, Dict[str, Any], BaseModel]:
+        """
+        Extract data from the current page based on natural language description.
         
-        # Return boolean for compatibility
-        return result.status == GoalStatus.ACHIEVED
+        Args:
+            prompt: Natural language description of what to extract
+                    (e.g., "product price", "article title", "form field values")
+            output_format: "json" (default), "text", or "structured"
+            model_schema: Optional Pydantic model for structured output
+            scope: "viewport", "full_page", or "element"
+            element_description: Required if scope="element"
+            max_retries: Maximum retry attempts if extraction fails
+            confidence_threshold: Minimum confidence to return result (0.0-1.0)
+        
+        Returns:
+            - If output_format="text": str
+            - If output_format="json": Dict[str, Any]
+            - If output_format="structured" and model_schema provided: model instance
+        """
+        from typing import get_type_hints
+        from ai_utils import generate_text, generate_model, answer_question_with_vision
+        
+        self._check_termination()
+        
+        if not self.started or not self.page:
+            raise RuntimeError("Bot not started. Call bot.start() first.")
+        
+        # Validate scope
+        if scope == "element" and not element_description:
+            raise ValueError("element_description is required when scope='element'")
+        
+        # Capture screenshot based on scope
+        try:
+            if scope == "full_page":
+                screenshot = self.page.screenshot(full_page=True)
+                # Get full page text
+                visible_text = self.page.evaluate("document.body.innerText")[:2000]
+            elif scope == "element":
+                # For element scope, we'll use vision to find the element first
+                screenshot = self.page.screenshot(full_page=False)
+                visible_text = self.page.evaluate("document.body.innerText")[:1000]
+            else:  # viewport
+                screenshot = self.page.screenshot(full_page=False)
+                visible_text = self.page.evaluate("document.body.innerText")[:1000]
+        except Exception as e:
+            raise RuntimeError(f"Failed to capture screenshot: {e}")
+        
+        # Build extraction prompt for LLM
+        extraction_prompt = f"""
+Extract the following information from this webpage:
+{prompt}
+
+Current page context:
+- URL: {self.page.url}
+- Title: {self.page.title()}
+- Visible text preview: {visible_text[:500]}...
+
+Please extract the requested information accurately.
+"""
+        
+        # Try extraction with retries
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                if output_format == "text":
+                    # Simple text extraction using vision
+                    question = f"What is the {prompt}? Return only the extracted text, no explanations."
+                    result_text = generate_text(
+                        prompt=question,
+                        system_prompt="You are extracting text from a webpage. Return only the extracted text, no explanations or formatting.",
+                        image=screenshot,
+                        image_detail="high"
+                    )
+                    extracted_text = result_text.strip()
+                    
+                    # Record extraction in interaction history
+                    from goals.base import InteractionType
+                    self.goal_monitor.record_interaction(
+                        InteractionType.EXTRACT,
+                        extraction_prompt=prompt,
+                        extracted_data={"text": extracted_text},
+                        success=True
+                    )
+                    
+                    return extracted_text
+                
+                elif output_format == "json":
+                    # JSON extraction using structured output
+                    # Use a string field for JSON to avoid schema validation issues with Dict[str, Any]
+                    class ExtractionResult(BaseModel):
+                        extracted_data: str = Field(description="The extracted data as a JSON string with key-value pairs")
+                        confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the extraction")
+                        reasoning: str = Field(description="Brief explanation of what was extracted")
+                    
+                    result = generate_model(
+                        prompt=extraction_prompt,
+                        model_object_type=ExtractionResult,
+                        system_prompt="You are extracting structured data from a webpage. Extract the requested information and return it as a JSON object string with appropriate keys. The extracted_data field should be a valid JSON string.",
+                        image=screenshot,
+                        image_detail="high"
+                    )
+                    
+                    if result.confidence < confidence_threshold:
+                        raise ValueError(f"Extraction confidence {result.confidence} below threshold {confidence_threshold}")
+                    
+                    # Parse the JSON string
+                    import json
+                    try:
+                        extracted_dict = json.loads(result.extracted_data)
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Failed to parse extracted_data as JSON: {e}. Raw data: {result.extracted_data}")
+                    
+                    # Add metadata
+                    extracted_dict["_confidence"] = result.confidence
+                    extracted_dict["_reasoning"] = result.reasoning
+                    
+                    # Record extraction in interaction history
+                    from goals.base import InteractionType
+                    self.goal_monitor.record_interaction(
+                        InteractionType.EXTRACT,
+                        extraction_prompt=prompt,
+                        extracted_data=extracted_dict,
+                        success=True
+                    )
+                    
+                    return extracted_dict
+                
+                elif output_format == "structured":
+                    if not model_schema:
+                        raise ValueError("model_schema is required when output_format='structured'")
+                    
+                    from goals.base import InteractionType
+                    result = generate_model(
+                        prompt=extraction_prompt,
+                        model_object_type=model_schema,
+                        system_prompt=f"You are extracting structured data from a webpage. Extract the requested information matching this schema: {model_schema.__name__}",
+                        image=screenshot,
+                        image_detail="high"
+                    )
+                    
+                    # Record extraction in interaction history
+                    # Convert Pydantic model to dict for storage
+                    extracted_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict()
+                    self.goal_monitor.record_interaction(
+                        InteractionType.EXTRACT,
+                        extraction_prompt=prompt,
+                        extracted_data=extracted_dict,
+                        success=True
+                    )
+                    
+                    return result
+                
+                else:
+                    raise ValueError(f"Invalid output_format: {output_format}")
+            
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    print(f"[Extract] Attempt {attempt + 1} failed: {e}, retrying...")
+                    import time
+                    time.sleep(0.5)
+                else:
+                    # Record failed extraction in interaction history
+                    from goals.base import InteractionType
+                    self.goal_monitor.record_interaction(
+                        InteractionType.EXTRACT,
+                        extraction_prompt=prompt,
+                        extracted_data=None,
+                        success=False,
+                        error_message=str(e)
+                    )
+                    raise RuntimeError(f"Extraction failed after {max_retries + 1} attempts: {e}")
+        
+        # Record failed extraction if we exhausted all retries
+        if last_error:
+            from goals.base import InteractionType
+            self.goal_monitor.record_interaction(
+                InteractionType.EXTRACT,
+                extraction_prompt=prompt,
+                extracted_data=None,
+                success=False,
+                error_message=str(last_error)
+            )
+        raise RuntimeError(f"Extraction failed: {last_error}")
+    
+    def extract_batch(
+        self,
+        prompts: List[str],
+        output_format: str = "json",
+        model_schema: Optional[Type[BaseModel]] = None,
+        scope: str = "viewport",
+        **kwargs
+    ) -> List[Union[str, Dict[str, Any], BaseModel]]:
+        """
+        Extract multiple fields from the current page in one operation.
+        
+        Args:
+            prompts: List of extraction prompts
+            output_format: "json" (default), "text", or "structured"
+            model_schema: Optional Pydantic model for structured output
+            scope: "viewport", "full_page", or "element"
+            **kwargs: Additional arguments passed to extract()
+        
+        Returns:
+            List of extraction results in the same order as prompts
+        """
+        results = []
+        for prompt in prompts:
+            try:
+                result = self.extract(
+                    prompt=prompt,
+                    output_format=output_format,
+                    model_schema=model_schema,
+                    scope=scope,
+                    **kwargs
+                )
+                results.append(result)
+            except Exception as e:
+                print(f"[ExtractBatch] Failed to extract '{prompt}': {e}")
+                # Return None or empty dict for failed extractions
+                if output_format == "text":
+                    results.append("")
+                elif output_format == "json":
+                    results.append({"error": str(e)})
+                else:
+                    results.append(None)
+        
+        return results
+    
+    def extract_multi_field(
+        self,
+        prompt: str,
+        fields: List[str],
+        output_format: str = "json",
+        scope: str = "viewport",
+        **kwargs
+    ) -> Dict[str, Union[str, Dict[str, Any], BaseModel]]:
+        """
+        Extract multiple related fields from a single prompt description.
+        
+        Example:
+            bot.extract_multi_field(
+                "product information",
+                fields=["name", "price", "rating"]
+            )
+        
+        Args:
+            prompt: Overall description of what to extract (e.g., "product information")
+            fields: List of specific field names to extract
+            output_format: "json" (default), "text", or "structured"
+            scope: "viewport", "full_page", or "element"
+            **kwargs: Additional arguments passed to extract()
+        
+        Returns:
+            Dictionary mapping field names to extracted values
+        """
+        # Build a combined extraction prompt
+        field_prompts = [f"{prompt} - {field}" for field in fields]
+        results = self.extract_batch(
+            prompts=field_prompts,
+            output_format=output_format,
+            scope=scope,
+            **kwargs
+        )
+        
+        # Combine results into a dictionary
+        extracted_data = {}
+        for i, field in enumerate(fields):
+            if i < len(results):
+                extracted_data[field] = results[i]
+            else:
+                extracted_data[field] = None
+        
+        return extracted_data
 
     def goto(self, url: str, timeout: int = 2000) -> None:
         """Go to a URL"""

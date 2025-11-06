@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
-from goals.base import BrowserState, Interaction
+from goals.base import BrowserState, Interaction, InteractionType
 from ai_utils import generate_model
 
 
@@ -124,7 +124,8 @@ Your task is to determine if the user's request has been fulfilled based on:
 Evaluation Guidelines:
 - Be conservative: only mark complete when you have high confidence the task is done
 - Consider the intent: a "navigate" task completes when the target page loads
-- Consider data collection: a "collect info" task completes when required data is visible/collected
+- **CRITICAL for extraction tasks: If the user prompt involves extracting, getting, finding, or collecting data, the task is ONLY complete if an EXTRACT interaction has been successfully performed AND the extracted data matches what was requested. Do NOT mark complete if data is just visible on the page - extraction must have actually occurred.**
+- Consider data collection: a "collect info" task completes when required data is visible/collected AND extraction has been performed
 - Consider form submission: a "submit" task completes when confirmation appears or success indicators are visible
 - Look for explicit success indicators: confirmation messages, success pages, completion banners
 - Consider navigation patterns: unexpected navigation away from target may indicate failure
@@ -207,23 +208,57 @@ Consider:
             return "No interactions yet."
         
         summary_parts = []
+        extraction_count = 0
+        successful_extractions = []
+        
         for i, interaction in enumerate(interactions[-10:], 1):  # Last 10 interactions
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
             
-            if interaction.coordinates:
-                summary += f" at ({interaction.coordinates[0]}, {interaction.coordinates[1]})"
-            if interaction.text_input:
-                summary += f" with text: '{interaction.text_input[:50]}'"
-            if interaction.target_element_info:
-                element_desc = interaction.target_element_info.get('description', '')[:50]
-                if element_desc:
-                    summary += f" on element: {element_desc}"
+            # Special handling for extraction interactions
+            if interaction.interaction_type == InteractionType.EXTRACT:
+                extraction_count += 1
+                if interaction.extraction_prompt:
+                    summary += f" - prompt: '{interaction.extraction_prompt[:100]}'"
+                if interaction.success and interaction.extracted_data:
+                    # Show key extracted data (limit size for prompt)
+                    import json
+                    try:
+                        data_str = json.dumps(interaction.extracted_data, indent=2)[:200]
+                        summary += f"\n   ✅ Successfully extracted: {data_str}..."
+                        successful_extractions.append({
+                            'prompt': interaction.extraction_prompt,
+                            'data': interaction.extracted_data
+                        })
+                    except:
+                        summary += f"\n   ✅ Successfully extracted data"
+                elif not interaction.success:
+                    summary += f"\n   ❌ Failed: {interaction.error_message or 'Unknown error'}"
+            else:
+                # Standard interaction details
+                if interaction.coordinates:
+                    summary += f" at ({interaction.coordinates[0]}, {interaction.coordinates[1]})"
+                if interaction.text_input:
+                    summary += f" with text: '{interaction.text_input[:50]}'"
+                if interaction.target_element_info:
+                    element_desc = interaction.target_element_info.get('description', '')[:50]
+                    if element_desc:
+                        summary += f" on element: {element_desc}"
             
             summary_parts.append(summary)
         
         if len(interactions) > 10:
             summary_parts.append(f"... and {len(interactions) - 10} more interactions")
+        
+        # Add extraction summary at the end if there were extractions
+        if extraction_count > 0:
+            summary_parts.append(f"\n📊 EXTRACTION SUMMARY:")
+            summary_parts.append(f"   Total extraction attempts: {extraction_count}")
+            summary_parts.append(f"   Successful extractions: {len(successful_extractions)}")
+            if successful_extractions:
+                summary_parts.append(f"   Extracted data:")
+                for ext in successful_extractions[-3:]:  # Last 3 extractions
+                    summary_parts.append(f"      - '{ext['prompt']}': {str(ext['data'])[:100]}...")
         
         return "\n".join(summary_parts) if summary_parts else "No interactions."
     

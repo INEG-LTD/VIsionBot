@@ -1,0 +1,127 @@
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762394790
+Start Time: 2025-11-06T02:06:30.229237
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762394812
+Start Time: 2025-11-06T02:06:52.957298
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:06:54.883203] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-11-06T02:06:54.972460] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Yahoo is part of the Yahoo family of brands.",
+  "page_url": "https://consent.yahoo.com/v2/collectConsent?sessionId=3_cc-session_2b7308a0-c045-4ede-9817-bbe730e27e0b"
+}
+[2025-11-06T02:07:05.492501] INFO     SYSTEM       Defer pause ended (took 10605.7ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 10.606
+}
+[2025-11-06T02:07:05.561548] SUCCESS  GOAL         Goal completed: defer (took 10670.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762395197
+Start Time: 2025-11-06T02:13:17.335851
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:13:18.728113] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-11-06T02:13:18.829618] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Yahoo is part of the Yahoo family of brands.",
+  "page_url": "https://consent.yahoo.com/v2/collectConsent?sessionId=3_cc-session_b5a50851-ed57-4833-a5f6-3c927e1911a6"
+}
+[2025-11-06T02:13:26.908754] INFO     SYSTEM       Defer pause ended (took 8173.8ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 8.174
+}
+[2025-11-06T02:13:26.909938] SUCCESS  GOAL         Goal completed: defer (took 8181.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762395571
+Start Time: 2025-11-06T02:19:31.316168
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:19:33.269438] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-11-06T02:19:33.348060] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Yahoo is part of the Yahoo family of brands.",
+  "page_url": "https://consent.yahoo.com/v2/collectConsent?sessionId=3_cc-session_de1bf53b-d205-4983-96e9-46d13c0dc557"
+}
+[2025-11-06T02:19:44.451266] INFO     SYSTEM       Defer pause ended (took 11179.0ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 11.179
+}
+[2025-11-06T02:19:44.461952] SUCCESS  GOAL         Goal completed: defer (took 11192.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762395920
+Start Time: 2025-11-06T02:25:20.280284
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762396354
+Start Time: 2025-11-06T02:32:34.249316
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:32:55.838104] INFO     GOAL         Starting goal: click: Accept all cookies button
+    Details: {
+  "goal_description": "click: Accept all cookies button"
+}
+[2025-11-06T02:35:45.623253] SUCCESS  GOAL         Goal completed: Accept all cookies button (took 169785.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762397207
+Start Time: 2025-11-06T02:46:47.553976
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:47:08.334318] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-06T02:49:25.471153] SUCCESS  GOAL         Goal completed: Accept all button (took 137136.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1762397862
+Start Time: 2025-11-06T02:57:42.402788
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-06T02:58:04.641411] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-06T03:00:16.920546] SUCCESS  GOAL         Goal completed: Accept all button (took 132279.2ms) ✅

@@ -9,7 +9,7 @@ Implements agentic mode with:
 """
 
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import re
 import hashlib
 
@@ -52,6 +52,7 @@ class AgentController:
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
+        self.extracted_data: Dict[str, Any] = {}  # Store extracted data (key: extraction prompt, value: result)
     
     def run_agentic_mode(self, user_prompt: str) -> GoalResult:
         """
@@ -134,6 +135,9 @@ class AgentController:
                         evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
                     except Exception:
                         evidence_dict = {"evidence": evaluation.evidence}
+                
+                # Include extracted data in evidence
+                evidence_dict["extracted_data"] = self.extracted_data
                 return GoalResult(
                     status=GoalStatus.ACHIEVED,
                     confidence=evaluation.confidence,
@@ -256,6 +260,35 @@ class AgentController:
             
             print(f"🎯 Next action: {current_action}")
             
+            # 4. Check if this is an extraction command or detect extraction needs from natural language
+            extraction_prompt = self._detect_extraction_need(current_action, user_prompt)
+            
+            if extraction_prompt:
+                print(f"📊 Extraction detected: {extraction_prompt}")
+                
+                try:
+                    # Call extract() directly - simpler and more efficient
+                    result = self.bot.extract(
+                        prompt=extraction_prompt,
+                        output_format="json",
+                        scope="viewport"
+                    )
+                    
+                    # Store extracted data with the prompt as key
+                    self.extracted_data[extraction_prompt] = result
+                    print(f"✅ Extraction completed: {result}")
+                    
+                    # Continue to next iteration (extraction is complete)
+                    time.sleep(self.iteration_delay)
+                    continue
+                except Exception as e:
+                    print(f"⚠️ Extraction failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue to next iteration anyway
+                    time.sleep(self.iteration_delay)
+                    continue
+            
             # 4. Filter out navigation commands - convert to click commands instead
             current_action = self._filter_navigation_commands(current_action)
             
@@ -356,6 +389,9 @@ class AgentController:
                                 evidence_dict = json.loads(eval_after.evidence) if isinstance(eval_after.evidence, str) else eval_after.evidence
                             except (json.JSONDecodeError, TypeError, ValueError):
                                 evidence_dict = {"evidence": eval_after.evidence}
+                        
+                        # Include extracted data in evidence
+                        evidence_dict["extracted_data"] = self.extracted_data
                         return GoalResult(
                             status=GoalStatus.ACHIEVED,
                             confidence=eval_after.confidence,
@@ -380,7 +416,10 @@ class AgentController:
             status=GoalStatus.FAILED,
             confidence=0.5,
             reasoning=f"Max iterations ({self.max_iterations}) reached without completion",
-            evidence={"max_iterations": self.max_iterations}
+            evidence={
+                "max_iterations": self.max_iterations,
+                "extracted_data": self.extracted_data  # Include extracted data even on failure
+            }
         )
     
     def _capture_snapshot(self, full_page: bool = False) -> BrowserState:
@@ -480,6 +519,53 @@ class AgentController:
             return new_action
         
         return action_command
+    
+    def _detect_extraction_need(self, current_action: Optional[str], user_prompt: str) -> Optional[str]:
+        """
+        Detect if extraction is needed from current action ONLY.
+        
+        We should only extract if the current action explicitly indicates extraction.
+        Do NOT extract based on user prompt if the action is something else (like click).
+        
+        Args:
+            current_action: The current action command (e.g., "extract: product price")
+            user_prompt: The original user prompt (not used for detection, only for context)
+        
+        Returns:
+            Extraction prompt if extraction is needed, None otherwise
+        """
+        if not current_action:
+            return None
+        
+        # Check for explicit "extract:" command
+        if current_action.startswith("extract:"):
+            return current_action.replace("extract:", "").strip()
+        
+        # Check if current action indicates extraction (even if not explicitly "extract:")
+        action_lower = current_action.lower()
+        extraction_keywords = ["extract", "get", "find", "note", "collect", "gather", "retrieve", "pull", "fetch"]
+        
+        # Only check if the action itself contains extraction keywords
+        # Don't extract if the action is clearly something else (like "click", "type", "scroll")
+        action_type_keywords = ["click", "type", "press", "scroll", "select", "navigate", "upload"]
+        
+        # If action starts with a non-extraction action type, don't extract
+        for action_type in action_type_keywords:
+            if action_lower.startswith(f"{action_type}:"):
+                return None  # This is clearly a different action, not extraction
+        
+        # If action contains extraction keywords, extract the description
+        for keyword in extraction_keywords:
+            if keyword in action_lower:
+                # Try to extract what needs to be extracted
+                # Pattern: "extract/get/find: <description>"
+                pattern = rf"{keyword}:\s*(.+?)(?:\s|$)"
+                match = re.search(pattern, action_lower)
+                if match:
+                    return match.group(1).strip()
+        
+        # Don't fall back to checking user prompt - only use current_action
+        return None
     
     def _parse_action_for_act_params(
         self,

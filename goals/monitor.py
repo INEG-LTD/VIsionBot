@@ -57,6 +57,10 @@ class GoalMonitor:
         if hasattr(goal, 'set_goal_monitor'):
             goal.set_goal_monitor(self)
         
+        # Set bot reference for goals that need it (like ExtractGoal)
+        if hasattr(goal, 'set_bot_reference') and hasattr(self, 'bot_reference'):
+            goal.set_bot_reference(self.bot_reference)
+        
         self.active_goal = goal
         print(f"[GoalMonitor] Added goal: {goal}")
     
@@ -270,7 +274,9 @@ class GoalMonitor:
             target_y=kwargs.get('target_y'),
             before_state=before_state,
             success=kwargs.get('success', True),
-            error_message=kwargs.get('error_message')
+            error_message=kwargs.get('error_message'),
+            extracted_data=kwargs.get('extracted_data'),
+            extraction_prompt=kwargs.get('extraction_prompt')
         )
         
         # Capture state after interaction (with small delay for page updates)

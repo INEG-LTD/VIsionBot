@@ -38,6 +38,7 @@ from .for_models import IterationTargetsResponse, ElementContextResponse, Target
 from .back_goal import BackGoal
 from .forward_goal import ForwardGoal
 from .defer_goal import DeferGoal
+from .extract_goal import ExtractGoal
 
 __all__ = [
     # Base types
@@ -75,4 +76,5 @@ __all__ = [
     "BackGoal",
     "ForwardGoal",
     "DeferGoal",
+    "ExtractGoal",
 ]
