@@ -42,12 +42,15 @@ class EnvironmentState:
     page_title: str
     visible_text: Optional[str] = None  # First 2000 chars of page text
     url_history: List[str] = field(default_factory=list)  # Navigation history
+    url_pointer: Optional[int] = None  # Current position within navigation history
     
     def __post_init__(self):
         if self.visible_text is None:
             self.visible_text = self.browser_state.visible_text[:2000] if self.browser_state.visible_text else ""
         if not self.url_history:
             self.url_history = []
+        if self.url_pointer is None:
+            self.url_pointer = len(self.url_history) - 1 if self.url_history else -1
 
 
 class CompletionContract:
@@ -154,7 +157,8 @@ Return your evaluation as structured JSON with:
         nav_summary = self._summarize_navigation(
             state.url_history,
             state.task_start_url,
-            state.current_url
+            state.current_url,
+            state.url_pointer
         )
         
         prompt = f"""
@@ -262,14 +266,33 @@ Consider:
         
         return "\n".join(summary_parts) if summary_parts else "No interactions."
     
-    def _summarize_navigation(self, url_history: List[str], start_url: str, current_url: str) -> str:
-        """Summarize navigation patterns"""
+    def _summarize_navigation(
+        self,
+        url_history: List[str],
+        start_url: str,
+        current_url: str,
+        url_pointer: Optional[int]
+    ) -> str:
+        """Summarize navigation patterns including back/forward availability"""
         if not url_history:
             return f"Started at: {start_url}\nCurrently at: {current_url}"
-        
-        nav_path = " → ".join(url_history[-5:])  # Last 5 URLs
-        if len(url_history) > 5:
-            nav_path = f"... → {nav_path}"
-        
-        return f"Navigation path: {nav_path}"
+
+        total = len(url_history)
+        pointer = url_pointer if url_pointer is not None and 0 <= url_pointer < total else total - 1
+        back_available = pointer > 0
+        forward_available = pointer < total - 1
+
+        start_idx = max(0, total - 5)
+        lines = []
+        for idx in range(start_idx, total):
+            marker = " (current)" if idx == pointer else ""
+            lines.append(f"{idx}: {url_history[idx]}{marker}")
+
+        history_block = "\n    ".join(lines)
+        return (
+            f"Pages visited: {total}\n"
+            f"Back available: {'yes' if back_available else 'no'}\n"
+            f"Forward available: {'yes' if forward_available else 'no'}\n"
+            f"Recent history (oldest → newest):\n    {history_block}"
+        )
 

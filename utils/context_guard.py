@@ -30,6 +30,16 @@ class ContextGuard:
         self.element_analyzer = element_analyzer or ElementAnalyzer(page)
         self._cache: Dict[Tuple[str, int, str], GuardDecision] = {}
 
+    def set_page(self, page: Page, element_analyzer: Optional[ElementAnalyzer] = None) -> None:
+        """Update the page (and optionally element analyzer) used for validation."""
+        if page and page is not self.page:
+            self.page = page
+        if element_analyzer:
+            self.element_analyzer = element_analyzer
+        elif hasattr(self.element_analyzer, "set_page"):
+            self.element_analyzer.set_page(self.page)
+        self.reset_cache()
+
     def reset_cache(self) -> None:
         """Clear cached guard results."""
         self._cache.clear()
@@ -122,6 +132,7 @@ class ContextGuard:
             ActionType.HANDLE_SELECT,
             ActionType.HANDLE_UPLOAD,
             ActionType.HANDLE_DATETIME,
+            ActionType.OPEN,
         }
 
     def _find_detected_element(self, plan: VisionPlan, overlay_index: int) -> Optional[DetectedElement]:

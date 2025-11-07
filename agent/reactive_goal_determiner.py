@@ -212,12 +212,14 @@ CRITICAL RULES:
 4. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
 5. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
 6. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
-7. Format actions as executable commands:
+7. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
+8. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
+9. Format actions as executable commands:
    - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price"
    - **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be specific** - e.g., "click: Google Search button", "click: first article link titled 'Introduction'", "click: search suggestion 'yahoo finance' link", "click: Accept all cookies button". NEVER use vague terms like 'first element', 'that button', or ambiguous text without element type like "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.).
    - **For TYPE commands: MUST include element type** - e.g., "type: John Doe in name input field", "type: john@example.com in email input field". NEVER use vague terms like 'the field' or 'it'.
    - **For PRESS commands: MUST be brief** - just the key name (e.g., "press: Enter", "press: Escape", "press: Tab"). Do NOT add descriptions or context.
-8. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
+10. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
 
 AVAILABLE COMMANDS:
 - extract: <description>  (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
@@ -230,6 +232,12 @@ AVAILABLE COMMANDS:
     - "extract: current and after market price" (when both prices are visible)
     - "extract: product name and price" (when product info is visible)
   This triggers automatic extraction using the bot's extract function.
+- defer: <optional message or seconds>  (e.g., "defer", "defer: 15", "defer: give control to the user")
+  Use this when automation must pause and hand control to the user.
+  - "defer" → pause indefinitely until the user resumes
+  - "defer: 10" → pause for 10 seconds, then resume automatically
+  - "defer: take over" → pause and show the provided message to the user
+  Only defer when the user explicitly requests manual control or human input is required (captcha, multi-factor auth, etc.).
 - scroll: <direction>  (e.g., "scroll: down", "scroll: up") - {"Use this ONLY in exploration mode" if is_exploring else "Use if needed elements aren't visible"}
 {"- DO NOT use type/click commands in exploration mode - element is not in viewport yet" if is_exploring else ""}
 {"- type: <value> in <specific field description>  (e.g., \"type: John Doe in name field\", \"type: john@example.com in email input field\") - Only use when NOT in exploration mode" if not is_exploring else ""}
@@ -252,12 +260,20 @@ AVAILABLE COMMANDS:
 {"   - \"click: second button\" → \"click: second submit button\" or \"click: second button labeled '<text>'\" (already includes type: button)" if not is_exploring else ""}
 {"   - \"click: third link\" → \"click: third link titled '<text>'\" or \"click: third navigation link\" (already includes type: link)" if not is_exploring else ""}
 {"   - \"click: search suggestion 'yahoo finance'\" → \"click: search suggestion 'yahoo finance' link\" or \"click: search suggestion 'yahoo finance' button\" (must specify type)" if not is_exploring else ""}
-{"   IMPORTANT: For navigation tasks, use \"click: <specific link or button description>\" instead of navigate commands. Be specific about what link/button to click." if not is_exploring else ""}
+{"- navigate: <url or site>  (e.g., \"navigate: https://news.ycombinator.com\") - Only use when the navigation history summary shows no way back/forward and no other tab already has the required page. Prefer taking advantage of history or existing tabs first." if not is_exploring else ""}
 {"- press: <key>  (e.g., \"press: Enter\", \"press: Escape\", \"press: Tab\") - MUST be brief, just the key name. Do NOT add descriptions or context." if not is_exploring else ""}
 {"   * GOOD: \"press: Enter\"" if not is_exploring else ""}
 {"   * GOOD: \"press: Escape\"" if not is_exploring else ""}
 {"   * BAD: \"press: Enter in the search input field\" (too descriptive - press commands should be brief)" if not is_exploring else ""}
 {"   * BAD: \"press: Enter to search\" (too descriptive - press commands should be brief)" if not is_exploring else ""}
+{"- form: <description>  (e.g., \"form: complete checkout form\") - Use when the task explicitly refers to filling an entire form or multiple related fields. Keep description precise." if not is_exploring else ""}
+{"- select: <option description>  (e.g., \"select: United States option in country dropdown\") - Use for dropdowns or select menus when a specific option must be chosen." if not is_exploring else ""}
+{"- upload: <file description>  (e.g., \"upload: resume.pdf using file input\") - Use when the workflow requires attaching a local file and the upload control is visible." if not is_exploring else ""}
+{"- datetime: <value and field>  (e.g., \"datetime: 2024-06-01 in start date picker\") - Use for date/time pickers that need structured input." if not is_exploring else ""}
+{"- back: <steps>  (e.g., \"back: 1\") and forward: <steps>  - Use when the navigation history summary shows the desired page is behind/ahead or when the user explicitly requests it. Defaults to 1 step if omitted." if not is_exploring else ""}
+{"   * Confirm the target using the history summary (previous page, next page) before issuing back/forward." if not is_exploring else ""}
+{"- focus/subfocus: <region description>  - Use to narrow the vision focus to a specific section before interacting. 'subfocus' zooms further inside the current focus." if not is_exploring else ""}
+{"- undofocus/undo:  - Use to restore the previous focus region when the narrowed view is no longer helpful." if not is_exploring else ""}
 
 {"EXPLORATION MODE (Full-Page Visible):" if is_exploring else "VIEWPORT-FIRST APPROACH:"}
 - Look at the screenshot carefully
@@ -316,6 +332,11 @@ AVAILABLE COMMANDS:
             for i, knowledge in enumerate(self.base_knowledge, 1):
                 base_knowledge_context += f"{i}. {knowledge}\n"
             base_knowledge_context += "\nThese base knowledge rules should guide your action selection. Apply them when relevant.\n"
+
+        nav_summary = self._summarize_navigation_history(
+            getattr(state, "url_history", []),
+            getattr(state, "url_pointer", None)
+        )
         
         prompt = f"""
 Determine the NEXT SINGLE ACTION to take based on:
@@ -330,6 +351,8 @@ CURRENT STATE:
 - Viewport: {state.browser_state.page_width}x{state.browser_state.page_height}
 - {"Screenshot: FULL-PAGE (you can see entire page layout)" if is_exploring else "Screenshot: VIEWPORT ONLY (currently visible area)"}
 - Visible Text: {state.visible_text[:500]}...
+NAVIGATION HISTORY SUMMARY:
+{nav_summary}
 {("- CURRENT VIEWPORT INFO: The viewport currently shows content from approximately Y={viewport_snapshot.scroll_y} to Y={viewport_snapshot.scroll_y + viewport_snapshot.page_height}" if is_exploring and viewport_snapshot else "")}
 {("- TARGET ELEMENT: You need to find: {missing_element}" if is_exploring and missing_element else "")}
 
@@ -375,6 +398,11 @@ INSTRUCTIONS:
      * User says "collect product information" → Action: "extract: product information"
    - **DO NOT use click/type/scroll when extraction is the goal and data is already visible**
    - **DO use extract: when data is visible, even if other actions were needed first**
+
+   **For BACK/FORWARD commands: Use navigation history summary**
+   - Use "back: <steps>" when the summary shows the needed page behind the current pointer.
+   - Use "forward: <steps>" when the summary shows the needed page ahead in the session history.
+   - If no step count is provided, default to 1. Reference the target URL from the summary in your reasoning.
    
    **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be descriptive**
    - NEVER use vague terms: "first element", "that button", "the field", "it", "this"
@@ -485,4 +513,34 @@ What is the single next action to take?
             summary_parts.append(summary)
         
         return "\n".join(summary_parts) if summary_parts else "No interactions."
+
+    def _summarize_navigation_history(self, url_history: List[str], url_pointer: Optional[int]) -> str:
+        """Provide a concise navigation summary for the prompt."""
+        if not url_history:
+            return "No navigation history recorded yet."
+
+        total = len(url_history)
+        pointer = url_pointer if url_pointer is not None and 0 <= url_pointer < total else total - 1
+        pointer = max(0, pointer)
+
+        prev_url = url_history[pointer - 1] if pointer > 0 else None
+        next_url = url_history[pointer + 1] if pointer < total - 1 else None
+
+        start_idx = max(0, total - 5)
+        lines = []
+        for idx in range(start_idx, total):
+            marker = " (current)" if idx == pointer else ""
+            lines.append(f"{idx}: {url_history[idx]}{marker}")
+
+        history_block = "\n    ".join(lines)
+        prev_line = f"Previous page (back target): {prev_url}" if prev_url else "Previous page (back target): none"
+        next_line = f"Next page (forward target): {next_url}" if next_url else "Next page (forward target): none"
+
+        return (
+            f"Total pages visited: {total}\n"
+            f"Current history index: {pointer}\n"
+            f"{prev_line}\n"
+            f"{next_line}\n"
+            f"Recent history (oldest → newest):\n    {history_block}"
+        )
 

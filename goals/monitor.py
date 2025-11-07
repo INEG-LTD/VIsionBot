@@ -37,6 +37,19 @@ class GoalMonitor:
         # Initialize with current state
         self._capture_initial_state()
     
+    def switch_to_page(self, page: Page) -> None:
+        """Update internal references when the active page changes."""
+        if not page or page is self.page:
+            return
+        self.page = page
+        if hasattr(self.element_analyzer, "set_page"):
+            self.element_analyzer.set_page(page)
+        else:
+            self.element_analyzer.page = page
+        # Active goals should use the latest analyzer/page reference
+        if self.active_goal and hasattr(self.active_goal, "set_element_analyzer"):
+            self.active_goal.set_element_analyzer(self.element_analyzer)
+
     def set_user_prompt(self, user_prompt: str) -> None:
         """Set the user prompt"""
         self.user_prompt = user_prompt
@@ -182,6 +195,30 @@ class GoalMonitor:
                     except Exception as e:
                         print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
         
+        elif interaction_type == InteractionType.NAVIGATION:
+            url = (kwargs.get('url') or '').strip()
+            planned_interaction_data = {
+                'interaction_type': interaction_type,
+                'url': url,
+                **kwargs
+            }
+
+            if self.active_goal and self.active_goal.EVALUATION_TIMING in (EvaluationTiming.BEFORE, EvaluationTiming.BOTH):
+                try:
+                    context = self._build_goal_context()
+                    context.planned_interaction = planned_interaction_data
+
+                    result = self.active_goal.evaluate(context)
+                    pre_interaction_results = result
+                    self.active_goal._last_evaluation = result
+                    print(f"[GoalMonitor] Pre-interaction evaluation: {self.active_goal} -> {result.status}")
+
+                    if result.status == GoalStatus.ACHIEVED:
+                        print(f"[GoalMonitor] Goal achieved before interaction: {self.active_goal}")
+
+                except Exception as e:
+                    print(f"[GoalMonitor] Error in pre-interaction evaluation for {self.active_goal}: {e}")
+
         elif interaction_type in (InteractionType.SELECT, InteractionType.TYPE, InteractionType.DATETIME):
             coordinates = kwargs.get('coordinates')
             if coordinates:
@@ -272,6 +309,7 @@ class GoalMonitor:
             scroll_axis=kwargs.get('scroll_axis'),
             target_x=kwargs.get('target_x'),
             target_y=kwargs.get('target_y'),
+            navigation_url=kwargs.get('navigation_url'),
             before_state=before_state,
             success=kwargs.get('success', True),
             error_message=kwargs.get('error_message'),

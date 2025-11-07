@@ -11,6 +11,10 @@ class SelectorUtils:
     def __init__(self, page: Page):
         self.page = page
     
+    def set_page(self, page: Page) -> None:
+        if page and page is not self.page:
+            self.page = page
+    
     def get_element_selector_from_coordinates(self, x: int, y: int) -> str:
         """Get a CSS selector for the element at the given coordinates"""
         try:

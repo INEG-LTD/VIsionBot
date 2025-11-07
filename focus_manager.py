@@ -73,6 +73,20 @@ class FocusManager:
         self.screenshot_dir = "focus_screenshots"
         os.makedirs(self.screenshot_dir, exist_ok=True)
     
+    def set_page(self, page: Page) -> None:
+        """Update managed page and reset cached state."""
+        if not page or page is self.page:
+            return
+        self.page = page
+        if hasattr(self.page_utils, "set_page"):
+            self.page_utils.set_page(page)
+        else:
+            self.page_utils.page = page
+        self.overlay_manager = OverlayManager(page)
+        self.current_elements = []
+        self.current_overlay_data = []
+        self.current_screenshot = None
+    
     def focus_on_elements(self, intent: str, page_info, overlay_manager: OverlayManager = None) -> bool:
         """
         Focus on elements based on natural language intent using AI-first approach.

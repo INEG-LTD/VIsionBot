@@ -4,23 +4,19 @@ Vision Bot - Clean modular version.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import time
 import traceback
 import uuid
-import re
 from typing import Any, Optional, List, Dict, Tuple, Union, Type
 
 from playwright.sync_api import Browser, Page, Playwright
 
-from goals.base import GoalResult
 from models import VisionPlan, PageElements
-from models.core_models import ActionStep, ActionType
+from models.core_models import ActionStep, ActionType, PageInfo
 from element_detection import ElementDetector
 from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
-from models.core_models import PageInfo
 from utils import PageUtils
 from action_queue import ActionQueue, QueuedAction
 from goals import (
@@ -37,31 +33,23 @@ from goals import (
     ForGoal,
     PressGoal,
     ScrollGoal,
-    Condition,
     BaseGoal,
     BackGoal,
     ForwardGoal,
     DeferGoal,
-    ExtractGoal,
 )
 from goals.defer_goal import TimedSleepGoal
 # from goals.condition_engine import create_predicate_condition as create_predicate
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
-    parse_while_statement,
     extract_click_target,
     extract_press_target,
-    extract_navigation_intent,
     parse_structured_if,
     parse_structured_while,
     parse_structured_for,
     parse_keyword_command,
     parse_focus_command,
     parse_undo_command,
-)
-from goals.history_utils import (
-    resolve_back_target,
-    resolve_forward_target,
 )
 from focus_manager import FocusManager
 from interaction_deduper import InteractionDeduper
@@ -187,10 +175,21 @@ class BrowserVisionBot:
     
     def start(self) -> None:
         """Start the bot"""
-        playwright, browser, page = self.init_browser()
-        self.playwright = playwright
-        self.browser = browser
-        self.page = page
+        # If page was already provided, use it instead of initializing new browser
+        if self.page is None:
+            playwright, browser, page = self.init_browser()
+            self.playwright = playwright
+            self.browser = browser
+            self.page = page
+        else:
+            # Page was provided, get browser and context from it
+            try:
+                self.browser = self.page.context.browser
+                # Note: playwright instance not available when page is provided externally
+                # This is fine for most use cases
+            except Exception:
+                pass
+        
         # Keep Playwright waits snappy while avoiding long stalls
         try:
             self.page.set_default_timeout(2000)
@@ -210,11 +209,32 @@ class BrowserVisionBot:
         self._cached_focus_context = None
         self._pre_dedup_element_data = []
         
+        # Use self.page (which may have been provided or just initialized)
+        page = self.page
+        
         # Initialize components
         self.goal_monitor: GoalMonitor = GoalMonitor(page)
         # Set bot reference in goal monitor for goals that need it
         self.goal_monitor.bot_reference = self
         self.overlay_manager = OverlayManager(page)
+        
+        # Initialize tab management (Phase 1)
+        try:
+            from tab_management import TabManager
+            if page and hasattr(page, 'context'):
+                self.tab_manager: Optional[TabManager] = TabManager(page.context)
+                # Register the initial page
+                self.tab_manager.register_tab(
+                    page=page,
+                    purpose="main",
+                    agent_id=None,
+                    metadata={"initial": True}
+                )
+            else:
+                self.tab_manager: Optional[TabManager] = None
+        except Exception as e:
+            print(f"⚠️ Failed to initialize TabManager: {e}")
+            self.tab_manager: Optional[TabManager] = None
         self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
         
@@ -337,6 +357,13 @@ class BrowserVisionBot:
                 except Exception:
                     pass
                 print("🆕 New page/tab detected by context listener → switching…")
+                
+                # If TabManager is available, detect and register the new tab
+                if self.tab_manager:
+                    tab_id = self.tab_manager.detect_new_tab(new_page)
+                    if tab_id:
+                        print(f"📑 New tab registered: {tab_id}")
+                
                 self.switch_to_page(new_page)
             except Exception as e:
                 print(f"⚠️ Error handling new page event: {e}")
@@ -357,8 +384,33 @@ class BrowserVisionBot:
             except Exception:
                 pass
 
+            # Update TabManager if available
+            if self.tab_manager:
+                # Find tab ID for this page
+                tab_id = None
+                for tid, tab_info in self.tab_manager.tabs.items():
+                    if id(tab_info.page) == id(new_page):
+                        tab_id = tid
+                        break
+                
+                # If not found, detect and register
+                if tab_id is None:
+                    tab_id = self.tab_manager.detect_new_tab(new_page)
+                
+                # Switch to this tab in TabManager
+                if tab_id:
+                    self.tab_manager.switch_to_tab(tab_id)
+
             self.page = new_page
             # Update core components
+            try:
+                if self.page_utils:
+                    if hasattr(self.page_utils, "set_page"):
+                        self.page_utils.set_page(new_page)
+                    else:
+                        self.page_utils.page = new_page
+            except Exception:
+                pass
             try:
                 if self.goal_monitor:
                     self.goal_monitor.switch_to_page(new_page)
@@ -370,13 +422,25 @@ class BrowserVisionBot:
             except Exception:
                 pass
             try:
-                if self.page_utils:
-                    self.page_utils.page = new_page
+                if hasattr(self, "focus_manager") and self.focus_manager:
+                    if hasattr(self.focus_manager, "set_page"):
+                        self.focus_manager.set_page(new_page)
+                    else:
+                        self.focus_manager.page = new_page
             except Exception:
                 pass
+            # Always refresh overlay manager for the new page context
             try:
-                if self.overlay_manager:
-                    self.overlay_manager.page = new_page
+                self.overlay_manager = OverlayManager(new_page)
+            except Exception:
+                pass
+
+            # Clear cached overlay/screenshot data tied to previous page
+            try:
+                self._cached_screenshot_with_overlays = None
+                self._cached_overlay_data = None
+                self._cached_dom_signature = None
+                self.last_dom_signature = None
             except Exception:
                 pass
 
@@ -972,7 +1036,9 @@ class BrowserVisionBot:
                     # Lower quality for model-bound screenshot to reduce payload
                     screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
 
-                if goal.needs_plan:
+                if isinstance(goal, NavigationGoal):
+                    plan = self._build_navigation_plan(goal)
+                elif goal.needs_plan:
                 # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
                     plan = self._generate_plan(
                         goal_description,
@@ -1203,8 +1269,7 @@ class BrowserVisionBot:
             - If output_format="json": Dict[str, Any]
             - If output_format="structured" and model_schema provided: model instance
         """
-        from typing import get_type_hints
-        from ai_utils import generate_text, generate_model, answer_question_with_vision
+        from ai_utils import generate_text, generate_model
         
         self._check_termination()
         
@@ -1673,6 +1738,21 @@ Please extract the requested information accurately.
             "entries": history,
             "reason": reason,
         }
+
+    def _build_navigation_plan(self, goal: NavigationGoal) -> Optional[VisionPlan]:
+        """Construct a single-step plan that opens the requested URL."""
+        url = (goal.navigation_intent or "").strip()
+        if not url:
+            print("❌ Navigation goal missing URL; cannot create OPEN plan")
+            return None
+
+        print(f"[PlanGen] Building OPEN plan for navigation goal: {url}")
+        return VisionPlan(
+            detected_elements=PageElements(elements=[]),
+            action_steps=[ActionStep(action=ActionType.OPEN, url=url)],
+            reasoning=f"Open the URL '{url}' in the current tab.",
+            confidence=1.0,
+        )
 
     def _generate_plan(
         self,

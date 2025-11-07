@@ -17,6 +17,15 @@ class UploadHandler:
         self.page = page
         self.selector_utils = SelectorUtils(page)
     
+    def set_page(self, page: Page) -> None:
+        if not page or page is self.page:
+            return
+        self.page = page
+        if hasattr(self.selector_utils, "set_page"):
+            self.selector_utils.set_page(page)
+        else:
+            self.selector_utils.page = page
+
     def handle_upload_field(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> None:
         """Execute a specialized upload field interaction"""
         print("  Handling upload field")

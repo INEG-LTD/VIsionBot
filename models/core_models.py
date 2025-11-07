@@ -22,6 +22,7 @@ class ActionType(str, Enum):
     HANDLE_DATETIME = "handle_datetime"
     BACK = "back"
     FORWARD = "forward"
+    OPEN = "open"
 
 
 class PageSection(str, Enum):
@@ -65,6 +66,7 @@ class ActionStep(BaseModel):
     select_option_text: Optional[str] = Field(default=None, description="Text of option to select (for HANDLE_SELECT)")
     datetime_value: Optional[str] = Field(default=None, description="Date/time value to set (for HANDLE_DATETIME)")
     upload_file_path: Optional[str] = Field(default=None, description="File path to upload (for HANDLE_UPLOAD)")
+    url: Optional[str] = Field(default=None, description="URL to open (for OPEN action)")
 
 
 class VisionPlan(BaseModel):

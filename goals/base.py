@@ -134,6 +134,7 @@ class Interaction:
     scroll_axis: Optional[str] = None
     target_x: Optional[int] = None
     target_y: Optional[int] = None
+    navigation_url: Optional[str] = None
     before_state: Optional[BrowserState] = None
     after_state: Optional[BrowserState] = None
     success: bool = True

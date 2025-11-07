@@ -15,6 +15,13 @@ class ElementAnalyzer:
         self.page = page
         self._description_cache = {}  # Cache for AI-generated descriptions
     
+    def set_page(self, page: Page) -> None:
+        """Update the underlying Playwright page reference."""
+        if not page or page is self.page:
+            return
+        self.page = page
+        self._description_cache.clear()
+    
     def analyze_element_at_coordinates(self, x: int, y: int) -> dict:
         """
         Returns:

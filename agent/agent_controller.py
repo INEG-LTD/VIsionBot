@@ -12,10 +12,15 @@ import time
 from typing import Optional, List, Dict, Any
 import re
 import hashlib
+from urllib.parse import urlparse
 
 from goals.base import BrowserState, GoalResult, GoalStatus
 from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
 from agent.reactive_goal_determiner import ReactiveGoalDeterminer
+from agent.agent_context import AgentContext
+from agent.sub_agent_controller import SubAgentController
+from agent.sub_agent_result import SubAgentResult
+from tab_management import TabDecisionEngine, TabAction
 
 
 class AgentController:
@@ -53,22 +58,73 @@ class AgentController:
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
         self.extracted_data: Dict[str, Any] = {}  # Store extracted data (key: extraction prompt, value: result)
+        self.sub_agent_results: List[SubAgentResult] = []  # Store completed sub-agent results
+        self.orchestration_events: List[Dict[str, Any]] = []  # Track orchestration events for reporting
+        
+        # Initialize TabDecisionEngine if TabManager is available
+        self.tab_decision_engine: Optional[TabDecisionEngine] = None
+        if hasattr(bot, 'tab_manager') and bot.tab_manager:
+            try:
+                self.tab_decision_engine = TabDecisionEngine(bot.tab_manager)
+            except Exception as e:
+                print(f"⚠️ Failed to initialize TabDecisionEngine: {e}")
+                self.tab_decision_engine = None
+        
+        # Phase 3: Sub-agent support
+        self.agent_context: Optional[AgentContext] = None
+        self.sub_agent_controller: Optional[SubAgentController] = None
     
-    def run_agentic_mode(self, user_prompt: str) -> GoalResult:
+    def run_agentic_mode(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> GoalResult:
         """
         Run basic agentic mode.
         
         Args:
             user_prompt: User's high-level request
+            agent_context: Optional agent context (for sub-agents)
             
         Returns:
             GoalResult indicating success or failure
         """
-        print(f"🤖 Starting agentic mode (Step 2): {user_prompt}")
+        # Reset per-run state
+        self.sub_agent_results = []
+        self.orchestration_events = []
+        
+        # Phase 3: Set agent context
+        if agent_context:
+            self.agent_context = agent_context
+            # Initialize sub-agent controller if this is main agent
+            if agent_context.parent_agent_id is None:
+                if not self.sub_agent_controller:
+                    self.sub_agent_controller = SubAgentController(self.bot, agent_context)
+        else:
+            # Create main agent context if not provided
+            if self.bot.tab_manager:
+                current_tab = self.bot.tab_manager.get_active_tab()
+                if current_tab:
+                    self.agent_context = AgentContext.create_main_agent(
+                        tab_id=current_tab.tab_id,
+                        instruction=user_prompt
+                    )
+                    if not self.sub_agent_controller:
+                        self.sub_agent_controller = SubAgentController(self.bot, self.agent_context)
+        
+        agent_type = "Sub-agent" if (self.agent_context and self.agent_context.parent_agent_id) else "Main agent"
+        print(f"🤖 Starting agentic mode ({agent_type}): {user_prompt}")
         print(f"   Max iterations: {self.max_iterations}")
+
+        self._log_event(
+            "agent_start",
+            agent_type=agent_type,
+            prompt=user_prompt,
+            tab_id=self.agent_context.tab_id if self.agent_context else None,
+        )
         
         # Initialize task tracking
-        self.task_start_url = self.bot.page.url
+        # Ensure we're using the current page (may have been switched)
+        try:
+            self.task_start_url = self.bot.page.url
+        except Exception:
+            self.task_start_url = "unknown"
         self.task_start_time = time.time()
         
         # Set base knowledge on goal monitor for goal evaluation
@@ -80,18 +136,22 @@ class AgentController:
         
         if not self.bot.started:
             print("❌ Bot not started. Call bot.start() first.")
+            self._log_event("agent_complete", status="failed", reason="bot_not_started")
             return GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
-                reasoning="Bot not started"
+                reasoning="Bot not started",
+                evidence=self._build_evidence()
             )
         
         if self.bot.page.url.startswith("about:blank"):
             print("❌ Page is on initial blank page.")
+            self._log_event("agent_complete", status="failed", reason="blank_page")
             return GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
-                reasoning="Page is blank"
+                reasoning="Page is blank",
+                evidence=self._build_evidence()
             )
         
         # Main reactive loop
@@ -99,6 +159,11 @@ class AgentController:
             print(f"\n{'='*60}")
             print(f"🔄 Iteration {iteration + 1}/{self.max_iterations}")
             print(f"{'='*60}")
+            
+            self._log_event("iteration_start", iteration=iteration + 1)
+
+            # Drain any completed sub-agent results before continuing
+            self._drain_sub_agent_results()
             
             # 1. Observe: Capture browser state (start with viewport)
             snapshot = self._capture_snapshot(full_page=False)
@@ -115,7 +180,8 @@ class AgentController:
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 visible_text=snapshot.visible_text,
-                url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else []
+                url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
+                url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
             )
             
             is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
@@ -128,7 +194,7 @@ class AgentController:
                 print(f"   Confidence: {evaluation.confidence:.2f}")
                 if evaluation.evidence:
                     print(f"   Evidence: {evaluation.evidence}")
-                evidence_dict = {}
+                evidence_dict: Dict[str, Any] = {}
                 if evaluation.evidence:
                     try:
                         import json
@@ -136,8 +202,13 @@ class AgentController:
                     except Exception:
                         evidence_dict = {"evidence": evaluation.evidence}
                 
-                # Include extracted data in evidence
-                evidence_dict["extracted_data"] = self.extracted_data
+                evidence_dict = self._build_evidence(evidence_dict)
+                self._log_event(
+                    "agent_complete",
+                    status="achieved",
+                    confidence=evaluation.confidence,
+                    reasoning=completion_reasoning,
+                )
                 return GoalResult(
                     status=GoalStatus.ACHIEVED,
                     confidence=evaluation.confidence,
@@ -146,6 +217,34 @@ class AgentController:
                 )
             else:
                 print(f"🔄 Task not complete: {completion_reasoning}")
+            
+            # 2.5. Check tab management decisions (Phase 2)
+            if self.tab_decision_engine and self.bot.tab_manager:
+                current_tab = self.bot.tab_manager.get_active_tab()
+                if current_tab:
+                    try:
+                        # Make tab decision
+                        tab_decision = self.tab_decision_engine.make_decision(
+                            current_tab_id=current_tab.tab_id,
+                            user_prompt=user_prompt,
+                            current_action=None,  # Will be determined next
+                            task_context={
+                                "iteration": iteration + 1,
+                                "max_iterations": self.max_iterations,
+                                "completion_reasoning": completion_reasoning
+                            }
+                        )
+                        
+                        # Execute decision if needed
+                        if tab_decision.should_take_action:
+                            executed = self._execute_tab_decision(tab_decision)
+                            if executed:
+                                # Tab switch/close happened, continue to next iteration
+                                print(f"🔄 Tab action executed, continuing to next iteration...")
+                                time.sleep(self.iteration_delay)
+                                continue
+                    except Exception as e:
+                        print(f"⚠️ Error in tab decision making: {e}")
             
             # 3. Determine next action - this will tell us if exploration is needed
             # Create reactive goal determiner (Step 2: determines next action from viewport)
@@ -195,7 +294,8 @@ class AgentController:
                     current_url=snapshot.url,
                     page_title=snapshot.title,
                     visible_text=snapshot.visible_text,
-                    url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else []
+                    url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
+                    url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
                 )
                 
                 # Retry logic for exploration mode
@@ -249,11 +349,17 @@ class AgentController:
             if not current_action:
                 print("⚠️ Cannot determine next action")
                 if iteration == self.max_iterations - 1:
+                    self._log_event(
+                        "agent_complete",
+                        status="failed",
+                        reason="no_action",
+                        iterations=iteration + 1,
+                    )
                     return GoalResult(
                         status=GoalStatus.FAILED,
                         confidence=0.5,
                         reasoning="Could not determine next action",
-                        evidence={"iterations": iteration + 1}
+                        evidence=self._build_evidence({"iterations": iteration + 1})
                     )
                 time.sleep(self.iteration_delay)
                 continue
@@ -363,6 +469,12 @@ class AgentController:
                 
                 if success:
                     print(f"✅ Action completed: {current_action}")
+                    self._log_event(
+                        "action_completed",
+                        action=current_action,
+                        success=True,
+                        url_after=state_after["url"],
+                    )
                     # Check if overall task is now complete (using LLM evaluation)
                     snapshot_after = self._capture_snapshot()
                     env_state_after = EnvironmentState(
@@ -374,7 +486,8 @@ class AgentController:
                         current_url=snapshot_after.url,
                         page_title=snapshot_after.title,
                         visible_text=snapshot_after.visible_text,
-                        url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else []
+                        url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
+                        url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
                     )
                     is_complete, completion_reasoning, eval_after = completion_contract.evaluate(
                         env_state_after,
@@ -382,7 +495,7 @@ class AgentController:
                     )
                     if is_complete:
                         # Convert evidence string to dict if needed
-                        evidence_dict = {}
+                        evidence_dict: Dict[str, Any] = {}
                         if eval_after.evidence:
                             try:
                                 import json
@@ -390,8 +503,13 @@ class AgentController:
                             except (json.JSONDecodeError, TypeError, ValueError):
                                 evidence_dict = {"evidence": eval_after.evidence}
                         
-                        # Include extracted data in evidence
-                        evidence_dict["extracted_data"] = self.extracted_data
+                        evidence_dict = self._build_evidence(evidence_dict)
+                        self._log_event(
+                            "agent_complete",
+                            status="achieved",
+                            confidence=eval_after.confidence,
+                            reasoning=completion_reasoning,
+                        )
                         return GoalResult(
                             status=GoalStatus.ACHIEVED,
                             confidence=eval_after.confidence,
@@ -400,6 +518,12 @@ class AgentController:
                         )
                 else:
                     print(f"⚠️ Action failed: {current_action}")
+                    self._log_event(
+                        "action_completed",
+                        action=current_action,
+                        success=False,
+                        url_after=state_after["url"],
+                    )
                     # Continue to next iteration (will try again with fresh state)
                     
             except Exception as e:
@@ -410,16 +534,21 @@ class AgentController:
             # Small delay between iterations
             time.sleep(self.iteration_delay)
         
+        # Drain any remaining sub-agent results before reporting failure
+        self._drain_sub_agent_results()
+        self._log_event(
+            "agent_complete",
+            status="failed",
+            reason="max_iterations",
+            iterations=self.max_iterations,
+        )
         # Max iterations reached
         print(f"❌ Max iterations ({self.max_iterations}) reached")
         return GoalResult(
             status=GoalStatus.FAILED,
             confidence=0.5,
             reasoning=f"Max iterations ({self.max_iterations}) reached without completion",
-            evidence={
-                "max_iterations": self.max_iterations,
-                "extracted_data": self.extracted_data  # Include extracted data even on failure
-            }
+            evidence=self._build_evidence({"max_iterations": self.max_iterations})
         )
     
     def _capture_snapshot(self, full_page: bool = False) -> BrowserState:
@@ -481,42 +610,76 @@ class AgentController:
         # Fallback: use prompt directly (Step 2 still basic for goal determination)
         return user_prompt
     
+    def _url_matches_target(self, url: Optional[str], target: str) -> bool:
+        if not url or not target:
+            return False
+        url_lower = url.lower()
+        target_lower = target.lower().strip()
+        if not target_lower:
+            return False
+
+        if target_lower in url_lower:
+            return True
+
+        try:
+            parsed = urlparse(url_lower)
+            domain = parsed.netloc
+            if domain and target_lower in domain:
+                return True
+            path = parsed.path
+            if path and target_lower in path:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    def _history_steps_to_target(self, history: List[str], pointer: int, target: str, direction: str) -> Optional[int]:
+        if not history:
+            return None
+
+        if direction == "back":
+            indices = range(pointer - 1, -1, -1)
+        else:
+            indices = range(pointer + 1, len(history))
+
+        steps = 0
+        for idx in indices:
+            steps += 1
+            if self._url_matches_target(history[idx], target):
+                return steps
+        return None
+
     def _filter_navigation_commands(self, action_command: str) -> str:
         """
-        Filter out navigate: commands and convert them to click commands.
-        
-        Navigation goals are disabled in agentic mode. Instead, the agent should
-        click on links/buttons to navigate, not use navigate: commands.
+        Filter navigate commands so they are only used when no simpler navigation path exists.
         
         Args:
             action_command: The action command to filter
             
         Returns:
-            Filtered action command (navigate: commands converted to click: or removed)
+            Potentially transformed action command
         """
-        # Check if action is a navigate command
         if action_command.lower().startswith("navigate:"):
-            # Extract the target URL or site name
             target = action_command.split(":", 1)[1].strip() if ":" in action_command else ""
-            
-            # Convert to click command
-            # If it's a URL, extract the domain name or site name
-            if target.startswith("http://") or target.startswith("https://"):
-                # Extract domain or site name from URL
-                from urllib.parse import urlparse
-                try:
-                    parsed = urlparse(target)
-                    site_name = parsed.netloc.replace("www.", "").split(".")[0]
-                    new_action = f"click: {site_name} link"
-                except (ValueError, AttributeError, IndexError):
-                    new_action = f"click: link to {target}"
-            else:
-                # Use the target as-is (e.g., "navigate: hackernews" -> "click: hackernews link")
-                new_action = f"click: {target} link"
-            
-            print(f"⚠️ Navigation command detected: {action_command}")
-            print(f"   Converted to: {new_action} (navigation goals disabled in agentic mode)")
-            return new_action
+            history = self.bot.goal_monitor.url_history if hasattr(self.bot, "goal_monitor") else []
+            pointer = getattr(self.bot.goal_monitor, "url_pointer", len(history) - 1) if hasattr(self.bot, "goal_monitor") else -1
+
+            if history and pointer is not None and pointer >= 0:
+                back_steps = self._history_steps_to_target(history, pointer, target, "back")
+                if back_steps:
+                    new_action = f"back: {back_steps}"
+                    print(f"ℹ️ Converted navigate command to back navigation: {new_action} (target: {target})")
+                    return new_action
+
+                forward_steps = self._history_steps_to_target(history, pointer, target, "forward")
+                if forward_steps:
+                    new_action = f"forward: {forward_steps}"
+                    print(f"ℹ️ Converted navigate command to forward navigation: {new_action} (target: {target})")
+                    return new_action
+
+            print(f"ℹ️ Navigation command preserved (no history shortcut available): {action_command}")
+            return action_command
         
         return action_command
     
@@ -547,7 +710,20 @@ class AgentController:
         
         # Only check if the action itself contains extraction keywords
         # Don't extract if the action is clearly something else (like "click", "type", "scroll")
-        action_type_keywords = ["click", "type", "press", "scroll", "select", "navigate", "upload"]
+        action_type_keywords = [
+            "click",
+            "type",
+            "press",
+            "scroll",
+            "select",
+            "navigate",
+            "upload",
+            "back",
+            "forward",
+            "form",
+            "defer",
+            "datetime"
+        ]
         
         # If action starts with a non-extraction action type, don't extract
         for action_type in action_type_keywords:
@@ -1002,6 +1178,74 @@ class AgentController:
                     "dom_signature": ""
                 }
     
+    def _drain_sub_agent_results(self) -> None:
+        """
+        Retrieve any newly completed sub-agent results and integrate them.
+        """
+        if not self.sub_agent_controller:
+            return
+        results = self.sub_agent_controller.pop_completed_results()
+        if not results:
+            return
+        
+        for result in results:
+            self.sub_agent_results.append(result)
+            status_icon = "✅" if result.success else "⚠️"
+            duration = max(0.0, result.completed_at - result.started_at)
+            print(f"{status_icon} Sub-agent [{result.agent_id}] ({result.instruction}) -> {result.status} "
+                  f"(confidence={result.confidence:.2f}, duration={duration:.2f}s)")
+            
+            # Merge extracted data into main agent store if provided
+            evidence = result.evidence or {}
+            extracted = evidence.get("extracted_data")
+            if isinstance(extracted, dict):
+                for key, value in extracted.items():
+                    if key not in self.extracted_data:
+                        self.extracted_data[key] = value
+            self._log_event(
+                "sub_agent_result_recorded",
+                agent_id=result.agent_id,
+                success=result.success,
+                status=result.status,
+            )
+
+    def _build_evidence(self, base: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Construct evidence dictionaries including extracted data and sub-agent results.
+        """
+        evidence: Dict[str, Any] = {}
+        if base:
+            evidence.update(base)
+        if self.extracted_data and "extracted_data" not in evidence:
+            evidence["extracted_data"] = self.extracted_data.copy()
+        if self.sub_agent_results:
+            evidence["sub_agents"] = [result.to_dict() for result in self.sub_agent_results]
+        orchestration = {
+            "events": list(self.orchestration_events),
+            "tabs": self._build_tab_summary(),
+        }
+        # Only include sub-agent summaries if not already present
+        if self.sub_agent_results:
+            orchestration["sub_agents"] = [result.to_dict() for result in self.sub_agent_results]
+        evidence["orchestration"] = orchestration
+        return evidence
+
+    def _build_tab_summary(self) -> List[Dict[str, Any]]:
+        tab_manager = getattr(self.bot, "tab_manager", None)
+        if not tab_manager:
+            return []
+        try:
+            tabs = tab_manager.list_tabs()
+        except Exception:
+            return []
+        summary = []
+        for tab in tabs:
+            if hasattr(tab, "to_dict"):
+                summary.append(tab.to_dict())
+            else:
+                summary.append({"tab_id": getattr(tab, "tab_id", None)})
+        return summary
+
     def _page_state_changed(self, state_before: dict, state_after: dict) -> bool:
         """
         Check if page state changed after an action.
@@ -1022,4 +1266,182 @@ class AgentController:
             return True
         
         return False
+    
+    def _execute_tab_decision(self, decision) -> bool:
+        """
+        Execute a tab management decision.
+        
+        Args:
+            decision: TabDecision object with action to take
+        
+        Returns:
+            True if action was executed, False otherwise
+        """
+        if not self.bot.tab_manager:
+            return False
+        
+        try:
+            if decision.action == TabAction.SWITCH:
+                if not decision.target_tab_id:
+                    print(f"⚠️ Tab decision: SWITCH but no target_tab_id provided")
+                    return False
+                
+                target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
+                if not target_tab:
+                    print(f"⚠️ Tab decision: SWITCH to {decision.target_tab_id} but tab not found")
+                    return False
+                
+                print(f"🔀 Tab Decision: Switching to tab {decision.target_tab_id} ({target_tab.purpose})")
+                print(f"   Reasoning: {decision.reasoning}")
+                print(f"   Confidence: {decision.confidence:.2f}")
+                
+                # Switch tab
+                if self.bot.tab_manager.switch_to_tab(decision.target_tab_id):
+                    # Switch bot to the new page
+                    self.bot.switch_to_page(target_tab.page)
+                    return True
+                else:
+                    print(f"⚠️ Failed to switch to tab {decision.target_tab_id}")
+                    return False
+            
+            elif decision.action == TabAction.CLOSE:
+                if not decision.target_tab_id:
+                    print(f"⚠️ Tab decision: CLOSE but no target_tab_id provided")
+                    return False
+                
+                target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
+                if not target_tab:
+                    print(f"⚠️ Tab decision: CLOSE {decision.target_tab_id} but tab not found")
+                    return False
+                
+                print(f"🗑️ Tab Decision: Closing tab {decision.target_tab_id} ({target_tab.purpose})")
+                print(f"   Reasoning: {decision.reasoning}")
+                print(f"   Confidence: {decision.confidence:.2f}")
+                
+                # Find another tab to switch to if closing active tab
+                current_tab = self.bot.tab_manager.get_active_tab()
+                switch_to = None
+                if current_tab and current_tab.tab_id == decision.target_tab_id:
+                    # Closing active tab, find another
+                    other_tabs = [t for t in self.bot.tab_manager.list_tabs() if t.tab_id != decision.target_tab_id]
+                    if other_tabs:
+                        switch_to = other_tabs[0].tab_id
+                
+                # Close tab
+                if self.bot.tab_manager.close_tab(decision.target_tab_id, switch_to=switch_to):
+                    # If we switched to another tab, update bot
+                    if switch_to:
+                        new_tab = self.bot.tab_manager.get_tab_info(switch_to)
+                        if new_tab:
+                            self.bot.switch_to_page(new_tab.page)
+                    return True
+                else:
+                    print(f"⚠️ Failed to close tab {decision.target_tab_id}")
+                    return False
+            
+            elif decision.action == TabAction.CONTINUE:
+                # No action needed, just log
+                print(f"✅ Tab Decision: Continue on current tab")
+                print(f"   Reasoning: {decision.reasoning}")
+                return False  # Don't skip iteration, just continue normally
+            
+            elif decision.action == TabAction.SPAWN_SUB_AGENT:
+                # Phase 3: Spawn sub-agent for another tab
+                if not decision.target_tab_id:
+                    print(f"⚠️ Tab decision: SPAWN_SUB_AGENT but no target_tab_id provided")
+                    return False
+                
+                if not self.sub_agent_controller:
+                    print(f"⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
+                    return False
+                
+                target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
+                if not target_tab:
+                    print(f"⚠️ Tab decision: SPAWN_SUB_AGENT for {decision.target_tab_id} but tab not found")
+                    return False
+                
+                print(f"🤖 Tab Decision: Spawning sub-agent for tab {decision.target_tab_id} ({target_tab.purpose})")
+                print(f"   Reasoning: {decision.reasoning}")
+                print(f"   Confidence: {decision.confidence:.2f}")
+                
+                # Extract instruction from reasoning or use a default
+                # The LLM should provide instruction in metadata or we derive from reasoning
+                instruction = decision.reasoning  # Default: use reasoning as instruction
+                if decision.target_tab_id in self.bot.tab_manager.tabs:
+                    tab_metadata = self.bot.tab_manager.tabs[decision.target_tab_id].metadata
+                    if "sub_agent_instruction" in tab_metadata:
+                        instruction = tab_metadata["sub_agent_instruction"]
+                
+                # Spawn sub-agent
+                sub_agent_id = self.sub_agent_controller.spawn_sub_agent(
+                    tab_id=decision.target_tab_id,
+                    instruction=instruction,
+                    metadata={"spawned_by_decision": True, "reasoning": decision.reasoning}
+                )
+                
+                if sub_agent_id:
+                    print(f"   ✅ Sub-agent spawned: {sub_agent_id}")
+                    self._log_event(
+                        "sub_agent_spawned",
+                        agent_id=sub_agent_id,
+                        instruction=instruction,
+                        tab_id=decision.target_tab_id,
+                    )
+                    # Execute sub-agent immediately
+                    result = self.sub_agent_controller.execute_sub_agent(sub_agent_id)
+                    if result.get("success"):
+                        print(f"   ✅ Sub-agent completed successfully")
+                        self._log_event(
+                            "sub_agent_execution",
+                            agent_id=sub_agent_id,
+                            success=True,
+                            status=result.get("status"),
+                        )
+                    else:
+                        print(f"   ⚠️ Sub-agent failed: {result.get('error', 'Unknown error')}")
+                        self._log_event(
+                            "sub_agent_execution",
+                            agent_id=sub_agent_id,
+                            success=False,
+                            status=result.get("status"),
+                            error=result.get("error"),
+                        )
+                    
+                    # Pull results into controller state
+                    self._drain_sub_agent_results()
+                    
+                    # Switch back to main agent's tab
+                    if self.agent_context:
+                        main_tab = self.bot.tab_manager.get_tab_info(self.agent_context.tab_id)
+                        if main_tab:
+                            self.bot.tab_manager.switch_to_tab(self.agent_context.tab_id)
+                            self.bot.switch_to_page(main_tab.page)
+                    
+                    return True
+                else:
+                    print(f"   ⚠️ Failed to spawn sub-agent")
+                    return False
+            
+            else:
+                print(f"⚠️ Unknown tab action: {decision.action}")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Error executing tab decision: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def get_sub_agent_results(self) -> List[SubAgentResult]:
+        """Return completed sub-agent results for this controller run."""
+        return list(self.sub_agent_results)
+
+    def _log_event(self, event_type: str, **data: Any) -> None:
+        event = {
+            "type": event_type,
+            "timestamp": time.time(),
+        }
+        if data:
+            event.update(data)
+        self.orchestration_events.append(event)
 

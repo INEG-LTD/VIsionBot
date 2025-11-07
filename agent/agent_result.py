@@ -2,7 +2,7 @@
 Agent Result - Structured return type for agentic mode execution.
 """
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from goals.base import GoalResult, GoalStatus
 
@@ -21,11 +21,19 @@ class AgentResult:
     """
     success: bool
     extracted_data: Dict[str, Any] = field(default_factory=dict)
+    sub_agent_results: List[Dict[str, Any]] = field(default_factory=list)
+    orchestration: Dict[str, Any] = field(default_factory=dict)
     reasoning: str = ""
     confidence: float = 0.0
     goal_result: Optional[GoalResult] = None
     
-    def __init__(self, goal_result: GoalResult, extracted_data: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        goal_result: GoalResult,
+        extracted_data: Optional[Dict[str, Any]] = None,
+        sub_agent_results: Optional[List[Dict[str, Any]]] = None,
+        orchestration: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize AgentResult from GoalResult.
         
@@ -35,13 +43,21 @@ class AgentResult:
         """
         self.success = goal_result.status == GoalStatus.ACHIEVED
         self.extracted_data = extracted_data or {}
+        self.sub_agent_results = sub_agent_results or []
+        self.orchestration = orchestration or {}
         self.reasoning = goal_result.reasoning
         self.confidence = goal_result.confidence
         self.goal_result = goal_result
         
         # Also extract any extracted_data from goal_result evidence if present
-        if goal_result.evidence and "extracted_data" in goal_result.evidence:
-            self.extracted_data.update(goal_result.evidence["extracted_data"])
+        if goal_result.evidence:
+            evidence = goal_result.evidence
+            if "extracted_data" in evidence:
+                self.extracted_data.update(evidence["extracted_data"])
+            if "sub_agents" in evidence and not self.sub_agent_results:
+                self.sub_agent_results = evidence["sub_agents"]
+            if "orchestration" in evidence and not self.orchestration:
+                self.orchestration = evidence["orchestration"]
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get extracted data by key, with optional default"""

@@ -19,6 +19,15 @@ class DateTimeHandler:
         self.selector_utils = SelectorUtils(page)
         self.goal_monitor = goal_monitor
     
+    def set_page(self, page: Page) -> None:
+        if not page or page is self.page:
+            return
+        self.page = page
+        if hasattr(self.selector_utils, "set_page"):
+            self.selector_utils.set_page(page)
+        else:
+            self.selector_utils.page = page
+
     def handle_datetime_field(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> None:
         """Execute datetime field interaction using direct fill() with coordinates"""
         print("  Handling datetime field with direct fill()")

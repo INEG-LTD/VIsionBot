@@ -17,6 +17,14 @@ class PageUtils:
         self.last_scroll_y = None
         self.last_scroll_x = None
     
+    def set_page(self, page: Page) -> None:
+        """Update internal page reference."""
+        if not page or page is self.page:
+            return
+        self.page = page
+        self.last_scroll_y = None
+        self.last_scroll_x = None
+    
     def get_page_info(self) -> PageInfo:
         """Get current page information"""
         try:

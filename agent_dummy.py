@@ -2,15 +2,16 @@ from vision_bot import BrowserVisionBot
 
 bot = BrowserVisionBot()
 bot.start()
-bot.page.goto("https://finance.yahoo.com/quote/FIG/")
+bot.page.goto("https:/google.com/")
 
 # Run agentic mode - now returns AgentResult with extracted data
 # bot.act("defer")
 result = bot.agentic_mode(
-    "extract only the current and after market price of the stock",
+    "i need to write a report on elon musk in google docs and i want to use the information about him from wikipedia, his company spacex, and also how he is doing in the stock market",
     base_knowledge=[
         "just press enter after you've typed a search term into a search field",
-        "if asked to search use the best search box contextually available"
+        "if asked to search use the best search box contextually available",
+        "if you encounter a captcha, give control to the user"
     ]
 )
 

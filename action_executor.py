@@ -98,6 +98,42 @@ class ActionExecutor:
         # Post-action callback system
         self.post_action_callbacks: List[Callable[[PostActionContext], None]] = []
     
+    def set_page(self, page: Page) -> None:
+        """Update internal references when the active page changes."""
+        if not page or page is self.page:
+            return
+        self.page = page
+        if self.page_utils:
+            if hasattr(self.page_utils, "set_page"):
+                self.page_utils.set_page(page)
+            else:
+                self.page_utils.page = page
+        if self.datetime_handler:
+            if hasattr(self.datetime_handler, "set_page"):
+                self.datetime_handler.set_page(page)
+            else:
+                self.datetime_handler.page = page
+        if self.select_handler:
+            if hasattr(self.select_handler, "set_page"):
+                self.select_handler.set_page(page)
+            else:
+                self.select_handler.page = page
+        if self.upload_handler:
+            if hasattr(self.upload_handler, "set_page"):
+                self.upload_handler.set_page(page)
+            else:
+                self.upload_handler.page = page
+        if self.selector_utils:
+            if hasattr(self.selector_utils, "set_page"):
+                self.selector_utils.set_page(page)
+            else:
+                self.selector_utils.page = page
+        if self.context_guard:
+            self.context_guard.set_page(page, getattr(self.goal_monitor, "element_analyzer", None))
+        # Reset click tracking state for new page
+        self.last_click_selector = None
+        self.last_click_url = None
+        self.last_click_dom_signature = None
     def register_pre_action_callback(self, callback: Callable[[PreActionContext], None]) -> None:
         """
         Register a callback to run before every action.
@@ -351,7 +387,7 @@ class ActionExecutor:
                         target_description = self.goal_monitor.active_goal.target_description
                     
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                    self.goal_monitor.record_planned_interaction(
                         InteractionType.SELECT,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=target_description,
@@ -393,7 +429,7 @@ class ActionExecutor:
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                    self.goal_monitor.record_planned_interaction(
                         InteractionType.UPLOAD,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=step.upload_file_path,
@@ -423,7 +459,7 @@ class ActionExecutor:
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    pre_evaluations = self.goal_monitor.record_planned_interaction(
+                    self.goal_monitor.record_planned_interaction(
                         InteractionType.DATETIME,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=step.datetime_value or "date field",
@@ -459,6 +495,11 @@ class ActionExecutor:
                         },
                         text_input=step.datetime_value,
                         success=step_success,
+                    )
+                elif step.action == ActionType.OPEN:
+                    step_success = self._execute_open(
+                        step,
+                        confirm_before_interaction=confirm_before_interaction,
                     )
                 elif step.action == ActionType.BACK:
                     step_success = self._execute_back()
@@ -974,7 +1015,7 @@ class ActionExecutor:
         box = None
         
         # Record planned interaction with goal monitor and get pre-interaction evaluations
-        pre_evaluations = self.goal_monitor.record_planned_interaction(
+        self.goal_monitor.record_planned_interaction(
             InteractionType.TYPE,
             coordinates=(x, y) if x is not None and y is not None else None,
             target_description=step.text_to_type,
@@ -2020,3 +2061,81 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
             # We use fallback tracking with coordinates instead
             if step.overlay_index is not None:
                 print(f"ℹ️ Overlay index {step.overlay_index} not in detected_elements, using fallback tracking")
+
+    def _execute_open(
+        self,
+        step: ActionStep,
+        *,
+        confirm_before_interaction: bool = False,
+    ) -> bool:
+        """Open a URL directly in the current tab and record navigation."""
+        url = (step.url or "").strip()
+        if not url:
+            print("❌ OPEN action missing URL")
+            self.goal_monitor.record_interaction(
+                InteractionType.NAVIGATION,
+                navigation_url="",
+                success=False,
+                error_message="OPEN action missing URL",
+            )
+            return False
+
+        # Record planned interaction for goal evaluation
+        self.goal_monitor.record_planned_interaction(
+            InteractionType.NAVIGATION,
+            url=url,
+        )
+
+        retry_goal = self.goal_monitor.check_for_retry_request()
+        if retry_goal:
+            print("🔄 Goals have requested retry - aborting current plan execution")
+            print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+            return False
+
+        if confirm_before_interaction:
+            print("ℹ️ Confirmation requested for OPEN action, skipping visual confirmation (no overlay)")
+
+        success = True
+        error_message = None
+        try:
+            self.page.goto(url, wait_until="domcontentloaded")
+        except Exception as e:
+            success = False
+            error_message = str(e)
+            print(f"  ❌ Open navigation failed: {e}")
+
+        self.goal_monitor.record_interaction(
+            InteractionType.NAVIGATION,
+            target_element_info={"url": url},
+            navigation_url=url if success else None,
+            success=success,
+            error_message=error_message,
+        )
+
+        return success
+
+    def _execute_back(self) -> bool:
+        """Navigate back in browser history and record interaction."""
+        try:
+            prev_url = self.page.url
+        except Exception:
+            prev_url = ""
+        try:
+            self.page.go_back()
+            success = True
+            error_msg = None
+        except Exception as e:
+            success = False
+            error_msg = str(e)
+            print(f"  ❌ Back navigation failed: {e}")
+        # Record navigation interaction
+        try:
+            self.goal_monitor.record_interaction(
+                InteractionType.NAVIGATION,
+                target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
+                success=success,
+                error_message=error_msg,
+            )
+        except Exception:
+            pass
+        return success
