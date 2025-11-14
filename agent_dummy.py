@@ -7,7 +7,7 @@ bot = BrowserVisionBot(
     command_model_name="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
     reasoning_level=ReasoningLevel.LOW,
     overlay_only_planning=True,
-    fast_mode=True
+    fast_mode=True,
 )
 bot.start()
 bot.page.goto("https://google.com")

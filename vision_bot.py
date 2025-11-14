@@ -99,7 +99,18 @@ class BrowserVisionBot:
         plan_cache_enabled: bool = True,
         plan_cache_ttl: float = 6.0,
         plan_cache_max_reuse: int = 1,
+        parallel_completion_and_action: bool = True,
     ):
+        """
+        Initialize BrowserVisionBot.
+        
+        Args:
+            parallel_completion_and_action: If True, run completion check and next action determination in parallel
+                                            for faster feedback. Default: True.
+                                            Note: Set to False primarily for debugging purposes, as sequential execution
+                                            makes it easier to trace the execution flow and understand which LLM call
+                                            is running at any given time.
+        """
         self.page = page
 
         if command_model_name is None:
@@ -155,6 +166,9 @@ class BrowserVisionBot:
         if self.plan_cache_max_reuse < -1:
             self.plan_cache_max_reuse = -1
         self._plan_cache_entry: Optional[Dict[str, Any]] = None
+        
+        # Parallel execution of completion check and next action determination
+        self.parallel_completion_and_action = parallel_completion_and_action
         
         # Auto-run actions on page load (opt-in)
         self._auto_on_load_enabled: bool = False
@@ -1492,7 +1506,8 @@ class BrowserVisionBot:
                 self,
                 track_ineffective_actions=track_ineffective_actions,
                 base_knowledge=base_knowledge,
-                allow_partial_completion=allow_partial_completion
+                allow_partial_completion=allow_partial_completion,
+                parallel_completion_and_action=self.parallel_completion_and_action
             )
             controller.max_iterations = max_iterations
             

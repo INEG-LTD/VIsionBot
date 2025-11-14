@@ -321,26 +321,37 @@ class SubAgentController:
 
     def _create_agent_controller(self) -> "AgentController":
         base_knowledge = self._get_base_knowledge()
+        parallel_completion_and_action = getattr(self.main_bot, "parallel_completion_and_action", True)
         if self._controller_factory:
             try:
                 return self._controller_factory(
                     self.main_bot,
                     base_knowledge=base_knowledge,
                     track_ineffective_actions=self.track_ineffective_actions,
-                    allow_partial_completion=self.allow_partial_completion
+                    allow_partial_completion=self.allow_partial_completion,
+                    parallel_completion_and_action=parallel_completion_and_action
                 )
             except TypeError:
                 try:
-                    return self._controller_factory(self.main_bot, base_knowledge=base_knowledge)
+                    return self._controller_factory(
+                        self.main_bot,
+                        base_knowledge=base_knowledge,
+                        track_ineffective_actions=self.track_ineffective_actions,
+                        allow_partial_completion=self.allow_partial_completion
+                    )
                 except TypeError:
-                    return self._controller_factory(self.main_bot)
+                    try:
+                        return self._controller_factory(self.main_bot, base_knowledge=base_knowledge)
+                    except TypeError:
+                        return self._controller_factory(self.main_bot)
         # Import here to avoid circular import
         from .agent_controller import AgentController
         return AgentController(
             bot=self.main_bot,
             track_ineffective_actions=self.track_ineffective_actions,
             base_knowledge=base_knowledge,
-            allow_partial_completion=self.allow_partial_completion
+            allow_partial_completion=self.allow_partial_completion,
+            parallel_completion_and_action=parallel_completion_and_action
         )
 
     def _get_base_knowledge(self) -> Optional[List[str]]:

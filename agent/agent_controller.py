@@ -5,6 +5,7 @@ from enum import Enum
 import re
 import hashlib
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor
 
 from goals.base import BrowserState, GoalResult, GoalStatus
 from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
@@ -100,7 +101,8 @@ class AgentController:
         bot,
         track_ineffective_actions: bool = True,
         base_knowledge: Optional[List[str]] = None,
-        allow_partial_completion: bool = False
+        allow_partial_completion: bool = False,
+        parallel_completion_and_action: bool = True
     ):
         """
         Initialize agent controller.
@@ -111,6 +113,12 @@ class AgentController:
                                        Default: True (recommended for better performance)
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            Example: ["just press enter after you've typed a search term into a search field"]
+            allow_partial_completion: If True, allow partial completion of tasks.
+            parallel_completion_and_action: If True, run completion check and next action determination in parallel
+                                            for faster feedback. Default: True.
+                                            Note: Set to False primarily for debugging purposes, as sequential execution
+                                            makes it easier to trace the execution flow and understand which LLM call
+                                            is running at any given time.
         """
         self.bot = bot
         self.max_iterations = 50
@@ -146,6 +154,7 @@ class AgentController:
         self._queued_action_reason: Optional[str] = None
         self._task_tracker: Dict[str, Dict[str, Any]] = {}
         self.allow_partial_completion = allow_partial_completion
+        self.parallel_completion_and_action = parallel_completion_and_action
         self._user_inputs: List[Dict[str, Any]] = []
         self._requirement_flags: Dict[str, bool] = {}
         self._original_user_prompt: str = ""
@@ -309,7 +318,7 @@ class AgentController:
             print(f"📍 Current URL: {snapshot.url}")
             print(f"📄 Page title: {snapshot.title}")
             
-            # 2. LLM-based completion check
+            # 2. Prepare environment state for parallel LLM calls
             environment_state = EnvironmentState(
                 browser_state=snapshot,
                 interaction_history=self.bot.goal_monitor.interaction_history,
@@ -323,39 +332,186 @@ class AgentController:
                 url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
             )
             
-            is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
-                environment_state,
-                screenshot=snapshot.screenshot
+            # 2.1. Prepare goal determiner (needed for exploration mode fallback)
+            dynamic_prompt = self._build_current_task_prompt(user_prompt)
+            goal_determiner = ReactiveGoalDeterminer(
+                dynamic_prompt,
+                base_knowledge=self.base_knowledge,
+                model_name=self.agent_model_name,
+                reasoning_level=self.agent_reasoning_level,
             )
             
-            if is_complete:
-                print(f"✅ Task complete: {completion_reasoning}")
-                print(f"   Confidence: {evaluation.confidence:.2f}")
-                if evaluation.evidence:
-                    print(f"   Evidence: {evaluation.evidence}")
-                evidence_dict: Dict[str, Any] = {}
-                if evaluation.evidence:
-                    try:
-                        import json
-                        evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
-                    except Exception:
-                        evidence_dict = {"evidence": evaluation.evidence}
-                
-                evidence_dict = self._build_evidence(evidence_dict)
+            # 2.2. Check for queued action first (doesn't need LLM)
+            current_action: Optional[str] = None
+            needs_exploration = False
+            
+            if self._queued_action:
+                current_action = self._queued_action
+                print(f"🎯 Using queued action: {current_action}")
+                if self._queued_action_reason:
+                    print(f"   Reason: {self._queued_action_reason}")
                 self._log_event(
-                    "agent_complete",
-                    status="achieved",
-                    confidence=evaluation.confidence,
-                    reasoning=completion_reasoning,
+                    "queued_action_consumed",
+                    action=current_action,
+                    reason=self._queued_action_reason,
                 )
-                return GoalResult(
-                    status=GoalStatus.ACHIEVED,
-                    confidence=evaluation.confidence,
-                    reasoning=completion_reasoning,
-                    evidence=evidence_dict
-                )
+                self._queued_action = None
+                self._queued_action_reason = None
+            
+            # 2.3. Run completion check and next action determination
+            # (only if we don't have a queued action)
+            if current_action is None:
+                if self.parallel_completion_and_action:
+                    print("🔄 Running completion check and next action determination in parallel...")
+                    
+                    def run_completion_check():
+                        """Run completion evaluation"""
+                        return completion_contract.evaluate(
+                            environment_state,
+                            screenshot=snapshot.screenshot
+                        )
+                    
+                    def run_next_action_determination():
+                        """Run next action determination"""
+                        if self.track_ineffective_actions:
+                            if self.failed_actions:
+                                print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
+                            if self.ineffective_actions:
+                                print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                        return goal_determiner.determine_next_action(
+                            environment_state,
+                            screenshot=snapshot.screenshot,
+                            is_exploring=False,  # Start with viewport mode
+                            failed_actions=self.failed_actions if self.track_ineffective_actions else [],
+                            ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
+                        )
+                    
+                    # Execute both in parallel
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        completion_future = executor.submit(run_completion_check)
+                        next_action_future = executor.submit(run_next_action_determination)
+                        
+                        # Wait for completion check first (we need to know if we're done)
+                        is_complete, completion_reasoning, evaluation = completion_future.result()
+                        
+                        if is_complete:
+                            print(f"✅ Task complete: {completion_reasoning}")
+                            print(f"   Confidence: {evaluation.confidence:.2f}")
+                            if evaluation.evidence:
+                                print(f"   Evidence: {evaluation.evidence}")
+                            evidence_dict: Dict[str, Any] = {}
+                            if evaluation.evidence:
+                                try:
+                                    import json
+                                    evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
+                                except Exception:
+                                    evidence_dict = {"evidence": evaluation.evidence}
+                            
+                            evidence_dict = self._build_evidence(evidence_dict)
+                            self._log_event(
+                                "agent_complete",
+                                status="achieved",
+                                confidence=evaluation.confidence,
+                                reasoning=completion_reasoning,
+                            )
+                            # Next action result will be ignored (task is complete)
+                            return GoalResult(
+                                status=GoalStatus.ACHIEVED,
+                                confidence=evaluation.confidence,
+                                reasoning=completion_reasoning,
+                                evidence=evidence_dict
+                            )
+                        else:
+                            print(f"🔄 Task not complete: {completion_reasoning}")
+                            # Task not complete, so we need the next action - wait for it
+                            print("🔍 Determining next action based on current viewport...")
+                            current_action, needs_exploration = next_action_future.result()
+                else:
+                    # Sequential execution (parallel disabled)
+                    print("🔄 Running completion check...")
+                    is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
+                        environment_state,
+                        screenshot=snapshot.screenshot
+                    )
+                    
+                    if is_complete:
+                        print(f"✅ Task complete: {completion_reasoning}")
+                        print(f"   Confidence: {evaluation.confidence:.2f}")
+                        if evaluation.evidence:
+                            print(f"   Evidence: {evaluation.evidence}")
+                        evidence_dict: Dict[str, Any] = {}
+                        if evaluation.evidence:
+                            try:
+                                import json
+                                evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
+                            except Exception:
+                                evidence_dict = {"evidence": evaluation.evidence}
+                        
+                        evidence_dict = self._build_evidence(evidence_dict)
+                        self._log_event(
+                            "agent_complete",
+                            status="achieved",
+                            confidence=evaluation.confidence,
+                            reasoning=completion_reasoning,
+                        )
+                        return GoalResult(
+                            status=GoalStatus.ACHIEVED,
+                            confidence=evaluation.confidence,
+                            reasoning=completion_reasoning,
+                            evidence=evidence_dict
+                        )
+                    else:
+                        print(f"🔄 Task not complete: {completion_reasoning}")
+                        # Task not complete, determine next action
+                        print("🔍 Determining next action based on current viewport...")
+                        if self.track_ineffective_actions:
+                            if self.failed_actions:
+                                print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
+                            if self.ineffective_actions:
+                                print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                        current_action, needs_exploration = goal_determiner.determine_next_action(
+                            environment_state,
+                            screenshot=snapshot.screenshot,
+                            is_exploring=False,  # Start with viewport mode
+                            failed_actions=self.failed_actions if self.track_ineffective_actions else [],
+                            ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
+                        )
             else:
-                print(f"🔄 Task not complete: {completion_reasoning}")
+                # We have a queued action, so we still need to check completion
+                print("🔄 Running completion check (next action already queued)...")
+                is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
+                    environment_state,
+                    screenshot=snapshot.screenshot
+                )
+                
+                if is_complete:
+                    print(f"✅ Task complete: {completion_reasoning}")
+                    print(f"   Confidence: {evaluation.confidence:.2f}")
+                    if evaluation.evidence:
+                        print(f"   Evidence: {evaluation.evidence}")
+                    evidence_dict: Dict[str, Any] = {}
+                    if evaluation.evidence:
+                        try:
+                            import json
+                            evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
+                        except Exception:
+                            evidence_dict = {"evidence": evaluation.evidence}
+                    
+                    evidence_dict = self._build_evidence(evidence_dict)
+                    self._log_event(
+                        "agent_complete",
+                        status="achieved",
+                        confidence=evaluation.confidence,
+                        reasoning=completion_reasoning,
+                    )
+                    return GoalResult(
+                        status=GoalStatus.ACHIEVED,
+                        confidence=evaluation.confidence,
+                        reasoning=completion_reasoning,
+                        evidence=evidence_dict
+                    )
+                else:
+                    print(f"🔄 Task not complete: {completion_reasoning}")
             
             # Update adaptive sub-agent utilization policy based on latest context
             self._update_sub_agent_policy(
@@ -378,7 +534,7 @@ class AgentController:
                         tab_decision = self.tab_decision_engine.make_decision(
                             current_tab_id=current_tab.tab_id,
                             user_prompt=user_prompt,
-                            current_action=None,  # Will be determined next
+                            current_action=current_action,  # Now we have the action
                             task_context={
                                 "iteration": iteration + 1,
                                 "max_iterations": self.max_iterations,
@@ -403,47 +559,8 @@ class AgentController:
                     except Exception as e:
                         print(f"⚠️ Error in tab decision making: {e}")
             
-            # 3. Determine next action - this will tell us if exploration is needed
-            current_action: Optional[str] = None
-            needs_exploration = False
-
-            if self._queued_action:
-                current_action = self._queued_action
-                print(f"🎯 Using queued action: {current_action}")
-                if self._queued_action_reason:
-                    print(f"   Reason: {self._queued_action_reason}")
-                self._log_event(
-                    "queued_action_consumed",
-                    action=current_action,
-                    reason=self._queued_action_reason,
-                )
-                self._queued_action = None
-                self._queued_action_reason = None
-
-            if current_action is None:
-                # Create reactive goal determiner (Step 2: determines next action from viewport)
-                dynamic_prompt = self._build_current_task_prompt(user_prompt)
-                goal_determiner = ReactiveGoalDeterminer(
-                    dynamic_prompt,
-                    base_knowledge=self.base_knowledge,
-                    model_name=self.agent_model_name,
-                    reasoning_level=self.agent_reasoning_level,
-                )
-                
-                print("🔍 Determining next action based on current viewport...")
-                if self.track_ineffective_actions:
-                    if self.failed_actions:
-                        print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
-                    if self.ineffective_actions:
-                        print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
-                
-                current_action, needs_exploration = goal_determiner.determine_next_action(
-                    environment_state,
-                    screenshot=snapshot.screenshot,
-                    is_exploring=False,  # Start with viewport mode
-                    failed_actions=self.failed_actions if self.track_ineffective_actions else [],  # Pass failed actions only if tracking enabled
-                    ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []  # Pass ineffective actions only if tracking enabled
-                )
+            # 3. Process next action (if we got one from parallel execution)
+            if current_action is not None:
                 
                 # Safeguard: Filter out actions that exactly match failed or ineffective actions (only if tracking enabled)
                 if (
