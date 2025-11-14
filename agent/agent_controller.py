@@ -40,7 +40,6 @@ class _SubAgentPolicyYesNo(BaseModel):
     """Lightweight yes/no response for sub-agent policy decision"""
     model_config = ConfigDict(extra="forbid")
     needs_sub_agents: bool = Field(description="True if sub-agents should be used, False otherwise")
-    brief_reason: str = Field(description="One sentence explaining the decision")
 
 
 class _SubAgentPolicyResponse(BaseModel):
@@ -374,9 +373,10 @@ class AgentController:
             
             # 2.3. Run completion check and next action determination
             # (only if we don't have a queued action)
+            policy_updated_in_parallel = False
             if current_action is None:
                 if self.parallel_completion_and_action:
-                    print("🔄 Running completion check and next action determination in parallel...")
+                    print("🔄 Running completion check, next action determination, and subagent policy check in parallel...")
                     
                     def run_completion_check():
                         """Run completion evaluation"""
@@ -400,13 +400,29 @@ class AgentController:
                             ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
                         )
                     
-                    # Execute both in parallel
-                    with ThreadPoolExecutor(max_workers=2) as executor:
+                    def run_subagent_policy_check(completion_reasoning_ref):
+                        """Run subagent policy check (will use completion_reasoning after completion check finishes)"""
+                        # Wait for completion_reasoning to be available
+                        completion_reasoning = completion_reasoning_ref[0] if completion_reasoning_ref else None
+                        return self._compute_sub_agent_policy(
+                            user_prompt=user_prompt,
+                            completion_reasoning=completion_reasoning or ""
+                        )
+                    
+                    # Execute all three in parallel
+                    # Use a list to share completion_reasoning between threads
+                    completion_reasoning_ref = [None]
+                    
+                    with ThreadPoolExecutor(max_workers=3) as executor:
                         completion_future = executor.submit(run_completion_check)
                         next_action_future = executor.submit(run_next_action_determination)
                         
                         # Wait for completion check first (we need to know if we're done)
                         is_complete, completion_reasoning, evaluation = completion_future.result()
+                        completion_reasoning_ref[0] = completion_reasoning  # Share with subagent policy check
+                        
+                        # Start subagent policy check now that we have completion_reasoning
+                        subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
                         
                         if is_complete:
                             print(f"✅ Task complete: {completion_reasoning}")
@@ -431,6 +447,11 @@ class AgentController:
                             # End task timer and log summary
                             self.bot.execution_timer.end_task()
                             self.bot.execution_timer.log_summary()
+                            # Wait for subagent policy check to complete (for logging)
+                            try:
+                                subagent_policy_future.result(timeout=5)
+                            except Exception:
+                                pass  # Ignore timeout, task is complete anyway
                             # Next action result will be ignored (task is complete)
                             return GoalResult(
                                 status=GoalStatus.ACHIEVED,
@@ -443,6 +464,41 @@ class AgentController:
                             # Task not complete, so we need the next action - wait for it
                             print("🔍 Determining next action based on current viewport...")
                             current_action, needs_exploration = next_action_future.result()
+                            
+                            # Wait for subagent policy check and update policy
+                            try:
+                                new_level, new_score, new_rationale = subagent_policy_future.result()
+                                
+                                # Check for changes before updating
+                                level_changed = new_level != self.sub_agent_policy_level
+                                score_changed = abs(new_score - self._sub_agent_policy_score) >= 0.1
+                                rationale_changed = new_rationale != self.sub_agent_policy_rationale
+                                
+                                # Update policy
+                                self.sub_agent_policy_level = new_level
+                                self._sub_agent_policy_score = new_score
+                                self.sub_agent_policy_rationale = new_rationale
+                                
+                                if level_changed or score_changed or rationale_changed:
+                                    print(f"📊 Sub-agent utilization policy → {self._policy_display_name(new_level)} "
+                                          f"(score {new_score:.2f})")
+                                    print(f"   Reason: {new_rationale}")
+                                    self._log_event(
+                                        "sub_agent_policy_update",
+                                        policy=new_level.value,
+                                        score=new_score,
+                                        rationale=new_rationale,
+                                        override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None
+                                    )
+                                policy_updated_in_parallel = True
+                            except Exception as e:
+                                print(f"⚠️ Subagent policy check failed: {e}")
+                                # Fallback: update policy sequentially
+                                self._update_sub_agent_policy(
+                                    user_prompt=user_prompt,
+                                    completion_reasoning=completion_reasoning
+                                )
+                                policy_updated_in_parallel = True
                 else:
                     # Sequential execution (parallel disabled)
                     print("🔄 Running completion check...")
@@ -536,11 +592,14 @@ class AgentController:
                 else:
                     print(f"🔄 Task not complete: {completion_reasoning}")
             
-            # Update adaptive sub-agent utilization policy based on latest context
-            self._update_sub_agent_policy(
-                user_prompt=user_prompt,
-                completion_reasoning=completion_reasoning
-            )
+            # Update adaptive sub-agent utilization policy (only if not already done in parallel path)
+            # In parallel path, policy is updated after next_action_future.result()
+            # In sequential/queued paths, update it here
+            if not policy_updated_in_parallel:
+                self._update_sub_agent_policy(
+                    user_prompt=user_prompt,
+                    completion_reasoning=completion_reasoning
+                )
             
             if (
                 self.sub_agent_policy_level == SubAgentPolicyLevel.PARALLELIZED
@@ -2319,7 +2378,8 @@ class AgentController:
         """
         new_level, new_score, new_rationale = self._compute_sub_agent_policy(
             user_prompt=user_prompt,
-            completion_reasoning=completion_reasoning or ""
+            completion_reasoning=completion_reasoning or "",
+            suppress_quick_check_print=True  # Suppress quick check print, we'll print the full policy update instead
         )
         
         level_changed = new_level != self.sub_agent_policy_level
@@ -2345,10 +2405,15 @@ class AgentController:
     def _compute_sub_agent_policy(
         self,
         user_prompt: str,
-        completion_reasoning: str
+        completion_reasoning: str,
+        suppress_quick_check_print: bool = False
     ) -> Tuple[SubAgentPolicyLevel, float, str]:
         """
         Compute the appropriate sub-agent utilization policy score and level using an LLM.
+        
+        Args:
+            suppress_quick_check_print: If True, don't print the quick check message (used when
+                                       called from _update_sub_agent_policy to avoid duplicate prints)
         """
         if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
             print("📊 Sub-agent policy decision: controller or tab manager unavailable (forcing single-threaded).")
@@ -2372,19 +2437,19 @@ class AgentController:
             )
         
         # First, do a lightweight yes/no check
-        needs_sub_agents, brief_reason = self._query_sub_agent_policy_yes_no(
+        needs_sub_agents = self._query_sub_agent_policy_yes_no(
             user_prompt=user_prompt,
             completion_reasoning=completion_reasoning
         )
         
         # If no sub-agents needed, return immediately without detailed evaluation
         if not needs_sub_agents:
-            print("📊 Sub-agent policy (quick check) → Single Threaded")
-            print(f"   Reason: {brief_reason}")
+            if not suppress_quick_check_print:
+                print("📊 Sub-agent policy (quick check) → Single Threaded")
             return (
                 SubAgentPolicyLevel.SINGLE_THREADED,
                 0.0,
-                brief_reason
+                "Quick check: no sub-agents needed"
             )
         
         # Only do detailed evaluation if yes/no check says sub-agents are needed
@@ -2422,10 +2487,10 @@ class AgentController:
         self,
         user_prompt: str,
         completion_reasoning: str
-    ) -> Tuple[bool, str]:
+    ) -> bool:
         """
         Lightweight yes/no check to determine if sub-agents are needed.
-        Returns (needs_sub_agents, brief_reason) tuple.
+        Returns True if sub-agents are needed, False otherwise.
         """
         prompt = self._build_sub_agent_policy_yes_no_prompt(
             user_prompt=user_prompt,
@@ -2439,11 +2504,11 @@ class AgentController:
                 model=self.agent_model_name,
                 reasoning_level=ReasoningLevel.LOW,  # Use low reasoning for quick check
             )
-            return result.needs_sub_agents, result.brief_reason
+            return result.needs_sub_agents
         except Exception as e:
             print(f"⚠️ Failed to evaluate sub-agent policy yes/no check via LLM: {e}")
             # Fallback: assume no sub-agents needed (conservative)
-            return False, "Fallback: quick check failed, defaulting to single-threaded"
+            return False
     
     @staticmethod
     def _build_sub_agent_policy_yes_no_system_prompt() -> str:
@@ -2461,7 +2526,7 @@ Sub-agents are NOT needed when:
 - Task is straightforward (single form, single page interaction)
 - No indication of parallel research needs
 
-Respond with just needs_sub_agents (true/false) and a brief one-sentence reason."""
+Respond with just needs_sub_agents (true/false)."""
     
     def _build_sub_agent_policy_yes_no_prompt(
         self,
@@ -2491,7 +2556,7 @@ Answer NO if:
 - Main agent can handle it alone
 - No parallel research needs
 
-Respond with needs_sub_agents (true/false) and brief_reason (one sentence).
+Respond with needs_sub_agents (true/false).
 """
     
     def _query_sub_agent_policy_llm(
