@@ -19,7 +19,7 @@ from ai_utils import (
     get_default_agent_model,
     get_default_agent_reasoning_level,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 _REQUIREMENT_KEYWORD_MAP = {
     "lede": ["lede", "introduction", "intro", "opening paragraph"],
@@ -34,6 +34,13 @@ _REQUIREMENT_KEYWORD_MAP = {
     "sources": ["source", "citation", "url", "link", "reference", "section title"],
     "revision": ["revision", "last updated", "last-edited", "last edited", "edit history"],
 }
+
+class _SubAgentPolicyYesNo(BaseModel):
+    """Lightweight yes/no response for sub-agent policy decision"""
+    model_config = ConfigDict(extra="forbid")
+    needs_sub_agents: bool = Field(description="True if sub-agents should be used, False otherwise")
+    brief_reason: str = Field(description="One sentence explaining the decision")
+
 
 class _SubAgentPolicyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -2256,6 +2263,23 @@ class AgentController:
                 f"Override active: forced to {self._policy_display_name(level)}."
             )
         
+        # First, do a lightweight yes/no check
+        needs_sub_agents, brief_reason = self._query_sub_agent_policy_yes_no(
+            user_prompt=user_prompt,
+            completion_reasoning=completion_reasoning
+        )
+        
+        # If no sub-agents needed, return immediately without detailed evaluation
+        if not needs_sub_agents:
+            print(f"📊 Sub-agent policy (quick check) → Single Threaded")
+            print(f"   Reason: {brief_reason}")
+            return (
+                SubAgentPolicyLevel.SINGLE_THREADED,
+                0.0,
+                brief_reason
+            )
+        
+        # Only do detailed evaluation if yes/no check says sub-agents are needed
         policy_spec, score, rationale = self._query_sub_agent_policy_llm(
             user_prompt=user_prompt,
             completion_reasoning=completion_reasoning
@@ -2285,6 +2309,82 @@ class AgentController:
         print(f"   Reason: {rationale_text}")
         
         return policy_level, score_clamped, rationale_text
+    
+    def _query_sub_agent_policy_yes_no(
+        self,
+        user_prompt: str,
+        completion_reasoning: str
+    ) -> Tuple[bool, str]:
+        """
+        Lightweight yes/no check to determine if sub-agents are needed.
+        Returns (needs_sub_agents, brief_reason) tuple.
+        """
+        prompt = self._build_sub_agent_policy_yes_no_prompt(
+            user_prompt=user_prompt,
+            completion_reasoning=completion_reasoning
+        )
+        try:
+            result = generate_model(
+                prompt=prompt,
+                model_object_type=_SubAgentPolicyYesNo,
+                system_prompt=self._build_sub_agent_policy_yes_no_system_prompt(),
+                model=self.agent_model_name,
+                reasoning_level=ReasoningLevel.LOW,  # Use low reasoning for quick check
+            )
+            return result.needs_sub_agents, result.brief_reason
+        except Exception as e:
+            print(f"⚠️ Failed to evaluate sub-agent policy yes/no check via LLM: {e}")
+            # Fallback: assume no sub-agents needed (conservative)
+            return False, "Fallback: quick check failed, defaulting to single-threaded"
+    
+    @staticmethod
+    def _build_sub_agent_policy_yes_no_system_prompt() -> str:
+        return """You are making a quick yes/no decision: should sub-agents be used for this task?
+
+Sub-agents are useful when:
+- Task requires parallel research across multiple sources/websites
+- Task involves collecting data from multiple independent sources
+- Task would benefit from simultaneous work in separate tabs
+- User explicitly mentions multiple sources or parallel work
+
+Sub-agents are NOT needed when:
+- Task is a simple sequential navigation (visit one page)
+- Task can be completed by the main agent alone
+- Task is straightforward (single form, single page interaction)
+- No indication of parallel research needs
+
+Respond with just needs_sub_agents (true/false) and a brief one-sentence reason."""
+    
+    def _build_sub_agent_policy_yes_no_prompt(
+        self,
+        user_prompt: str,
+        completion_reasoning: str
+    ) -> str:
+        """Build a lightweight prompt for yes/no sub-agent decision"""
+        return f"""
+QUICK SUB-AGENT DECISION
+========================
+
+USER PROMPT:
+{user_prompt}
+
+COMPLETION REASONING:
+{completion_reasoning or "N/A"}
+
+QUESTION: Does this task need sub-agents (parallel work across multiple tabs/sources)?
+
+Answer YES only if:
+- Multiple independent sources need to be researched
+- Parallel data collection from different websites
+- Task explicitly benefits from simultaneous work
+
+Answer NO if:
+- Simple sequential task (one page, one form)
+- Main agent can handle it alone
+- No parallel research needs
+
+Respond with needs_sub_agents (true/false) and brief_reason (one sentence).
+"""
     
     def _query_sub_agent_policy_llm(
         self,

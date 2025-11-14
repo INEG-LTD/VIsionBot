@@ -3,8 +3,8 @@ from vision_bot import BrowserVisionBot
 
 bot = BrowserVisionBot(
     save_gif=True,
-    agent_model_name="gpt-5-mini",
-    # command_model_name="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+    agent_model_name="gemini/gemini-2.5-flash-lite",
+    command_model_name="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
     reasoning_level=ReasoningLevel.LOW,
     overlay_only_planning=True,
     fast_mode=True
