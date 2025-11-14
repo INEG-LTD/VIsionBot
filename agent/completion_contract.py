@@ -61,8 +61,9 @@ class CompletionContract:
     Step 2: Uses LLM to determine if the overall task is complete.
     """
     
-    def __init__(self, user_prompt: str):
+    def __init__(self, user_prompt: str, allow_partial_completion: bool = False):
         self.user_prompt = user_prompt
+        self.allow_partial_completion = allow_partial_completion
     
     def evaluate(
         self,
@@ -108,14 +109,19 @@ class CompletionContract:
                 is_complete=False,
                 confidence=0.0,
                 reasoning=f"Evaluation error: {str(e)}",
-                evidence={"error": str(e)},
+                evidence=str({"error": str(e)}),
                 remaining_steps=["Fix evaluation error"]
             )
             return False, fallback_eval.reasoning, fallback_eval
     
     def _build_system_prompt(self) -> str:
         """Build system prompt that guides the LLM on how to evaluate completion"""
-        return """
+        partial_guidance = ""
+        if self.allow_partial_completion:
+            partial_guidance = """
+- Partial completion is allowed for this evaluation. If the majority of the user's requested deliverables have been satisfied and missing items are minor or clearly unobtainable, you may mark the task complete but explicitly note any remaining gaps in the reasoning.
+"""
+        return f"""
 You are evaluating whether a web automation task has been successfully completed.
 
 Your task is to determine if the user's request has been fulfilled based on:
@@ -133,6 +139,7 @@ Evaluation Guidelines:
 - Look for explicit success indicators: confirmation messages, success pages, completion banners
 - Consider navigation patterns: unexpected navigation away from target may indicate failure
 - Be aware of intermediate states: don't mark complete during multi-step workflows unless truly finished
+{partial_guidance}
 
 Your evaluation should be:
 - Precise: Base conclusions on concrete evidence
@@ -161,6 +168,9 @@ Return your evaluation as structured JSON with:
             state.url_pointer
         )
         
+        partial_note = ""
+        if self.allow_partial_completion:
+            partial_note = "\nPARTIAL COMPLETION ENABLED: If substantial progress (e.g., most requested extractions or subtasks) is evident, you may mark the task complete while noting any remaining gaps.\n"
         prompt = f"""
 Evaluate if the following task has been completed:
 
@@ -190,6 +200,7 @@ TASK PROGRESS:
 - Started at time: {state.task_start_time}
 - Current time: {state.browser_state.timestamp}
 - Session duration: {state.browser_state.timestamp - state.task_start_time:.1f} seconds
+{partial_note}
 
 Based on this comprehensive state, determine:
 1. Has the user's request been fulfilled?

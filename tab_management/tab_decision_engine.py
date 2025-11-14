@@ -27,6 +27,8 @@ class TabDecision(BaseModel):
     """
     action: TabAction = Field(description="The action to take")
     target_tab_id: Optional[str] = Field(None, description="Target tab ID for switch/close actions")
+    target_purpose: Optional[str] = Field(None, description="Optional purpose/name for a new tab when spawning a sub-agent")
+    target_url: Optional[str] = Field(None, description="Optional URL for a new tab when spawning a sub-agent")
     reasoning: str = Field(description="Explanation of why this decision was made")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the decision (0.0 to 1.0)")
     should_take_action: bool = Field(True, description="Whether this decision should take action immediately (True) or just be informational (False)")
@@ -142,6 +144,12 @@ class TabDecisionEngine:
                     decision.action = TabAction.CONTINUE
                     decision.reasoning += f" (Target tab {decision.target_tab_id} not found, defaulting to continue)"
                     decision.confidence = 0.3
+            elif decision.action == TabAction.SPAWN_SUB_AGENT:
+                if decision.target_tab_id and decision.target_tab_id not in [t.tab_id for t in all_tabs]:
+                    decision.target_tab_id = None
+                if not decision.target_tab_id and not decision.target_purpose:
+                    # Provide fallback purpose to avoid ambiguity
+                    decision.target_purpose = "sub-agent task"
             
             return decision
             
@@ -177,10 +185,10 @@ Your role is to analyze the current context and decide the best tab management a
 - SWITCH: Switch to a different tab that is more relevant to the current task
 - CLOSE: Close a tab that is no longer needed or has completed its purpose
 - CONTINUE: Continue working on the current tab
-- SPAWN_SUB_AGENT: Spawn a sub-agent to work on another tab (Phase 3). Use this when:
-  * Work needs to happen on another tab while the main agent continues on current tab
-  * You need to gather information from another tab without leaving the current one
-  * Parallel work is needed (e.g., "research this candidate" - spawn sub-agent for LinkedIn while main agent continues)
+- SPAWN_SUB_AGENT: Spawn a sub-agent to work on a new or existing tab (Phase 3). Use this when:
+  * The current task would benefit from parallel progress (e.g., research, cross-referencing, data gathering).
+  * The main agent should stay focused while a helper investigates another lead.
+  * You should normally create a brand-new tab for the sub-agent. Only point to an existing tab if it is already dedicated to the sub-task.
 
 CRITICAL RULES:
 1. Only switch tabs if another tab is clearly more relevant to the current task
@@ -190,7 +198,14 @@ CRITICAL RULES:
 5. Be conservative - don't switch/close unnecessarily
 6. If switching/closing, you MUST provide a valid target_tab_id
 7. Confidence should reflect how certain you are about the decision
-8. Set should_take_action=True only if the action should happen immediately (for SWITCH/CLOSE), False for CONTINUE (informational only)"""
+8. Respect the provided sub-agent utilization policy:
+   - single_threaded → avoid SPAWN_SUB_AGENT unless the policy override explicitly allows it.
+   - parallelized → be proactive about SPAWN_SUB_AGENT for independent work streams.
+9. When recommending SPAWN_SUB_AGENT:
+   - Set target_tab_id to an existing tab only if it is already dedicated to the required sub-task.
+   - Otherwise leave target_tab_id empty and provide target_purpose (required) and optional target_url for the new tab.
+   - Use the reasoning field to summarize the sub-task and expected outcome for the sub-agent.
+10. Set should_take_action=True only if the action should happen immediately (for SWITCH/CLOSE), False for CONTINUE (informational only)"""
     
     def _build_decision_prompt(
         self,
@@ -222,8 +237,40 @@ CRITICAL RULES:
         if current_action:
             prompt_parts.append(f"CURRENT ACTION: {current_action}")
         
+        policy_level = None
+        policy_score = None
+        policy_reason = None
+        policy_override = None
+        policy_spawn_count = None
+        policy_iteration_spawns = None
+        
         if task_context:
-            prompt_parts.append(f"TASK CONTEXT: {task_context}")
+            prompt_parts.append("TASK CONTEXT:")
+            if isinstance(task_context, dict):
+                policy_level = task_context.get("sub_agent_policy")
+                policy_score = task_context.get("sub_agent_policy_score")
+                policy_reason = task_context.get("sub_agent_policy_reason")
+                policy_override = task_context.get("sub_agent_policy_override")
+                policy_spawn_count = task_context.get("sub_agent_spawn_count")
+                policy_iteration_spawns = task_context.get("sub_agent_spawns_this_iteration")
+                for key, value in task_context.items():
+                    if key.startswith("sub_agent_"):
+                        continue
+                    prompt_parts.append(f"  - {key}: {value}")
+            else:
+                prompt_parts.append(f"  {task_context}")
+        
+        if policy_level:
+            prompt_parts.extend([
+                "",
+                "SUB-AGENT UTILIZATION POLICY:",
+                f"  - Level: {policy_level}",
+                f"  - Score: {policy_score}",
+                f"  - Rationale: {policy_reason}",
+                f"  - Override: {policy_override or 'None'}",
+                f"  - Spawn count (this run): {policy_spawn_count}",
+                f"  - Spawn count (this iteration): {policy_iteration_spawns}",
+            ])
         
         prompt_parts.extend([
             "",
@@ -237,10 +284,12 @@ CRITICAL RULES:
             "",
             "Return a TabDecision with:",
             "- action: SWITCH, CLOSE, CONTINUE, or SPAWN_SUB_AGENT",
-            "- target_tab_id: Required if action is SWITCH or CLOSE",
-            "- reasoning: Clear explanation",
+            "- target_tab_id: Required if action is SWITCH or CLOSE. Optional for SPAWN_SUB_AGENT (only use if an existing tab should be repurposed).",
+            "- target_purpose: For SPAWN_SUB_AGENT, provide a short purpose/name for the new tab (required when creating a new tab).",
+            "- target_url: Optional URL for the sub-agent's new tab (if a specific site should be opened immediately).",
+            "- reasoning: Clear explanation of why this decision is appropriate.",
             "- confidence: 0.0 to 1.0",
-            "- should_take_action: True if action should happen immediately (SWITCH/CLOSE), False for CONTINUE (informational)"
+            "- should_take_action: True if the action should happen immediately (SWITCH/CLOSE/Spawn), False for CONTINUE (informational)"
         ])
         
         return "\n".join(prompt_parts)

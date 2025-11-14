@@ -5,8 +5,8 @@ Step 2: LLM-based reactive goal determination that decides what to do RIGHT NOW
 based on what's visible in the viewport, not pre-planning.
 """
 
-from typing import Optional, List
-from pydantic import BaseModel, Field
+from typing import Optional, List, ClassVar, Set
+from pydantic import BaseModel, Field, field_validator
 import re
 
 from goals.base import BrowserState, Interaction
@@ -21,6 +21,139 @@ class NextAction(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
     expected_outcome: str = Field(description="What should happen after executing this action")
     needs_exploration: bool = Field(description="True if the action requires exploring/searching for elements not visible in current viewport (e.g., scrolling to find a field)")
+
+    VALID_COMMANDS: ClassVar[Set[str]] = {
+        "click",
+        "type",
+        "press",
+        "scroll",
+        "extract",
+        "defer",
+        "navigate",
+        "back",
+        "forward",
+        "subagents",
+        "form",
+        "select",
+        "upload",
+        "datetime",
+        "stop",
+        "open",
+        "handle_select",
+        "handle_upload",
+        "handle_datetime",
+    }
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("action must be a string")
+        action = value.strip()
+        if not action:
+            raise ValueError("action cannot be empty")
+
+        action = cls._ensure_colon(action)
+        command, body = action.split(":", 1)
+        command = command.strip().lower()
+        body = body.strip()
+
+        if command not in cls.VALID_COMMANDS:
+            raise ValueError(f"Unsupported action command: '{command}'")
+
+        if command == "click":
+            body = cls._normalize_click_body(body)
+            action = f"click: {body}"
+        elif command == "type":
+            body = cls._normalize_type_body(body)
+            action = f"type: {body}"
+        elif command == "press":
+            body = cls._normalize_press_body(body)
+            action = f"press: {body}"
+        elif command == "scroll":
+            body = cls._normalize_scroll_body(body)
+            action = f"scroll: {body}"
+        elif command == "extract":
+            if not body:
+                raise ValueError("extract command requires a description")
+            action = f"extract: {body}"
+        elif command == "defer":
+            action = "defer" if not body else f"defer: {body}"
+        elif command == "navigate":
+            if not body:
+                raise ValueError("navigate command requires a target URL or site")
+            action = f"navigate: {body}"
+        elif command in {"back", "forward"}:
+            if not body:
+                body = "1"
+            if not body.isdigit():
+                raise ValueError(f"{command} command requires numeric steps")
+            action = f"{command}: {body}"
+        elif command == "subagents":
+            if not body:
+                raise ValueError("subagents command requires a mode")
+            action = f"subagents: {body}"
+        elif command in {"form", "select", "upload", "datetime", "stop", "open", "handle_select", "handle_upload", "handle_datetime"}:
+            if not body:
+                raise ValueError(f"{command} command requires additional detail")
+            action = f"{command}: {body}"
+
+        return action
+
+    @staticmethod
+    def _ensure_colon(text: str) -> str:
+        if ":" in text:
+            head, tail = text.split(":", 1)
+            return f"{head.strip()}: {tail.strip()}"
+        match = re.match(r"^(?P<cmd>\w+)\s+(?P<body>.+)$", text)
+        if not match:
+            raise ValueError("action must contain a command and description")
+        cmd = match.group("cmd")
+        body = match.group("body").strip()
+        if cmd.lower() == "click" and body.lower().startswith("on "):
+            body = body[3:].strip()
+        return f"{cmd}: {body}"
+
+    @staticmethod
+    def _normalize_click_body(body: str) -> str:
+        if not body:
+            raise ValueError("click command requires a target")
+        if body.lower().startswith("on "):
+            body = body[3:].strip()
+        if not re.search(r"\b(button|link|tab|checkbox|radio|option|div|input|icon|item)\b", body, flags=re.IGNORECASE):
+            if not body.lower().endswith("link"):
+                body = f"{body} link"
+        return body.strip()
+
+    @staticmethod
+    def _normalize_type_body(body: str) -> str:
+        if not body:
+            raise ValueError("type command requires text and target")
+        lowered = body.lower()
+        if ":" in body and not re.search(r"\b(in|into)\b", lowered):
+            pass  # assume already structured
+        elif not re.search(r"\b(in|into)\b", lowered):
+            raise ValueError("type command must specify target field using 'in'")
+        if not re.search(r"\b(field|input|area|box|textbox)\b", lowered):
+            body = re.sub(r"\b(in|into)\b\s*", lambda m: f"{m.group(0)}input field ", body, count=1, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", body).strip()
+
+    @staticmethod
+    def _normalize_press_body(body: str) -> str:
+        key = body.strip()
+        if not key:
+            raise ValueError("press command requires a key")
+        if re.search(r"\s", key):
+            raise ValueError("press command should only contain a single key")
+        return key
+
+    @staticmethod
+    def _normalize_scroll_body(body: str) -> str:
+        direction = body.strip().lower()
+        allowed = {"up", "down", "left", "right"}
+        if direction not in allowed:
+            raise ValueError("scroll command must be one of: up, down, left, right")
+        return direction
 
 
 class ReactiveGoalDeterminer:
@@ -238,6 +371,12 @@ AVAILABLE COMMANDS:
   - "defer: 10" → pause for 10 seconds, then resume automatically
   - "defer: take over" → pause and show the provided message to the user
   Only defer when the user explicitly requests manual control or human input is required (captcha, multi-factor auth, etc.).
+- subagents: <mode>  (e.g., "subagents: single", "subagents: parallel", "subagents: reset")
+  Override the adaptive sub-agent utilization policy when it is clearly misaligned with the task or the user explicitly requests a change.
+  - "single"/"single-threaded"/"off"/"conservative" → minimize or block spawning.
+  - "parallel"/"aggressive"/"max" → encourage eager spawning for independent work.
+  - "reset"/"default"/"auto"/"adaptive" → clear overrides and return to adaptive mode.
+  Only issue this command when the current policy is blocking progress or after the user asks for a different parallelism mode.
 - scroll: <direction>  (e.g., "scroll: down", "scroll: up") - {"Use this ONLY in exploration mode" if is_exploring else "Use if needed elements aren't visible"}
 {"- DO NOT use type/click commands in exploration mode - element is not in viewport yet" if is_exploring else ""}
 {"- type: <value> in <specific field description>  (e.g., \"type: John Doe in name field\", \"type: john@example.com in email input field\") - Only use when NOT in exploration mode" if not is_exploring else ""}

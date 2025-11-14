@@ -125,6 +125,8 @@ class IfGoal(ConditionalGoal):
                     screenshot
                 )
                 
+                print(f"🔍 DEBUG: Vision condition result: {result}")
+                
                 # Parse result
                 answer = str(result or "").lower().strip()
                 return answer in ['yes', 'true', '1']

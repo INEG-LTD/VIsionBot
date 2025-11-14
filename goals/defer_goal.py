@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Optional, Callable
 
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 
@@ -21,7 +21,15 @@ class DeferGoal(BaseGoal):
 
     EVALUATION_TIMING = EvaluationTiming.CONTINUOUS
 
-    def __init__(self, description: str, prompt: Optional[str] = None, max_retries: int = 0) -> None:
+    def __init__(
+        self,
+        description: str,
+        prompt: Optional[str] = None,
+        max_retries: int = 0,
+        request_user_input: bool = False,
+        response_key: Optional[str] = None,
+        input_callback: Optional[Callable[[str, GoalContext], str]] = None,
+    ) -> None:
         super().__init__(
             description=description,
             max_retries=max_retries,
@@ -35,6 +43,10 @@ class DeferGoal(BaseGoal):
         self._logged_start: bool = False
         self._logged_end: bool = False
         self._logger = get_logger()
+        self.request_user_input = request_user_input
+        self.response_key = (response_key or "user_input").strip() or "user_input"
+        self.input_callback = input_callback
+        self._user_input: Optional[str] = None
 
     def on_monitoring_start(self) -> None:
         self._started_at = time.time()
@@ -61,7 +73,26 @@ class DeferGoal(BaseGoal):
                 )
                 self._logged_start = True
             try:
-                input("[Defer] Press Enter to continue automation...")
+                if self.request_user_input:
+                    user_response = None
+                    if self.input_callback:
+                        try:
+                            callback_result = self.input_callback(self.prompt_message, context)
+                            if callback_result is not None:
+                                user_response = str(callback_result)
+                        except Exception as callback_error:
+                            print(f"[Defer] Warning: input callback failed ({callback_error}); falling back to console input.")
+                    if user_response is None:
+                        try:
+                            prompt_text = f"{self.prompt_message}\n> " if self.prompt_message else "> "
+                            user_response = input(prompt_text)
+                        except EOFError:
+                            print("[Defer] Warning: input stream unavailable; capturing empty response.")
+                            user_response = ""
+                    self._user_input = user_response
+                    print("[Defer] User input received.")
+                else:
+                    input("[Defer] Press Enter to continue automation...")
             except EOFError:
                 print("[Defer] Warning: input stream unavailable; resuming automatically.")
             self._completed = True
@@ -69,6 +100,8 @@ class DeferGoal(BaseGoal):
         evidence = {"defer_prompt": self.prompt_message}
         if self._started_at is not None:
             evidence["defer_duration_seconds"] = round(time.time() - self._started_at, 3)
+        if self._user_input is not None:
+            evidence[self.response_key] = self._user_input
         if not self._logged_end:
             duration_ms = None
             if self._started_at is not None:
@@ -86,12 +119,18 @@ class DeferGoal(BaseGoal):
         return GoalResult(
             status=GoalStatus.ACHIEVED,
             confidence=1.0,
-            reasoning="User signaled readiness to resume after defer pause.",
+            reasoning="User input collected during defer pause." if self.request_user_input else "User signaled readiness to resume after defer pause.",
             evidence=evidence,
         )
 
     def get_description(self, context: GoalContext) -> str:
         return self.prompt_message
+
+    def get_user_input(self) -> Optional[str]:
+        return self._user_input
+
+    def set_input_callback(self, callback: Callable[[str, GoalContext], str]) -> None:
+        self.input_callback = callback
 
     def _build_context_summary(self, context: GoalContext) -> dict:
         """Create a small context summary for display/logging."""

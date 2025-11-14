@@ -1,15 +1,7 @@
-"""
-Agent Controller - Step 2: LLM-Based Completion + Reactive Goal Determination
-
-Implements agentic mode with:
-- Reactive loop: observe → check completion (LLM) → determine goal → act → repeat
-- LLM-based completion evaluation (CompletionContract)
-- EnvironmentState for full context
-- Reactive goal determination (what to do now)
-"""
-
+import json
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple, Set
+from enum import Enum
 import re
 import hashlib
 from urllib.parse import urlparse
@@ -21,7 +13,63 @@ from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
 from tab_management import TabDecisionEngine, TabAction
+from ai_utils import generate_model
+from pydantic import BaseModel, ConfigDict
 
+_REQUIREMENT_KEYWORD_MAP = {
+    "lede": ["lede", "introduction", "intro", "opening paragraph"],
+    "infobox": ["infobox"],
+    "milestones": ["milestone", "timeline", "chronology", "history"],
+    "founding": ["founding", "founded", "established", "origin", "formation"],
+    "leadership": ["leadership", "executive", "ceo", "chairman", "president", "founder"],
+    "products": ["product", "service", "achievement", "mission", "program"],
+    "controversies": ["controversy", "controversies", "criticism", "lawsuit", "scandal", "challenge"],
+    "summary": ["summary", "summaries", "report", "overview"],
+    "bullet_list": ["bullet", "list", "milestones", "timeline", "chronology"],
+    "sources": ["source", "citation", "url", "link", "reference", "section title"],
+    "revision": ["revision", "last updated", "last-edited", "last edited", "edit history"],
+}
+
+class _SubAgentPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policy_level: str
+    policy_score: float
+    rationale: str
+
+
+class _SubAgentTaskPlan(BaseModel):
+    name: str
+    instruction: str
+    suggested_url: Optional[str] = None
+    expected_output: Optional[str] = None
+
+
+class _ParallelWorkPlan(BaseModel):
+    main_agent_focus: str
+    sub_tasks: List[_SubAgentTaskPlan]
+    integration_notes: Optional[str] = None
+
+
+class _RetargetDecision(BaseModel):
+    action: Optional[str]
+    rationale: str
+
+
+class SubAgentPolicyLevel(Enum):
+    """Adaptive utilization policy levels for sub-agent usage."""
+    SINGLE_THREADED = "single_threaded"
+    PARALLELIZED = "parallelized"
+
+
+"""
+Agent Controller - Step 2: LLM-Based Completion + Reactive Goal Determination
+
+Implements agentic mode with:
+- Reactive loop: observe → check completion (LLM) → determine goal → act → repeat
+- LLM-based completion evaluation (CompletionContract)
+- EnvironmentState for full context
+- Reactive goal determination (what to do now)
+"""
 
 class AgentController:
     """
@@ -35,7 +83,13 @@ class AgentController:
     5. Repeats until done or max iterations
     """
     
-    def __init__(self, bot, track_ineffective_actions: bool = True, base_knowledge: Optional[List[str]] = None):
+    def __init__(
+        self,
+        bot,
+        track_ineffective_actions: bool = True,
+        base_knowledge: Optional[List[str]] = None,
+        allow_partial_completion: bool = False
+    ):
         """
         Initialize agent controller.
         
@@ -54,12 +108,37 @@ class AgentController:
         self.exploration_retry_max = 2  # Max retries when exploration mode returns invalid command
         self.allow_non_clickable_clicks = True  # Allow clicking non-clickable elements (configurable)
         self.track_ineffective_actions = track_ineffective_actions  # Track actions that didn't yield page changes
+        self.detect_ineffective_actions = track_ineffective_actions
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
         self.extracted_data: Dict[str, Any] = {}  # Store extracted data (key: extraction prompt, value: result)
         self.sub_agent_results: List[SubAgentResult] = []  # Store completed sub-agent results
         self.orchestration_events: List[Dict[str, Any]] = []  # Track orchestration events for reporting
+        self.sub_agent_policy_level: SubAgentPolicyLevel = SubAgentPolicyLevel.SINGLE_THREADED
+        self.sub_agent_policy_rationale: str = "Default adaptive policy (single-threaded)."
+        self._sub_agent_policy_override: Optional[SubAgentPolicyLevel] = None
+        self._sub_agent_policy_score: float = 0.0
+        self.sub_agent_spawn_count: int = 0
+        self._spawns_this_iteration: int = 0
+        self._current_iteration: int = 0
+        self._parallel_plan_done: bool = False
+        self._parallel_plan: Optional[_ParallelWorkPlan] = None
+        self._main_agent_focus: Optional[str] = None
+        self._integration_notes: Optional[str] = None
+        self._extraction_failures: Dict[str, int] = {}
+        self._completed_extractions: Set[str] = set()
+        self._extraction_prompt_map: Dict[str, str] = {}
+        self._retarget_attempts: Dict[str, int] = {}
+        self._queued_action: Optional[str] = None
+        self._queued_action_reason: Optional[str] = None
+        self._task_tracker: Dict[str, Dict[str, Any]] = {}
+        self.allow_partial_completion = allow_partial_completion
+        self._user_inputs: List[Dict[str, Any]] = []
+        self._requirement_flags: Dict[str, bool] = {}
+        self._original_user_prompt: str = ""
+        self._primary_output_tasks_initialized: bool = False
+        self._last_action_summary: Optional[Dict[str, Any]] = None
         
         # Initialize TabDecisionEngine if TabManager is available
         self.tab_decision_engine: Optional[TabDecisionEngine] = None
@@ -86,8 +165,25 @@ class AgentController:
             GoalResult indicating success or failure
         """
         # Reset per-run state
+        role = "Main agent"
+        if agent_context and agent_context.parent_agent_id:
+            role = f"Sub-agent helper (task: {agent_context.instruction})"
+        print(f"🤖 Active role: {role}")
+
         self.sub_agent_results = []
         self.orchestration_events = []
+        self.sub_agent_policy_level = SubAgentPolicyLevel.SINGLE_THREADED
+        self.sub_agent_policy_rationale = "Default adaptive policy (single-threaded)."
+        self._sub_agent_policy_override = None
+        self._sub_agent_policy_score = 0.0
+        self.sub_agent_spawn_count = 0
+        self._spawns_this_iteration = 0
+        self._current_iteration = 0
+        self._task_tracker = {}
+        self._original_user_prompt = user_prompt
+        self._primary_output_tasks_initialized = False
+        self._initialize_requirement_flags(user_prompt)
+        self._ensure_primary_output_tasks(user_prompt)
         
         # Phase 3: Set agent context
         if agent_context:
@@ -95,7 +191,13 @@ class AgentController:
             # Initialize sub-agent controller if this is main agent
             if agent_context.parent_agent_id is None:
                 if not self.sub_agent_controller:
-                    self.sub_agent_controller = SubAgentController(self.bot, agent_context)
+                    self.sub_agent_controller = SubAgentController(
+                        self.bot,
+                        agent_context,
+                        controller_factory=self._spawn_child_controller,
+                        track_ineffective_actions=self.detect_ineffective_actions,
+                        allow_partial_completion=self.allow_partial_completion
+                    )
         else:
             # Create main agent context if not provided
             if self.bot.tab_manager:
@@ -106,7 +208,13 @@ class AgentController:
                         instruction=user_prompt
                     )
                     if not self.sub_agent_controller:
-                        self.sub_agent_controller = SubAgentController(self.bot, self.agent_context)
+                        self.sub_agent_controller = SubAgentController(
+                            self.bot,
+                            self.agent_context,
+                            controller_factory=self._spawn_child_controller,
+                            track_ineffective_actions=self.detect_ineffective_actions,
+                            allow_partial_completion=self.allow_partial_completion
+                        )
         
         agent_type = "Sub-agent" if (self.agent_context and self.agent_context.parent_agent_id) else "Main agent"
         print(f"🤖 Starting agentic mode ({agent_type}): {user_prompt}")
@@ -132,7 +240,10 @@ class AgentController:
             self.bot.goal_monitor.set_base_knowledge(self.base_knowledge)
         
         # Create completion contract (Step 2: LLM-based)
-        completion_contract = CompletionContract(user_prompt)
+        completion_contract = CompletionContract(
+            user_prompt,
+            allow_partial_completion=self.allow_partial_completion
+        )
         
         if not self.bot.started:
             print("❌ Bot not started. Call bot.start() first.")
@@ -161,6 +272,8 @@ class AgentController:
             print(f"{'='*60}")
             
             self._log_event("iteration_start", iteration=iteration + 1)
+            self._current_iteration = iteration + 1
+            self._spawns_this_iteration = 0
 
             # Drain any completed sub-agent results before continuing
             self._drain_sub_agent_results()
@@ -218,6 +331,18 @@ class AgentController:
             else:
                 print(f"🔄 Task not complete: {completion_reasoning}")
             
+            # Update adaptive sub-agent utilization policy based on latest context
+            self._update_sub_agent_policy(
+                user_prompt=user_prompt,
+                completion_reasoning=completion_reasoning
+            )
+            
+            if (
+                self.sub_agent_policy_level == SubAgentPolicyLevel.PARALLELIZED
+                and not self._parallel_plan_done
+                and (not self.agent_context or self.agent_context.parent_agent_id is None)
+            ):
+                self._orchestrate_parallel_work(user_prompt)
             # 2.5. Check tab management decisions (Phase 2)
             if self.tab_decision_engine and self.bot.tab_manager:
                 current_tab = self.bot.tab_manager.get_active_tab()
@@ -231,7 +356,13 @@ class AgentController:
                             task_context={
                                 "iteration": iteration + 1,
                                 "max_iterations": self.max_iterations,
-                                "completion_reasoning": completion_reasoning
+                                    "completion_reasoning": completion_reasoning,
+                                    "sub_agent_policy": self.sub_agent_policy_level.value,
+                                    "sub_agent_policy_score": round(self._sub_agent_policy_score, 2),
+                                    "sub_agent_policy_reason": self.sub_agent_policy_rationale,
+                                    "sub_agent_policy_override": self._sub_agent_policy_override.value if self._sub_agent_policy_override else None,
+                                    "sub_agent_spawn_count": self.sub_agent_spawn_count,
+                                    "sub_agent_spawns_this_iteration": self._spawns_this_iteration,
                             }
                         )
                         
@@ -240,35 +371,58 @@ class AgentController:
                             executed = self._execute_tab_decision(tab_decision)
                             if executed:
                                 # Tab switch/close happened, continue to next iteration
-                                print(f"🔄 Tab action executed, continuing to next iteration...")
+                                print("🔄 Tab action executed, continuing to next iteration...")
                                 time.sleep(self.iteration_delay)
                                 continue
                     except Exception as e:
                         print(f"⚠️ Error in tab decision making: {e}")
             
             # 3. Determine next action - this will tell us if exploration is needed
-            # Create reactive goal determiner (Step 2: determines next action from viewport)
-            goal_determiner = ReactiveGoalDeterminer(user_prompt, base_knowledge=self.base_knowledge)
-            
-            print("🔍 Determining next action based on current viewport...")
-            if self.track_ineffective_actions:
-                if self.failed_actions:
-                    print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
-                if self.ineffective_actions:
-                    print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
-            
-            current_action, needs_exploration = goal_determiner.determine_next_action(
-                environment_state,
-                screenshot=snapshot.screenshot,
-                is_exploring=False,  # Start with viewport mode
-                failed_actions=self.failed_actions if self.track_ineffective_actions else [],  # Pass failed actions only if tracking enabled
-                ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []  # Pass ineffective actions only if tracking enabled
-            )
-            
-            # Safeguard: Filter out actions that exactly match failed or ineffective actions (only if tracking enabled)
-            if self.track_ineffective_actions and current_action and (current_action in self.failed_actions or current_action in self.ineffective_actions):
-                print(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
-                current_action = None
+            current_action: Optional[str] = None
+            needs_exploration = False
+
+            if self._queued_action:
+                current_action = self._queued_action
+                print(f"🎯 Using queued action: {current_action}")
+                if self._queued_action_reason:
+                    print(f"   Reason: {self._queued_action_reason}")
+                self._log_event(
+                    "queued_action_consumed",
+                    action=current_action,
+                    reason=self._queued_action_reason,
+                )
+                self._queued_action = None
+                self._queued_action_reason = None
+
+            if current_action is None:
+                # Create reactive goal determiner (Step 2: determines next action from viewport)
+                dynamic_prompt = self._build_current_task_prompt(user_prompt)
+                goal_determiner = ReactiveGoalDeterminer(dynamic_prompt, base_knowledge=self.base_knowledge)
+                
+                print("🔍 Determining next action based on current viewport...")
+                if self.track_ineffective_actions:
+                    if self.failed_actions:
+                        print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
+                    if self.ineffective_actions:
+                        print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                
+                current_action, needs_exploration = goal_determiner.determine_next_action(
+                    environment_state,
+                    screenshot=snapshot.screenshot,
+                    is_exploring=False,  # Start with viewport mode
+                    failed_actions=self.failed_actions if self.track_ineffective_actions else [],  # Pass failed actions only if tracking enabled
+                    ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []  # Pass ineffective actions only if tracking enabled
+                )
+                
+                # Safeguard: Filter out actions that exactly match failed or ineffective actions (only if tracking enabled)
+                if (
+                    self.track_ineffective_actions
+                    and current_action
+                    and current_action.lower().startswith("click:")
+                    and (current_action in self.failed_actions or current_action in self.ineffective_actions)
+                ):
+                    print(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
+                    current_action = None
             
             # 4. If no action determined, trigger exploration mode
             # Exploration mode should only be used when we cannot determine any action
@@ -319,7 +473,13 @@ class AgentController:
                     )
                     
                     # Safeguard: Filter out actions that exactly match failed/ineffective actions (except scroll commands in exploration mode, only if tracking enabled)
-                    if self.track_ineffective_actions and current_action and (current_action in self.failed_actions or current_action in self.ineffective_actions) and not current_action.startswith("scroll:"):
+                    if (
+                        self.track_ineffective_actions
+                        and current_action
+                        and current_action.lower().startswith("click:")
+                        and (current_action in self.failed_actions or current_action in self.ineffective_actions)
+                        and not current_action.startswith("scroll:")
+                    ):
                         print(f"⚠️ Generated action matches a failed/ineffective action: {current_action}")
                         current_action = None
                     
@@ -370,18 +530,60 @@ class AgentController:
             extraction_prompt = self._detect_extraction_need(current_action, user_prompt)
             
             if extraction_prompt:
-                print(f"📊 Extraction detected: {extraction_prompt}")
+                self._update_requirement_flags_from_text(extraction_prompt)
+                subject = self._infer_extraction_subject(extraction_prompt)
+                normalized_key_source = subject if subject else extraction_prompt
+                normalized_key = self._normalize_extraction_prompt(normalized_key_source)
+                canonical_prompt = self._build_comprehensive_extraction_prompt(
+                    extraction_prompt,
+                    subject,
+                    self._original_user_prompt or user_prompt,
+                    snapshot.url if snapshot else None
+                )
+                self._extraction_prompt_map[normalized_key] = canonical_prompt
+                task_description = self._build_extraction_task_description(subject, extraction_prompt)
+                self._register_task(normalized_key, task_description, "extraction")
+                print(f"📊 Extraction detected: {canonical_prompt}")
+                already_completed = normalized_key in self._completed_extractions
+                task_entry = self._task_tracker.get(normalized_key)
+                if task_entry and not already_completed:
+                    task_entry["status"] = "running"
+                    task_entry["updated_at"] = time.time()
+                
+                if already_completed:
+                    print(f"ℹ️ Extraction skipped (already completed): {canonical_prompt}")
+                    if task_entry:
+                        task_entry["status"] = "completed"
+                    self._activate_primary_output_task("Required Wikipedia fields already captured.")
+                    time.sleep(self.iteration_delay)
+                    continue
+                if self._should_skip_extraction(normalized_key):
+                    print(f"⚠️ Extraction skipped after repeated failures: {canonical_prompt}")
+                    time.sleep(self.iteration_delay)
+                    continue
                 
                 try:
                     # Call extract() directly - simpler and more efficient
                     result = self.bot.extract(
-                        prompt=extraction_prompt,
+                        prompt=canonical_prompt,
                         output_format="json",
-                        scope="viewport"
+                        scope="page"
                     )
+                    self._record_extraction_success(normalized_key)
+                    self._completed_extractions.add(normalized_key)
                     
-                    # Store extracted data with the prompt as key
-                    self.extracted_data[extraction_prompt] = result
+                    self._extraction_prompt_map[normalized_key] = canonical_prompt
+                    
+                    # Store extracted data with the canonical prompt as key
+                    self.extracted_data[canonical_prompt] = result
+                    self._mark_task_completed(
+                        normalized_key,
+                        {
+                            "type": "extraction",
+                            "fields": list(result.keys()),
+                        }
+                    )
+                    self._activate_primary_output_task("Extraction completed successfully.")
                     print(f"✅ Extraction completed: {result}")
                     
                     # Continue to next iteration (extraction is complete)
@@ -391,9 +593,41 @@ class AgentController:
                     print(f"⚠️ Extraction failed: {e}")
                     import traceback
                     traceback.print_exc()
+                    self._record_extraction_failure(normalized_key)
+                    self._mark_task_failed(normalized_key, str(e))
+                    
+                    retarget_decision = self._retarget_after_extraction_failure(
+                        prompt_key=normalized_key,
+                        extraction_prompt=canonical_prompt,
+                        snapshot=snapshot,
+                        environment_state=environment_state,
+                        user_prompt=user_prompt
+                    )
+                    if retarget_decision and retarget_decision.action:
+                        action_lower = retarget_decision.action.lower()
+                        if action_lower != "none":
+                            self._queued_action = retarget_decision.action
+                            self._queued_action_reason = retarget_decision.rationale
+                            print(f"🔁 Retargeting after extraction failure → {retarget_decision.action}")
+                            print(f"   Rationale: {retarget_decision.rationale}")
+                            self._log_event(
+                                "retarget_suggested",
+                                action=retarget_decision.action,
+                                rationale=retarget_decision.rationale,
+                                prompt=canonical_prompt,
+                                failures=self._extraction_failures.get(normalized_key, 0),
+                            )
+                        else:
+                            print(f"ℹ️ Retarget assessment: no navigation change needed ({retarget_decision.rationale})")
+                    
                     # Continue to next iteration anyway
                     time.sleep(self.iteration_delay)
                     continue
+            
+            # 4.1. Handle internal control commands (e.g., policy overrides)
+            if self._handle_internal_command(current_action, user_prompt):
+                time.sleep(self.iteration_delay)
+                continue
             
             # 4. Filter out navigation commands - convert to click commands instead
             current_action = self._filter_navigation_commands(current_action)
@@ -431,9 +665,17 @@ class AgentController:
                 
                 # Capture page state AFTER action
                 state_after = self._get_page_state()
+                defer_input_consumer = getattr(self.bot, "consume_last_defer_input", None)
+                if callable(defer_input_consumer):
+                    defer_payload = defer_input_consumer()
+                    if defer_payload:
+                        self._handle_defer_input(defer_payload, current_action)
                 
                 # Check if action yielded any change
-                page_changed = self._page_state_changed(state_before, state_after)
+                page_changed = True
+                if self.detect_ineffective_actions:
+                    page_changed = self._page_state_changed(state_before, state_after)
+                is_click_action = current_action.lower().startswith("click:")
                 
                 # Only track ineffective actions if the feature is enabled
                 if self.track_ineffective_actions:
@@ -447,25 +689,37 @@ class AgentController:
                                 self.ineffective_actions.clear()
                         else:
                             # Successful command but no page change - add to ineffective actions
-                            print(f"⚠️ Action succeeded but did not yield any change: {current_action}")
-                            print(f"   URL before: {state_before['url']}")
-                            print(f"   URL after: {state_after['url']}")
-                            print(f"   DOM signature unchanged")
-                            # Add to ineffective actions list (nudge to try something different)
-                            if current_action not in self.ineffective_actions:
-                                self.ineffective_actions.append(current_action)
-                                print(f"   📝 Added to ineffective actions list (will try different approach in future iterations)")
+                            if is_click_action and self.detect_ineffective_actions:
+                                print(f"⚠️ Action succeeded but did not yield any change: {current_action}")
+                                print(f"   URL before: {state_before['url']}")
+                                print(f"   URL after: {state_after['url']}")
+                                print("   DOM signature unchanged")
+                                # Add to ineffective actions list (nudge to try something different)
+                                if current_action not in self.ineffective_actions:
+                                    self.ineffective_actions.append(current_action)
+                                    print("   📝 Added to ineffective actions list (will try different approach in future iterations)")
+                            else:
+                                if self.detect_ineffective_actions:
+                                    print(f"ℹ️ Non-click action succeeded without visible change: {current_action}")
                     else:
                         # Failed command - check if it yielded any change
                         if not page_changed:
                             print(f"⚠️ Action failed and did not yield any change: {current_action}")
                             print(f"   URL before: {state_before['url']}")
                             print(f"   URL after: {state_after['url']}")
-                            print(f"   DOM signature unchanged")
+                            print("   DOM signature unchanged")
                             # Add to failed actions list (avoid trying this again)
                             if current_action not in self.failed_actions:
                                 self.failed_actions.append(current_action)
-                                print(f"   📝 Added to failed actions list (will avoid in future iterations)")
+                                print("   📝 Added to failed actions list (will avoid in future iterations)")
+                
+                self._record_action_outcome(
+                    current_action,
+                    success,
+                    state_before,
+                    state_after,
+                    page_changed,
+                )
                 
                 if success:
                     print(f"✅ Action completed: {current_action}")
@@ -570,6 +824,21 @@ class AgentController:
                 print(f"⚠️ Failed to capture full-page screenshot: {e}")
                 # Fall back to viewport screenshot
         
+        # Compute screenshot hash for change detection
+        screenshot_data = getattr(snapshot, "screenshot", None)
+        screenshot_hash = None
+        if screenshot_data:
+            try:
+                screenshot_hash = hashlib.md5(screenshot_data).hexdigest()
+            except Exception:
+                screenshot_hash = None
+        setattr(snapshot, "screenshot_hash", screenshot_hash)
+        if hasattr(self.bot, "page"):
+            try:
+                setattr(self.bot.page, "_last_screenshot_hash", screenshot_hash)
+            except Exception:
+                pass
+        
         return snapshot
     
     def _determine_next_action(
@@ -661,27 +930,103 @@ class AgentController:
             Potentially transformed action command
         """
         if action_command.lower().startswith("navigate:"):
-            target = action_command.split(":", 1)[1].strip() if ":" in action_command else ""
-            history = self.bot.goal_monitor.url_history if hasattr(self.bot, "goal_monitor") else []
-            pointer = getattr(self.bot.goal_monitor, "url_pointer", len(history) - 1) if hasattr(self.bot, "goal_monitor") else -1
-
-            if history and pointer is not None and pointer >= 0:
-                back_steps = self._history_steps_to_target(history, pointer, target, "back")
-                if back_steps:
-                    new_action = f"back: {back_steps}"
-                    print(f"ℹ️ Converted navigate command to back navigation: {new_action} (target: {target})")
-                    return new_action
-
-                forward_steps = self._history_steps_to_target(history, pointer, target, "forward")
-                if forward_steps:
-                    new_action = f"forward: {forward_steps}"
-                    print(f"ℹ️ Converted navigate command to forward navigation: {new_action} (target: {target})")
-                    return new_action
-
-            print(f"ℹ️ Navigation command preserved (no history shortcut available): {action_command}")
+            print(f"ℹ️ Navigation command preserved: {action_command}")
             return action_command
         
         return action_command
+    
+    def _handle_internal_command(self, current_action: Optional[str], user_prompt: str) -> bool:
+        """
+        Handle controller-level internal commands that should not be forwarded to act().
+        
+        Returns True if the command was handled (iteration should continue), False otherwise.
+        """
+        if not current_action:
+            return False
+        
+        command = current_action.strip()
+        command_lower = command.lower()
+        
+        if command_lower.startswith("subagents:"):
+            directive = command.split(":", 1)[1].strip() if ":" in command else ""
+            if not directive:
+                print("⚠️ Sub-agent override command provided without a directive. "
+                      "Use one of: single, parallel, reset.")
+                self._log_event(
+                    "sub_agent_policy_override_requested",
+                    directive=None,
+                    recognized=False,
+                    source="command",
+                    user_prompt_excerpt=user_prompt[:120]
+                )
+                return True
+            
+            handled = self._apply_sub_agent_override(directive)
+            self._log_event(
+                "sub_agent_policy_override_requested",
+                directive=directive,
+                recognized=handled,
+                source="command",
+                user_prompt_excerpt=user_prompt[:120]
+            )
+            if handled:
+                print("🛠️ Sub-agent utilization override updated.")
+            else:
+                print(f"⚠️ Unknown sub-agent override directive: '{directive}'. "
+                      "Valid options: single, parallel, aggressive, max, reset.")
+            return True
+        
+        return False
+    
+    @staticmethod
+    def _policy_display_name(level: SubAgentPolicyLevel) -> str:
+        """Return human-readable label for a policy level."""
+        return level.value.replace("_", " ").title()
+    
+    def _apply_sub_agent_override(self, directive: str) -> bool:
+        """Apply a user-specified override for the sub-agent utilization policy."""
+        directive_normalized = directive.strip().lower()
+        reset_keywords = {"reset", "clear", "default", "auto", "adaptive"}
+        override_map = {
+            "single": SubAgentPolicyLevel.SINGLE_THREADED,
+            "single-threaded": SubAgentPolicyLevel.SINGLE_THREADED,
+            "solo": SubAgentPolicyLevel.SINGLE_THREADED,
+            "off": SubAgentPolicyLevel.SINGLE_THREADED,
+            "conservative": SubAgentPolicyLevel.SINGLE_THREADED,
+            "parallel": SubAgentPolicyLevel.PARALLELIZED,
+            "parallelized": SubAgentPolicyLevel.PARALLELIZED,
+            "aggressive": SubAgentPolicyLevel.PARALLELIZED,
+            "max": SubAgentPolicyLevel.PARALLELIZED,
+        }
+        score_map = {
+            SubAgentPolicyLevel.SINGLE_THREADED: 0.0,
+            SubAgentPolicyLevel.PARALLELIZED: 1.0,
+        }
+        
+        if directive_normalized in reset_keywords:
+            was_overridden = self._sub_agent_policy_override is not None
+            self._sub_agent_policy_override = None
+            self.sub_agent_policy_level = SubAgentPolicyLevel.SINGLE_THREADED
+            self._sub_agent_policy_score = 0.0
+            self.sub_agent_policy_rationale = "Override cleared; returning to adaptive policy (single-threaded baseline)."
+            if was_overridden:
+                print("🔄 Sub-agent utilization override cleared. Adaptive policy re-enabled.")
+            else:
+                print("ℹ️ Sub-agent utilization is already using adaptive policy.")
+            return True
+        
+        if directive_normalized in override_map:
+            level = override_map[directive_normalized]
+            self._sub_agent_policy_override = level
+            self.sub_agent_policy_level = level
+            self._sub_agent_policy_score = score_map[level]
+            self.sub_agent_policy_rationale = (
+                f"Override active: forced to {self._policy_display_name(level)}."
+            )
+            print(f"✅ Sub-agent utilization override -> {self._policy_display_name(level)}")
+            return True
+        
+        return False
     
     def _detect_extraction_need(self, current_action: Optional[str], user_prompt: str) -> Optional[str]:
         """
@@ -722,7 +1067,8 @@ class AgentController:
             "forward",
             "form",
             "defer",
-            "datetime"
+            "datetime",
+            "subagents"
         ]
         
         # If action starts with a non-extraction action type, don't extract
@@ -742,6 +1088,511 @@ class AgentController:
         
         # Don't fall back to checking user prompt - only use current_action
         return None
+
+    @staticmethod
+    def _normalize_extraction_prompt(prompt: str) -> str:
+        """
+        Normalize extraction prompt text so equivalent requests share the same key.
+        """
+        return " ".join(prompt.lower().strip().split())
+
+    @staticmethod
+    def _normalize_task_name(name: str) -> str:
+        return " ".join(name.lower().strip().split())
+
+    def _initialize_requirement_flags(self, user_prompt: str) -> None:
+        """
+        Seed requirement flags from the user's original prompt.
+        """
+        self._requirement_flags = {}
+        lowered = user_prompt.lower()
+        for key, keywords in _REQUIREMENT_KEYWORD_MAP.items():
+            self._requirement_flags[key] = any(keyword in lowered for keyword in keywords)
+
+    def _update_requirement_flags_from_text(self, text: str) -> None:
+        """
+        Strengthen requirement flags if new instructions mention additional deliverables.
+        """
+        if not text:
+            return
+        lowered = text.lower()
+        for key, keywords in _REQUIREMENT_KEYWORD_MAP.items():
+            if self._requirement_flags.get(key):
+                continue
+            if any(keyword in lowered for keyword in keywords):
+                self._requirement_flags[key] = True
+
+    def _infer_extraction_subject(self, extraction_prompt: str) -> Optional[str]:
+        """
+        Attempt to infer which subject/entity the extraction prompt targets.
+        """
+        if not extraction_prompt:
+            return None
+        match = re.search(r"from the ([^.,\\n]+?)(?: wikipedia| article| page| site)", extraction_prompt, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r"for (.+?)(?: page| article| wikipedia)", extraction_prompt, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return None
+
+    def _build_extraction_task_description(self, subject: Optional[str], extraction_prompt: str) -> str:
+        """
+        Produce a concise description for the task tracker.
+        """
+        subject_label = subject or "the target subject"
+        sanitized_prompt = extraction_prompt.strip().replace("\n", " ")
+        return f"Extract the data requested for {subject_label}: {sanitized_prompt}"
+
+    def _build_comprehensive_extraction_prompt(
+        self,
+        extraction_prompt: str,
+        subject: Optional[str],
+        user_prompt: str,
+        current_url: Optional[str] = None
+    ) -> str:
+        """
+        Wrap the extraction prompt with light guidance while keeping scope tight.
+        """
+        scope_note = f"Focus on the subject '{subject}'." if subject else "Focus on the primary subject of this page."
+        lines = [
+            "Extract exactly the information described below.",
+            "Use the entire page content (not just the visible viewport) and avoid adding extra categories.",
+            scope_note,
+            "Return JSON that mirrors the requested fields only.",
+        ]
+        if current_url:
+            lines.append(f"Current page URL: {current_url}")
+        lines.extend([
+            "",
+            "Requested extraction:",
+            extraction_prompt.strip(),
+            "",
+            "Reference (original user prompt):",
+            user_prompt.strip()
+        ])
+        return "\n".join(lines)
+
+    def _extract_requested_subjects(self, user_prompt: str) -> List[str]:
+        """
+        Heuristic extraction of distinct subjects mentioned in the user prompt.
+        """
+        lower = user_prompt.lower()
+        alias_pairs = [
+            ("elon musk", "Elon Musk"),
+            ("space x", "SpaceX"),
+            ("spacex", "SpaceX"),
+            ("tesla stock", "Tesla Stock"),
+            ("tesla, inc.", "Tesla, Inc."),
+            ("tesla inc.", "Tesla, Inc."),
+            ("tesla inc", "Tesla, Inc."),
+            ("tesla", "Tesla, Inc."),
+            ("yahoo finance", "Yahoo Finance"),
+            ("google docs", "Google Docs"),
+        ]
+
+        found: List[Tuple[int, str]] = []
+        for alias, canonical in alias_pairs:
+            for match in re.finditer(re.escape(alias), lower):
+                found.append((match.start(), canonical))
+
+        found.sort(key=lambda item: item[0])
+        subjects: List[str] = []
+        for _, canonical in found:
+            if canonical and canonical not in subjects:
+                subjects.append(canonical)
+        return subjects
+
+    def _build_manual_parallel_plan(
+        self,
+        subjects: List[str],
+        user_prompt: str
+    ) -> Optional[_ParallelWorkPlan]:
+        """
+        Construct a deterministic parallel plan that mirrors the requested sources.
+        """
+        if not subjects:
+            return None
+
+        lower_prompt = user_prompt.lower()
+        sub_tasks: List[_SubAgentTaskPlan] = []
+        for subject in subjects:
+            subject_lower = subject.lower()
+            if subject_lower == "google docs":
+                # Leave Google Docs work to the main agent.
+                continue
+
+            if subject_lower == "yahoo finance":
+                sub_tasks.append(
+                    _SubAgentTaskPlan(
+                        name="Tesla stock snapshot",
+                        instruction=(
+                            "Navigate to https://finance.yahoo.com/quote/TSLA and capture the Tesla stock "
+                            "performance metrics the user requested (price, change, market summary, key stats). "
+                            "Stay focused on the Yahoo Finance data only."
+                        ),
+                        suggested_url="https://finance.yahoo.com/quote/TSLA",
+                        expected_output="Structured Yahoo Finance data for Tesla stock."
+                    )
+                )
+                continue
+
+            slug = re.sub(r"[^\w]+", "_", subject).strip("_")
+            suggested_url = None
+            if "wikipedia" in lower_prompt:
+                suggested_url = f"https://en.wikipedia.org/wiki/{slug}"
+
+            sub_tasks.append(
+                _SubAgentTaskPlan(
+                    name=f"Wikipedia – {subject}",
+                    instruction=(
+                        f"Open the Wikipedia page for {subject} and gather only the information requested in the user prompt. "
+                        "Do not add unrelated details."
+                    ),
+                    suggested_url=suggested_url,
+                    expected_output=f"Structured Wikipedia data for {subject}."
+                )
+            )
+
+        if not sub_tasks:
+            return None
+
+        main_focus = "Integrate the sub-agent outputs and compose the final write-up using Google Docs."
+        integration_notes = "Combine the extracted data from each sub-task to fulfill the original request."
+        return _ParallelWorkPlan(
+            main_agent_focus=main_focus,
+            sub_tasks=sub_tasks,
+            integration_notes=integration_notes
+        )
+
+    def _handle_defer_input(self, payload: Dict[str, Any], action_command: str) -> None:
+        """
+        Record user-provided input collected via a defer-input command.
+        """
+        if not payload:
+            return
+        response = payload.get("response")
+        if response is None:
+            return
+        prompt = payload.get("prompt", "")
+        timestamp = payload.get("timestamp", time.time())
+        entry = {
+            "prompt": prompt,
+            "response": response,
+            "timestamp": timestamp,
+            "action": action_command,
+            "page_url": payload.get("page_url"),
+            "page_title": payload.get("page_title"),
+        }
+        self._user_inputs.append(entry)
+        print(f"📝 Captured user input from defer: {response}")
+        self._log_event(
+            "defer_input_received",
+            prompt=prompt,
+            response=response,
+            action=action_command,
+            timestamp=timestamp,
+            page_url=entry.get("page_url"),
+            page_title=entry.get("page_title"),
+        )
+
+    def _ensure_primary_output_tasks(self, user_prompt: str) -> None:
+        """
+        Register downstream deliverable tasks (e.g., Google Docs report) so the determiner
+        focuses on them once prerequisite extractions are satisfied.
+        """
+        if self._primary_output_tasks_initialized:
+            return
+
+        lowered = (user_prompt or "").lower()
+        tasks_added = False
+
+        if any(keyword in lowered for keyword in ["google doc", "google docs", "google document"]):
+            self._register_task(
+                "google_docs_report",
+                "Create a Google Docs report using the extracted Wikipedia basics (open docs.google.com, start a document, insert and organize the captured data).",
+                "document_output",
+            )
+            entry = self._task_tracker.get("google_docs_report")
+            if entry:
+                details = entry.setdefault("details", {})
+                details["requires_extractions"] = True
+                details["ready"] = False
+            tasks_added = True
+
+        # Prevent redundant initialization checks even if no tasks were added.
+        if tasks_added or True:
+            self._primary_output_tasks_initialized = True
+
+    def _activate_primary_output_task(self, reason: Optional[str] = None) -> None:
+        """
+        Flag the Google Docs output task as ready so the goal determiner pivots away from extraction.
+        """
+        entry = self._task_tracker.get("google_docs_report")
+        if not entry:
+            return
+        details = entry.setdefault("details", {})
+        already_ready = details.get("ready", False)
+        details["ready"] = True
+        if reason:
+            details["ready_reason"] = reason
+        entry["updated_at"] = time.time()
+        if entry["status"] == "pending" and not already_ready:
+            print("📝 Google Docs task unlocked: extraction prerequisites satisfied.")
+
+    def _register_task(self, task_id: str, description: str, task_type: str) -> None:
+        entry = self._task_tracker.get(task_id)
+        if not entry:
+            self._task_tracker[task_id] = {
+                "description": description,
+                "type": task_type,
+                "status": "pending",
+                "attempts": 0,
+                "last_error": None,
+                "details": {},
+                "updated_at": time.time(),
+            }
+        else:
+            if description and description != entry.get("description"):
+                entry["description"] = description
+            entry.setdefault("type", task_type)
+        self._update_requirement_flags_from_text(description)
+
+    def _mark_task_completed(self, task_id: str, details: Optional[Dict[str, Any]] = None) -> None:
+        entry = self._task_tracker.get(task_id)
+        if not entry:
+            return
+        entry["status"] = "completed"
+        entry["updated_at"] = time.time()
+        entry["last_error"] = None
+        if details is not None:
+            entry["details"] = details
+
+    def _mark_task_failed(self, task_id: str, error: Optional[str] = None) -> None:
+        entry = self._task_tracker.get(task_id)
+        if not entry:
+            return
+        entry["status"] = "pending"
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        entry["updated_at"] = time.time()
+        if error:
+            entry["last_error"] = error
+
+    def _record_action_outcome(
+        self,
+        action: str,
+        success: bool,
+        state_before: Optional[Dict[str, Any]],
+        state_after: Optional[Dict[str, Any]],
+        page_changed: bool,
+    ) -> None:
+        """
+        Store a lightweight summary of the last executed action so the determiner
+        can see recent context and blockers can react accordingly.
+        """
+        summary = {
+            "action": action,
+            "success": success,
+            "page_changed": page_changed,
+            "url_before": (state_before or {}).get("url"),
+            "url_after": (state_after or {}).get("url"),
+            "timestamp": time.time(),
+        }
+        if not success:
+            summary["note"] = "Action execution failed."
+        elif not page_changed:
+            summary["note"] = "No visible page change detected."
+        self._last_action_summary = summary
+        self._update_task_blockers(summary)
+
+    def _update_task_blockers(self, summary: Dict[str, Any]) -> None:
+        """
+        Annotate downstream tasks with blocker notes (e.g., authentication walls).
+        """
+        url_after = (summary.get("url_after") or "").strip()
+        if not url_after:
+            return
+
+        parsed = urlparse(url_after)
+        host = (parsed.netloc or "").lower()
+        entry = self._task_tracker.get("google_docs_report")
+        if not entry:
+            return
+
+        details = entry.setdefault("details", {})
+        blockers: Dict[str, Any] = details.setdefault("blockers", {})
+        blocker_key = "google_auth_wall"
+        blocker_message = "Google Docs is gated by a sign-in screen. Use defer-input or manual authentication."
+        blocker_added = False
+        blocker_removed = False
+
+        if "accounts.google.com" in host or "signin" in host:
+            blocker = blockers.get(blocker_key)
+            if not blocker:
+                blockers[blocker_key] = {
+                    "message": blocker_message,
+                    "url": url_after,
+                    "timestamp": summary.get("timestamp"),
+                }
+                blocker_added = True
+            entry["last_error"] = blocker_message
+            details.setdefault("ready", False)
+        else:
+            if blockers.pop(blocker_key, None) is not None:
+                blocker_removed = True
+            if entry.get("last_error") == blocker_message:
+                entry["last_error"] = None
+
+        if blocker_added or blocker_removed:
+            entry["updated_at"] = time.time()
+
+    def _build_current_task_prompt(self, original_prompt: str) -> str:
+        if not self._task_tracker:
+            return original_prompt
+
+        pending_items = [
+            (task_id, data)
+            for task_id, data in self._task_tracker.items()
+            if data.get("status") != "completed"
+        ]
+        completed_items = [
+            (task_id, data)
+            for task_id, data in self._task_tracker.items()
+            if data.get("status") == "completed"
+        ]
+
+        lines = [original_prompt.strip(), "", "---- Task Progress ----"]
+
+        if completed_items:
+            lines.append("Completed objectives:")
+            for _, data in completed_items:
+                lines.append(f"- ✅ {data.get('description')}")
+        else:
+            lines.append("Completed objectives: (none yet)")
+
+        if pending_items:
+            lines.append("")
+            lines.append("Current focus (pending):")
+            for task_id, data in pending_items:
+                status = data.get("status", "pending")
+                attempts = data.get("attempts", 0)
+                descriptor = data.get("description")
+                status_note = " (in progress)" if status == "running" else ""
+                attempt_note = f" [retries: {attempts}]" if attempts else ""
+                lines.append(f"- ⏳ {descriptor}{status_note}{attempt_note}")
+                last_error = data.get("last_error")
+                if last_error:
+                    lines.append(f"    ↳ last error: {last_error}")
+                details = data.get("details") or {}
+                if task_id == "google_docs_report" and details.get("ready"):
+                    reason = details.get("ready_reason", "Extraction prerequisites satisfied.")
+                    lines.append(f"    ↳ Next step: open Google Docs and compose the report. ({reason})")
+                blockers = (details.get("blockers") or {})
+                if blockers:
+                    for blocker in blockers.values():
+                        message = blocker.get("message", "Blocked")
+                        lines.append(f"    ↳ Blocked: {message}")
+                        blocker_url = blocker.get("url")
+                        if blocker_url:
+                            lines.append(f"       url: {blocker_url}")
+            lines.append("")
+            lines.append("Tip: If the required content is on a different site, use `navigate: <url>` to open it directly.")
+        if self._user_inputs:
+            lines.append("")
+            lines.append("User-provided clarifications (most recent first):")
+            for entry in reversed(self._user_inputs[-3:]):
+                prompt = (entry.get("prompt") or "").strip()
+                response = (entry.get("response") or "").strip()
+                if prompt:
+                    lines.append(f"- {prompt}: {response}")
+                else:
+                    lines.append(f"- {response}")
+
+        if self._last_action_summary:
+            summary = self._last_action_summary
+            lines.append("")
+            lines.append("Recent action summary:")
+            action = summary.get("action", "Unknown action")
+            result_word = "succeeded" if summary.get("success") else "failed"
+            change_note = "changed the page" if summary.get("page_changed") else "no visible change"
+            lines.append(f"- {action} → {result_word} ({change_note}).")
+            url_after = summary.get("url_after")
+            if url_after:
+                lines.append(f"  URL after: {url_after}")
+            note = summary.get("note")
+            if note:
+                lines.append(f"  Note: {note}")
+
+        return "\n".join(lines)
+
+    def _should_skip_extraction(self, prompt_key: str) -> bool:
+        failures = self._extraction_failures.get(prompt_key, 0)
+        return failures >= 2
+
+    def _record_extraction_failure(self, prompt_key: str) -> None:
+        self._extraction_failures[prompt_key] = self._extraction_failures.get(prompt_key, 0) + 1
+
+    def _record_extraction_success(self, prompt_key: str) -> None:
+        if prompt_key in self._extraction_failures:
+            del self._extraction_failures[prompt_key]
+        if prompt_key in self._retarget_attempts:
+            del self._retarget_attempts[prompt_key]
+
+    def _retarget_after_extraction_failure(
+        self,
+        prompt_key: str,
+        extraction_prompt: str,
+        snapshot: BrowserState,
+        environment_state: EnvironmentState,
+        user_prompt: str,
+    ) -> Optional[_RetargetDecision]:
+        """
+        Use an LLM to determine if we should retarget the task after repeated extraction failures.
+        """
+        attempts = self._retarget_attempts.get(prompt_key, 0)
+        if attempts >= 2:
+            return None
+        self._retarget_attempts[prompt_key] = attempts + 1
+
+        visible_text = snapshot.visible_text or ""
+        snippet = visible_text[:1200]
+
+        history_summary = ""
+        if environment_state.url_history:
+            history_summary = " → ".join(environment_state.url_history[-5:])
+
+        prompt = (
+            "The agent attempted to extract structured data but the extraction failed.\n"
+            "Decide whether the current page contains the requested information, and if not, provide a single retargeting command.\n\n"
+            f"User task: {user_prompt}\n"
+            f"Extraction request: {extraction_prompt}\n"
+            f"Current URL: {snapshot.url}\n"
+            f"Page title: {snapshot.title}\n"
+            f"Recent URL history: {history_summary or 'N/A'}\n"
+            f"Visible text snippet (truncated):\n{snippet}\n\n"
+            "If the page is irrelevant or missing the requested subject, output a command such as:\n"
+            "- navigate: <url>\n"
+            "- search: <query>\n"
+            "- click: <selector or link text>\n"
+            "Return 'none' if the page is correct and the agent should try extraction again without navigating.\n"
+            "Avoid scroll actions, and prefer precise navigation targets when suggesting URLs."
+        )
+
+        try:
+            decision = generate_model(
+                prompt=prompt,
+                system_prompt=(
+                    "You help a web-browsing automation agent recover from failed data extractions. "
+                    "Evaluate the current page and produce the best single next action. "
+                    "Respond with a short command (or 'none') and a concise rationale."
+                ),
+                model_object_type=_RetargetDecision,
+                model="gpt-5-mini",
+            )
+            return decision
+        except Exception as e:
+            print(f"⚠️ Failed to obtain retarget decision: {e}")
+            return None
     
     def _parse_action_for_act_params(
         self,
@@ -1159,24 +2010,49 @@ class AgentController:
             element_count = self.bot.page.evaluate("() => document.querySelectorAll('*').length")
             sig_src = f"{url}|{element_count}"
             dom_signature = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
+            screenshot_hash = getattr(self.bot.page, "_last_screenshot_hash", None)
             return {
                 "url": url,
-                "dom_signature": dom_signature
+                "dom_signature": dom_signature,
+                "screenshot_hash": screenshot_hash
             }
         except Exception:
             # Fallback to just URL
             try:
                 url = self.bot.page.url
                 dom_signature = hashlib.md5(url.encode("utf-8")).hexdigest()
+                screenshot_hash = getattr(self.bot.page, "_last_screenshot_hash", None)
                 return {
                     "url": url,
-                    "dom_signature": dom_signature
+                    "dom_signature": dom_signature,
+                    "screenshot_hash": screenshot_hash
                 }
             except Exception:
                 return {
                     "url": "",
-                    "dom_signature": ""
+                    "dom_signature": "",
+                    "screenshot_hash": None
                 }
+
+    def _spawn_child_controller(
+        self,
+        bot,
+        *,
+        base_knowledge: Optional[List[str]] = None,
+        track_ineffective_actions: Optional[bool] = None,
+        allow_partial_completion: Optional[bool] = None
+    ) -> "AgentController":
+        """
+        Factory method passed to SubAgentController to ensure sub-agents inherit configuration.
+        """
+        track = self.detect_ineffective_actions if track_ineffective_actions is None else track_ineffective_actions
+        partial = self.allow_partial_completion if allow_partial_completion is None else allow_partial_completion
+        return AgentController(
+            bot=bot,
+            track_ineffective_actions=track,
+            base_knowledge=base_knowledge,
+            allow_partial_completion=partial
+        )
     
     def _drain_sub_agent_results(self) -> None:
         """
@@ -1228,6 +2104,32 @@ class AgentController:
         if self.sub_agent_results:
             orchestration["sub_agents"] = [result.to_dict() for result in self.sub_agent_results]
         evidence["orchestration"] = orchestration
+        evidence["sub_agent_policy"] = {
+            "level": self.sub_agent_policy_level.value,
+            "score": round(self._sub_agent_policy_score, 2),
+            "rationale": self.sub_agent_policy_rationale,
+            "override": self._sub_agent_policy_override.value if self._sub_agent_policy_override else None,
+            "spawn_count": self.sub_agent_spawn_count,
+        }
+        if self._parallel_plan:
+            evidence["parallel_plan"] = {
+                "main_agent_focus": self._main_agent_focus,
+                "integration_notes": self._integration_notes,
+                "sub_tasks": [task.dict() for task in self._parallel_plan.sub_tasks],
+            }
+        if self._task_tracker:
+            evidence["task_progress"] = {
+                task_id: {
+                    "description": data.get("description"),
+                    "type": data.get("type"),
+                    "status": data.get("status"),
+                    "attempts": data.get("attempts"),
+                    "last_error": data.get("last_error"),
+                    "updated_at": data.get("updated_at"),
+                    "details": data.get("details"),
+                }
+                for task_id, data in self._task_tracker.items()
+            }
         return evidence
 
     def _build_tab_summary(self) -> List[Dict[str, Any]]:
@@ -1265,7 +2167,432 @@ class AgentController:
         if state_before.get("dom_signature") != state_after.get("dom_signature"):
             return True
         
+        # Check if screenshot hash changed (if available)
+        if state_before.get("screenshot_hash") != state_after.get("screenshot_hash"):
+            return True
+        
         return False
+    
+    def _update_sub_agent_policy(self, user_prompt: str, completion_reasoning: Optional[str]) -> None:
+        """
+        Evaluate and update the adaptive sub-agent utilization policy.
+        """
+        new_level, new_score, new_rationale = self._compute_sub_agent_policy(
+            user_prompt=user_prompt,
+            completion_reasoning=completion_reasoning or ""
+        )
+        
+        level_changed = new_level != self.sub_agent_policy_level
+        score_changed = abs(new_score - self._sub_agent_policy_score) >= 0.1
+        rationale_changed = new_rationale != self.sub_agent_policy_rationale
+        
+        self.sub_agent_policy_level = new_level
+        self._sub_agent_policy_score = new_score
+        self.sub_agent_policy_rationale = new_rationale
+        
+        if level_changed or score_changed or rationale_changed:
+            print(f"📊 Sub-agent utilization policy → {self._policy_display_name(new_level)} "
+                  f"(score {new_score:.2f})")
+            print(f"   Reason: {new_rationale}")
+            self._log_event(
+                "sub_agent_policy_update",
+                policy=new_level.value,
+                score=new_score,
+                rationale=new_rationale,
+                override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None
+            )
+    
+    def _compute_sub_agent_policy(
+        self,
+        user_prompt: str,
+        completion_reasoning: str
+    ) -> Tuple[SubAgentPolicyLevel, float, str]:
+        """
+        Compute the appropriate sub-agent utilization policy score and level using an LLM.
+        """
+        if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
+            print("📊 Sub-agent policy decision: controller or tab manager unavailable (forcing single-threaded).")
+            return (
+                SubAgentPolicyLevel.SINGLE_THREADED,
+                0.0,
+                "Sub-agent controller or tab manager unavailable."
+            )
+        
+        if self._sub_agent_policy_override:
+            level = self._sub_agent_policy_override
+            score_override = {
+                SubAgentPolicyLevel.SINGLE_THREADED: 0.0,
+                SubAgentPolicyLevel.PARALLELIZED: 1.0
+            }[level]
+            print(f"📊 Sub-agent policy override active → {self._policy_display_name(level)} (score {score_override:.2f}).")
+            return (
+                level,
+                score_override,
+                f"Override active: forced to {self._policy_display_name(level)}."
+            )
+        
+        policy_spec, score, rationale = self._query_sub_agent_policy_llm(
+            user_prompt=user_prompt,
+            completion_reasoning=completion_reasoning
+        )
+        
+        if not isinstance(policy_spec, str):
+            policy_spec = SubAgentPolicyLevel.SINGLE_THREADED.value
+        
+        policy_spec_normalized = policy_spec.strip().lower()
+        level_map = {
+            "single": SubAgentPolicyLevel.SINGLE_THREADED,
+            "single_threaded": SubAgentPolicyLevel.SINGLE_THREADED,
+            "single-threaded": SubAgentPolicyLevel.SINGLE_THREADED,
+            "assistive": SubAgentPolicyLevel.PARALLELIZED,
+            "balanced": SubAgentPolicyLevel.PARALLELIZED,
+            "default": SubAgentPolicyLevel.SINGLE_THREADED,
+            "parallel": SubAgentPolicyLevel.PARALLELIZED,
+            "parallelized": SubAgentPolicyLevel.PARALLELIZED,
+            "aggressive": SubAgentPolicyLevel.PARALLELIZED,
+        }
+        policy_level = level_map.get(policy_spec_normalized, SubAgentPolicyLevel.SINGLE_THREADED)
+        
+        score_clamped = max(0.0, min(1.0, score if isinstance(score, (int, float)) else (1.0 if policy_level == SubAgentPolicyLevel.PARALLELIZED else 0.0)))
+        rationale_text = rationale or "LLM policy evaluation."
+        
+        print(f"📊 Sub-agent policy (LLM) → {self._policy_display_name(policy_level)} (score {score_clamped:.2f})")
+        print(f"   Reason: {rationale_text}")
+        
+        return policy_level, score_clamped, rationale_text
+    
+    def _query_sub_agent_policy_llm(
+        self,
+        user_prompt: str,
+        completion_reasoning: str
+    ) -> Tuple[str, float, str]:
+        """
+        Ask an LLM to evaluate whether sub-agents should be used and at what intensity.
+        """
+        policy_prompt = self._build_sub_agent_policy_prompt(
+            user_prompt=user_prompt,
+            completion_reasoning=completion_reasoning
+        )
+        try:
+            result = generate_model(
+                prompt=policy_prompt,
+                model_object_type=_SubAgentPolicyResponse,
+                system_prompt=self._build_sub_agent_policy_system_prompt(),
+                model="gpt-5-mini"
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to evaluate sub-agent policy via LLM: {e}")
+            return SubAgentPolicyLevel.SINGLE_THREADED.value, 0.0, "Fallback adaptive policy (LLM error)."
+        
+        return result.policy_level, result.policy_score, result.rationale
+    
+    @staticmethod
+    def _build_sub_agent_policy_system_prompt() -> str:
+        return """You help a browser automation supervisor decide whether to delegate work to sub-agents.
+
+Consider task urgency, need for parallel research, blockers, focus requirements, and historical success of sub-agents.
+Return a concise policy recommendation."""
+    
+    def _build_sub_agent_policy_prompt(
+        self,
+        user_prompt: str,
+        completion_reasoning: str
+    ) -> str:
+        active_sub_agents = 0
+        if self.sub_agent_controller:
+            active_sub_agents = sum(
+                1 for ctx in self.sub_agent_controller.sub_agents.values()
+                if ctx.status in {"pending", "running"}
+            )
+        
+        history = self.sub_agent_controller.get_execution_history() if self.sub_agent_controller else []
+        successes = sum(1 for result in history if getattr(result, "success", False))
+        failures = len(history) - successes
+        
+        tab_manager = getattr(self.bot, "tab_manager", None)
+        active_tab_url = ""
+        if tab_manager and tab_manager.get_active_tab():
+            try:
+                active_tab_url = tab_manager.get_active_tab().url
+            except Exception:
+                active_tab_url = ""
+        
+        prompt_flags = {
+            "multi_tab_emphasis": "spread across multiple tabs" if "multiple tabs" in user_prompt.lower() else "unspecified",
+            "urgency": "yes" if any(word in user_prompt.lower() for word in ["quick", "fast", "urgent", "asap"]) else "no"
+        }
+        
+        return f"""
+SUB-AGENT UTILIZATION DECISION
+==============================
+
+USER PROMPT:
+{user_prompt}
+
+COMPLETION REASONING:
+{completion_reasoning or "N/A"}
+
+ACTIVE TAB URL:
+{active_tab_url or "unknown"}
+
+CURRENT POLICY:
+- Override: {self._sub_agent_policy_override.value if self._sub_agent_policy_override else "None"}
+- Previous level: {self.sub_agent_policy_level.value}
+- Spawn count this run: {self.sub_agent_spawn_count}
+- Spawns this iteration: {self._spawns_this_iteration}
+- Active sub-agents: {active_sub_agents}
+- Recent sub-agent successes: {successes}
+- Recent sub-agent failures: {failures}
+
+TASK CONTEXT FLAGS:
+- Multi-tab emphasis: {prompt_flags["multi_tab_emphasis"]}
+- Urgency mentioned: {prompt_flags["urgency"]}
+
+DECISION GUIDELINES:
+- single_threaded: keep work on the main agent; avoid spawning sub-agents.
+- parallelized: aggressively use sub-agents; create dedicated tabs for parallel research or extraction.
+
+Provide:
+1. policy_level (single_threaded or parallelized)
+2. policy_score (0.0-1.0 representing intensity of delegation)
+3. rationale (one or two sentences)
+"""
+
+    def _normalize_suggested_url(self, url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        parts = url.strip().split()
+        for part in parts:
+            candidate = part.strip()
+            if candidate.lower().startswith(("http://", "https://")):
+                return candidate
+        return None
+
+    def _run_orchestrated_task(self, task: _SubAgentTaskPlan, plan_label: str) -> None:
+        if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
+            return
+        if self.agent_context and self.agent_context.parent_agent_id and plan_label != "parallel_plan":
+            print(f"ℹ️ {plan_label}: sub-agents do not orchestrate additional helpers (task '{task.name}' skipped).")
+            return
+
+        task_key = self._normalize_task_name(task.name)
+        self._register_task(task_key, task.instruction or task.name, plan_label)
+        task_entry = self._task_tracker.get(task_key)
+        if task_entry:
+            task_entry["status"] = "running"
+            task_entry["updated_at"] = time.time()
+
+        metadata = {
+            "orchestrated": True,
+            "plan": plan_label,
+            "task_name": task.name,
+            "expected_output": task.expected_output,
+        }
+
+        normalized_url = self._normalize_suggested_url(task.suggested_url)
+        if task.suggested_url and not normalized_url:
+            print(f"⚠️ {plan_label}: suggested URL '{task.suggested_url}' is invalid; skipping automatic navigation.")
+
+        new_tab_id = self.bot.tab_manager.open_new_tab(
+            purpose=task.name,
+            url=normalized_url,
+            metadata=metadata
+        )
+        if not new_tab_id:
+            print(f"⚠️ {plan_label}: failed to open tab for task '{task.name}'.")
+            self._log_event(f"{plan_label}_tab_failed", task=task.dict())
+            self._mark_task_failed(task_key, "Unable to open browser tab for sub-task.")
+            return
+
+        sub_agent_id = self.sub_agent_controller.spawn_sub_agent(
+            tab_id=new_tab_id,
+            instruction=task.instruction,
+            metadata=metadata
+        )
+        if not sub_agent_id:
+            print(f"⚠️ {plan_label}: failed to spawn sub-agent for task '{task.name}'.")
+            self._log_event(
+                f"{plan_label}_spawn_failed",
+                task=task.dict(),
+                tab_id=new_tab_id
+            )
+            self._mark_task_failed(task_key, "Failed to spawn sub-agent for sub-task.")
+            return
+
+        if not (self.agent_context and self.agent_context.parent_agent_id):
+            self.sub_agent_spawn_count += 1
+            self._spawns_this_iteration += 1
+
+        self._log_event(
+            f"{plan_label}_task_spawned",
+            task=task.dict(),
+            tab_id=new_tab_id,
+            agent_id=sub_agent_id
+        )
+        print(f"🤝 {plan_label}: running sub-agent '{task.name}' → {task.instruction}")
+
+        result = self.sub_agent_controller.execute_sub_agent(sub_agent_id)
+        self._log_event(
+            f"{plan_label}_task_completed",
+            task=task.dict(),
+            tab_id=new_tab_id,
+            agent_id=sub_agent_id,
+            result=result
+        )
+        success = False
+        confidence = None
+        reasoning = None
+        error_reason = None
+        if isinstance(result, dict):
+            success = bool(result.get("success"))
+            confidence = result.get("confidence")
+            reasoning = result.get("reasoning")
+            error_reason = result.get("error")
+        else:
+            success = bool(getattr(result, "success", False))
+            confidence = getattr(result, "confidence", None)
+            reasoning = getattr(result, "reasoning", None)
+            error_reason = getattr(result, "error", None)
+
+        if success:
+            self._mark_task_completed(
+                task_key,
+                {
+                    "type": plan_label,
+                    "success": True,
+                    "confidence": confidence,
+                    "reasoning": reasoning,
+                }
+            )
+        else:
+            self._mark_task_failed(task_key, error_reason or "Sub-agent task did not complete successfully.")
+        self._drain_sub_agent_results()
+    
+    def _orchestrate_parallel_work(self, user_prompt: str) -> None:
+        if self._parallel_plan_done:
+            return
+        if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
+            self._parallel_plan_done = True
+            return
+        if self.agent_context and self.agent_context.parent_agent_id:
+            self._parallel_plan_done = True
+            return
+        
+        plan = self._create_parallel_plan(user_prompt)
+        if not plan or not plan.sub_tasks:
+            print("⚠️ Parallel work plan could not be generated. Continuing without orchestration.")
+            self._parallel_plan_done = True
+            return
+        
+        self._parallel_plan = plan
+        self._main_agent_focus = plan.main_agent_focus
+        self._integration_notes = plan.integration_notes
+        self._log_event("parallel_plan_created", plan=plan.dict())
+        for sub_task in plan.sub_tasks:
+            task_key = self._normalize_task_name(sub_task.name)
+            self._register_task(task_key, sub_task.instruction or sub_task.name, "parallel_task")
+        if plan.main_agent_focus:
+            focus_key = self._normalize_task_name(f"focus:{plan.main_agent_focus}")
+            self._register_task(focus_key, plan.main_agent_focus, "integration")
+        elif self._integration_notes:
+            notes_key = self._normalize_task_name(f"notes:{self._integration_notes}")
+            self._register_task(notes_key, self._integration_notes, "integration")
+        
+        if plan.integration_notes:
+            print(f"🧩 Parallel integration notes: {plan.integration_notes}")
+        if plan.main_agent_focus:
+            print(f"🧭 Main agent focus set to: {plan.main_agent_focus}")
+        elif self._main_agent_focus:
+            print(f"🧭 Main agent continuing focus: {self._main_agent_focus}")
+        
+        original_tab_id = self.agent_context.tab_id if self.agent_context else None
+        
+        for task in plan.sub_tasks:
+            self._run_orchestrated_task(task, "parallel_plan")
+        
+        if original_tab_id and self.bot.tab_manager:
+            main_tab = self.bot.tab_manager.get_tab_info(original_tab_id)
+            if main_tab:
+                self.bot.tab_manager.switch_to_tab(original_tab_id)
+                self.bot.switch_to_page(main_tab.page)
+        
+        self._parallel_plan_done = True
+    
+    def _create_parallel_plan(self, user_prompt: str) -> Optional[_ParallelWorkPlan]:
+        subjects = self._extract_requested_subjects(user_prompt)
+        manual_plan = self._build_manual_parallel_plan(subjects, user_prompt)
+        if manual_plan:
+            return manual_plan
+
+        prompt = self._build_parallel_plan_prompt(user_prompt)
+        try:
+            plan = generate_model(
+                prompt=prompt,
+                model_object_type=_ParallelWorkPlan,
+                system_prompt=self._build_parallel_plan_system_prompt(),
+                model="gpt-5-mini"
+            )
+            return plan
+        except Exception as e:
+            print(f"⚠️ Failed to generate parallel work plan: {e}")
+            return None
+    
+    @staticmethod
+    def _build_parallel_plan_system_prompt() -> str:
+        return """You are the coordinator for a multi-agent browser automation system.
+Break the user's high-level goal into:
+- A concise focus for the main agent (the coordinator)
+- 2-4 sub-agent tasks, each with clear instructions, an optional starting URL, and an expected output description.
+Ensure sub-tasks are independent and collectively satisfy the overall request.
+Create one sub-task per distinct source or deliverable; do not bundle multiple independent targets into a single task.
+Return structured data in the provided schema only."""
+    
+    def _build_parallel_plan_prompt(self, user_prompt: str) -> str:
+        tab_summary = self._build_tab_summary()
+        tab_summary_text = json.dumps(tab_summary, indent=2) if tab_summary else "[]"
+        base_rules = "\n".join(self.base_knowledge) if self.base_knowledge else "None provided."
+        recent_results = [
+            result.to_dict() for result in self.sub_agent_results[-5:]
+        ] if self.sub_agent_results else []
+        recent_results_text = json.dumps(recent_results, indent=2) if recent_results else "[]"
+        
+        return f"""
+PARALLEL WORK PLANNING
+======================
+
+USER PROMPT:
+{user_prompt}
+
+CURRENT POLICY LEVEL: {self.sub_agent_policy_level.value} (score {self._sub_agent_policy_score:.2f})
+OVERRIDE: {self._sub_agent_policy_override.value if self._sub_agent_policy_override else "None"}
+
+KNOWN TABS:
+{tab_summary_text}
+
+RECENT SUB-AGENT RESULTS (if any):
+{recent_results_text}
+
+BASE KNOWLEDGE RULES:
+{base_rules}
+
+Provide a plan that:
+- Gives 'main_agent_focus' (the primary coordinator's responsibility).
+- Lists 'sub_tasks' (each with name, instruction, optional suggested_url, and expected_output). Each sub-task should target exactly one independent source or deliverable (e.g., one website, document, or dataset).
+- Optionally adds 'integration_notes' explaining how the outputs should be combined.
+- If the user mentions multiple sources (e.g., several websites or datasets), create a separate sub-task for each source so they can run in parallel or sequentially without overlap.
+"""
+    
+    def _can_spawn_sub_agent(self) -> Tuple[bool, str]:
+        """
+        Determine if a sub-agent can be spawned under the current policy and budgets.
+        """
+        if not self.sub_agent_controller:
+            return False, "Sub-agent controller not initialized."
+        
+        if self.sub_agent_policy_level == SubAgentPolicyLevel.SINGLE_THREADED:
+            return False, "Policy set to single-threaded."
+        
+        return True, ""
     
     def _execute_tab_decision(self, decision) -> bool:
         """
@@ -1283,7 +2610,7 @@ class AgentController:
         try:
             if decision.action == TabAction.SWITCH:
                 if not decision.target_tab_id:
-                    print(f"⚠️ Tab decision: SWITCH but no target_tab_id provided")
+                    print("⚠️ Tab decision: SWITCH but no target_tab_id provided")
                     return False
                 
                 target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
@@ -1306,7 +2633,7 @@ class AgentController:
             
             elif decision.action == TabAction.CLOSE:
                 if not decision.target_tab_id:
-                    print(f"⚠️ Tab decision: CLOSE but no target_tab_id provided")
+                    print("⚠️ Tab decision: CLOSE but no target_tab_id provided")
                     return False
                 
                 target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
@@ -1341,28 +2668,70 @@ class AgentController:
             
             elif decision.action == TabAction.CONTINUE:
                 # No action needed, just log
-                print(f"✅ Tab Decision: Continue on current tab")
+                print("✅ Tab Decision: Continue on current tab")
                 print(f"   Reasoning: {decision.reasoning}")
                 return False  # Don't skip iteration, just continue normally
             
             elif decision.action == TabAction.SPAWN_SUB_AGENT:
                 # Phase 3: Spawn sub-agent for another tab
                 if not decision.target_tab_id:
-                    print(f"⚠️ Tab decision: SPAWN_SUB_AGENT but no target_tab_id provided")
+                    print("⚠️ Tab decision: SPAWN_SUB_AGENT but no target_tab_id provided")
                     return False
                 
                 if not self.sub_agent_controller:
-                    print(f"⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
+                    print("⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
                     return False
                 
-                target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
-                if not target_tab:
-                    print(f"⚠️ Tab decision: SPAWN_SUB_AGENT for {decision.target_tab_id} but tab not found")
+                policy_allowed, policy_reason = self._can_spawn_sub_agent()
+                if not policy_allowed:
+                    print(f"🚫 Sub-agent spawn skipped ({policy_reason})")
+                    self._log_event(
+                        "sub_agent_spawn_blocked",
+                        policy=self.sub_agent_policy_level.value,
+                        reason=policy_reason,
+                        override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None,
+                        target_tab_id=decision.target_tab_id,
+                        iteration=self._current_iteration,
+                        spawn_count=self.sub_agent_spawn_count
+                    )
                     return False
+                
+                target_tab: Optional[Any] = None
+                created_new_tab = False
+                
+                if decision.target_tab_id:
+                    target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
+                    if not target_tab:
+                        print(f"⚠️ Tab decision: SPAWN_SUB_AGENT for {decision.target_tab_id} but tab not found")
+                        return False
+                else:
+                    purpose = decision.target_purpose or "Sub-agent task"
+                    metadata = {
+                        "spawned_by_decision": True,
+                        "decision_reasoning": decision.reasoning,
+                    }
+                    if self._sub_agent_policy_override:
+                        metadata["policy_override"] = self._sub_agent_policy_override.value
+                    new_tab_id = self.bot.tab_manager.open_new_tab(
+                        purpose=purpose,
+                        url=decision.target_url,
+                        metadata=metadata
+                    )
+                    if not new_tab_id:
+                        print("⚠️ Failed to create new tab for sub-agent.")
+                        return False
+                    decision.target_tab_id = new_tab_id
+                    created_new_tab = True
+                    target_tab = self.bot.tab_manager.get_tab_info(new_tab_id)
+                    if not target_tab:
+                        print(f"⚠️ Failed to retrieve newly created tab {new_tab_id} for sub-agent.")
+                        return False
                 
                 print(f"🤖 Tab Decision: Spawning sub-agent for tab {decision.target_tab_id} ({target_tab.purpose})")
                 print(f"   Reasoning: {decision.reasoning}")
                 print(f"   Confidence: {decision.confidence:.2f}")
+                if created_new_tab:
+                    print(f"   🆕 Created new tab {decision.target_tab_id} (URL: {target_tab.url}) for the sub-agent.")
                 
                 # Extract instruction from reasoning or use a default
                 # The LLM should provide instruction in metadata or we derive from reasoning
@@ -1371,6 +2740,8 @@ class AgentController:
                     tab_metadata = self.bot.tab_manager.tabs[decision.target_tab_id].metadata
                     if "sub_agent_instruction" in tab_metadata:
                         instruction = tab_metadata["sub_agent_instruction"]
+                    else:
+                        tab_metadata["sub_agent_instruction"] = instruction
                 
                 # Spawn sub-agent
                 sub_agent_id = self.sub_agent_controller.spawn_sub_agent(
@@ -1387,10 +2758,12 @@ class AgentController:
                         instruction=instruction,
                         tab_id=decision.target_tab_id,
                     )
+                    self.sub_agent_spawn_count += 1
+                    self._spawns_this_iteration += 1
                     # Execute sub-agent immediately
                     result = self.sub_agent_controller.execute_sub_agent(sub_agent_id)
                     if result.get("success"):
-                        print(f"   ✅ Sub-agent completed successfully")
+                        print("   ✅ Sub-agent completed successfully")
                         self._log_event(
                             "sub_agent_execution",
                             agent_id=sub_agent_id,
@@ -1419,7 +2792,7 @@ class AgentController:
                     
                     return True
                 else:
-                    print(f"   ⚠️ Failed to spawn sub-agent")
+                    print("   ⚠️ Failed to spawn sub-agent")
                     return False
             
             else:

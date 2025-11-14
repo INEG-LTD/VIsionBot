@@ -151,16 +151,16 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
     if not t:
         return None
     # Accept forms like "click: payload" or "click action: payload"
-    m = re.match(r"^\s*([a-z]+)(?:\s+action)?\s*:\s*(.*)$", t, flags=re.IGNORECASE)
+    m = re.match(r"^\s*([a-z][a-z0-9\-]*)(?:\s+action)?\s*:\s*(.*)$", t, flags=re.IGNORECASE)
     if m:
-        kw = m.group(1).lower()
+        kw = m.group(1).lower().replace("-", "_")
         payload = (m.group(2) or "").strip()
     else:
         # Allow bare keywords for defer so commands like "defer" or "defer take over" work.
-        m_defer = re.match(r"^\s*(defer)(?:\s+(.*))?$", t, flags=re.IGNORECASE)
+        m_defer = re.match(r"^\s*(defer(?:-input)?)(?:\s+(.*))?$", t, flags=re.IGNORECASE)
         if not m_defer:
             return None
-        kw = m_defer.group(1).lower()
+        kw = m_defer.group(1).lower().replace("-", "_")
         payload = (m_defer.group(2) or "").strip()
     # Normalize synonyms
     alias = {
@@ -188,6 +188,7 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
         "upload",
         "datetime",
         "defer",
+        "defer_input",
     }
     if kw not in supported:
         return None
@@ -218,7 +219,7 @@ def parse_type_command(text: str) -> Optional[tuple[str, Optional[str]]]:
         return None
     rest = m.group(1).strip()
     # Split on into/in
-    m2 = re.match(r"^(.*?)(?:\s+(?:into|in|to)\s+(.+))?$", rest, flags=re.IGNORECASE)
+    m2 = re.match(r"^(.*?)(?:\s+(?:into|in|to)\s*:?\s*(.+))?$", rest, flags=re.IGNORECASE)
     if not m2:
         return None
     raw_val = (m2.group(1) or "").strip()
@@ -238,7 +239,7 @@ def _parse_value_target(command: str, keyword: str) -> Optional[tuple[str, Optio
     if not m:
         return None
     rest = m.group(1).strip()
-    m2 = re.match(r"^(.*?)(?:\s+(?:into|in|to)\s+(.+))?$", rest, flags=re.IGNORECASE)
+    m2 = re.match(r"^(.*?)(?:\s+(?:into|in|to)\s*:?\s*(.+))?$", rest, flags=re.IGNORECASE)
     if not m2:
         return None
     raw_val = (m2.group(1) or "").strip()

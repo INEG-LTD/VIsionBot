@@ -30,7 +30,9 @@ class SubAgentController:
         self,
         main_bot: "BrowserVisionBot",
         main_agent_context: AgentContext,
-        controller_factory: Optional[Callable[..., "AgentController"]] = None
+        controller_factory: Optional[Callable[..., "AgentController"]] = None,
+        track_ineffective_actions: bool = True,
+        allow_partial_completion: bool = False
     ):
         """
         Initialize SubAgentController.
@@ -46,6 +48,8 @@ class SubAgentController:
         self.execution_history: List[SubAgentResult] = []
         self._pending_results: List[SubAgentResult] = []
         self._controller_factory = controller_factory
+        self.track_ineffective_actions = track_ineffective_actions
+        self.allow_partial_completion = allow_partial_completion
     
     def spawn_sub_agent(
         self,
@@ -185,7 +189,10 @@ class SubAgentController:
             # Execute sub-agent's task
             print(f"▶️ Executing sub-agent {sub_agent_id}: {sub_agent_context.instruction}")
             start_time = time.time()
-            goal_result = sub_controller.run_agentic_mode(sub_agent_context.instruction)
+            goal_result = sub_controller.run_agentic_mode(
+                sub_agent_context.instruction,
+                agent_context=sub_agent_context
+            )
             end_time = time.time()
             
             # Mark as completed
@@ -316,22 +323,40 @@ class SubAgentController:
         base_knowledge = self._get_base_knowledge()
         if self._controller_factory:
             try:
-                return self._controller_factory(self.main_bot, base_knowledge=base_knowledge)
+                return self._controller_factory(
+                    self.main_bot,
+                    base_knowledge=base_knowledge,
+                    track_ineffective_actions=self.track_ineffective_actions,
+                    allow_partial_completion=self.allow_partial_completion
+                )
             except TypeError:
-                # Fallback for factories that only accept the bot argument
-                return self._controller_factory(self.main_bot)
+                try:
+                    return self._controller_factory(self.main_bot, base_knowledge=base_knowledge)
+                except TypeError:
+                    return self._controller_factory(self.main_bot)
         # Import here to avoid circular import
         from .agent_controller import AgentController
         return AgentController(
             bot=self.main_bot,
-            track_ineffective_actions=True,
-            base_knowledge=base_knowledge
+            track_ineffective_actions=self.track_ineffective_actions,
+            base_knowledge=base_knowledge,
+            allow_partial_completion=self.allow_partial_completion
         )
 
     def _get_base_knowledge(self) -> Optional[List[str]]:
         if hasattr(self.main_bot, "goal_monitor"):
             base = getattr(self.main_bot.goal_monitor, "base_knowledge", None)
             if base:
-                return base.copy()
-        return None
+                base_list = base.copy()
+            else:
+                base_list = []
+        else:
+            base_list = []
+        helper_rule = (
+            "You are a delegated sub-agent helper. Stay focused on the provided instruction, "
+            "do not spawn additional sub-agents, and do not initiate parallel orchestration unless explicitly commanded."
+        )
+        if helper_rule not in base_list:
+            base_list.append(helper_rule)
+        return base_list
 

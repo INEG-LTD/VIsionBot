@@ -1,18 +1,27 @@
+from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
 
-bot = BrowserVisionBot()
+bot = BrowserVisionBot(
+    save_gif=True,
+    model_name="gpt-5-mini",
+    reasoning_level=ReasoningLevel.LOW,
+    overlay_only_planning=True,
+    fast_mode=True
+)
 bot.start()
-bot.page.goto("https:/google.com/")
+bot.page.goto("https://google.com")
 
 # Run agentic mode - now returns AgentResult with extracted data
-# bot.act("defer")
+bot.act("defer")
 result = bot.agentic_mode(
-    "i need to write a report on elon musk in google docs and i want to use the information about him from wikipedia, his company spacex, and also how he is doing in the stock market",
+    "go to elon musk's wikipedia page",
     base_knowledge=[
         "just press enter after you've typed a search term into a search field",
         "if asked to search use the best search box contextually available",
-        "if you encounter a captcha, give control to the user"
-    ]
+        "if you encounter a captcha, give control to the user",
+        "if there is a cookie banner, accept all cookies",
+    ],
+    allow_partial_completion=True
 )
 
 # Check if task succeeded

@@ -235,6 +235,40 @@ class TabManager:
         
         return True
     
+    def open_new_tab(
+        self,
+        purpose: str,
+        url: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Open a brand-new browser tab, register it, and optionally navigate to a URL.
+        
+        Args:
+            purpose: Purpose/description for the new tab
+            url: Optional URL to navigate to immediately after opening
+            metadata: Optional metadata to attach to the TabInfo
+        """
+        try:
+            page = self.browser_context.new_page()
+        except Exception as e:
+            print(f"⚠️ Failed to open new tab: {e}")
+            return None
+        
+        tab_metadata = metadata.copy() if metadata else {}
+        tab_id = self.register_tab(page=page, purpose=purpose, metadata=tab_metadata)
+        
+        if url:
+            try:
+                page.goto(url)
+            except Exception as e:
+                print(f"⚠️ Failed to navigate new tab {tab_id} to {url}: {e}")
+        
+        # Switch focus to the new tab
+        self.switch_to_tab(tab_id)
+        
+        return tab_id
+    
     def detect_new_tab(self, page: Page) -> Optional[str]:
         """
         Detect when a new tab is opened (e.g., from button click).

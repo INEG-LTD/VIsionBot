@@ -1,23 +1,26 @@
+from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
 
 # Initialize bot with GIF recording enabled and high reasoning level
-bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano", reasoning_level="low")
+bot = BrowserVisionBot(save_gif=True, model_name="gpt-5-nano", reasoning_level=ReasoningLevel.LOW, fast_mode=True)
 bot.start()
 bot.goto("https://www.reed.co.uk/")
 bot.default_interpretation_mode = "semantic"
 
 def sign_in_without_password_commands(bot: BrowserVisionBot):
         bot.register_prompts([
-                "form: type 'eromoseleinegbe@gmail.com' into: the email input field (look for a input field like 'Email' or 'Email Address' in the page.",
+                "type: 'eromoseleinegbe@gmail.com' into: the email input field",
                 "click: the sign in without password button",
                 "defer"
         ], "sign_in_without_password_commands", all_must_be_true=False)
         
         # Search for ios developer jobs in london or remote
-        bot.act("form: type 'ios developer' into the what field and 'london or remote' into the where field")
+        bot.act("type: 'ios developer' into the what field")
+        bot.act("type: 'london or remote' into the where field")
         bot.act("click: the search jobs button")
 
         # If user is not logged in, click the button to login and sign in without password
+        bot.act("defer: 2")
         bot.act("if see: a sign in button/link/text is visible (look for a button like 'Sign in' or 'Login' in the page.) then: click: the sign in button (look for a button like 'Sign in' or 'Login' in the page.)")
         bot.act("if see: on sign in page then: ref: sign_in_without_password_commands")
 
@@ -28,8 +31,8 @@ def sign_up(bot: BrowserVisionBot):
         email = input("Enter your email: ")
         password = input("Enter your password: ")
         
-        bot.act(f"form: type '{email}' into the email input field")
-        bot.act(f"form: type '{password}' into the password input field")
+        bot.act(f"type: type '{email}' into the email input field")
+        bot.act(f"type: type '{password}' into the password input field")
         bot.act("click: the continue button")
         
         bot.act("defer 3")
@@ -47,16 +50,16 @@ def sign_up(bot: BrowserVisionBot):
         desired_minimum_salary = "£50,000"
         desired_work_location = "London"
         
-        bot.act(f"form: type '{first_name}' into the first name input field")
-        bot.act(f"form: type '{last_name}' into the last name input field")
-        bot.act(f"form: type '{contact_number}' into the contact number input field")
-        bot.act(f"form: select '{country}' from the country dropdown")
-        bot.act(f"form: type '{city}' into the city input field")
-        bot.act(f"form: type '{current_job_title}' into the current job title input field")
-        bot.act(f"form: type '{eligible_to_work_in_uk}' into the eligible to work in uk input field")
-        bot.act(f"form: type '{desired_job_title}' into the desired job title input field")
-        bot.act(f"form: type '{desired_minimum_salary}' into the desired minimum salary input field")
-        bot.act(f"form: select '{desired_work_location}' from the desired work location dropdown")
+        bot.act(f"type: type '{first_name}' into the first name input field")
+        bot.act(f"type: type '{last_name}' into the last name input field")
+        bot.act(f"type: type '{contact_number}' into the contact number input field")
+        bot.act(f"type: select '{country}' from the country dropdown")
+        bot.act(f"type: type '{city}' into the city input field")
+        bot.act(f"type: type '{current_job_title}' into the current job title input field")
+        bot.act(f"type: type '{eligible_to_work_in_uk}' into the eligible to work in uk input field")
+        bot.act(f"type: type '{desired_job_title}' into the desired job title input field")
+        bot.act(f"type: type '{desired_minimum_salary}' into the desired minimum salary input field")
+        bot.act(f"select: select '{desired_work_location}' from the desired work location dropdown")
         bot.act("click: the create account button")
          
 bot.register_prompts([
@@ -98,7 +101,7 @@ bot.register_prompts([
 
 # If cookie banner is visible, click the button to accept cookies
 bot.act("defer 3")
-bot.on_new_page_load(["if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)"], command_id="cookie_banner_commands")
+bot.act("if see: there is a cookie banner/dialog or privacy policy banner/dialog with 'Accept' or 'Accept all' text is visible then: click: the button to accept cookies (look for a button like 'Accept' or 'Accept all' in the cookie banner)")
 sign_in_without_password_commands(bot)
 
 # Apply to all available jobs, then click pagination

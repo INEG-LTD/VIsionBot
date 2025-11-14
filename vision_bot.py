@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import time
 import traceback
 import uuid
-from typing import Any, Optional, List, Dict, Tuple, Union, Type
+from typing import Any, Optional, List, Dict, Tuple, Union, Type, Callable
 
 from playwright.sync_api import Browser, Page, Playwright
 
@@ -37,6 +38,8 @@ from goals import (
     BackGoal,
     ForwardGoal,
     DeferGoal,
+    GoalResult,
+    GoalContext,
 )
 from goals.defer_goal import TimedSleepGoal
 # from goals.condition_engine import create_predicate_condition as create_predicate
@@ -44,6 +47,7 @@ from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     extract_click_target,
     extract_press_target,
+    parse_action_intent,
     parse_structured_if,
     parse_structured_while,
     parse_structured_for,
@@ -57,7 +61,7 @@ from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
-from ai_utils import set_default_model
+from ai_utils import ReasoningLevel, set_default_model, set_default_reasoning_level
 from agent import AgentController
 from agent.agent_result import AgentResult
 from pydantic import BaseModel, Field
@@ -70,7 +74,7 @@ class BrowserVisionBot:
         self,
         page: Page = None,
         model_name: str = "gpt-5-mini",
-        reasoning_level: str = "medium",
+        reasoning_level: ReasoningLevel = ReasoningLevel.MEDIUM,
         max_attempts: int = 10,
         max_detailed_elements: int = 400,
         include_detailed_elements: bool = True,
@@ -78,6 +82,13 @@ class BrowserVisionBot:
         max_coordinate_overlays: int = 600,
         save_gif: bool = False,
         gif_output_dir: str = "gif_recordings",
+        merge_overlay_selection: bool = True,
+        overlay_only_planning: bool = False,
+        overlay_selection_max_samples: Optional[int] = None,
+        fast_mode: bool = False,
+        plan_cache_enabled: bool = True,
+        plan_cache_ttl: float = 6.0,
+        plan_cache_max_reuse: int = 1,
     ):
         self.page = page
         self.model_name = model_name
@@ -85,7 +96,6 @@ class BrowserVisionBot:
         # Set the centralized model configuration
         set_default_model(model_name)
         # Set the centralized reasoning level configuration
-        from ai_utils import set_default_reasoning_level
         set_default_reasoning_level(reasoning_level)
         self.max_attempts = max_attempts
         self.started = False
@@ -96,6 +106,26 @@ class BrowserVisionBot:
         self.two_pass_planning = two_pass_planning
         # Hard cap for how many overlay coordinates to include in prompts
         self.max_coordinate_overlays = max_coordinate_overlays
+        # Merge overlay selection with plan generation (single LLM call)
+        self.merge_overlay_selection = merge_overlay_selection
+        # Return only overlay index from planning (test mode)
+        self.overlay_only_planning = overlay_only_planning
+        self.overlay_selection_max_samples = (
+            None if overlay_selection_max_samples is not None and overlay_selection_max_samples <= 0 else overlay_selection_max_samples
+        )
+        # Fast mode: direct keyword -> action execution without full planning
+        self.fast_mode = fast_mode
+        self._fast_mode_original_evaluations: Dict[Type["BaseGoal"], Callable] = {}
+        # Planning cache controls
+        self.plan_cache_enabled = plan_cache_enabled
+        self.plan_cache_ttl = max(plan_cache_ttl, 0.0)
+        try:
+            self.plan_cache_max_reuse = int(plan_cache_max_reuse)
+        except (TypeError, ValueError):
+            self.plan_cache_max_reuse = 1
+        if self.plan_cache_max_reuse < -1:
+            self.plan_cache_max_reuse = -1
+        self._plan_cache_entry: Optional[Dict[str, Any]] = None
         
         # Auto-run actions on page load (opt-in)
         self._auto_on_load_enabled: bool = False
@@ -145,6 +175,10 @@ class BrowserVisionBot:
         self._interpretation_mode_stack: List[str] = []
         self._semantic_target_cache: Dict[str, Optional[SemanticTarget]] = {}
         
+        # Deferred input handling
+        self.defer_input_handler: Optional[Callable[[str, GoalContext], str]] = None
+        self._pending_defer_input: Optional[Dict[str, Any]] = None
+        
     def init_browser(self) -> tuple[Playwright, Browser, Page]:
         # Local import to avoid dependency when not running as script
         from playwright.sync_api import sync_playwright
@@ -173,6 +207,132 @@ class BrowserVisionBot:
         
         return p, browser, page
     
+    # ---------- Plan caching helpers ----------
+    def _invalidate_plan_cache(self, reason: str = "") -> None:
+        """Clear any cached plan."""
+        if not self.plan_cache_enabled:
+            return
+        if not self._plan_cache_entry:
+            return
+        if reason:
+            print(f"🧹 Clearing cached plan ({reason})")
+        self._plan_cache_entry = None
+
+    def _store_plan_in_cache(
+        self,
+        *,
+        goal_description: str,
+        dom_signature: str,
+        page_info: PageInfo,
+        plan: VisionPlan,
+        additional_context: str,
+        interpretation_mode: str,
+        agent_mode: bool,
+        target_context_guard: Optional[str],
+    ) -> None:
+        """Store a deep copy of the plan so we can reuse it without another LLM call."""
+        if not self.plan_cache_enabled:
+            return
+        if not plan or not getattr(plan, "action_steps", None):
+            return
+        description_key = (goal_description or "").strip()
+        context_key = (additional_context or "").strip()
+        guard_key = (target_context_guard or "").strip()
+        short_sig = dom_signature[:8] if dom_signature else "none"
+        self._plan_cache_entry = {
+            "goal": description_key,
+            "dom_signature": dom_signature,
+            "page_url": page_info.url,
+            "timestamp": time.time(),
+            "plan": plan.copy(deep=True),
+            "reuse_count": 0,
+            "additional_context": context_key,
+            "interpretation_mode": interpretation_mode,
+            "agent_mode": agent_mode,
+            "target_context_guard": guard_key,
+        }
+        print(f"💾 Cached plan for goal '{description_key}' (signature {short_sig})")
+
+    def _get_cached_plan(
+        self,
+        *,
+        goal_description: str,
+        dom_signature: str,
+        page_info: PageInfo,
+        additional_context: str,
+        interpretation_mode: str,
+        agent_mode: bool,
+        target_context_guard: Optional[str],
+    ) -> Optional[VisionPlan]:
+        """Return a cached plan copy when all context still matches."""
+        if not self.plan_cache_enabled:
+            return None
+        entry = self._plan_cache_entry
+        if not entry:
+            return None
+        if self.plan_cache_ttl > 0 and (time.time() - entry["timestamp"]) > self.plan_cache_ttl:
+            self._invalidate_plan_cache("expired")
+            return None
+        description_key = (goal_description or "").strip()
+        context_key = (additional_context or "").strip()
+        guard_key = (target_context_guard or "").strip()
+        if entry["goal"] != description_key:
+            return None
+        if entry["dom_signature"] != dom_signature:
+            return None
+        if entry["page_url"] != page_info.url:
+            return None
+        if entry["additional_context"] != context_key:
+            return None
+        if entry["interpretation_mode"] != interpretation_mode:
+            return None
+        if entry["agent_mode"] != agent_mode:
+            return None
+        if entry["target_context_guard"] != guard_key:
+            return None
+        if self.plan_cache_max_reuse >= 0 and entry["reuse_count"] >= self.plan_cache_max_reuse:
+            return None
+        entry["reuse_count"] += 1
+        entry["timestamp"] = time.time()
+        print("♻️ Reusing cached plan (skipped LLM planning)")
+        return entry["plan"].copy(deep=True)
+    
+    def set_defer_input_handler(self, handler: Optional[Callable[[str, GoalContext], str]]) -> None:
+        """Register a custom handler for defer goals that request user input."""
+        self.defer_input_handler = handler
+
+    def _default_defer_input_handler(self, prompt: str, context: GoalContext) -> str:
+        try:
+            message = prompt.strip() if prompt and prompt.strip() else "Please provide the requested input to continue."
+            return input(f"{message}\n> ")
+        except EOFError:
+            print("[Defer] Warning: input stream unavailable; returning empty response.")
+            return ""
+
+    def _request_defer_input(self, prompt: str, context: GoalContext) -> str:
+        handler = self.defer_input_handler or self._default_defer_input_handler
+        response = handler(prompt, context)
+        if response is None:
+            response = ""
+        response_str = str(response)
+        payload: Dict[str, Any] = {
+            "prompt": prompt,
+            "response": response_str,
+            "timestamp": time.time(),
+        }
+        if context and getattr(context, "current_state", None):
+            state = context.current_state
+            payload["page_url"] = getattr(state, "url", None)
+            payload["page_title"] = getattr(state, "title", None)
+        self._pending_defer_input = payload
+        return response_str
+
+    def consume_last_defer_input(self) -> Optional[Dict[str, Any]]:
+        """Return and clear the most recent defer input payload, if any."""
+        payload = self._pending_defer_input
+        self._pending_defer_input = None
+        return payload
+    
     def start(self) -> None:
         """Start the bot"""
         # If page was already provided, use it instead of initializing new browser
@@ -190,12 +350,6 @@ class BrowserVisionBot:
             except Exception:
                 pass
         
-        # Keep Playwright waits snappy while avoiding long stalls
-        try:
-            self.page.set_default_timeout(2000)
-        except Exception:
-            pass
-        
         # State tracking
         self.current_attempt = 0
         self.last_screenshot_hash = None
@@ -204,6 +358,7 @@ class BrowserVisionBot:
         
         # Screenshot and overlay caching for performance optimization
         self._cached_screenshot_with_overlays = None
+        self._cached_clean_screenshot = None
         self._cached_overlay_data = None
         self._cached_dom_signature = None
         self._cached_focus_context = None
@@ -267,6 +422,9 @@ class BrowserVisionBot:
         self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
             max_detailed_elements=self.max_detailed_elements,
+            merge_overlay_selection=self.merge_overlay_selection,
+            return_overlay_only=self.overlay_only_planning,
+            overlay_selection_max_samples=self.overlay_selection_max_samples,
         )
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
@@ -439,6 +597,7 @@ class BrowserVisionBot:
             try:
                 self._cached_screenshot_with_overlays = None
                 self._cached_overlay_data = None
+                self._cached_clean_screenshot = None
                 self._cached_dom_signature = None
                 self.last_dom_signature = None
             except Exception:
@@ -856,9 +1015,20 @@ class BrowserVisionBot:
             # Reset DOM signature for new goal - don't check against previous goal's signature
             # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
-            
+
+            if self.fast_mode:
+                fast_mode_result = self._execute_fast_mode(
+                    goal_description=goal_description,
+                    additional_context=additional_context,
+                    target_context_guard=target_context_guard,
+                    confirm_before_interaction=confirm_before_interaction,
+                    command_id=command_id,
+                    start_time=start_time,
+                )
+                if fast_mode_result is not None:
+                    return fast_mode_result
+
             self.goal_monitor.set_user_prompt(goal_description)
-            
             # Set up smart goal monitoring if enabled
             # Store kwargs temporarily for goal creation
             self._temp_goal_kwargs = kwargs
@@ -881,6 +1051,8 @@ class BrowserVisionBot:
             if goal:
                 goal_description = transformed_goal_description
                 self.goal_monitor.add_goal(goal)
+                if self.fast_mode:
+                    self._enable_fast_mode_goal_evaluation()
             elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
                 # Handle reference commands that were returned from IF evaluation
                 print(f"🔄 Executing reference command from IF evaluation: {transformed_goal_description}")
@@ -1020,9 +1192,12 @@ class BrowserVisionBot:
                     print("🔄 Same DOM but retry requested - proceeding with retry attempt")
                     print(f"   🔍 DOM signature: {sig_hash[:8]}...")
                 if sig_hash != self.last_dom_signature:
+                    if self.last_dom_signature is not None:
+                        self._invalidate_plan_cache("DOM signature changed")
                     print(f"🔄 DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
                     # Invalidate cache when DOM changes
                     self._cached_screenshot_with_overlays = None
+                    self._cached_clean_screenshot = None
                     self._cached_overlay_data = None
                     self._cached_dom_signature = None
                     print("🗑️ Invalidated screenshot and overlay cache")
@@ -1036,17 +1211,49 @@ class BrowserVisionBot:
                     # Lower quality for model-bound screenshot to reduce payload
                     screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
 
+                if self._agent_mode:
+                    target_context_guard = None
+
+                plan: Optional[VisionPlan] = None
+                current_interpretation_mode = self._get_current_interpretation_mode()
                 if isinstance(goal, NavigationGoal):
                     plan = self._build_navigation_plan(goal)
                 elif goal.needs_plan:
-                # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
-                    plan = self._generate_plan(
-                        goal_description,
-                        additional_context,
-                        screenshot,
-                        page_info,
-                        target_context_guard,
+                    plan = self._get_cached_plan(
+                        goal_description=goal_description,
+                        dom_signature=sig_hash,
+                        page_info=page_info,
+                        additional_context=additional_context,
+                        interpretation_mode=current_interpretation_mode,
+                        agent_mode=self._agent_mode,
+                        target_context_guard=target_context_guard,
                     )
+
+                    if not plan:
+                        # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
+                        plan = self._generate_plan(
+                            goal_description,
+                            additional_context,
+                            screenshot,
+                            page_info,
+                            target_context_guard,
+                        )
+
+                        if plan and plan.action_steps:
+                            self._store_plan_in_cache(
+                                goal_description=goal_description,
+                                dom_signature=sig_hash,
+                                page_info=page_info,
+                                plan=plan,
+                                additional_context=additional_context,
+                                interpretation_mode=current_interpretation_mode,
+                                agent_mode=self._agent_mode,
+                                target_context_guard=target_context_guard,
+                            )
+                    try:
+                        self.overlay_manager.remove_overlays()
+                    except Exception:
+                        pass
                 else:
                     plan = None
                     
@@ -1092,6 +1299,7 @@ class BrowserVisionBot:
                     # Check for retry requests after goal evaluation
                     retry_goal = self.goal_monitor.check_for_retry_request()
                     if retry_goal:
+                        self._invalidate_plan_cache("goal requested retry")
                         print("🔄 Goal requested retry after plan execution - regenerating plan")
                         print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
                         # Don't reset retry requests here - let them persist for the next iteration
@@ -1100,6 +1308,7 @@ class BrowserVisionBot:
                     print(f"🔍 Goal result: {goal_result}")
                     
                     if goal_result.status == GoalStatus.ACHIEVED:
+                        self._invalidate_plan_cache("goal achieved")
                         duration_ms = (time.time() - start_time) * 1000
                         self.logger.log_goal_success(goal_description, duration_ms)
                         print(f"✅ Smart goal {goal_description} achieved during plan execution!")
@@ -1111,6 +1320,7 @@ class BrowserVisionBot:
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
                     # to explore more of the page instead of waiting for duplicate screenshots
                     # Disable auto-scroll in agent mode (agent handles its own navigation)
+                    self._invalidate_plan_cache("goal incomplete after execution")
                     if not self._agent_mode:
                         print("📜 Plan executed successfully, scrolling down to explore more content")
                         from action_executor import ScrollReason
@@ -1123,6 +1333,7 @@ class BrowserVisionBot:
                         print("📜 Plan executed successfully (agent mode - auto-scroll disabled)")
                         continue
                 else:
+                    self._invalidate_plan_cache("plan execution failed")
                     # Plan execution failed - check if it was due to retry request
                     retry_goal = self.goal_monitor.check_for_retry_request()
                     if retry_goal:
@@ -1166,6 +1377,11 @@ class BrowserVisionBot:
             self._in_act = False
             if self._interpretation_mode_stack:
                 self._interpretation_mode_stack.pop()
+            if self.fast_mode:
+                try:
+                    self._restore_goal_evaluations()
+                except Exception as e:
+                    print(f"⚠️ Failed to restore fast mode goal overrides: {e}")
             try:
                 self._flush_pending_auto_on_load()
             except Exception:
@@ -1180,7 +1396,15 @@ class BrowserVisionBot:
                 except Exception as e:
                     print(f"⚠️ Error processing action queue: {e}")
 
-    def agentic_mode(self, user_prompt: str, max_iterations: int = 50, track_ineffective_actions: bool = True, base_knowledge: Optional[List[str]] = None) -> AgentResult:
+    def agentic_mode(
+        self,
+        user_prompt: str,
+        max_iterations: int = 50,
+        track_ineffective_actions: bool = True,
+        base_knowledge: Optional[List[str]] = None,
+        allow_partial_completion: bool = False,
+        check_ineffective_actions: Optional[bool] = None
+    ) -> AgentResult:
         """
         Run agentic mode (Step 1: Basic Reactive Agent).
         
@@ -1195,6 +1419,8 @@ class BrowserVisionBot:
             user_prompt: High-level user request (e.g., "click the submit button", "navigate to google.com", "extract product price")
             max_iterations: Maximum number of iterations before giving up (default: 50)
             track_ineffective_actions: If True, track and avoid repeating actions that didn't yield page changes.
+            allow_partial_completion: If True, allow CompletionContract to mark tasks complete when major deliverables are satisfied, even if minor items remain.
+            check_ineffective_actions: Optional override to enable/disable ineffective-action detection. If provided, supersedes track_ineffective_actions.
                                        Default: True (recommended for better performance)
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            These rules influence what actions the agent takes.
@@ -1230,7 +1456,15 @@ class BrowserVisionBot:
         # Set agent mode flag
         self._agent_mode = True
         try:
-            controller = AgentController(self, track_ineffective_actions=track_ineffective_actions, base_knowledge=base_knowledge)
+            if check_ineffective_actions is not None:
+                track_ineffective_actions = check_ineffective_actions
+            
+            controller = AgentController(
+                self,
+                track_ineffective_actions=track_ineffective_actions,
+                base_knowledge=base_knowledge,
+                allow_partial_completion=allow_partial_completion
+            )
             controller.max_iterations = max_iterations
             
             goal_result = controller.run_agentic_mode(user_prompt)
@@ -1249,7 +1483,7 @@ class BrowserVisionBot:
         scope: str = "viewport",
         element_description: Optional[str] = None,
         max_retries: int = 2,
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.6,
     ) -> Union[str, Dict[str, Any], BaseModel]:
         """
         Extract data from the current page based on natural language description.
@@ -1754,6 +1988,803 @@ Please extract the requested information accurately.
             confidence=1.0,
         )
 
+    def _build_click_selection_plan(
+        self,
+        *,
+        goal_description: str,
+        element_data: List[Dict[str, Any]],
+        screenshot_with_overlays: Optional[bytes],
+        page_info: PageInfo,
+        semantic_hint: Optional[SemanticTarget],
+    ) -> Optional[VisionPlan]:
+        """Use lightweight overlay selection to build a single-click plan."""
+        if not element_data:
+            return None
+
+        overlay_idx = self.plan_generator.select_best_overlay(
+            goal_description,
+            element_data,
+            semantic_hint=semantic_hint,
+            screenshot=screenshot_with_overlays,
+        )
+
+        if overlay_idx is None:
+            print("[PlanGen] ❌ Overlay selection failed to identify a target")
+            return None
+
+        matching_data = next((elem for elem in element_data if elem.get("index") == overlay_idx), None)
+        if not matching_data:
+            print(f"[PlanGen] ❌ Selected overlay #{overlay_idx} missing in element data")
+            return None
+
+        action_step = ActionStep(action=ActionType.CLICK, overlay_index=overlay_idx)
+        detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
+
+        confidence = 0.0
+        reasoning = f"Selected overlay #{overlay_idx} that best matches the goal."
+
+        print(f"[PlanGen] 🎯 Click selection chose overlay #{overlay_idx}")
+
+        return VisionPlan(
+            detected_elements=detected_elements,
+            action_steps=[action_step],
+            reasoning=reasoning,
+            confidence=confidence,
+        )
+
+    def _collect_overlay_data(
+        self,
+        goal_description: str,
+        page_info: PageInfo,
+    ) -> tuple[List[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
+        """Collect overlay metadata and screenshots, with caching and dedup filtering."""
+        current_focus_context = self.focus_manager.get_current_focus_context()
+        
+        print("🔢 Numbering interactive elements...")
+        clean_screenshot = None
+        try:
+            clean_screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
+        except Exception as e:
+            print(f"⚠️ Failed to capture clean screenshot before overlays: {e}")
+
+        element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive") or []
+
+        if current_focus_context:
+            print("🎯 Filtering elements based on current focus context...")
+            element_data = self._filter_elements_by_focus(element_data)
+
+        self._pre_dedup_element_data = element_data.copy() if element_data else []
+        self._cached_focus_context = current_focus_context
+
+        print("📸 Capturing screenshot with overlays...")
+        screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
+        self._cached_screenshot_with_overlays = screenshot_with_overlays
+        self._cached_clean_screenshot = clean_screenshot
+        self._cached_overlay_data = (
+            self._pre_dedup_element_data.copy() if hasattr(self, "_pre_dedup_element_data") else element_data.copy()
+        )
+        self._cached_dom_signature = self.last_dom_signature
+        print(f"💾 Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
+
+        if (
+            self.deduper
+            and self.deduper.dedup_enabled
+            and element_data
+        ):
+            should_avoid, reason = self._determine_dedup_usage(goal_description)
+            if should_avoid:
+                print(f"🚫 Filtering out interacted elements (reason: {reason})...")
+                elements_for_dedup: List[Dict[str, Any]] = []
+                for elem in element_data:
+                    elements_for_dedup.append(
+                        {
+                            "tagName": elem.get("tagName", ""),
+                            "text": elem.get("text", ""),
+                            "textContent": elem.get("text", ""),
+                            "description": elem.get("description", ""),
+                            "element_type": elem.get("tagName", ""),
+                            "href": elem.get("href", ""),
+                            "ariaLabel": elem.get("ariaLabel", ""),
+                            "aria_label": elem.get("ariaLabel", ""),
+                            "id": elem.get("id", ""),
+                            "role": elem.get("role", ""),
+                            "overlayIndex": elem.get("index"),
+                            "box2d": elem.get("normalizedCoords"),
+                            "normalizedCoords": elem.get("normalizedCoords"),
+                        }
+                    )
+
+                filtered_elements = self.deduper.filter_interacted_elements(elements_for_dedup, "click")
+                print(
+                    f"🔢 Found {len(filtered_elements)} elements after deduplication "
+                    f"(removed {len(elements_for_dedup) - len(filtered_elements)} duplicates)"
+                )
+
+                filtered_element_data: List[Dict[str, Any]] = []
+                for elem in filtered_elements:
+                    overlay_idx = elem.get("overlayIndex")
+                    original_elem = next((e for e in element_data if e.get("index") == overlay_idx), None)
+                    if original_elem:
+                        filtered_element_data.append(original_elem.copy())
+                element_data = filtered_element_data
+
+        return element_data, screenshot_with_overlays, clean_screenshot
+    
+    def _execute_fast_mode(
+        self,
+        goal_description: str,
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+        command_id: Optional[str],
+        start_time: float,
+    ) -> Optional[bool]:
+        """Attempt to execute the command using fast mode. Returns None to fall back."""
+        parsed = parse_keyword_command(goal_description)
+        if not parsed:
+            return None
+        keyword, payload, helper = parsed
+        keyword = (keyword or "").strip().lower()
+
+        if keyword == "click":
+            result = self._fast_click(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "type":
+            result = self._fast_type(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "select":
+            result = self._fast_select(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "upload":
+            result = self._fast_upload(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "datetime":
+            result = self._fast_datetime(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "scroll":
+            result = self._fast_scroll(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "wait":
+            result = self._fast_wait(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "press":
+            result = self._fast_press(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "stop":
+            result = self._fast_stop(
+                goal_description=goal_description,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "back":
+            result = self._fast_back(
+                goal_description=goal_description,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "forward":
+            result = self._fast_forward(
+                goal_description=goal_description,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        elif keyword == "navigate":
+            result = self._fast_open(
+                goal_description=goal_description,
+                payload=payload,
+                helper=helper,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        else:
+            # Unsupported keyword in fast mode – fall back
+            return None
+
+        if result is None:
+            # Fast mode could not confidently execute – allow normal flow
+            return None
+
+        duration_ms = (time.time() - start_time) * 1000
+        if result:
+            self.logger.log_goal_success(goal_description, duration_ms)
+            print(f"✅ Fast mode completed: {goal_description}")
+            self.command_ledger.complete_command(command_id, success=True)
+        else:
+            self.logger.log_goal_failure(goal_description, "Fast mode execution failed", duration_ms)
+            self.command_ledger.complete_command(
+                command_id,
+                success=False,
+                error_message="Fast mode execution failed",
+            )
+        self._invalidate_plan_cache("fast mode execution")
+        return result
+
+    def _fast_normalize_hint(self, text: Optional[str]) -> str:
+        if not text:
+            return ""
+        stripped = re.sub(r"\b(click|press|tap|button|link|the|a|type|select|choose|set)\b", " ", text, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        return stripped or text.strip()
+
+    def _fast_compose_selection_instruction(
+        self,
+        *,
+        request_instruction: str,
+        target_hint: str,
+        detail: Optional[str] = None,
+    ) -> str:
+        parts: List[str] = []
+        if request_instruction:
+            parts.append(request_instruction)
+        if target_hint:
+            parts.append(f"(target: {target_hint})")
+        if detail:
+            parts.append(f"(detail: {detail})")
+        if parts:
+            return " ".join(parts)
+        return request_instruction or target_hint or detail or ""
+
+    def _fast_execute_plan(
+        self,
+        *,
+        action_steps: List[ActionStep],
+        reasoning: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+        detected_elements: Optional[PageElements] = None,
+        page_info: Optional[PageInfo] = None,
+        disable_vision_tag_hint: bool = False,
+    ) -> bool:
+        plan = VisionPlan(
+            detected_elements=detected_elements or PageElements(elements=[]),
+            action_steps=action_steps,
+            reasoning=reasoning,
+            confidence=0.0,
+        )
+
+        page_info = page_info or self.page_utils.get_page_info()
+
+        original_tag_hint_state: Optional[bool] = None
+        if disable_vision_tag_hint and hasattr(self.action_executor, "enable_vision_tag_hint"):
+            original_tag_hint_state = getattr(self.action_executor, "enable_vision_tag_hint")
+            self.action_executor.enable_vision_tag_hint = False
+
+        try:
+            print("[FastMode] Executing fast plan via action_executor")
+            success = self.action_executor.execute_plan(
+                plan,
+                page_info,
+                target_context_guard=target_context_guard,
+                skip_post_guard_refinement=True,
+                confirm_before_interaction=confirm_before_interaction,
+            )
+        finally:
+            if disable_vision_tag_hint and hasattr(self.action_executor, "enable_vision_tag_hint"):
+                self.action_executor.enable_vision_tag_hint = original_tag_hint_state
+
+        print(f"[FastMode] Execution result: {success}")
+        return success
+
+    def _fast_overlay_action(
+        self,
+        *,
+        goal_description: str,
+        selection_instruction: str,
+        target_hint: str,
+        action_type: ActionType,
+        action_kwargs: Dict[str, Any],
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        page_info = self.page_utils.get_page_info()
+        element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
+        if not element_data:
+            print("❌ Fast mode: no interactive elements detected")
+            return False
+
+        instruction = selection_instruction or goal_description
+        print("[FastMode] Requesting overlay selection from LLM")
+        selection = self.plan_generator.select_best_overlay(
+            instruction=instruction,
+            element_data=element_data,
+            semantic_hint=None,
+            screenshot=clean_screenshot or screenshot_with_overlays,
+        )
+        print(f"[FastMode] Overlay selection response: {selection}")
+
+        if selection is None:
+            print("❌ Fast mode: overlay selection failed – falling back")
+            return None
+
+        overlay_index = selection
+        print(f"[FastMode] LLM chose overlay #{overlay_index}")
+
+        matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
+        if not matching_data:
+            print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data")
+            return None
+
+        try:
+            self.overlay_manager.remove_overlays()
+        except Exception:
+            pass
+
+        filtered_kwargs = {k: v for k, v in action_kwargs.items() if v is not None}
+        action_step = ActionStep(action=action_type, overlay_index=overlay_index, **filtered_kwargs)
+        detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
+
+        try:
+            return self._fast_execute_plan(
+                action_steps=[action_step],
+                reasoning=f"Fast mode selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+                detected_elements=detected_elements,
+                page_info=page_info,
+                disable_vision_tag_hint=True,
+            )
+        finally:
+            try:
+                self.overlay_manager.remove_overlays()
+            except Exception:
+                pass
+
+    def _fast_click(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        target_hint_raw = (payload or "").strip()
+        if helper:
+            helper = helper.strip()
+            if helper:
+                target_hint_raw = f"{target_hint_raw} {helper}".strip()
+        if not target_hint_raw:
+            extracted = extract_click_target(goal_description)
+            if extracted:
+                target_hint_raw = extracted
+
+        target_hint = self._fast_normalize_hint(target_hint_raw)
+        request_instruction = self._fast_normalize_hint(goal_description)
+        print(f"[FastMode] Executing fast click for instruction='{goal_description}' target_hint='{target_hint}'")
+
+        selection_instruction = self._fast_compose_selection_instruction(
+            request_instruction=request_instruction,
+            target_hint=target_hint,
+        )
+
+        return self._fast_overlay_action(
+            goal_description=goal_description,
+            selection_instruction=selection_instruction,
+            target_hint=target_hint,
+            action_type=ActionType.CLICK,
+            action_kwargs={},
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_type(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        intent = parse_action_intent(goal_description)
+        if not intent or intent.action != "type" or not intent.value:
+            return None
+
+        target_hint_raw = intent.target_text or helper or intent.helper_text
+        target_hint = self._fast_normalize_hint(target_hint_raw)
+        if not target_hint:
+            print("ℹ️ Fast mode: TYPE command missing target hint – falling back")
+            return None
+
+        request_instruction = self._fast_normalize_hint(goal_description)
+        selection_instruction = self._fast_compose_selection_instruction(
+            request_instruction=request_instruction,
+            target_hint=target_hint,
+        )
+
+        return self._fast_overlay_action(
+            goal_description=goal_description,
+            selection_instruction=selection_instruction,
+            target_hint=target_hint,
+            action_type=ActionType.TYPE,
+            action_kwargs={"text_to_type": intent.value},
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_select(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        intent = parse_action_intent(goal_description)
+        if not intent or intent.action != "select" or not intent.value:
+            return None
+
+        target_hint_raw = intent.target_text or helper or intent.helper_text
+        target_hint = self._fast_normalize_hint(target_hint_raw)
+        if not target_hint:
+            print("ℹ️ Fast mode: SELECT command missing target hint – falling back")
+            return None
+
+        request_instruction = self._fast_normalize_hint(goal_description)
+        option_detail = intent.value[:40] + ("…" if len(intent.value or "") > 40 else "")
+        selection_instruction = self._fast_compose_selection_instruction(
+            request_instruction=request_instruction,
+            target_hint=target_hint,
+            detail=f"option: {option_detail}" if option_detail else None,
+        )
+
+        return self._fast_overlay_action(
+            goal_description=goal_description,
+            selection_instruction=selection_instruction,
+            target_hint=target_hint,
+            action_type=ActionType.HANDLE_SELECT,
+            action_kwargs={"select_option_text": intent.value},
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_upload(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        intent = parse_action_intent(goal_description)
+        if not intent or intent.action != "upload" or not intent.value:
+            return None
+
+        target_hint_raw = intent.target_text or helper or intent.helper_text
+        target_hint = self._fast_normalize_hint(target_hint_raw)
+        if not target_hint:
+            print("ℹ️ Fast mode: UPLOAD command missing target hint – falling back")
+            return None
+
+        request_instruction = self._fast_normalize_hint(goal_description)
+        selection_instruction = self._fast_compose_selection_instruction(
+            request_instruction=request_instruction,
+            target_hint=target_hint,
+        )
+
+        return self._fast_overlay_action(
+            goal_description=goal_description,
+            selection_instruction=selection_instruction,
+            target_hint=target_hint,
+            action_type=ActionType.HANDLE_UPLOAD,
+            action_kwargs={"upload_file_path": intent.value},
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_datetime(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        additional_context: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        intent = parse_action_intent(goal_description)
+        if not intent or intent.action != "datetime" or not intent.value:
+            return None
+
+        target_hint_raw = intent.target_text or helper or intent.helper_text
+        target_hint = self._fast_normalize_hint(target_hint_raw)
+        if not target_hint:
+            print("ℹ️ Fast mode: DATETIME command missing target hint – falling back")
+            return None
+
+        request_instruction = self._fast_normalize_hint(goal_description)
+        selection_instruction = self._fast_compose_selection_instruction(
+            request_instruction=request_instruction,
+            target_hint=target_hint,
+        )
+
+        return self._fast_overlay_action(
+            goal_description=goal_description,
+            selection_instruction=selection_instruction,
+            target_hint=target_hint,
+            action_type=ActionType.HANDLE_DATETIME,
+            action_kwargs={"datetime_value": intent.value},
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_scroll(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        text = " ".join(filter(None, [payload, helper, goal_description])).lower()
+        direction = "down"
+        if any(term in text for term in ["up", "top", "page up"]):
+            direction = "up"
+        elif any(term in text for term in ["left"]):
+            direction = "left"
+        elif any(term in text for term in ["right"]):
+            direction = "right"
+        elif "bottom" in text:
+            direction = "down"
+
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.SCROLL, scroll_direction=direction)],
+            reasoning=f"Fast mode scroll {direction} command.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_wait(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        text = " ".join(filter(None, [payload, helper, goal_description]))
+        duration_ms = self._fast_parse_duration_ms(text)
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.WAIT, wait_time_ms=duration_ms)],
+            reasoning=f"Fast mode wait for {duration_ms} ms.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_press(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        key = extract_press_target(goal_description)
+        if not key:
+            key = (payload or helper or "").strip()
+        if not key:
+            print("ℹ️ Fast mode: PRESS command missing key – falling back")
+            return None
+
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.PRESS, keys_to_press=key)],
+            reasoning=f"Fast mode press '{key}' command.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_stop(
+        self,
+        *,
+        goal_description: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.STOP)],
+            reasoning="Fast mode stop command.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_back(
+        self,
+        *,
+        goal_description: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.BACK)],
+            reasoning="Fast mode back navigation command.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_forward(
+        self,
+        *,
+        goal_description: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.FORWARD)],
+            reasoning="Fast mode forward navigation command.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_open(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        helper: Optional[str],
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        url = self._fast_extract_url(payload) or self._fast_extract_url(helper) or self._fast_extract_url(goal_description)
+        if not url:
+            print("ℹ️ Fast mode: NAVIGATE command missing URL – falling back")
+            return None
+
+        return self._fast_execute_plan(
+            action_steps=[ActionStep(action=ActionType.OPEN, url=url)],
+            reasoning=f"Fast mode navigate to {url}.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+        )
+
+    def _fast_parse_duration_ms(self, text: Optional[str]) -> int:
+        default_ms = 1000
+        if not text:
+            return default_ms
+        match = re.search(r"(\d+(?:\.\d+)?)", text)
+        if not match:
+            return default_ms
+        value = float(match.group(1))
+        lowered = text.lower()
+        if any(unit in lowered for unit in ["hour", "hours", "hr", "hrs"]):
+            ms = int(value * 3_600_000)
+        elif any(unit in lowered for unit in ["minute", "minutes", "min", "mins"]):
+            ms = int(value * 60_000)
+        elif any(unit in lowered for unit in ["ms", "millisecond", "milliseconds"]):
+            ms = int(value)
+        else:
+            ms = int(value * 1_000)
+        return max(ms, 0)
+
+    def _fast_extract_url(self, text: Optional[str]) -> Optional[str]:
+        if not text:
+            return None
+        text = text.strip()
+        if not text:
+            return None
+        url_match = re.search(r"(https?://[^\s]+)", text, flags=re.IGNORECASE)
+        if url_match:
+            candidate = url_match.group(1).rstrip(").,;\"'")
+            return candidate
+        domain_match = re.search(r"\b([a-z0-9][a-z0-9\.-]*\.[a-z]{2,})(/[^\s]*)?\b", text, flags=re.IGNORECASE)
+        if domain_match:
+            domain = domain_match.group(1).rstrip(").,;\"'")
+            path = (domain_match.group(2) or "").rstrip(").,;\"'")
+            if not domain.startswith(("http://", "https://")):
+                return f"https://{domain}{path}"
+            return f"{domain}{path}"
+        return None
+
+    def _enable_fast_mode_goal_evaluation(self) -> List[Type[BaseGoal]]:
+        """Override goal evaluation with automatic success in fast mode."""
+        goal_types: List[Type[BaseGoal]] = []
+        if not self.goal_monitor or not self.goal_monitor.active_goal:
+            return goal_types
+
+        goal = self.goal_monitor.active_goal
+        goal_cls = goal.__class__
+
+        # Skip overriding defer-style goals that must run their own evaluation logic.
+        defer_like = getattr(goal, "request_user_input", None) is not None or goal_cls.__name__ in {"DeferGoal", "TimedSleepGoal"}
+        if defer_like:
+            print(f"[FastMode] Leaving goal evaluation intact for {goal_cls.__name__}")
+            return goal_types
+
+        goal_types.append(goal_cls)
+
+        if goal_cls not in self._fast_mode_original_evaluations:
+            original_eval = getattr(goal, "evaluate", None)
+
+            def _fast_evaluate(_: GoalContext) -> GoalResult:  # type: ignore[override]
+                return GoalResult(
+                    status=GoalStatus.ACHIEVED,
+                    confidence=1.0,
+                    reasoning="Fast mode: skipping goal evaluation.",
+                )
+
+            self._fast_mode_original_evaluations[goal_cls] = original_eval
+            goal.evaluate = _fast_evaluate.__get__(goal, goal_cls)  # type: ignore[attr-defined]
+
+            # Ensure evaluation timing won't prevent immediate success
+            try:
+                goal.EVALUATION_TIMING = GoalStatus.ACHIEVED  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        return goal_types
+
+    def _restore_goal_evaluations(self) -> None:
+        """Restore original goal evaluation behavior after fast mode completes."""
+        if not self.goal_monitor or not self.goal_monitor.active_goal:
+            return
+
+        goal = self.goal_monitor.active_goal
+        goal_cls = goal.__class__
+
+        original_eval = self._fast_mode_original_evaluations.get(goal_cls)
+        if original_eval is not None:
+            if original_eval:
+                goal.evaluate = original_eval.__get__(goal, goal_cls)  # type: ignore[attr-defined]
+            else:
+                try:
+                    delattr(goal, "evaluate")
+                except Exception:
+                    pass
+            del self._fast_mode_original_evaluations[goal_cls]
+
     def _generate_plan(
         self,
         goal_description: str,
@@ -1763,6 +2794,10 @@ Please extract the requested information accurately.
         target_context_guard: Optional[str] = None,
     ) -> Optional[VisionPlan]:
         """Generate an action plan using numbered element detection"""
+
+        # Disable context guards while running in agent mode to avoid repeated guard blocks
+        if self._agent_mode:
+            target_context_guard = None
 
         # Check if any active goal needs element detection
         needs_detection = self.goal_monitor.active_goal.needs_detection if self.goal_monitor.active_goal else True
@@ -1795,92 +2830,11 @@ Please extract the requested information accurately.
             )
             return plan
 
-        # Step 1: Number interactive elements (respecting focus context)
-        # Check if we can use cached overlay data
-        current_focus_context = self.focus_manager.get_current_focus_context()
-        can_use_cache = (
-            self._cached_dom_signature == self.last_dom_signature and
-            self._cached_overlay_data is not None and
-            self._cached_screenshot_with_overlays is not None and
-            current_focus_context == getattr(self, '_cached_focus_context', None)
-        )
-        
-        if can_use_cache:
-            print("⚡ Using cached overlay data and screenshot (DOM unchanged)")
-            element_data = self._cached_overlay_data
-        else:
-            print("🔢 Numbering interactive elements...")
-            element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive")
-            
-            # Filter elements based on current focus context
-            if current_focus_context:
-                print("🎯 Filtering elements based on current focus context...")
-                element_data = self._filter_elements_by_focus(element_data)
-            
-            # Store the filtered data (before dedup) for potential caching
-            self._pre_dedup_element_data = element_data.copy() if element_data else []
-            self._cached_focus_context = current_focus_context
-
-        # Filter out interacted elements if dedup is enabled
-        if self.deduper and self.deduper.dedup_enabled:
-            should_avoid, reason = self._determine_dedup_usage(goal_description)
-            if should_avoid:
-                print(f"🚫 Filtering out interacted elements (reason: {reason})...")
-                # Convert element_data to the format expected by deduper
-                elements_for_dedup = []
-                for elem in element_data:
-                    element_dict = {
-                        'tagName': elem.get('tagName', ''),
-                        'text': elem.get('text', ''),
-                        'textContent': elem.get('text', ''),
-                        'description': elem.get('description', ''),
-                        'element_type': elem.get('tagName', ''),
-                        'href': elem.get('href', ''),
-                        'ariaLabel': elem.get('ariaLabel', ''),
-                        'aria_label': elem.get('ariaLabel', ''),
-                        'id': elem.get('id', ''),
-                        'role': elem.get('role', ''),
-                        'overlayIndex': elem.get('index'),
-                        'box2d': elem.get('normalizedCoords'),
-                        'normalizedCoords': elem.get('normalizedCoords'),
-                    }
-                    elements_for_dedup.append(element_dict)
-                
-                # Filter out interacted elements
-                filtered_elements = self.deduper.filter_interacted_elements(elements_for_dedup, "click")
-                print(f"🔢 Found {len(filtered_elements)} elements after deduplication (removed {len(elements_for_dedup) - len(filtered_elements)} duplicates)")
-                
-                # Convert back to element_data format and update indices
-                filtered_element_data = []
-                for elem in filtered_elements:
-                    overlay_idx = elem.get('overlayIndex')
-                    # Find the original element by overlay index (keep original numbering)
-                    original_elem = next((e for e in element_data if e.get('index') == overlay_idx), None)
-                    if original_elem:
-                        # Preserve the original index to keep alignment with DOM overlays
-                        filtered_element_data.append(original_elem.copy())
-                
-                element_data = filtered_element_data
+        element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
 
         if not element_data:
             print("❌ No interactive elements found for overlays")
             return None
-
-        # Step 2: Take screenshot with numbered overlays visible (JPEG for speed)
-        # Use cached screenshot if available, otherwise capture new one
-        if can_use_cache:
-            screenshot_with_overlays = self._cached_screenshot_with_overlays
-        else:
-            # Lower quality for model-bound overlay screenshot
-            print("📸 Capturing screenshot with overlays...")
-            screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
-            
-            # Cache the screenshot and pre-dedup overlay data for future use
-            # We cache pre-dedup data because dedup state changes with interactions
-            self._cached_screenshot_with_overlays = screenshot_with_overlays
-            self._cached_overlay_data = self._pre_dedup_element_data.copy() if hasattr(self, '_pre_dedup_element_data') else element_data.copy()
-            self._cached_dom_signature = self.last_dom_signature
-            print(f"💾 Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
 
         # Step 3: Generate plan with element indices (and optional filtered overlay list)
         # In agent mode, limit to 1 step for strict action execution
@@ -1902,6 +2856,15 @@ Please extract the requested information accurately.
             target_context_guard=target_context_guard,
             max_steps=max_steps,
         )
+
+        if plan:
+            try:
+                plan_payload = plan.model_dump()
+            except AttributeError:
+                plan_payload = plan.dict()
+            except Exception as e:
+                plan_payload = f"<unable to serialize plan: {e}>"
+            print(f"[PlanGen] Plan response: {plan_payload}")
 
         # Step 4: Clean up overlays after plan generation
         self.overlay_manager.remove_overlays()
@@ -2080,7 +3043,7 @@ Please extract the requested information accurately.
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
             return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
-        if k == "defer":
+        if k in {"defer", "defer_input"}:
             # Check if payload contains a number (timed defer)
             import re
             number_match = re.match(r'^(\d+)(?:\s+(.*))?$', p.strip() if p else "")
@@ -2097,7 +3060,21 @@ Please extract the requested information accurately.
             else:
                 # Regular defer (manual control)
                 message = p or "Manual control active"
-                return DeferGoal(description=f"Defer action: {message}", prompt=message, max_retries=max_retries)
+                response_key = None
+                if message:
+                    response_key_match = re.match(r"^(?:response[_\-]?key\s*=\s*)([^|]+)\|(.+)$", message, flags=re.IGNORECASE)
+                    if response_key_match:
+                        response_key = response_key_match.group(1).strip()
+                        message = response_key_match.group(2).strip()
+                request_input = (k == "defer_input")
+                return DeferGoal(
+                    description=f"Defer action: {message}",
+                    prompt=message,
+                    max_retries=max_retries,
+                    request_user_input=request_input,
+                    response_key=response_key,
+                    input_callback=self._request_defer_input if request_input else None,
+                )
         # if k == "ref":
         #     goal_description = keyword + ": " + payload
         #     print(f"🔄 Handling ref command: '{goal_description}'")
@@ -2380,9 +3357,10 @@ Please extract the requested information accurately.
             if not determined_route and route:
                 determined_route = route.lower()
             
-            # 3. Fail if no route specified
+            # 3. Default to page route if none specified
             if not determined_route:
-                raise ValueError("If goal requires route specification. Use modifier=['see'] or modifier=['page'] or specify in command like 'if see: condition then: action'")
+                determined_route = "page"
+                print("ℹ️ No route specified for IfGoal; defaulting to 'page' evaluation.")
             
             if determined_route not in ["see", "page"]:
                 raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
@@ -2390,7 +3368,8 @@ Please extract the requested information accurately.
             print(f"Success text: '{success_text}'")
             
             # Handle reference commands differently - don't create goals for them
-            if success_text.strip().lower().startswith("ref:"):
+            normalized_success = success_text.strip()
+            if normalized_success.lower().startswith("ref:"):
                 # Create a simple placeholder goal for reference commands
                 from goals.base import BaseGoal
                 class RefPlaceholderGoal(BaseGoal):
@@ -2405,11 +3384,14 @@ Please extract the requested information accurately.
                 success_goal, _ = self._create_goal_from_description(success_text)
                 if not success_goal:
                     return None
+            if success_goal:
+                setattr(success_goal, "fast_command_text", success_text)
             
             print(f"🔀 Created success goal: '{success_goal.description}'")
             
             if fail_text and fail_text.strip():
-                if fail_text.strip().lower().startswith("ref:"):
+                normalized_fail = fail_text.strip()
+                if normalized_fail.lower().startswith("ref:"):
                     # Create a simple placeholder goal for reference commands
                     from goals.base import BaseGoal
                     class RefPlaceholderGoal(BaseGoal):
@@ -2422,6 +3404,8 @@ Please extract the requested information accurately.
                     fail_goal = RefPlaceholderGoal(fail_text)
                 else:
                     fail_goal, _ = self._create_goal_from_description(fail_text)
+                if fail_goal:
+                    setattr(fail_goal, "fast_command_text", fail_text)
             else:
                 fail_goal = None
 
@@ -2446,6 +3430,24 @@ Please extract the requested information accurately.
 
     def _evaluate_if_goal(self, if_goal: IfGoal) -> tuple[Optional[BaseGoal], str]:
         """Evaluate a conditional goal immediately and return the active sub-goal and updated description"""
+
+        def _execute_branch_goal(branch_goal: Optional[BaseGoal], branch_name: str) -> Optional[tuple[Optional[BaseGoal], str]]:
+            if not branch_goal:
+                return None
+            desc = getattr(branch_goal, "description", "") or ""
+            fast_desc = getattr(branch_goal, "fast_command_text", "")
+            command_text = fast_desc or desc
+            if desc.strip().lower().startswith("ref:"):
+                print(f"🔀 {branch_name} branch resolved to reference command: {desc} (execution deferred)")
+                return None, desc
+
+            print(f"🔀 {branch_name} branch invoking act() with '{command_text}' to leverage fast/regular execution pipeline")
+            try:
+                self.act(command_text)
+            except Exception as branch_error:
+                print(f"⚠️ IfGoal {branch_name.lower()} branch act() execution failed: {branch_error}")
+            return None, ""
+
         try:
             # Create a basic context for evaluation
             from goals.base import GoalContext, BrowserState
@@ -2469,20 +3471,16 @@ Please extract the requested information accurately.
             if_goal.evaluate(basic_context)
             
             if if_goal._last_condition_result:
-                success_goal = if_goal.success_goal
-                # If the success branch is a reference command, defer execution to act()
-                if hasattr(success_goal, 'description') and success_goal.description.strip().lower().startswith('ref:'):
-                    print(f"🔀 Success branch resolved to reference command: {success_goal.description} (execution deferred)")
-                    return None, success_goal.description
-                return success_goal, getattr(success_goal, 'description', '')
+                branch_result = _execute_branch_goal(if_goal.success_goal, "Success")
+                if branch_result is not None:
+                    return branch_result
+                return if_goal.success_goal, getattr(if_goal.success_goal, "description", "")
 
             if if_goal.fail_goal:
-                fail_goal = if_goal.fail_goal
-                # If the fail branch is a reference command, defer execution to act()
-                if hasattr(fail_goal, 'description') and fail_goal.description.strip().lower().startswith('ref:'):
-                    print(f"🔀 Fail branch resolved to reference command: {fail_goal.description} (execution deferred)")
-                    return None, fail_goal.description
-                return fail_goal, fail_goal.description
+                branch_result = _execute_branch_goal(if_goal.fail_goal, "Fail")
+                if branch_result is not None:
+                    return branch_result
+                return if_goal.fail_goal, if_goal.fail_goal.description
 
             return None, ""
                 

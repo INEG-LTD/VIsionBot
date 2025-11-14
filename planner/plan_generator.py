@@ -3,25 +3,16 @@ Plan generation utilities extracted from BrowserVisionBot.
 """
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-
-from ai_utils import generate_model
+from ai_utils import generate_model, generate_text
 from goals.base import BaseGoal
 from models import VisionPlan, PageElements
 from models.core_models import DetectedElement, PageSection, ActionStep, PageInfo, ActionType
 from utils.semantic_targets import SemanticTarget
-
-
-class OverlaySelection(BaseModel):
-    """Response schema for NL overlay selection."""
-
-    overlay_index: Optional[int] = Field(default=None)
-    confidence: float = Field(default=0.0)
-    reasoning: Optional[str] = Field(default=None)
+from utils.intent_parsers import parse_action_intent
 
 
 class PlanGenerator:
@@ -33,10 +24,18 @@ class PlanGenerator:
         include_detailed_elements: bool = True,
         max_detailed_elements: int = 400,
         max_steps: Optional[int] = None,
+        merge_overlay_selection: bool = False,
+        return_overlay_only: bool = False,
+        overlay_selection_max_samples: Optional[int] = None,
     ) -> None:
         self.include_detailed_elements = include_detailed_elements
         self.max_detailed_elements = max_detailed_elements
         self.max_steps = max_steps  # Maximum number of steps to generate (None = no limit, uses default 1-3)
+        self.merge_overlay_selection = merge_overlay_selection
+        self.return_overlay_only = return_overlay_only
+        if overlay_selection_max_samples is not None and overlay_selection_max_samples <= 0:
+            overlay_selection_max_samples = None
+        self.overlay_selection_max_samples = overlay_selection_max_samples
 
     # -------------------- Public API --------------------
     def create_plan(
@@ -75,6 +74,8 @@ class PlanGenerator:
         # Determine max_steps: use method parameter if provided, otherwise use instance default, otherwise default to 3
         effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else 3)
         
+        force_click_only = self._is_click_goal(goal_description, active_goal)
+
         instructions = [
             "Focus ONLY on the ACTIVE GOAL DESCRIPTIONS above. Prioritize fields or targets marked as pending.",
             "Do not re-complete fields already marked as completed (✅).",
@@ -87,6 +88,10 @@ class PlanGenerator:
         if target_context_guard:
             instructions.append(
                 f"Only include action steps targeting elements whose immediate surrounding context satisfies: {target_context_guard}."
+            )
+        if force_click_only:
+            instructions.append(
+                "The active goal is a CLICK. Return exactly one CLICK action targeting the requested element. Do NOT include TYPE, SCROLL, or any other action types."
             )
         if dedup_instruction_lines:
             instructions.extend(dedup_instruction_lines)
@@ -125,6 +130,8 @@ class PlanGenerator:
                     plan.action_steps = plan.action_steps[:effective_max_steps]
                     # Update reasoning to reflect the limitation
                     plan.reasoning = f"(Limited to {effective_max_steps} step(s)) {plan.reasoning}"
+                if force_click_only:
+                    self._enforce_click_actions(plan)
             return plan
         except Exception as e:
             print(f"❌ Error creating plan: {e}")
@@ -153,17 +160,36 @@ class PlanGenerator:
         print(f"[PlanGen] Received {len(element_data) if element_data else 0} element(s) for planning")
 
         element_data = element_data or []
-
+        force_click_only = self._is_click_goal(goal_description, active_goal)
+        action_intent = parse_action_intent(goal_description) if self.return_overlay_only else None
+        overlay_only_supported_actions = {"click", "type", "select", "upload", "datetime"}
+        overlay_only_candidate = (
+            action_intent is not None
+            and action_intent.action in overlay_only_supported_actions
+        )
+        
         selected_overlay = None
-        if interpretation_mode.lower() != "literal":
+        overlay_selection = None
+        should_run_selection = (
+            interpretation_mode.lower() != "literal"
+            and (
+                not self.merge_overlay_selection
+                or overlay_only_candidate
+            )
+        )
+        if should_run_selection:
             try:
-                selected_overlay = self._select_overlay_with_language(
+                overlay_selection = self._select_overlay_with_language(
                     goal_description,
                     element_data,
                     semantic_hint=semantic_hint,
+                    screenshot=screenshot_with_overlays,
                 )
             except Exception as e:
                 print(f"[PlanGen][NL] overlay selection failed: {e}")
+
+        if overlay_selection is not None:
+            selected_overlay = overlay_selection.overlay_index
 
         if selected_overlay is not None:
             overlay_data = next(
@@ -204,7 +230,7 @@ class PlanGenerator:
         dedup_block, dedup_instruction_lines = self._build_dedup_context_block(dedup_context)
         # Determine max_steps: use method parameter if provided, otherwise use instance default, otherwise default to 3
         effective_max_steps = max_steps if max_steps is not None else (self.max_steps if self.max_steps is not None else 3)
-        
+
         instructions = [
             "Treat user instructions as casual guidance from a teammate; choose the action that a careful human would naturally take to fulfil the request.",
             "Assume that everything needed to fulfil the goal is visible on the page.",
@@ -223,9 +249,17 @@ class PlanGenerator:
             instructions.append(
                 "If a VISION PRESELECTED TARGET is supplied, choose it unless it clearly conflicts with the goal."
             )
+        elif self.merge_overlay_selection and interpretation_mode.lower() != "literal":
+            instructions.append(
+                "Select the best overlay directly within your action plan; reference its number explicitly in the returned step."
+            )
         if target_context_guard:
             instructions.append(
                 f"Reject any overlay whose surrounding content does not satisfy: {target_context_guard}."
+            )
+        if force_click_only:
+            instructions.append(
+                "This goal requires a CLICK. Return exactly one CLICK action that targets the requested element. Do NOT output TYPE or other action types."
             )
         if dedup_instruction_lines:
             instructions.extend(dedup_instruction_lines)
@@ -262,6 +296,96 @@ class PlanGenerator:
         Ensure the overlay index of the elements to interact with in the action steps match the overlay index's of the elements presented in the reasoning.
         """
 
+        if self.return_overlay_only and overlay_only_candidate:
+            # Use overlay selection result when available; otherwise request selection now.
+            selection = overlay_selection
+            if selection is None and interpretation_mode.lower() != "literal":
+                try:
+                    selection = self._select_overlay_with_language(
+                        goal_description,
+                        element_data,
+                        semantic_hint=semantic_hint,
+                        screenshot=screenshot_with_overlays,
+                    )
+                except Exception as e:
+                    print(f"[PlanGen][NL] overlay-only selection failed: {e}")
+
+            if selection and selection.overlay_index is not None:
+                overlay_idx = selection.overlay_index
+                action_type = {
+                    "click": ActionType.CLICK,
+                    "type": ActionType.TYPE,
+                    "select": ActionType.HANDLE_SELECT,
+                    "upload": ActionType.HANDLE_UPLOAD,
+                    "datetime": ActionType.HANDLE_DATETIME,
+                }[action_intent.action]
+
+                step_kwargs: Dict[str, Any] = {}
+                if action_intent.action == "type":
+                    if not action_intent.value:
+                        print("[PlanGen] Overlay-only TYPE command missing value, falling back to full plan.")
+                        selection = None
+                    else:
+                        step_kwargs["text_to_type"] = action_intent.value
+                elif action_intent.action == "select":
+                    if not action_intent.value:
+                        print("[PlanGen] Overlay-only SELECT command missing option, falling back to full plan.")
+                        selection = None
+                    else:
+                        step_kwargs["select_option_text"] = action_intent.value
+                elif action_intent.action == "upload":
+                    if not action_intent.value:
+                        print("[PlanGen] Overlay-only UPLOAD command missing file path, falling back to full plan.")
+                        selection = None
+                    else:
+                        step_kwargs["upload_file_path"] = action_intent.value
+                elif action_intent.action == "datetime":
+                    if not action_intent.value:
+                        print("[PlanGen] Overlay-only DATETIME command missing value, falling back to full plan.")
+                        selection = None
+                    else:
+                        step_kwargs["datetime_value"] = action_intent.value
+
+                if selection is not None:
+                    action_step = ActionStep(
+                        action=action_type,
+                        overlay_index=overlay_idx,
+                        **step_kwargs,
+                    )
+                detected_elements = self.convert_indices_to_elements(
+                    [action_step],
+                    element_data,
+                )
+                reasoning_suffix = ""
+                if action_intent.action == "type":
+                    reasoning_suffix = f" and type '{action_intent.value}'"
+                elif action_intent.action == "select":
+                    reasoning_suffix = f" and select option '{action_intent.value}'"
+                elif action_intent.action == "upload":
+                    reasoning_suffix = f" and upload file '{action_intent.value}'"
+                elif action_intent.action == "datetime":
+                    reasoning_suffix = f" and set value '{action_intent.value}'"
+
+                target_hint = action_intent.target_text or ""
+                reason_prefix = selection.reasoning or f"Selected overlay #{overlay_idx}"
+                reasoning = f"{reason_prefix}{reasoning_suffix}"
+                if target_hint:
+                    reasoning += f" for target '{target_hint}'"
+
+                confidence = max(0.0, min(1.0, selection.confidence or 0.5))
+                print(
+                    f"[PlanGen] Overlay-only plan generated {action_type.value.upper()} on overlay #{overlay_idx} "
+                    f"(confidence={confidence:.2f})"
+                )
+                return VisionPlan(
+                    detected_elements=detected_elements,
+                    action_steps=[action_step],
+                    reasoning=reasoning,
+                    confidence=confidence,
+                )
+
+            print("[PlanGen] ❌ Overlay-only planning could not determine a target; falling back to full plan.")
+
         try:
             user_prompt = f"Create a plan to achieve the goal: '{goal_description}' using the numbered elements."
             if additional_context:
@@ -287,12 +411,51 @@ class PlanGenerator:
                 detected_elements = self.convert_indices_to_elements(plan.action_steps, element_data)
                 plan.detected_elements = detected_elements
                 print(f"✅ Plan created with {len(detected_elements.elements)} detected elements")
+                if force_click_only:
+                    self._enforce_click_actions(plan)
             return plan
         except Exception as e:
             print(f"❌ Error creating plan with element indices: {e}")
             return None
 
     # -------------------- Helpers --------------------
+    def select_best_overlay(
+        self,
+        instruction: str,
+        element_data: List[Dict[str, Any]],
+        *,
+        semantic_hint: Optional[SemanticTarget] = None,
+        screenshot: Optional[bytes] = None,
+        max_samples: Optional[int] = None,
+    ) -> Optional[int]:
+        """
+        Lightweight helper that asks the LLM to pick a single overlay number.
+        Returns the overlay index as an int, or None if selection fails.
+        """
+        selection = self._select_overlay_with_language(
+            instruction,
+            element_data,
+            semantic_hint=semantic_hint,
+            screenshot=screenshot,
+            max_samples=max_samples,
+        )
+        if selection is None:
+            return None
+        if isinstance(selection, int):
+            return selection
+        if isinstance(selection, str):
+            try:
+                return int(selection.strip())
+            except Exception:
+                return None
+        # Fallback for legacy OverlaySelection object
+        overlay_idx = getattr(selection, "overlay_index", None)
+        if overlay_idx is None:
+            return None
+        try:
+            return int(overlay_idx)
+        except Exception:
+            return None
     def _build_dedup_context_block(self, dedup_context: Optional[Dict[str, Any]]) -> tuple[str, List[str]]:
         """Prepare a textual summary of interacted elements for prompt injection."""
 
@@ -506,75 +669,111 @@ class PlanGenerator:
 
         plan.action_steps = filtered_steps
 
+    def _is_click_goal(self, goal_description: str, active_goal: Optional[BaseGoal]) -> bool:
+        if active_goal and active_goal.__class__.__name__ == "ClickGoal":
+            return True
+        text = (goal_description or "").strip().lower()
+        if not text:
+            return False
+        click_leads = ("click", "press", "tap")
+        if text.split(":", 1)[0] in click_leads:
+            return True
+        return any(text.startswith(f"{prefix} ") or text.startswith(f"{prefix}:") for prefix in click_leads)
+
+    def _enforce_click_actions(self, plan: VisionPlan) -> None:
+        if not plan or not plan.action_steps:
+            return
+
+        adjusted_steps: List[ActionStep] = []
+        mutated = False
+
+        for step in plan.action_steps:
+            if step.action == ActionType.CLICK:
+                adjusted_steps.append(step)
+                continue
+
+            mutated = True
+            if step.overlay_index is None:
+                print("[PlanGen] ⚠️ Non-click step without overlay removed during click-only enforcement.")
+                continue
+
+            adjusted_steps.append(
+                ActionStep(
+                    action=ActionType.CLICK,
+                    overlay_index=step.overlay_index,
+                    x=step.x,
+                    y=step.y,
+                    text_to_type=None,
+                    wait_time_ms=step.wait_time_ms,
+                    scroll_direction=step.scroll_direction,
+                    keys_to_press=None,
+                    select_option_text=None,
+                    datetime_value=None,
+                    upload_file_path=None,
+                    url=step.url,
+                )
+            )
+
+        if not adjusted_steps:
+            print("[PlanGen] ⚠️ Click-only enforcement produced no actionable steps; clearing plan.")
+            plan.action_steps = []
+            return
+
+        if mutated:
+            print("[PlanGen] 🔧 Adjusted plan to enforce CLICK-only actions.")
+            plan.action_steps = adjusted_steps
+            plan.reasoning = (plan.reasoning or "") + " [click-only enforcement]"
+
     def _select_overlay_with_language(
         self,
         instruction: str,
         element_data: List[Dict[str, Any]],
         *,
         semantic_hint: Optional[SemanticTarget] = None,
-        max_samples: int = 40,
+        screenshot: Optional[bytes] = None,
+        max_samples: Optional[int] = None,
     ) -> Optional[int]:
         if not element_data:
             return None
 
         # Prioritise likely clickable overlays and discard huge structural regions
-        filtered: List[Dict[str, Any]] = []
-        for elem in element_data:
-            idx = elem.get("index")
-            if idx is None:
-                continue
-            if not self._infer_clickable(elem):
-                continue
-            if self._normalized_area_ratio(elem) > 0.3:
-                continue
-            filtered.append(elem)
-
-        if not filtered:
-            return None
-
         goal_tokens = self._extract_goal_tokens(instruction)
         hint_terms = self._extract_hint_terms(semantic_hint)
         goal_token_str = ", ".join(goal_tokens) if goal_tokens else "none"
 
-        scored_candidates: List[Dict[str, Any]] = []
-        for elem in filtered:
-            score_hint, token_hits, hint_hits = self._score_overlay_for_instruction(
-                goal_tokens,
-                hint_terms,
-                elem,
-            )
-            elem_copy = dict(elem)
-            elem_copy["_score_hint"] = score_hint
-            elem_copy["_token_hits"] = token_hits
-            elem_copy["_hint_hits"] = hint_hits
-            scored_candidates.append(elem_copy)
-
-        scored_candidates.sort(key=lambda e: e.get("_score_hint", 0), reverse=True)
+        if max_samples is None:
+            max_samples = self.overlay_selection_max_samples
+        if max_samples is not None and max_samples <= 0:
+            max_samples = None
 
         samples: List[str] = []
-        for elem in scored_candidates[:max_samples]:
+        if element_data:
+            print("[PlanGen][NL] Candidate overlays for LLM selection:")
+        iterable = element_data if max_samples is None else element_data[:max_samples]
+        for elem in iterable:
             idx = elem.get("index")
             role = (elem.get("role") or elem.get("tagName") or "").lower()
             tag = (elem.get("tagName") or "").lower()
             text = (elem.get("textContent") or "").strip()
             aria = (elem.get("ariaLabel") or "").strip()
-            area = self._normalized_area_ratio(elem) * 100
-            score_hint = int(elem.get("_score_hint", 0))
-            token_hits = elem.get("_token_hits") or []
-            hint_hits = elem.get("_hint_hits") or []
-
-            text_snip = text[:80]
-            aria_snip = aria[:60] if aria else "-"
-            match_str = ",".join(token_hits) if token_hits else "-"
-            hint_str = ",".join(hint_hits) if hint_hits else "-"
-
-            samples.append(
-                f"- #{idx} score={score_hint} role={role or 'unknown'} tag={tag or 'unknown'} area={area:.2f}% "
-                f"text='{text_snip}' aria='{aria_snip}' matches={match_str} hint_hits={hint_str}"
-            )
+            text_snip = text.strip()[:60]
+            aria_snip = aria.strip()[:40]
+            if not text_snip and not aria_snip:
+                continue
+            role_str = role or "unknown"
+            tag_str = tag or "unknown"
+            if role_str == tag_str:
+                role_str = ""
+            aria_str = f' aria="{aria_snip}"' if aria_snip else ""
+            text_str = f' txt="{text_snip}"' if text_snip else ""
+            role_part = f" role={role_str}" if role_str else ""
+            log_line = f"  • #{idx} tag={tag_str}{role_part}{text_str}{aria_str}"
+            print(log_line)
+            samples.append(f"- #{idx} tag={tag_str}{role_part}{text_str}{aria_str}")
 
         prompt = (
-            "You select the overlay index that best fulfills the browsing instruction.\n"
+            "You are given a page screenshot and a list of numbered overlay summaries.\n"
+            "Pick the overlay number that best satisfies the browsing instruction.\n"
             f"Instruction: \"{instruction}\"\n"
             f"Instruction terms to align with: {goal_token_str}.\n"
         )
@@ -592,29 +791,30 @@ class PlanGenerator:
             "- Choose concise clickable controls (buttons/links) that directly execute the request.\n"
             "- Prefer overlays whose visible text or aria labels contain several instruction or must-have terms.\n"
             "- Reject overlays that describe entire job cards, long descriptions, or containers that lack a primary action.\n"
-            "Return JSON {\"overlay_index\": number|null, \"confidence\": number, \"reasoning\": string}.\n"
+            "Respond with ONLY the overlay number (e.g., 5). No explanation, no JSON.\n"
             "Overlays:\n" + "\n".join(samples)
         )
 
         try:
-            selection = generate_model(
+            raw_response = generate_text(
                 prompt=prompt,
-                model_object_type=OverlaySelection,
+                system_prompt="You select the overlay index that best fits the instruction. Reply with just the index as an integer.",
+                image=screenshot,
             )
         except Exception as e:
             print(f"[PlanGen][NL] LLM selection error: {e}")
             return None
 
-        if not selection or selection.overlay_index is None:
+        if not raw_response:
             return None
 
-        print(
-            f"[PlanGen][NL] overlay #{selection.overlay_index} chosen (confidence={selection.confidence:.2f})"
-        )
-        try:
-            return int(selection.overlay_index)
-        except Exception:
+        match = re.search(r"\d+", str(raw_response))
+        if not match:
             return None
+
+        overlay_index = int(match.group())
+        print(f"[PlanGen][NL] overlay #{overlay_index} chosen (raw='{raw_response}')")
+        return overlay_index
 
     def _normalized_area_ratio(self, element: Dict[str, Any]) -> float:
         box = element.get("normalizedCoords") or []

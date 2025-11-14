@@ -3,7 +3,7 @@ Base Form Field Goal - Shared logic for form field validation goals.
 """
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,35 @@ class FormFieldGoal(BaseGoal):
                 
                 const rect = element.getBoundingClientRect();
                 const computedStyle = getComputedStyle(element);
+
+                const editableAncestor = element.closest('[contenteditable="true"]');
+                let editableAncestorTag = null;
+                let editableAncestorRole = null;
+                if (editableAncestor) {{
+                    editableAncestorTag = editableAncestor.tagName ? editableAncestor.tagName.toLowerCase() : null;
+                    editableAncestorRole = editableAncestor.getAttribute('role') || '';
+                }}
+
+                let docEditableSurface = false;
+                try {{
+                    if (!editableAncestor) {{
+                        if (element.tagName && element.tagName.toLowerCase() === 'canvas') {{
+                            const iframe = element.closest('iframe');
+                            if (iframe && iframe.contentDocument) {{
+                                const iframeActive = iframe.contentDocument.activeElement;
+                                if (iframeActive && (iframeActive.isContentEditable || iframeActive.getAttribute('contenteditable') === 'true')) {{
+                                    docEditableSurface = true;
+                                }}
+                            }}
+                        }}
+                        const active = document.activeElement;
+                        if (active && (active.isContentEditable || active.getAttribute('contenteditable') === 'true')) {{
+                            docEditableSurface = docEditableSurface || active.contains(element) || element.contains(active);
+                        }}
+                    }}
+                }} catch (err) {{
+                    docEditableSurface = docEditableSurface || false;
+                }}
                 
                 return {{
                     tagName: element.tagName.toLowerCase(),
@@ -53,6 +82,12 @@ class FormFieldGoal(BaseGoal):
                     textContent: element.textContent || '',
                     value: element.value || '',
                     required: element.required || false,
+                    role: element.getAttribute('role') || '',
+                    isContentEditable: !!(element.isContentEditable || element.getAttribute('contenteditable') === 'true'),
+                    hasEditableAncestor: !!editableAncestor,
+                    editableAncestorTag: editableAncestorTag,
+                    editableAncestorRole: editableAncestorRole,
+                    docEditableSurface: docEditableSurface,
                     isClickable: computedStyle.pointerEvents !== 'none' && 
                                 computedStyle.display !== 'none' && 
                                 computedStyle.visibility !== 'hidden',
@@ -66,7 +101,9 @@ class FormFieldGoal(BaseGoal):
                         id: element.id,
                         placeholder: element.placeholder,
                         'aria-label': element.getAttribute('aria-label'),
-                        class: element.className
+                        class: element.className,
+                        role: element.getAttribute('role'),
+                        contenteditable: element.getAttribute('contenteditable')
                     }}
                 }};
             }})();
@@ -98,8 +135,12 @@ class FormFieldGoal(BaseGoal):
         elif label:
             description_parts.append(f"labeled '{label}'")
         
+        if(bool(element_info.get('isContentEditable'))):
+            description_parts.append("(content editable)")
         if field_type and field_type != 'text':
             description_parts.append(f"of type '{field_type}'")
+        if element_info.get('role'):
+            description_parts.append(f"(role='{element_info.get('role')}')")
         
         return " ".join(description_parts)
     
@@ -192,6 +233,10 @@ class FormFieldGoal(BaseGoal):
         """Check if element matches expected types"""
         tag_name = element_info.get('tagName', '').lower()
         input_type = element_info.get('type', '').lower()
+        role = element_info.get('role', '')
+        if role:
+            role = role.lower()
+        is_content_editable = bool(element_info.get('isContentEditable'))
         
         for expected in expected_types:
             if isinstance(expected, tuple):
@@ -200,8 +245,22 @@ class FormFieldGoal(BaseGoal):
                     return True
             else:
                 # Check tag only (e.g., 'select', 'textarea')
-                if tag_name == expected:
+                expected_lower = str(expected).lower()
+                if expected_lower == 'contenteditable' and is_content_editable:
                     return True
+                if expected_lower.startswith('role:') and role == expected_lower.split(':', 1)[1]:
+                    return True
+                if tag_name == expected_lower:
+                    return True
+        
+        # Fallback heuristics for rich editors (e.g., Google Docs)
+        has_editable_ancestor = bool(element_info.get('hasEditableAncestor'))
+        if has_editable_ancestor:
+            return True
+        if element_info.get('docEditableSurface'):
+            return True
+        if is_content_editable and any(isinstance(exp, str) and exp.lower() == 'contenteditable' for exp in expected_types):
+            return True
         
         return False
     

@@ -32,7 +32,7 @@ This document consolidates the implementation details for the BrowserVision agen
 
 - `agent/reactive_goal_determiner.py` builds a detailed prompt emphasizing:
   - **Extraction priority** (`extract:` commands whenever the user wants data).
-  - **Command catalogue** including `click`, `type`, `press`, `scroll`, `select`, `form`, `upload`, and the newly documented `defer` handoff.
+- **Command catalogue** including `click`, `type`, `press`, `scroll`, `select`, `form`, `upload`, the `defer` handoff, and the `subagents:` override for tuning sub-agent parallelism.
   - **Element specificity**: click/type commands must name the element type.
   - **Base knowledge**: user-supplied rules injected into the system and action prompts.
   - **Failed/ineffective history**: clearly enumerated so the LLM steers away from repeats.
@@ -64,8 +64,8 @@ This document consolidates the implementation details for the BrowserVision agen
 ### Tab Decision Engine (`tab_management/tab_decision_engine.py`)
 
 - Builds an LLM prompt summarizing the current tab, all other tabs, and the user goal.
-- Returns a structured `TabDecision` (`action`, `target_tab_id`, `reasoning`, `confidence`, `should_take_action`).
-- Possible actions: `SWITCH`, `CLOSE`, `CONTINUE`, `SPAWN_SUB_AGENT`.
+- Returns a structured `TabDecision` (`action`, `target_tab_id`, `target_purpose`, `target_url`, `reasoning`, `confidence`, `should_take_action`).
+- Possible actions: `SWITCH`, `CLOSE`, `CONTINUE`, `SPAWN_SUB_AGENT`. Spawn recommendations can include a fresh tab purpose and starting URL when no existing tab should be reused.
 - `AgentController` checks for decisions each iteration; `_execute_tab_decision()` runs them (bringing tabs to front, closing, or invoking sub-agent logic).
 
 ## 6. Sub-Agent Infrastructure
@@ -76,6 +76,18 @@ This document consolidates the implementation details for the BrowserVision agen
   - `execute_sub_agent()` switches to the child tab, runs `agentic_mode`, records success/failure, and switches back.
   - Supports listing, querying, result retrieval, execution history, and cleanup of completed agents.
 - **Propagation**: Sub-agents inherit base knowledge and share the same Bot instance, but operate on isolated tabs.
+- **Parallel orchestration**: When the adaptive policy recommends `parallelized`, the main controller asks an LLM to break the task into sub-prompts, launches dedicated tabs/sub-agents to handle the research tasks, and then resumes with their results while focusing the main agent on the integration/assembly work.
+
+### Adaptive Utilization Policy
+
+- `AgentController` evaluates an adaptive sub-agent utilization policy every iteration via an LLM call that weighs task intent, urgency, active helper load, recent sub-agent outcomes, and stated overrides.
+- Policy levels:
+  - `single_threaded`: avoid spawning; used when delegation targets are unavailable or the task demands tight focus.
+  - `parallelized`: encourage eager spawning for independent or research-heavy tasks.
+- The current policy, score, rationale, and override flag are recorded in orchestration evidence and surfaced to the TabDecisionEngine.
+- Users (and the reactive LLM) can issue `subagents:` override commands (`single`, `parallel`, `reset`, etc.) to force or clear a policy level when necessary. Overrides take effect immediately and are logged.
+- `TabDecisionEngine` receives the policy context and respects it when recommending `SPAWN_SUB_AGENT`, preventing surprise spawns when the budget is exhausted or policy forbids it.
+- Spawn decisions are task-driven: when a new helper is needed, the decision engine describes the sub-task and the controller opens a brand-new browser tab (optionally navigating to a supplied URL) before launching the sub-agent. Existing tabs are only reused when explicitly requested.
 
 ## 7. Orchestration & Results
 
@@ -94,10 +106,12 @@ This document consolidates the implementation details for the BrowserVision agen
 ## 9. Key Interaction Patterns
 
 - **Defer command**: When the user requests manual control (captcha, MFA, human decision), the reactive prompt now advertises `defer:` commands. Runtime support exists in `vision_bot.py` (`DeferGoal` & `TimedSleepGoal`).
+- **Sub-agent policy overrides**: The reactive prompt can issue `subagents:` commands to force `single` or `parallel` utilization (or `reset` to return to adaptive mode) when the default policy needs nudging.
 - **Plan truncation**: In agent mode, plan generation is limited to a single step and auto-scroll is disabled to keep the loop reactive.
 - **State resets**: Cache invalidation (`_cached_screenshot_with_overlays`, `_cached_dom_signature`, etc.) occurs whenever DOM signature changes or tabs switch, preventing stale context.
 - **Fallbacks**: Navigation commands are converted to clicks, and pressing keys defaults to brief commands (e.g., `press: Enter`).
 - **History-aware navigation**: The reactive prompt summarizes recent URLs and highlights previous/next pages so the agent can choose `back:` or `forward:` when returning to a prior step is faster than searching again.
+- **Parallel orchestration**: When the policy escalates to “parallelized,” the controller pauses to request an LLM-produced work plan, spawns sub-agents with mini-prompts (creating tabs as needed), waits for their outputs, and then continues the main loop with a focused integration task.
 
 ## 10. Extending the System
 

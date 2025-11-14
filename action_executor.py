@@ -93,6 +93,9 @@ class ActionExecutor:
         analyzer = getattr(goal_monitor, "element_analyzer", None)
         self.context_guard = ContextGuard(page, analyzer)
         
+        # Vision-assisted refinements
+        self.enable_vision_tag_hint: bool = True
+        
         # Pre-action callback system
         self.pre_action_callbacks: List[Callable[[PreActionContext], None]] = []
         # Post-action callback system
@@ -1779,7 +1782,7 @@ class ActionExecutor:
         
         # Use vision to identify what element tag should be clicked at these coordinates
         vision_tag_hint = None
-        if screenshot:
+        if screenshot and getattr(self, "enable_vision_tag_hint", True):
             vision_tag_hint = self._get_vision_tag_hint(x, y, screenshot, page_info, normalized_box)
         
         js = r"""
