@@ -73,6 +73,163 @@ from agent.agent_result import AgentResult
 from pydantic import BaseModel, Field
 
 
+class ExecutionTimer:
+    """Tracks execution timings for tasks, iterations, and commands"""
+    
+    def __init__(self):
+        self.task_start_time: Optional[float] = None
+        self.task_end_time: Optional[float] = None
+        self.iterations: List[Dict[str, float]] = []  # List of {start, end} dicts
+        self.commands: List[Dict[str, Any]] = []  # List of {command_id, command, start, end} dicts
+        self.current_iteration_start: Optional[float] = None
+        self.current_command_id: Optional[str] = None
+        self.current_command_start: Optional[float] = None
+        self._current_command_text: str = ""
+    
+    def start_task(self) -> None:
+        """Start tracking task execution"""
+        self.task_start_time = time.time()
+        self.iterations = []
+        self.commands = []
+    
+    def end_task(self) -> None:
+        """End task tracking"""
+        self.task_end_time = time.time()
+        # End any active iteration or command
+        if self.current_iteration_start is not None:
+            self.end_iteration()
+        if self.current_command_start is not None:
+            self.end_command()
+    
+    def start_iteration(self) -> None:
+        """Start tracking an iteration"""
+        # End previous iteration if still active
+        if self.current_iteration_start is not None:
+            self.end_iteration()
+        self.current_iteration_start = time.time()
+    
+    def end_iteration(self) -> None:
+        """End current iteration tracking"""
+        if self.current_iteration_start is not None:
+            self.iterations.append({
+                "start": self.current_iteration_start,
+                "end": time.time()
+            })
+            self.current_iteration_start = None
+    
+    def start_command(self, command_id: str, command: str) -> None:
+        """Start tracking a command"""
+        # End previous command if still active
+        if self.current_command_start is not None:
+            self.end_command()
+        self.current_command_id = command_id
+        self.current_command_start = time.time()
+    
+    def end_command(self) -> None:
+        """End current command tracking"""
+        if self.current_command_start is not None and self.current_command_id is not None:
+            self.commands.append({
+                "command_id": self.current_command_id,
+                "command": getattr(self, "_current_command_text", ""),
+                "start": self.current_command_start,
+                "end": time.time()
+            })
+            self.current_command_id = None
+            self.current_command_start = None
+            self._current_command_text = ""
+    
+    def set_command_text(self, text: str) -> None:
+        """Set the command text for the current command"""
+        self._current_command_text = text
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get a summary of all timings"""
+        summary = {
+            "task": {},
+            "iterations": [],
+            "commands": []
+        }
+        
+        # Task timing
+        if self.task_start_time and self.task_end_time:
+            task_duration = self.task_end_time - self.task_start_time
+            summary["task"] = {
+                "duration_seconds": round(task_duration, 2),
+                "duration_formatted": self._format_duration(task_duration)
+            }
+        
+        # Iteration timings
+        for i, iter_data in enumerate(self.iterations, 1):
+            duration = iter_data["end"] - iter_data["start"]
+            summary["iterations"].append({
+                "iteration": i,
+                "duration_seconds": round(duration, 2),
+                "duration_formatted": self._format_duration(duration)
+            })
+        
+        # Command timings
+        for cmd_data in self.commands:
+            duration = cmd_data["end"] - cmd_data["start"]
+            summary["commands"].append({
+                "command_id": cmd_data["command_id"],
+                "command": cmd_data.get("command", ""),
+                "duration_seconds": round(duration, 2),
+                "duration_formatted": self._format_duration(duration)
+            })
+        
+        return summary
+    
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in a human-readable way"""
+        if seconds < 1:
+            return f"{int(seconds * 1000)}ms"
+        elif seconds < 60:
+            return f"{seconds:.2f}s"
+        else:
+            mins = int(seconds // 60)
+            secs = seconds % 60
+            return f"{mins}m {secs:.2f}s"
+    
+    def log_summary(self) -> None:
+        """Log timing summary to console"""
+        summary = self.get_summary()
+        
+        print("\n" + "="*60)
+        print("⏱️  EXECUTION TIMING SUMMARY")
+        print("="*60)
+        
+        # Task timing
+        if summary["task"]:
+            print(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
+        
+        # Iteration timings
+        if summary["iterations"]:
+            total_iter_time = sum(iter_data["duration_seconds"] for iter_data in summary["iterations"])
+            avg_iter_time = total_iter_time / len(summary["iterations"])
+            print(f"\n🔄 Iterations: {len(summary['iterations'])}")
+            print(f"   Total iteration time: {self._format_duration(total_iter_time)}")
+            print(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
+            print(f"   Fastest iteration: {min(iter_data['duration_formatted'] for iter_data in summary['iterations'])}")
+            print(f"   Slowest iteration: {max(iter_data['duration_formatted'] for iter_data in summary['iterations'])}")
+        
+        # Command timings
+        if summary["commands"]:
+            total_cmd_time = sum(cmd_data["duration_seconds"] for cmd_data in summary["commands"])
+            avg_cmd_time = total_cmd_time / len(summary["commands"])
+            print(f"\n🎯 Commands: {len(summary['commands'])}")
+            print(f"   Total command time: {self._format_duration(total_cmd_time)}")
+            print(f"   Average per command: {self._format_duration(avg_cmd_time)}")
+            
+            # Show top 5 slowest commands
+            sorted_commands = sorted(summary["commands"], key=lambda x: x["duration_seconds"], reverse=True)
+            print("\n   Top 5 slowest commands:")
+            for i, cmd in enumerate(sorted_commands[:5], 1):
+                cmd_text = cmd["command"][:50] + "..." if len(cmd.get("command", "")) > 50 else cmd.get("command", "")
+                print(f"   {i}. {cmd['command_id']}: {cmd['duration_formatted']} - {cmd_text}")
+        
+        print("="*60 + "\n")
+
+
 class BrowserVisionBot:
     """Modular vision-based web automation bot"""
 
@@ -221,6 +378,9 @@ class BrowserVisionBot:
         # Deferred input handling
         self.defer_input_handler: Optional[Callable[[str, GoalContext], str]] = None
         self._pending_defer_input: Optional[Dict[str, Any]] = None
+        
+        # Execution timer for tracking task, iteration, and command timings
+        self.execution_timer = ExecutionTimer()
         
     def init_browser(self) -> tuple[Playwright, Browser, Page]:
         # Local import to avoid dependency when not running as script
@@ -907,12 +1067,14 @@ class BrowserVisionBot:
             page_info = self.page_utils.get_page_info()
             ok = self.action_executor.execute_plan(fast_plan, page_info, command_id=command_id)
             if not ok:
+                self.execution_timer.end_command()
                 return False
 
             # Evaluate goals after execution
             goal_result = self.goal_monitor.evaluate_goal()
             if goal_result.status == GoalStatus.ACHIEVED:
                 self._print_goal_summary()
+                self.execution_timer.end_command()
                 return True
 
             # If not achieved, allow normal planning to proceed
@@ -987,11 +1149,15 @@ class BrowserVisionBot:
             if not self.started:
                 self.logger.log_error("Bot not started", "act() called before bot.start()")
                 print("❌ Bot not started")
+                if self.execution_timer.current_command_start is not None:
+                    self.execution_timer.end_command()
                 return False
             
             if self.page.url.startswith("about:blank"):
                 self.logger.log_error("Page is on initial blank page", "act() called before navigation")
                 print("❌ Page is on the initial blank page")
+                if self.execution_timer.current_command_start is not None:
+                    self.execution_timer.end_command()
                 return False
             
             # Register command in ledger
@@ -1001,6 +1167,10 @@ class BrowserVisionBot:
                 metadata={"source": "act", "mode": resolved_mode}
             )
             self.command_ledger.start_command(command_id)
+            
+            # Start command timer
+            self.execution_timer.start_command(command_id, goal_description)
+            self.execution_timer.set_command_text(goal_description)
             
             # Log goal start
             self.logger.log_goal_start(goal_description)
@@ -1013,18 +1183,21 @@ class BrowserVisionBot:
             focus_result = self._handle_focus_commands(goal_description, self.overlay_manager)
             if focus_result is not None:
                 self.command_ledger.complete_command(command_id, success=focus_result)
+                self.execution_timer.end_command()
                 return focus_result
             
             # Check for dedup commands
             dedup_result = self._handle_dedup_commands(goal_description)
             if dedup_result is not None:
                 self.command_ledger.complete_command(command_id, success=dedup_result)
+                self.execution_timer.end_command()
                 return dedup_result
             
             # Check for ref commands
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
                 self.command_ledger.complete_command(command_id, success=ref_result)
+                self.execution_timer.end_command()
                 return ref_result
             
             # Check for extract commands
@@ -1041,10 +1214,12 @@ class BrowserVisionBot:
                     )
                     print(f"✅ Extraction completed: {result}")
                     self.command_ledger.complete_command(command_id, success=True)
+                    self.execution_timer.end_command()
                     return True
                 except Exception as e:
                     print(f"❌ Extraction failed: {e}")
                     self.command_ledger.complete_command(command_id, success=False)
+                    self.execution_timer.end_command()
                     return False
 
             # Clear any existing goals before starting a new goal
@@ -1099,9 +1274,12 @@ class BrowserVisionBot:
             elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
                 # Handle reference commands that were returned from IF evaluation
                 print(f"🔄 Executing reference command from IF evaluation: {transformed_goal_description}")
-                return self._handle_ref_commands(transformed_goal_description)
+                result = self._handle_ref_commands(transformed_goal_description)
+                self.execution_timer.end_command()
+                return result
             else:
                 print("ℹ️ No smart goal setup")
+                self.execution_timer.end_command()
                 return True
             
             # If conditional evaluation resulted in a deliberate no-op (no fail action and condition false)
@@ -1109,6 +1287,7 @@ class BrowserVisionBot:
                 duration_ms = (time.time() - start_time) * 1000
                 self.logger.log(LogLevel.INFO, LogCategory.GOAL, "No actionable goal after condition evaluation (no-op)", duration_ms=duration_ms)
                 print("ℹ️ No actionable goal after condition evaluation (no-op). Skipping.")
+                self.execution_timer.end_command()
                 return True
             
             print(f"🔍 Smart goals setup: {goal}\n")
@@ -1307,6 +1486,7 @@ class BrowserVisionBot:
                         self.logger.log_goal_success(goal_description, duration_ms)
                         print(f"✅ Smart goal {goal_description} achieved during plan execution!")
                         self._print_goal_summary()
+                        self.execution_timer.end_command()
                         return True
                     else:
                         print(f"⏳ Smart goal {goal_description} pending further evaluation")
@@ -1358,6 +1538,8 @@ class BrowserVisionBot:
                         self._print_goal_summary()
                         # Mark command as completed successfully
                         self.command_ledger.complete_command(command_id, success=True)
+                        # End command timer
+                        self.execution_timer.end_command()
                         return True
                     
                     # If plan executed successfully but no goals achieved, scroll down one viewport height
@@ -1414,8 +1596,14 @@ class BrowserVisionBot:
             self._print_goal_summary()
             # Mark command as failed
             self.command_ledger.complete_command(command_id, success=False, error_message=f"Failed after {effective_max_attempts} attempts")
+            # End command timer
+            self.execution_timer.end_command()
             return False
         finally:
+            # End command timer if still active (safety net for any unhandled returns)
+            if self.execution_timer.current_command_start is not None:
+                self.execution_timer.end_command()
+            
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
             self._in_act = False
             if self._interpretation_mode_stack:

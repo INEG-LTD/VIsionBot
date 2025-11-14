@@ -268,6 +268,9 @@ class AgentController:
             self.task_start_url = "unknown"
         self.task_start_time = time.time()
         
+        # Start task timer
+        self.bot.execution_timer.start_task()
+        
         # Set base knowledge on goal monitor for goal evaluation
         if self.base_knowledge:
             self.bot.goal_monitor.set_base_knowledge(self.base_knowledge)
@@ -283,6 +286,10 @@ class AgentController:
         if not self.bot.started:
             print("❌ Bot not started. Call bot.start() first.")
             self._log_event("agent_complete", status="failed", reason="bot_not_started")
+            # End task timer if it was started
+            if self.bot.execution_timer.task_start_time is not None:
+                self.bot.execution_timer.end_task()
+                self.bot.execution_timer.log_summary()
             return GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
@@ -293,6 +300,10 @@ class AgentController:
         if self.bot.page.url.startswith("about:blank"):
             print("❌ Page is on initial blank page.")
             self._log_event("agent_complete", status="failed", reason="blank_page")
+            # End task timer if it was started
+            if self.bot.execution_timer.task_start_time is not None:
+                self.bot.execution_timer.end_task()
+                self.bot.execution_timer.log_summary()
             return GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
@@ -305,6 +316,9 @@ class AgentController:
             print(f"\n{'='*60}")
             print(f"🔄 Iteration {iteration + 1}/{self.max_iterations}")
             print(f"{'='*60}")
+            
+            # Start iteration timer
+            self.bot.execution_timer.start_iteration()
             
             self._log_event("iteration_start", iteration=iteration + 1)
             self._current_iteration = iteration + 1
@@ -414,6 +428,9 @@ class AgentController:
                                 confidence=evaluation.confidence,
                                 reasoning=completion_reasoning,
                             )
+                            # End task timer and log summary
+                            self.bot.execution_timer.end_task()
+                            self.bot.execution_timer.log_summary()
                             # Next action result will be ignored (task is complete)
                             return GoalResult(
                                 status=GoalStatus.ACHIEVED,
@@ -454,6 +471,9 @@ class AgentController:
                             confidence=evaluation.confidence,
                             reasoning=completion_reasoning,
                         )
+                        # End task timer and log summary
+                        self.bot.execution_timer.end_task()
+                        self.bot.execution_timer.log_summary()
                         return GoalResult(
                             status=GoalStatus.ACHIEVED,
                             confidence=evaluation.confidence,
@@ -504,6 +524,9 @@ class AgentController:
                         confidence=evaluation.confidence,
                         reasoning=completion_reasoning,
                     )
+                    # End task timer and log summary
+                    self.bot.execution_timer.end_task()
+                    self.bot.execution_timer.log_summary()
                     return GoalResult(
                         status=GoalStatus.ACHIEVED,
                         confidence=evaluation.confidence,
@@ -663,6 +686,9 @@ class AgentController:
                         reason="no_action",
                         iterations=iteration + 1,
                     )
+                    # End task timer and log summary
+                    self.bot.execution_timer.end_task()
+                    self.bot.execution_timer.log_summary()
                     return GoalResult(
                         status=GoalStatus.FAILED,
                         confidence=0.5,
@@ -892,6 +918,9 @@ class AgentController:
                 import traceback
                 traceback.print_exc()
             
+            # End iteration timer
+            self.bot.execution_timer.end_iteration()
+            
             # Small delay between iterations
             time.sleep(self.iteration_delay)
         
@@ -903,6 +932,9 @@ class AgentController:
             reason="max_iterations",
             iterations=self.max_iterations,
         )
+        # End task timer and log summary
+        self.bot.execution_timer.end_task()
+        self.bot.execution_timer.log_summary()
         # Max iterations reached
         print(f"❌ Max iterations ({self.max_iterations}) reached")
         return GoalResult(
