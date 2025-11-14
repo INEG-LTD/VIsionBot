@@ -178,6 +178,7 @@ class ReactiveGoalDeterminer:
         *,
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
+        image_detail: str = "low",
     ):
         """
         Initialize the reactive goal determiner.
@@ -186,6 +187,8 @@ class ReactiveGoalDeterminer:
             user_prompt: The user's high-level goal
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            Example: ["just press enter after you've typed a search term into a search field"]
+            image_detail: Image detail level for vision API ("low" for faster, "high" for more accurate).
+                         Default: "low" for better performance.
         """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -195,6 +198,8 @@ class ReactiveGoalDeterminer:
         else:
             reasoning = ReasoningLevel.coerce(reasoning_level)
         self.reasoning_level: ReasoningLevel = reasoning
+        self.image_detail = image_detail
+        self._system_prompt_cache: dict[bool, str] = {}  # Cache system prompts by is_exploring
     
     def determine_next_action(
         self,
@@ -307,7 +312,7 @@ class ReactiveGoalDeterminer:
                 model_object_type=NextAction,
                 system_prompt=system_prompt,
                 image=screenshot,
-                image_detail="high",
+                image_detail=self.image_detail,
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
             )
@@ -321,6 +326,9 @@ class ReactiveGoalDeterminer:
     
     def _build_system_prompt(self, is_exploring: bool = False) -> str:
         """Build system prompt for reactive action determination"""
+        # Use cached prompt if available
+        if is_exploring in self._system_prompt_cache:
+            return self._system_prompt_cache[is_exploring]
         
         screenshot_note = "full-page screenshot (entire page)" if is_exploring else "viewport screenshot (currently visible area)"
         
@@ -345,7 +353,7 @@ CRITICAL EXPLORATION MODE RULES:
                 base_knowledge_section += f"{i}. {knowledge}\n"
             base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining actions. They override general assumptions.\n"
         
-        return f"""
+        prompt = f"""
 You are determining the NEXT SINGLE ACTION to take based on the current state.
 
 Your job is to look at the screenshot ({screenshot_note}) and decide:
@@ -442,6 +450,9 @@ AVAILABLE COMMANDS:
 {"- If target is BELOW viewport → return \"scroll: down\"" if is_exploring else "- If target element is NOT visible → scroll to reveal it"}
 - Don't plan ahead - just decide the immediate next action
 """
+        # Cache the prompt
+        self._system_prompt_cache[is_exploring] = prompt
+        return prompt
     
     def _build_action_prompt(
         self, 
@@ -470,7 +481,7 @@ AVAILABLE COMMANDS:
             all_ineffective.extend([(action, "succeeded but no change") for action in ineffective_actions])
         
         if all_ineffective:
-            ineffective_actions_context = f"\n⚠️ IMPORTANT: The following actions were recently tried and did NOT yield any page change (same URL, same DOM state):\n"
+            ineffective_actions_context = "\n⚠️ IMPORTANT: The following actions were recently tried and did NOT yield any page change (same URL, same DOM state):\n"
             for i, (action, reason) in enumerate(all_ineffective, 1):
                 ineffective_actions_context += f"   {i}. {action} ({reason})\n"
             ineffective_actions_context += "\nDO NOT suggest these same actions again. They were ineffective. Try a different approach or different element.\n"
@@ -484,131 +495,39 @@ AVAILABLE COMMANDS:
             else:
                 exploration_context = "\n🔍 EXPLORATION MODE: Use the full-page screenshot to locate the target element.\n"
         
-        # Build base knowledge section if provided
-        base_knowledge_context = ""
-        if self.base_knowledge:
-            base_knowledge_context = "\n\nBASE KNOWLEDGE (Apply these rules when determining actions):\n"
-            for i, knowledge in enumerate(self.base_knowledge, 1):
-                base_knowledge_context += f"{i}. {knowledge}\n"
-            base_knowledge_context += "\nThese base knowledge rules should guide your action selection. Apply them when relevant.\n"
-
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
             getattr(state, "url_pointer", None)
         )
         
+        # Simplified user prompt - only essential context (rules/examples are in system prompt)
         prompt = f"""
 Determine the NEXT SINGLE ACTION to take based on:
 
-USER GOAL:
-"{self.user_prompt}"
-{base_knowledge_context}
+USER GOAL: "{self.user_prompt}"
+
 CURRENT STATE:
 - URL: {state.current_url}
 - Page Title: {state.page_title}
 - Scroll Position: Y={state.browser_state.scroll_y}, X={state.browser_state.scroll_x}
 - Viewport: {state.browser_state.page_width}x{state.browser_state.page_height}
-- {"Screenshot: FULL-PAGE (you can see entire page layout)" if is_exploring else "Screenshot: VIEWPORT ONLY (currently visible area)"}
-- Visible Text: {state.visible_text[:500]}...
-NAVIGATION HISTORY SUMMARY:
+- {"Screenshot: FULL-PAGE (entire page visible)" if is_exploring else "Screenshot: VIEWPORT ONLY (currently visible area)"}
+- Visible Text: {state.visible_text[:300]}...
+
+NAVIGATION HISTORY:
 {nav_summary}
-{("- CURRENT VIEWPORT INFO: The viewport currently shows content from approximately Y={viewport_snapshot.scroll_y} to Y={viewport_snapshot.scroll_y + viewport_snapshot.page_height}" if is_exploring and viewport_snapshot else "")}
-{("- TARGET ELEMENT: You need to find: {missing_element}" if is_exploring and missing_element else "")}
+{("- Viewport shows content from Y={viewport_snapshot.scroll_y} to Y={viewport_snapshot.scroll_y + viewport_snapshot.page_height}" if is_exploring and viewport_snapshot else "")}
+{("- Target element to find: {missing_element}" if is_exploring and missing_element else "")}
 
 WHAT'S BEEN DONE:
 {interaction_summary}
 
 {ineffective_actions_context if ineffective_actions_context else ""}
-{exploration_context if exploration_context else ""}{"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
+{exploration_context if exploration_context else ""}
+{"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
 
-**EXTRACTION DETECTION**:
-- Check if the user prompt contains extraction keywords: "extract", "get", "find", "note", "collect", "gather", "retrieve", "pull", "fetch"
-- If yes, determine:
-  1. Is the data already visible on the page? → Use "extract: <description>" immediately
-  2. Does the page need interaction first (click, scroll, type)? → Do that first, then use "extract: <description>"
-  3. What specific data needs extracting? → Use that in the extract command
-- Example: User says "extract the current and after market price of the stock"
-  - If prices are visible → Action: "extract: current and after market price"
-  - If prices are not visible → First navigate/interact, then "extract: current and after market price"
-
-INSTRUCTIONS:
-1. Look at the screenshot - {"it shows the FULL PAGE" if is_exploring else "it shows ONLY the current viewport (what's visible now)"}
-2. Determine ONE action to take RIGHT NOW based on:
-   - What's visible in the screenshot
-   - What still needs to be done (user goal vs. what's been done)
-   - What would make progress toward the goal
-   {"- In exploration mode: Look for the specific element(s) mentioned above in the full-page screenshot" if is_exploring else ""}
-   {"- If target element is in the screenshot but not in viewport, determine scroll direction (up/down) based on element position" if is_exploring else ""}
-   {"- **IMPORTANT: Apply the BASE KNOWLEDGE rules above when they are relevant to the current situation**" if self.base_knowledge else ""}
-
-3. Format the action as an executable command:
-   **For EXTRACT commands: PRIORITY when user wants data extracted**
-   - **CRITICAL: If the user prompt contains extraction requests (extract, get, find, note, collect, gather, retrieve, pull, fetch), you MUST generate an "extract:" command once the required data is visible on the page.**
-   - Format: "extract: <what to extract>" (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
-   - **Workflow**: 
-     1. First, ensure the page shows the data (click buttons, navigate, scroll if needed)
-     2. Then, once the data is visible, use "extract: <description>" to extract it
-     3. The extract function will automatically run and capture the data
-   - Examples:
-     * User says "extract the price" → Action: "extract: price"
-     * User says "get the stock price" → Action: "extract: stock price"
-     * User says "find current and after market price" → Action: "extract: current and after market price"
-     * User says "collect product information" → Action: "extract: product information"
-   - **DO NOT use click/type/scroll when extraction is the goal and data is already visible**
-   - **DO use extract: when data is visible, even if other actions were needed first**
-
-   **For BACK/FORWARD commands: Use navigation history summary**
-   - Use "back: <steps>" when the summary shows the needed page behind the current pointer.
-   - Use "forward: <steps>" when the summary shows the needed page ahead in the session history.
-   - If no step count is provided, default to 1. Reference the target URL from the summary in your reasoning.
-   
-   **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be descriptive**
-   - NEVER use vague terms: "first element", "that button", "the field", "it", "this"
-   - NEVER use ambiguous text without element type: "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.)
-   - ALWAYS include element type: button, link, div, input, etc.
-   - ALWAYS be specific: include button text, field label, article title, or other identifying details
-   
-   Examples:
-   - If you see a field that needs filling: "type: <value> in <specific field description>"
-     * GOOD: "type: John Doe in name input field" (includes type: input field)
-     * GOOD: "type: john@example.com in email input field" (includes type: input field)
-     * BAD: "type: John Doe in field" (too vague - what type of field?)
-   
-   - If you see a button that needs clicking: "click: <specific button description>" (already includes type: button)
-     * GOOD: "click: Google Search button" (includes type: button)
-     * GOOD: "click: Accept all cookies button" (includes type: button)
-     * GOOD: "click: first article link titled 'Introduction to Python'" (includes type: link)
-     * GOOD: "click: search suggestion 'yahoo finance' link" (includes type: link)
-     * BAD: "click: search suggestion 'yahoo finance'" (missing element type - is it a link? button? div?)
-     * BAD: "click: first article" (missing element type - is it a link? div? button?)
-     * BAD: "click: first element" (too vague - what element? what type?)
-     * BAD: "click: button" (too vague - which button?)
-   
-   - **CRITICAL: Preserve ordinal information AND include element TYPE for click commands**:
-     * If user says "first article" → use "click: first article link titled '<title>'" or "click: first article link in the list" (must include type: link) NOT "click: first article" (missing type) or "click: first element" (too vague)
-     * If user says "second button" → use "click: second submit button" or "click: second button labeled '<text>'" (already includes type: button)
-     * If user says "third link" → use "click: third link titled '<text>'" or "click: third navigation link" (already includes type: link)
-     * If user says "search suggestion 'yahoo finance'" → use "click: search suggestion 'yahoo finance' link" or "click: search suggestion 'yahoo finance' button" (must specify type) NOT "click: search suggestion 'yahoo finance'" (missing type)
-     * Ordinals: first, second, third, fourth, fifth, last, etc.
-   
-   **For PRESS commands: MUST be brief**
-   - Just the key name: "press: Enter", "press: Escape", "press: Tab"
-   - Do NOT add descriptions, context, or field names
-   - GOOD: "press: Enter"
-   - BAD: "press: Enter in the search input field" (too descriptive)
-   - BAD: "press: Enter to search" (too descriptive)
-   
-   {("- If target element is above current position: scroll up" if is_exploring else "- If needed element isn't visible, use scroll commands")}
-   {("- If target element is below current position: scroll down" if is_exploring else "")}
-
-4. Return the action command with clear reasoning.
-5. **CRITICAL: Set needs_exploration=True ONLY when you cannot determine ANY valid action** (i.e., when no actionable element is visible and you cannot proceed without scrolling first). 
-   - If you can determine a valid action (even if it's not perfect), set needs_exploration=False and return that action
-   - Only set needs_exploration=True when you genuinely cannot determine what to do next without exploring (scrolling) the page
-   - If you return None or cannot determine an action, set needs_exploration=True to trigger exploration mode
-
-What is the single next action to take?
+Look at the screenshot and determine the single next action to progress toward the goal.
 """
         return prompt
     
@@ -658,7 +577,7 @@ What is the single next action to take?
             return "No interactions yet."
         
         summary_parts = []
-        for i, interaction in enumerate(interactions[-5:], 1):  # Last 5
+        for i, interaction in enumerate(interactions[-3:], 1):  # Last 3 (reduced for speed)
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
             
@@ -685,7 +604,7 @@ What is the single next action to take?
         prev_url = url_history[pointer - 1] if pointer > 0 else None
         next_url = url_history[pointer + 1] if pointer < total - 1 else None
 
-        start_idx = max(0, total - 5)
+        start_idx = max(0, total - 3)  # Reduced for speed
         lines = []
         for idx in range(start_idx, total):
             marker = " (current)" if idx == pointer else ""
