@@ -877,47 +877,6 @@ class AgentController:
                         success=True,
                         url_after=state_after["url"],
                     )
-                    # Check if overall task is now complete (using LLM evaluation)
-                    snapshot_after = self._capture_snapshot()
-                    env_state_after = EnvironmentState(
-                        browser_state=snapshot_after,
-                        interaction_history=self.bot.goal_monitor.interaction_history,
-                        user_prompt=user_prompt,
-                        task_start_url=self.task_start_url,
-                        task_start_time=self.task_start_time,
-                        current_url=snapshot_after.url,
-                        page_title=snapshot_after.title,
-                        visible_text=snapshot_after.visible_text,
-                        url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
-                        url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
-                    )
-                    is_complete, completion_reasoning, eval_after = completion_contract.evaluate(
-                        env_state_after,
-                        screenshot=snapshot_after.screenshot
-                    )
-                    if is_complete:
-                        # Convert evidence string to dict if needed
-                        evidence_dict: Dict[str, Any] = {}
-                        if eval_after.evidence:
-                            try:
-                                import json
-                                evidence_dict = json.loads(eval_after.evidence) if isinstance(eval_after.evidence, str) else eval_after.evidence
-                            except (json.JSONDecodeError, TypeError, ValueError):
-                                evidence_dict = {"evidence": eval_after.evidence}
-                        
-                        evidence_dict = self._build_evidence(evidence_dict)
-                        self._log_event(
-                            "agent_complete",
-                            status="achieved",
-                            confidence=eval_after.confidence,
-                            reasoning=completion_reasoning,
-                        )
-                        return GoalResult(
-                            status=GoalStatus.ACHIEVED,
-                            confidence=eval_after.confidence,
-                            reasoning=completion_reasoning,
-                            evidence=evidence_dict
-                        )
                 else:
                     print(f"⚠️ Action failed: {current_action}")
                     self._log_event(
@@ -2388,7 +2347,7 @@ class AgentController:
         
         # If no sub-agents needed, return immediately without detailed evaluation
         if not needs_sub_agents:
-            print(f"📊 Sub-agent policy (quick check) → Single Threaded")
+            print("📊 Sub-agent policy (quick check) → Single Threaded")
             print(f"   Reason: {brief_reason}")
             return (
                 SubAgentPolicyLevel.SINGLE_THREADED,
