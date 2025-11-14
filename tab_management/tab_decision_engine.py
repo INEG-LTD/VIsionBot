@@ -3,14 +3,18 @@ TabDecisionEngine - LLM-based decision making for tab management.
 
 Phase 2: Tab Decision Making
 """
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from enum import Enum
 from pydantic import BaseModel, Field
 from playwright.sync_api import Page
 
 from .tab_manager import TabManager
 from .tab_info import TabInfo
-from ai_utils import generate_model
+from ai_utils import (
+    generate_model,
+    ReasoningLevel,
+    get_default_agent_reasoning_level,
+)
 
 
 class TabAction(str, Enum):
@@ -45,7 +49,12 @@ class TabDecisionEngine:
     - Whether to spawn a sub-agent (Phase 3)
     """
     
-    def __init__(self, tab_manager: TabManager, model_name: str = "gpt-5-mini"):
+    def __init__(
+        self,
+        tab_manager: TabManager,
+        model_name: str = "gpt-5-mini",
+        reasoning_level: Optional[Union[ReasoningLevel, str]] = None,
+    ):
         """
         Initialize TabDecisionEngine.
         
@@ -55,6 +64,11 @@ class TabDecisionEngine:
         """
         self.tab_manager = tab_manager
         self.model_name = model_name
+        if reasoning_level is None:
+            reasoning = ReasoningLevel.coerce(get_default_agent_reasoning_level())
+        else:
+            reasoning = ReasoningLevel.coerce(reasoning_level)
+        self.reasoning_level: ReasoningLevel = reasoning
     
     def make_decision(
         self,
@@ -129,7 +143,8 @@ class TabDecisionEngine:
                 prompt=decision_prompt,
                 model_object_type=TabDecision,
                 system_prompt=self._build_system_prompt(),
-                model=self.model_name
+                model=self.model_name,
+                reasoning_level=self.reasoning_level,
             )
             
             # Validate decision

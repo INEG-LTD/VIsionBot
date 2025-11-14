@@ -13,7 +13,12 @@ from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
 from tab_management import TabDecisionEngine, TabAction
-from ai_utils import generate_model
+from ai_utils import (
+    generate_model,
+    ReasoningLevel,
+    get_default_agent_model,
+    get_default_agent_reasoning_level,
+)
 from pydantic import BaseModel, ConfigDict
 
 _REQUIREMENT_KEYWORD_MAP = {
@@ -139,12 +144,24 @@ class AgentController:
         self._original_user_prompt: str = ""
         self._primary_output_tasks_initialized: bool = False
         self._last_action_summary: Optional[Dict[str, Any]] = None
+
+        self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
+        agent_reasoning = getattr(bot, "agent_reasoning_level", None)
+        if agent_reasoning is None:
+            agent_reasoning = ReasoningLevel.coerce(get_default_agent_reasoning_level())
+        else:
+            agent_reasoning = ReasoningLevel.coerce(agent_reasoning)
+        self.agent_reasoning_level: ReasoningLevel = agent_reasoning
         
         # Initialize TabDecisionEngine if TabManager is available
         self.tab_decision_engine: Optional[TabDecisionEngine] = None
         if hasattr(bot, 'tab_manager') and bot.tab_manager:
             try:
-                self.tab_decision_engine = TabDecisionEngine(bot.tab_manager)
+                self.tab_decision_engine = TabDecisionEngine(
+                    bot.tab_manager,
+                    model_name=self.agent_model_name,
+                    reasoning_level=self.agent_reasoning_level,
+                )
             except Exception as e:
                 print(f"⚠️ Failed to initialize TabDecisionEngine: {e}")
                 self.tab_decision_engine = None
@@ -242,7 +259,9 @@ class AgentController:
         # Create completion contract (Step 2: LLM-based)
         completion_contract = CompletionContract(
             user_prompt,
-            allow_partial_completion=self.allow_partial_completion
+            allow_partial_completion=self.allow_partial_completion,
+            model_name=self.agent_model_name,
+            reasoning_level=self.agent_reasoning_level,
         )
         
         if not self.bot.started:
@@ -397,7 +416,12 @@ class AgentController:
             if current_action is None:
                 # Create reactive goal determiner (Step 2: determines next action from viewport)
                 dynamic_prompt = self._build_current_task_prompt(user_prompt)
-                goal_determiner = ReactiveGoalDeterminer(dynamic_prompt, base_knowledge=self.base_knowledge)
+                goal_determiner = ReactiveGoalDeterminer(
+                    dynamic_prompt,
+                    base_knowledge=self.base_knowledge,
+                    model_name=self.agent_model_name,
+                    reasoning_level=self.agent_reasoning_level,
+                )
                 
                 print("🔍 Determining next action based on current viewport...")
                 if self.track_ineffective_actions:
@@ -1587,7 +1611,8 @@ class AgentController:
                     "Respond with a short command (or 'none') and a concise rationale."
                 ),
                 model_object_type=_RetargetDecision,
-                model="gpt-5-mini",
+                model=self.agent_model_name,
+                reasoning_level=self.agent_reasoning_level,
             )
             return decision
         except Exception as e:
@@ -2278,7 +2303,8 @@ class AgentController:
                 prompt=policy_prompt,
                 model_object_type=_SubAgentPolicyResponse,
                 system_prompt=self._build_sub_agent_policy_system_prompt(),
-                model="gpt-5-mini"
+                model=self.agent_model_name,
+                reasoning_level=self.agent_reasoning_level,
             )
         except Exception as e:
             print(f"⚠️ Failed to evaluate sub-agent policy via LLM: {e}")
@@ -2530,7 +2556,8 @@ Provide:
                 prompt=prompt,
                 model_object_type=_ParallelWorkPlan,
                 system_prompt=self._build_parallel_plan_system_prompt(),
-                model="gpt-5-mini"
+                model=self.agent_model_name,
+                reasoning_level=self.agent_reasoning_level,
             )
             return plan
         except Exception as e:

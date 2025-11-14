@@ -5,13 +5,18 @@ Step 2: LLM-based reactive goal determination that decides what to do RIGHT NOW
 based on what's visible in the viewport, not pre-planning.
 """
 
-from typing import Optional, List, ClassVar, Set
+from typing import Optional, List, ClassVar, Set, Union
 from pydantic import BaseModel, Field, field_validator
 import re
 
 from goals.base import BrowserState, Interaction
 from agent.completion_contract import EnvironmentState
-from ai_utils import generate_model
+from ai_utils import (
+    generate_model,
+    ReasoningLevel,
+    get_default_agent_model,
+    get_default_agent_reasoning_level,
+)
 
 
 class NextAction(BaseModel):
@@ -166,7 +171,14 @@ class ReactiveGoalDeterminer:
     This is reactive - it only determines ONE action to take NOW, not a sequence.
     """
     
-    def __init__(self, user_prompt: str, base_knowledge: Optional[List[str]] = None):
+    def __init__(
+        self,
+        user_prompt: str,
+        base_knowledge: Optional[List[str]] = None,
+        *,
+        model_name: Optional[str] = None,
+        reasoning_level: Union[ReasoningLevel, str, None] = None,
+    ):
         """
         Initialize the reactive goal determiner.
         
@@ -177,6 +189,12 @@ class ReactiveGoalDeterminer:
         """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
+        self.model_name = model_name or get_default_agent_model()
+        if reasoning_level is None:
+            reasoning = ReasoningLevel.coerce(get_default_agent_reasoning_level())
+        else:
+            reasoning = ReasoningLevel.coerce(reasoning_level)
+        self.reasoning_level: ReasoningLevel = reasoning
     
     def determine_next_action(
         self,
@@ -289,7 +307,9 @@ class ReactiveGoalDeterminer:
                 model_object_type=NextAction,
                 system_prompt=system_prompt,
                 image=screenshot,
-                image_detail="high"
+                image_detail="high",
+                model=self.model_name,
+                reasoning_level=self.reasoning_level,
             )
             return action
         except Exception as e:

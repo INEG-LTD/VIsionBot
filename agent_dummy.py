@@ -3,7 +3,8 @@ from vision_bot import BrowserVisionBot
 
 bot = BrowserVisionBot(
     save_gif=True,
-    model_name="gpt-5-mini",
+    agent_model_name="gpt-5-mini",
+    # command_model_name="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
     reasoning_level=ReasoningLevel.LOW,
     overlay_only_planning=True,
     fast_mode=True
@@ -12,7 +13,6 @@ bot.start()
 bot.page.goto("https://google.com")
 
 # Run agentic mode - now returns AgentResult with extracted data
-bot.act("defer")
 result = bot.agentic_mode(
     "go to elon musk's wikipedia page",
     base_knowledge=[

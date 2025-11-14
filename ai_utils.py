@@ -60,6 +60,8 @@ class ReasoningLevel(str, Enum):
 # Global defaults – kept in module state so callers can change them centrally.
 _DEFAULT_MODEL = "gpt-5-mini"
 _DEFAULT_REASONING_LEVEL: str = ReasoningLevel.MEDIUM.value
+_DEFAULT_AGENT_MODEL = "gpt-5-mini"
+_DEFAULT_AGENT_REASONING_LEVEL: str = ReasoningLevel.MEDIUM.value
 
 
 # Optional per-model or per-provider API keys. Populate this if you do not want
@@ -105,8 +107,12 @@ __all__ = [
     "MODEL_API_KEYS",
     "set_default_model",
     "get_default_model",
+    "set_default_agent_model",
+    "get_default_agent_model",
     "set_default_reasoning_level",
     "get_default_reasoning_level",
+    "set_default_agent_reasoning_level",
+    "get_default_agent_reasoning_level",
     "generate_text_with_cost",
     "generate_text_gpt_with_cost",
     "generate_text",
@@ -135,6 +141,17 @@ def get_default_model() -> str:
     return _DEFAULT_MODEL
 
 
+def set_default_agent_model(model_name: str) -> None:
+    """Update the fallback agent model used by helpers when none is provided."""
+    global _DEFAULT_AGENT_MODEL
+    _DEFAULT_AGENT_MODEL = model_name
+
+
+def get_default_agent_model() -> str:
+    """Return the globally configured default agent model name."""
+    return _DEFAULT_AGENT_MODEL
+
+
 def set_default_reasoning_level(reasoning_level: Union[ReasoningLevel, str]) -> None:
     """Set the default reasoning level used when callers omit the parameter."""
     global _DEFAULT_REASONING_LEVEL
@@ -144,6 +161,19 @@ def set_default_reasoning_level(reasoning_level: Union[ReasoningLevel, str]) -> 
 def get_default_reasoning_level() -> str:
     """Return the globally configured default reasoning level."""
     return _DEFAULT_REASONING_LEVEL
+
+
+def set_default_agent_reasoning_level(
+    reasoning_level: Union[ReasoningLevel, str]
+) -> None:
+    """Set the default agent reasoning level used when callers omit the parameter."""
+    global _DEFAULT_AGENT_REASONING_LEVEL
+    _DEFAULT_AGENT_REASONING_LEVEL = ReasoningLevel.coerce(reasoning_level).value
+
+
+def get_default_agent_reasoning_level() -> str:
+    """Return the globally configured default agent reasoning level."""
+    return _DEFAULT_AGENT_REASONING_LEVEL
 
 
 # ---------------------------------------------------------------------------

@@ -9298,3 +9298,86 @@ Log File: bot_automation.log
   "goal_description": "click: Elon Musk Wikipedia link (the search result link titled 'Elon Musk' pointing to en.wikipedia.org)"
 }
 [2025-11-14T00:59:55.998222] SUCCESS  GOAL         Goal completed: click: Elon Musk Wikipedia link (the search result link titled 'Elon Musk' pointing to en.wikipedia.org) (took 5182.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763086765
+Start Time: 2025-11-14T02:19:25.107362
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-14T02:19:29.855617] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-11-14T02:19:29.932113] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Google",
+  "page_url": "https://www.google.com/"
+}
+[2025-11-14T02:19:31.665422] INFO     SYSTEM       Defer pause ended (took 1804.9ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 1.805
+}
+[2025-11-14T02:19:31.668075] SUCCESS  GOAL         Goal completed: defer (took 1812.5ms) ✅
+[2025-11-14T02:20:03.589007] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-14T02:20:07.229846] SUCCESS  GOAL         Goal completed: click: Accept all button (took 3641.1ms) ✅
+[2025-11-14T02:20:50.531071] INFO     GOAL         Starting goal: type: Elon Musk Wikipedia in Google search input field
+    Details: {
+  "goal_description": "type: Elon Musk Wikipedia in Google search input field"
+}
+[2025-11-14T02:20:56.362470] SUCCESS  GOAL         Goal completed: type: Elon Musk Wikipedia in Google search input field (took 5831.5ms) ✅
+[2025-11-14T02:21:36.566964] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-14T02:21:37.723611] SUCCESS  GOAL         Goal completed: press: Enter (took 1156.7ms) ✅
+[2025-11-14T02:23:31.403692] INFO     GOAL         Starting goal: click: 'Elon Musk' Wikipedia link (top search result link to en.wikipedia.org/wiki/Elon_Musk)
+    Details: {
+  "goal_description": "click: 'Elon Musk' Wikipedia link (top search result link to en.wikipedia.org/wiki/Elon_Musk)"
+}
+[2025-11-14T02:23:33.670333] SUCCESS  GOAL         Goal completed: click: 'Elon Musk' Wikipedia link (top search result link to en.wikipedia.org/wiki/Elon_Musk) (took 2266.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763105442
+Start Time: 2025-11-14T07:30:42.439484
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-14T07:30:44.047720] INFO     GOAL         Starting goal: defer
+    Details: {
+  "goal_description": "defer"
+}
+[2025-11-14T07:30:44.134815] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Manual control active",
+  "page_title": "Google",
+  "page_url": "https://www.google.com/"
+}
+[2025-11-14T07:30:49.716002] INFO     SYSTEM       Defer pause ended (took 5665.0ms) ✅
+    Details: {
+  "defer_prompt": "Manual control active",
+  "defer_duration_seconds": 5.665
+}
+[2025-11-14T07:30:49.719475] SUCCESS  GOAL         Goal completed: defer (took 5671.9ms) ✅
+[2025-11-14T07:31:09.945235] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-14T07:31:14.329205] SUCCESS  GOAL         Goal completed: click: Accept all button (took 4384.1ms) ✅
+[2025-11-14T07:31:51.810148] INFO     GOAL         Starting goal: type: Elon Musk Wikipedia in search input field
+    Details: {
+  "goal_description": "type: Elon Musk Wikipedia in search input field"
+}
+[2025-11-14T07:31:58.017134] SUCCESS  GOAL         Goal completed: type: Elon Musk Wikipedia in search input field (took 6207.1ms) ✅
+[2025-11-14T07:32:28.113852] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-14T07:32:29.185551] SUCCESS  GOAL         Goal completed: press: Enter (took 1071.7ms) ✅

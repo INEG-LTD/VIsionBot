@@ -61,7 +61,13 @@ from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
-from ai_utils import ReasoningLevel, set_default_model, set_default_reasoning_level
+from ai_utils import (
+    ReasoningLevel,
+    set_default_model,
+    set_default_reasoning_level,
+    set_default_agent_model,
+    set_default_agent_reasoning_level,
+)
 from agent import AgentController
 from agent.agent_result import AgentResult
 from pydantic import BaseModel, Field
@@ -75,6 +81,10 @@ class BrowserVisionBot:
         page: Page = None,
         model_name: str = "gpt-5-mini",
         reasoning_level: ReasoningLevel = ReasoningLevel.MEDIUM,
+        command_model_name: Optional[str] = None,
+        agent_model_name: Optional[str] = None,
+        command_reasoning_level: Optional[ReasoningLevel] = None,
+        agent_reasoning_level: Optional[ReasoningLevel] = None,
         max_attempts: int = 10,
         max_detailed_elements: int = 400,
         include_detailed_elements: bool = True,
@@ -91,12 +101,31 @@ class BrowserVisionBot:
         plan_cache_max_reuse: int = 1,
     ):
         self.page = page
-        self.model_name = model_name
-        self.reasoning_level = reasoning_level
+
+        if command_model_name is None:
+            command_model_name = model_name
+        if agent_model_name is None:
+            agent_model_name = command_model_name
+
+        if command_reasoning_level is None:
+            command_reasoning_level = reasoning_level
+        if agent_reasoning_level is None:
+            agent_reasoning_level = reasoning_level
+
+        self.command_model_name = command_model_name
+        self.agent_model_name = agent_model_name
+        self.model_name = self.command_model_name
+
+        self.command_reasoning_level = ReasoningLevel.coerce(command_reasoning_level)
+        self.agent_reasoning_level = ReasoningLevel.coerce(agent_reasoning_level)
+        self.reasoning_level = self.command_reasoning_level
+
         # Set the centralized model configuration
-        set_default_model(model_name)
+        set_default_model(self.command_model_name)
         # Set the centralized reasoning level configuration
-        set_default_reasoning_level(reasoning_level)
+        set_default_reasoning_level(self.command_reasoning_level)
+        set_default_agent_model(self.agent_model_name)
+        set_default_agent_reasoning_level(self.agent_reasoning_level)
         self.max_attempts = max_attempts
         self.started = False
         # Controls for how much element detail to include in planning prompts

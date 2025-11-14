@@ -5,11 +5,16 @@ Step 2: Evaluates task completion using LLM with full environment state.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 
 from goals.base import BrowserState, Interaction, InteractionType
-from ai_utils import generate_model
+from ai_utils import (
+    generate_model,
+    ReasoningLevel,
+    get_default_agent_model,
+    get_default_agent_reasoning_level,
+)
 
 
 class CompletionEvaluation(BaseModel):
@@ -61,9 +66,22 @@ class CompletionContract:
     Step 2: Uses LLM to determine if the overall task is complete.
     """
     
-    def __init__(self, user_prompt: str, allow_partial_completion: bool = False):
+    def __init__(
+        self,
+        user_prompt: str,
+        allow_partial_completion: bool = False,
+        *,
+        model_name: Optional[str] = None,
+        reasoning_level: Union[ReasoningLevel, str, None] = None,
+    ):
         self.user_prompt = user_prompt
         self.allow_partial_completion = allow_partial_completion
+        self.model_name = model_name or get_default_agent_model()
+        if reasoning_level is None:
+            reasoning = ReasoningLevel.coerce(get_default_agent_reasoning_level())
+        else:
+            reasoning = ReasoningLevel.coerce(reasoning_level)
+        self.reasoning_level: ReasoningLevel = reasoning
     
     def evaluate(
         self,
@@ -91,7 +109,9 @@ class CompletionContract:
                 model_object_type=CompletionEvaluation,
                 system_prompt=system_prompt,
                 image=screenshot,
-                image_detail="high" if screenshot else "low"  # Use high detail for completion checks
+                image_detail="high" if screenshot else "low",  # Use high detail for completion checks
+                model=self.model_name,
+                reasoning_level=self.reasoning_level,
             )
             
             return (
