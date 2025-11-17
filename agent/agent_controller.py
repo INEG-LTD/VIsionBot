@@ -13,6 +13,7 @@ from agent.reactive_goal_determiner import ReactiveGoalDeterminer
 from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
+from agent.stuck_detector import HeuristicStuckDetector, IterationSnapshot
 from tab_management import TabDecisionEngine, TabAction
 from ai_utils import (
     generate_model,
@@ -101,7 +102,21 @@ class AgentController:
         track_ineffective_actions: bool = True,
         base_knowledge: Optional[List[str]] = None,
         allow_partial_completion: bool = False,
-        parallel_completion_and_action: bool = True
+        parallel_completion_and_action: bool = True,
+        show_completion_reasoning_every_iteration: bool = False,
+        strict_mode: bool = False,
+        clarification_callback: Optional[Any] = None,
+        max_clarification_rounds: int = 0,
+        # Stuck detector configuration
+        stuck_detector_enabled: bool = True,
+        stuck_detector_window_size: int = 5,
+        stuck_detector_threshold: float = 0.6,
+        stuck_detector_weight_repeated_action: float = 0.15,
+        stuck_detector_weight_repetitive_action_no_change: float = 0.4,
+        stuck_detector_weight_no_state_change: float = 0.3,
+        stuck_detector_weight_no_progress: float = 0.2,
+        stuck_detector_weight_error_spiral: float = 0.2,
+        stuck_detector_weight_high_confidence_no_progress: float = 0.1,
     ):
         """
         Initialize agent controller.
@@ -131,6 +146,7 @@ class AgentController:
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
+        self._consecutive_page_changes: int = 0  # Track consecutive page state changes for phase-out
         self.extracted_data: Dict[str, Any] = {}  # Store extracted data (key: extraction prompt, value: result)
         self.sub_agent_results: List[SubAgentResult] = []  # Store completed sub-agent results
         self.orchestration_events: List[Dict[str, Any]] = []  # Track orchestration events for reporting
@@ -154,11 +170,33 @@ class AgentController:
         self._task_tracker: Dict[str, Dict[str, Any]] = {}
         self.allow_partial_completion = allow_partial_completion
         self.parallel_completion_and_action = parallel_completion_and_action
+        # Completion / evaluation behavior
+        self.show_completion_reasoning_every_iteration = show_completion_reasoning_every_iteration
+        self.strict_mode = strict_mode
+        self.clarification_callback = clarification_callback
+        self.max_clarification_rounds = max_clarification_rounds
         self._user_inputs: List[Dict[str, Any]] = []
         self._requirement_flags: Dict[str, bool] = {}
         self._original_user_prompt: str = ""
         self._primary_output_tasks_initialized: bool = False
         self._last_action_summary: Optional[Dict[str, Any]] = None
+        self._current_task_prompt: Optional[str] = None  # Rewritten prompt when stuck
+        self._last_completion_reasoning: Optional[str] = None  # Store for stuck detection at start of next iteration
+        self._last_completion_evaluation: Optional[CompletionEvaluation] = None
+        self._last_screenshot_hash: Optional[str] = None  # Store screenshot hash for phase-out tracking
+
+        # Initialize stuck detector
+        self.stuck_detector = HeuristicStuckDetector(
+            enabled=stuck_detector_enabled,
+            window_size=stuck_detector_window_size,
+            threshold=stuck_detector_threshold,
+            weight_repeated_action=stuck_detector_weight_repeated_action,
+            weight_repetitive_action_no_change=stuck_detector_weight_repetitive_action_no_change,
+            weight_no_state_change=stuck_detector_weight_no_state_change,
+            weight_no_progress=stuck_detector_weight_no_progress,
+            weight_error_spiral=stuck_detector_weight_error_spiral,
+            weight_high_confidence_no_progress=stuck_detector_weight_high_confidence_no_progress,
+        )
 
         self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
         agent_reasoning = getattr(bot, "agent_reasoning_level", None)
@@ -213,9 +251,16 @@ class AgentController:
         self._current_iteration = 0
         self._task_tracker = {}
         self._original_user_prompt = user_prompt
+        self._current_task_prompt = None  # Reset rewritten prompt
         self._primary_output_tasks_initialized = False
         self._initialize_requirement_flags(user_prompt)
         self._ensure_primary_output_tasks(user_prompt)
+        # Reset stuck detector history for new task
+        self.stuck_detector.clear()
+        # Reset page change counter for new task
+        self._consecutive_page_changes = 0
+        # Reset screenshot hash tracking
+        self._last_screenshot_hash = None
         
         # Phase 3: Set agent context
         if agent_context:
@@ -278,6 +323,8 @@ class AgentController:
         completion_contract = CompletionContract(
             user_prompt,
             allow_partial_completion=self.allow_partial_completion,
+            show_task_completion_reason=self.show_completion_reasoning_every_iteration,
+            strict_mode=self.strict_mode,
             model_name=self.agent_model_name,
             reasoning_level=self.agent_reasoning_level,
         )
@@ -331,6 +378,27 @@ class AgentController:
             print(f"📍 Current URL: {snapshot.url}")
             print(f"📄 Page title: {snapshot.title}")
             
+            # Calculate screenshot hash for phase-out tracking (at start of iteration)
+            if snapshot.screenshot:
+                current_screenshot_hash = hashlib.md5(snapshot.screenshot).hexdigest()
+                # Compare with previous iteration's screenshot hash
+                if self._last_screenshot_hash and current_screenshot_hash != self._last_screenshot_hash:
+                    # Screenshot changed from previous iteration
+                    self._consecutive_page_changes += 1
+                    # After 2 clear page state changes (screenshot hash differences), phase out failed/ineffective actions
+                    if self._consecutive_page_changes >= 2:
+                        if self.failed_actions or self.ineffective_actions:
+                            total = len(self.failed_actions) + len(self.ineffective_actions)
+                            print(f"   🔄 {self._consecutive_page_changes} consecutive screenshot changes detected - phasing out {total} failed/ineffective action(s)")
+                            self.failed_actions.clear()
+                            self.ineffective_actions.clear()
+                            self._consecutive_page_changes = 0  # Reset counter after phase-out
+                elif self._last_screenshot_hash:
+                    # Screenshot didn't change, reset counter
+                    self._consecutive_page_changes = 0
+                # Update screenshot hash for next iteration
+                self._last_screenshot_hash = current_screenshot_hash
+            
             # 2. Prepare environment state for parallel LLM calls
             environment_state = EnvironmentState(
                 browser_state=snapshot,
@@ -345,7 +413,21 @@ class AgentController:
                 url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
             )
             
-            # 2.1. Prepare goal determiner (needed for exploration mode fallback)
+            # 2.1. Check for stuck state at the beginning of iteration (before determining action)
+            # Use completion reasoning from previous iteration if available
+            if self._last_completion_reasoning and self._last_completion_evaluation:
+                prompt_rewritten = self._check_and_handle_stuck(
+                    user_prompt=user_prompt,
+                    environment_state=environment_state,
+                    completion_reasoning=self._last_completion_reasoning,
+                    evaluation=self._last_completion_evaluation,
+                    current_action=None,
+                    iteration=iteration,
+                )
+                if prompt_rewritten:
+                    print("📝 Using rewritten prompt for this iteration")
+            
+            # 2.2. Prepare goal determiner with current prompt (original or rewritten)
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
             goal_determiner = ReactiveGoalDeterminer(
                 dynamic_prompt,
@@ -354,7 +436,7 @@ class AgentController:
                 reasoning_level=self.agent_reasoning_level,
             )
             
-            # 2.2. Check for queued action first (doesn't need LLM)
+            # 2.3. Check for queued action first (doesn't need LLM)
             current_action: Optional[str] = None
             needs_exploration = False
             
@@ -371,9 +453,12 @@ class AgentController:
                 self._queued_action = None
                 self._queued_action_reason = None
             
-            # 2.3. Run completion check and next action determination
+            # 2.4. Run completion check and next action determination
             # (only if we don't have a queued action)
             policy_updated_in_parallel = False
+            # Store completion reasoning and evaluation for stuck detector (for next iteration)
+            latest_completion_reasoning: Optional[str] = None
+            latest_evaluation: Optional[CompletionEvaluation] = None
             if current_action is None:
                 if self.parallel_completion_and_action:
                     print("🔄 Running completion check, next action determination, and subagent policy check in parallel...")
@@ -420,6 +505,8 @@ class AgentController:
                         # Wait for completion check first (we need to know if we're done)
                         is_complete, completion_reasoning, evaluation = completion_future.result()
                         completion_reasoning_ref[0] = completion_reasoning  # Share with subagent policy check
+                        latest_completion_reasoning = completion_reasoning
+                        latest_evaluation = evaluation
                         
                         # Start subagent policy check now that we have completion_reasoning
                         subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
@@ -506,6 +593,8 @@ class AgentController:
                         environment_state,
                         screenshot=snapshot.screenshot
                     )
+                    latest_completion_reasoning = completion_reasoning
+                    latest_evaluation = evaluation
                     
                     if is_complete:
                         print(f"✅ Task complete: {completion_reasoning}")
@@ -559,6 +648,8 @@ class AgentController:
                     environment_state,
                     screenshot=snapshot.screenshot
                 )
+                latest_completion_reasoning = completion_reasoning
+                latest_evaluation = evaluation
                 
                 if is_complete:
                     print(f"✅ Task complete: {completion_reasoning}")
@@ -910,6 +1001,7 @@ class AgentController:
                     page_changed = self._page_state_changed(state_before, state_after)
                 is_click_action = current_action.lower().startswith("click:")
                 
+                
                 # Only track ineffective actions if the feature is enabled
                 if self.track_ineffective_actions:
                     if success:
@@ -920,6 +1012,8 @@ class AgentController:
                                 print(f"   ✅ Command succeeded and changed page - clearing {total} ineffective action(s) from memory")
                                 self.failed_actions.clear()
                                 self.ineffective_actions.clear()
+                                # Reset counter since we cleared the lists
+                                self._consecutive_page_changes = 0
                         else:
                             # Successful command but no page change - add to ineffective actions
                             if is_click_action and self.detect_ineffective_actions:
@@ -942,6 +1036,12 @@ class AgentController:
                             print(f"   URL after: {state_after['url']}")
                             print("   DOM signature unchanged")
                             # Add to failed actions list (avoid trying this again)
+                            if current_action not in self.failed_actions:
+                                self.failed_actions.append(current_action)
+                                print("   📝 Added to failed actions list (will avoid in future iterations)")
+                        else:
+                            # Action failed but page changed - still add to failed actions since the action itself failed
+                            print(f"⚠️ Action failed (page changed but action execution failed): {current_action}")
                             if current_action not in self.failed_actions:
                                 self.failed_actions.append(current_action)
                                 print("   📝 Added to failed actions list (will avoid in future iterations)")
@@ -976,6 +1076,34 @@ class AgentController:
                 print(f"⚠️ Error executing action: {e}")
                 import traceback
                 traceback.print_exc()
+            
+            # Update stuck detector with this iteration's results
+            # Capture fresh environment state after action execution
+            snapshot_after = self._capture_snapshot(full_page=False)
+            environment_state_after = EnvironmentState(
+                browser_state=snapshot_after,
+                interaction_history=self.bot.goal_monitor.interaction_history,
+                user_prompt=user_prompt,
+                task_start_url=self.task_start_url,
+                task_start_time=self.task_start_time,
+                current_url=snapshot_after.url,
+                page_title=snapshot_after.title,
+                visible_text=snapshot_after.visible_text,
+                url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
+                url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
+            )
+            # Use stored completion reasoning and evaluation from this iteration
+            if latest_completion_reasoning and latest_evaluation:
+                self._update_stuck_detector_snapshot(
+                    iteration=iteration,
+                    current_action=current_action if current_action else None,
+                    environment_state=environment_state_after,
+                    completion_reasoning=latest_completion_reasoning,
+                    evaluation=latest_evaluation,
+                )
+                # Store for next iteration's stuck detection
+                self._last_completion_reasoning = latest_completion_reasoning
+                self._last_completion_evaluation = latest_evaluation
             
             # End iteration timer
             self.bot.execution_timer.end_iteration()
@@ -1249,7 +1377,13 @@ class AgentController:
         
         # Check if current action indicates extraction (even if not explicitly "extract:")
         action_lower = current_action.lower()
-        extraction_keywords = ["extract", "get", "find", "note", "collect", "gather", "retrieve", "pull", "fetch"]
+        extraction_keywords = [
+            "extract", "get", "find", "note", "collect", "gather", "retrieve", "pull", "fetch",
+            "list", "show", "display", "return", "output", "print", "read", "scan", "capture",
+            "obtain", "acquire", "pick up", "take", "grab", "pull out", "pull up", "bring up",
+            "present", "report", "summarize", "detail", "enumerate", "itemize", "catalog",
+            "record", "document", "save", "export", "download", "copy", "quote", "cite"
+        ]
         
         # Only check if the action itself contains extraction keywords
         # Don't extract if the action is clearly something else (like "click", "type", "scroll")
@@ -1645,6 +1779,10 @@ class AgentController:
             entry["updated_at"] = time.time()
 
     def _build_current_task_prompt(self, original_prompt: str) -> str:
+        # Use rewritten prompt if available (from stuck detector)
+        if self._current_task_prompt:
+            return self._current_task_prompt
+        
         if not self._task_tracker:
             return original_prompt
 
@@ -2330,6 +2468,194 @@ class AgentController:
                 for task_id, data in self._task_tracker.items()
             }
         return evidence
+
+    def _check_and_handle_stuck(
+        self,
+        user_prompt: str,
+        environment_state: EnvironmentState,
+        completion_reasoning: str,
+        evaluation: CompletionEvaluation,
+        current_action: Optional[str],
+        iteration: int,
+    ) -> bool:
+        """
+        Check if agent is stuck and rewrite prompt if needed.
+        
+        This is called after completion check but before determining next action.
+        
+        Returns:
+            True if prompt was rewritten (action should be recomputed), False otherwise
+        """
+        # Assess stuck status
+        stuck_status = self.stuck_detector.assess()
+        
+        if stuck_status.is_stuck:
+            print(f"⚠️ Stuck detection triggered (score={stuck_status.score:.2f}): {stuck_status.reason}")
+            self._log_event(
+                "stuck_detected",
+                score=stuck_status.score,
+                reason=stuck_status.reason,
+                contributing_factors=stuck_status.contributing_factors,
+            )
+            
+            # Rewrite prompt using completion reasoning
+            rewritten = self._rewrite_task_prompt_using_completion_reasoning(
+                original_user_prompt=user_prompt,
+                current_task_prompt=self._current_task_prompt or user_prompt,
+                completion_reasoning=completion_reasoning,
+            )
+            
+            if rewritten and rewritten != (self._current_task_prompt or user_prompt):
+                self._current_task_prompt = rewritten
+                print(f"📝 Rewritten task prompt: {rewritten}")
+                self._log_event(
+                    "prompt_rewritten",
+                    original_prompt=user_prompt,
+                    rewritten_prompt=rewritten,
+                    completion_reasoning=completion_reasoning,
+                )
+                return True  # Prompt was rewritten, action should be recomputed
+        
+        return False  # No prompt rewrite
+    
+    def _update_stuck_detector_snapshot(
+        self,
+        iteration: int,
+        current_action: Optional[str],
+        environment_state: EnvironmentState,
+        completion_reasoning: str,
+        evaluation: CompletionEvaluation,
+    ) -> None:
+        """
+        Update stuck detector with current iteration snapshot.
+        
+        This is called after we determine the next action but before executing it.
+        We'll update it again after execution to track success/failure and state changes.
+        """
+        # Get last interaction to determine success and state changes
+        last_interaction = None
+        if environment_state.interaction_history:
+            last_interaction = environment_state.interaction_history[-1]
+        
+        # Determine URL change
+        url_changed = False
+        if len(environment_state.url_history) >= 2:
+            url_changed = environment_state.url_history[-1] != environment_state.url_history[-2]
+        
+        # Determine DOM change from last interaction
+        dom_changed = False
+        if last_interaction and last_interaction.before_state and last_interaction.after_state:
+            if last_interaction.before_state.dom_snapshot and last_interaction.after_state.dom_snapshot:
+                dom_changed = last_interaction.before_state.dom_snapshot != last_interaction.after_state.dom_snapshot
+            elif url_changed:
+                # If URL changed, DOM likely changed too
+                dom_changed = True
+        
+        # Get extracted items count
+        extracted_count = len(self.extracted_data) if self.extracted_data else 0
+        
+        # Normalize action text
+        action_text_norm = None
+        action_type = None
+        if current_action:
+            action_text_norm = current_action.lower().strip()
+            # Extract action type (e.g., "click:", "type:", "scroll:")
+            if ":" in action_text_norm:
+                action_type = action_text_norm.split(":")[0].strip().upper()
+        
+        # Get success from last interaction
+        success = None
+        if last_interaction:
+            success = last_interaction.success
+        
+        # Create snapshot
+        snap = IterationSnapshot(
+            iteration=iteration + 1,
+            action_text_norm=action_text_norm,
+            action_type=action_type,
+            success=success,
+            url=environment_state.current_url,
+            page_title=environment_state.page_title,
+            url_changed=url_changed,
+            dom_changed=dom_changed,
+            extracted_items_count=extracted_count,
+            completion_reasoning=completion_reasoning,
+            completion_confidence=evaluation.confidence,
+        )
+        
+        self.stuck_detector.add_iteration(snap)
+    
+    def _rewrite_task_prompt_using_completion_reasoning(
+        self,
+        original_user_prompt: str,
+        current_task_prompt: str,
+        completion_reasoning: str,
+    ) -> Optional[str]:
+        """
+        Rewrite the task prompt using completion reasoning to focus on what's still needed.
+        
+        Uses LLM to create a new, focused prompt that doesn't mention being stuck.
+        """
+        try:
+            from pydantic import BaseModel, Field, ConfigDict
+            
+            class RewrittenTaskPrompt(BaseModel):
+                model_config = ConfigDict(extra="forbid")
+                rewritten_prompt: str = Field(
+                    description="New task prompt that keeps the original goal but narrows it to the next concrete subtask. "
+                               "Do NOT mention that the agent is stuck or looping. Write it as a fresh instruction."
+                )
+            
+            system_prompt = """You rewrite high-level web automation tasks into focused subtasks.
+
+You are given:
+- The original user task
+- The current task prompt (which may already be a rewrite)
+- A completion evaluator's reasoning explaining why the task is NOT complete
+
+Your job:
+- Keep the original ultimate goal in mind
+- Produce a short rewritten task prompt that focuses the agent on the NEXT concrete sub-goal needed right now
+- Do NOT mention that the agent is stuck or looping
+- Avoid meta commentary; write it as a plain instruction the agent would normally receive
+- Be specific about what needs to be done next based on the completion reasoning
+
+Examples:
+- Original: "Collect all quotes from the first 3 pages"
+  Completion reasoning: "Only quotes from page 1 collected; pages 2 and 3 not visited."
+  Rewritten: "From the current page, navigate to pages 2 and 3 of the quote site and extract all quotes from each page."
+
+- Original: "Fill out the contact form"
+  Completion reasoning: "Form fields are visible but not yet filled."
+  Rewritten: "Fill in all visible form fields on the contact form and submit it."
+
+Output JSON with just the field 'rewritten_prompt'."""
+            
+            user_prompt_text = f"""ORIGINAL USER PROMPT:
+{original_user_prompt}
+
+CURRENT TASK PROMPT:
+{current_task_prompt}
+
+COMPLETION REASONING (not complete):
+{completion_reasoning}
+
+Write a new, focused task prompt that the agent should follow next.
+Do NOT mention being stuck or looping. Write it as a fresh instruction."""
+            
+            result = generate_model(
+                prompt=user_prompt_text,
+                model_object_type=RewrittenTaskPrompt,
+                system_prompt=system_prompt,
+                model=self.agent_model_name,
+                reasoning_level=ReasoningLevel.LOW,  # Use low reasoning for prompt rewriting
+            )
+            
+            return result.rewritten_prompt if result else None
+            
+        except Exception as e:
+            print(f"⚠️ Failed to rewrite task prompt: {e}")
+            return None
 
     def _build_tab_summary(self) -> List[Dict[str, Any]]:
         tab_manager = getattr(self.bot, "tab_manager", None)

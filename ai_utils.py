@@ -19,6 +19,11 @@ from collections.abc import Sequence as SequenceABC
 import re
 
 from litellm import completion, completion_cost
+try:
+    from litellm.exceptions import UnsupportedParamsError
+except ImportError:
+    # Fallback if the exception isn't available
+    UnsupportedParamsError = None
 from pydantic import BaseModel, ValidationError
 
 
@@ -197,6 +202,53 @@ def _infer_provider(model: str) -> str:
     if "anthropic" in lowered or "claude" in lowered:
         return "anthropic"
     return "openai"
+
+
+# Models that don't support reasoning_effort parameter
+_MODELS_WITHOUT_REASONING: set[str] = {
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash-lite-001",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-flash-8b-001",
+    # Add more models as needed
+}
+
+
+def _model_supports_reasoning(model: str, provider: str, config: ProviderConfig) -> bool:
+    """
+    Check if a specific model supports the reasoning_effort parameter.
+    
+    Args:
+        model: The model identifier
+        provider: The provider name
+        config: The provider configuration
+    
+    Returns:
+        True if the model supports reasoning, False otherwise
+    """
+    # First check if provider supports reasoning at all
+    if not config.supports_reasoning_flag:
+        return False
+    
+    # Check model-specific exceptions
+    model_lower = model.lower()
+    if model_lower in _MODELS_WITHOUT_REASONING:
+        return False
+    
+    # Check for patterns in model names that indicate no reasoning support
+    # Some "lite" or "flash" models may not support reasoning
+    if provider == "google" or provider == "gemini":
+        # Most Gemini models support reasoning, but some lite/flash variants don't
+        if "-lite" in model_lower or "-flash" in model_lower:
+            # Check against known exceptions
+            if model_lower not in _MODELS_WITHOUT_REASONING:
+                # For unknown lite/flash models, we'll try and catch the error
+                # This allows us to be permissive but handle failures gracefully
+                pass
+    
+    return True
 
 
 def _resolve_api_key(model: str, provider: str) -> str:
@@ -407,6 +459,8 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
             return _manual_parse_next_action(text, model_object_type)
         if model_object_type.__name__ == "CompletionEvaluation":
             return _manual_parse_completion_evaluation(text, model_object_type)
+        if model_object_type.__name__ == "ExtractionResult":
+            return _manual_parse_extraction_result(text, model_object_type)
     except Exception as exc:
         print(f"⚠️ Manual parse helper error for {model_object_type.__name__}: {exc}")
     return None
@@ -612,6 +666,109 @@ def _manual_parse_completion_evaluation(text: str, model_object_type: Type[BaseM
         return None
 
 
+def _manual_parse_extraction_result(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
+    """
+    Heuristic parser for ExtractionResult when the model emits prose instead of structured JSON.
+    
+    Attempts to extract:
+    - extracted_data: JSON object or key-value pairs
+    - confidence: float between 0.0 and 1.0
+    - reasoning: explanation text
+    """
+    import json
+    
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    
+    # First, try to extract JSON object from the text
+    json_obj = _extract_json_object(cleaned)
+    if isinstance(json_obj, dict):
+        # Try to match ExtractionResult structure
+        extracted_data = json_obj.get("extracted_data") or json_obj.get("data") or json_obj
+        confidence = json_obj.get("confidence", 0.7)
+        reasoning = json_obj.get("reasoning") or json_obj.get("explanation") or "Extracted from JSON response"
+        
+        # Ensure extracted_data is a JSON string
+        if isinstance(extracted_data, dict):
+            extracted_data = json.dumps(extracted_data)
+        elif not isinstance(extracted_data, str):
+            extracted_data = json.dumps({"content": str(extracted_data)})
+        
+        try:
+            # Validate confidence
+            confidence = float(confidence)
+            confidence = max(0.0, min(1.0, confidence))
+            
+            if hasattr(model_object_type, "model_validate"):
+                return model_object_type.model_validate({
+                    "extracted_data": extracted_data,
+                    "confidence": confidence,
+                    "reasoning": reasoning
+                })
+            return model_object_type(
+                extracted_data=extracted_data,
+                confidence=confidence,
+                reasoning=reasoning
+            )
+        except (ValidationError, ValueError) as exc:
+            print(f"⚠️ Manual ExtractionResult JSON parse failed validation: {exc}")
+    
+    # Fallback: extract key-value pairs from prose
+    pairs = {}
+    for key in ("extracted_data", "extracted data", "data", "confidence", "reasoning", "explanation"):
+        match = re.search(rf"{key}\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            pairs[key.lower().replace(" ", "_")] = match.group(1).strip(" \n\r\t\"'")
+    
+    # Try to extract JSON from the text content
+    extracted_data_raw = pairs.get("extracted_data") or pairs.get("data") or cleaned
+    extracted_data = None
+    
+    # Try to find JSON in the text
+    json_obj = _extract_json_object(extracted_data_raw)
+    if json_obj:
+        extracted_data = json.dumps(json_obj)
+    else:
+        # If no JSON found, wrap the content as a description
+        # Remove common prefixes like "extracted_data:", "data:", etc.
+        content = extracted_data_raw
+        for prefix in ["extracted_data:", "data:", "extraction:", "result:"]:
+            if content.lower().startswith(prefix.lower()):
+                content = content[len(prefix):].strip()
+        # Try to create a simple key-value structure from the description
+        extracted_data = json.dumps({"description": content[:500]})
+    
+    # Extract confidence
+    confidence = 0.7  # Default
+    confidence_str = pairs.get("confidence")
+    if confidence_str:
+        try:
+            confidence = float(re.search(r"[\d.]+", confidence_str).group() if re.search(r"[\d.]+", confidence_str) else confidence_str)
+            confidence = max(0.0, min(1.0, confidence))
+        except (ValueError, AttributeError):
+            pass
+    
+    # Extract reasoning
+    reasoning = pairs.get("reasoning") or pairs.get("explanation") or cleaned[:200]
+    
+    try:
+        if hasattr(model_object_type, "model_validate"):
+            return model_object_type.model_validate({
+                "extracted_data": extracted_data,
+                "confidence": confidence,
+                "reasoning": reasoning
+            })
+        return model_object_type(
+            extracted_data=extracted_data,
+            confidence=confidence,
+            reasoning=reasoning
+        )
+    except ValidationError as exc:
+        print(f"⚠️ Manual ExtractionResult parse failed validation: {exc}")
+        return None
+
+
 def _perform_completion(
     *,
     prompt: str,
@@ -645,10 +802,33 @@ def _perform_completion(
     }
     if response_format is not None:
         kwargs["response_format"] = response_format
-    if reasoning_level and config.supports_reasoning_flag:
+    
+    # Check if model supports reasoning before adding the parameter
+    use_reasoning = reasoning_level and _model_supports_reasoning(model, provider, config)
+    if use_reasoning:
         kwargs["reasoning_effort"] = reasoning_level
 
-    response = completion(**kwargs)
+    # Try completion with reasoning, fallback without if it fails
+    try:
+        response = completion(**kwargs)
+    except Exception as e:
+        # If we get an UnsupportedParamsError for reasoning_effort, retry without it
+        error_str = str(e).lower()
+        is_reasoning_error = (
+            (UnsupportedParamsError is not None and isinstance(e, UnsupportedParamsError)) or
+            (("reasoning_effort" in error_str or "reasoning" in error_str) and
+             ("unsupported" in error_str or "not support" in error_str or "does not support" in error_str))
+        )
+        
+        if is_reasoning_error and "reasoning_effort" in kwargs:
+            # Remove reasoning_effort and retry
+            kwargs.pop("reasoning_effort", None)
+            print(f"⚠️ Model {model} doesn't support reasoning_effort, retrying without it...")
+            response = completion(**kwargs)
+            # Cache this model as not supporting reasoning for future calls
+            _MODELS_WITHOUT_REASONING.add(model.lower())
+        else:
+            raise
     text = _extract_text_from_response(response)
     cost_usd, usage = _extract_usage(response, model)
 
@@ -889,8 +1069,12 @@ def generate_model_with_cost(
     if model_object_type is None:
         parsed_result: Any = text
     else:
-        message = (response.get("choices") or [{}])[0].get("message", {})
-        parsed_obj = message.get("parsed")
+        # Safely extract message from response
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            choices = [{}]
+        message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+        parsed_obj = message.get("parsed") if isinstance(message, dict) else None
         if parsed_obj is not None:
             parsed_result = parsed_obj
         else:

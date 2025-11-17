@@ -5,8 +5,8 @@ Step 2: Evaluates task completion using LLM with full environment state.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Union
-from pydantic import BaseModel, Field
+from typing import List, Optional, Tuple, Union, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict
 
 from goals.base import BrowserState, Interaction, InteractionType
 from ai_utils import (
@@ -15,6 +15,12 @@ from ai_utils import (
     get_default_agent_model,
     get_default_agent_reasoning_level,
 )
+
+
+class CompletionYesNo(BaseModel):
+    """Lightweight yes/no response for completion check"""
+    model_config = ConfigDict(extra="forbid")
+    is_complete: bool = Field(description="True if the task is complete, False otherwise")
 
 
 class CompletionEvaluation(BaseModel):
@@ -70,12 +76,16 @@ class CompletionContract:
         self,
         user_prompt: str,
         allow_partial_completion: bool = False,
+        show_task_completion_reason: bool = False,
+        strict_mode: bool = False,
         *,
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
     ):
         self.user_prompt = user_prompt
         self.allow_partial_completion = allow_partial_completion
+        self.show_task_completion_reason = show_task_completion_reason
+        self.strict_mode = strict_mode
         self.model_name = model_name or get_default_agent_model()
         if reasoning_level is None:
             reasoning = ReasoningLevel.coerce(get_default_agent_reasoning_level())
@@ -86,10 +96,15 @@ class CompletionContract:
     def evaluate(
         self,
         environment_state: EnvironmentState,
-        screenshot: Optional[bytes] = None
+        screenshot: Optional[bytes] = None,
+        user_inputs: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[bool, str, CompletionEvaluation]:
         """
         Evaluates if the task is complete using LLM with full environment context.
+        
+        Uses a two-stage approach:
+        1. Quick yes/no check (fast)
+        2. Full evaluation with reasoning (only if complete or show_task_completion_reason=True)
         
         Args:
             environment_state: Complete state snapshot
@@ -99,9 +114,28 @@ class CompletionContract:
             (is_complete, reasoning, full_evaluation)
         """
         try:
+            # First, do a quick yes/no check
+            # Note: quick check doesn't include user inputs for speed, but full evaluation will
+            is_complete_quick = self._query_completion_yes_no(environment_state, screenshot)
+            
+            # If not complete and not showing reason, return early with minimal reasoning
+            if not is_complete_quick and not self.show_task_completion_reason:
+                return (
+                    False,
+                    "Task not complete",
+                    CompletionEvaluation(
+                        is_complete=False,
+                        confidence=0.0,
+                        reasoning="Task not complete",
+                        evidence=None,
+                        remaining_steps=[]
+                    )
+                )
+            
+            # Task is complete OR show_task_completion_reason is True - do full evaluation
             # Build comprehensive context for LLM
             system_prompt = self._build_system_prompt()
-            user_prompt_text = self._build_evaluation_prompt(environment_state)
+            user_prompt_text = self._build_evaluation_prompt(environment_state, user_inputs or [])
             
             # Call LLM with structured schema
             evaluation = generate_model(
@@ -134,6 +168,70 @@ class CompletionContract:
             )
             return False, fallback_eval.reasoning, fallback_eval
     
+    def _query_completion_yes_no(
+        self,
+        environment_state: EnvironmentState,
+        screenshot: Optional[bytes] = None
+    ) -> bool:
+        """
+        Lightweight yes/no check to determine if task is complete.
+        Returns True if task is complete, False otherwise.
+        """
+        prompt = self._build_completion_yes_no_prompt(environment_state)
+        try:
+            result = generate_model(
+                prompt=prompt,
+                model_object_type=CompletionYesNo,
+                system_prompt=self._build_completion_yes_no_system_prompt(),
+                image=screenshot,
+                image_detail="low",  # Use low detail for quick check
+                model=self.model_name,
+                reasoning_level=ReasoningLevel.LOW,  # Use low reasoning for quick check
+            )
+            return result.is_complete
+        except Exception as e:
+            print(f"⚠️ Failed to evaluate completion yes/no check via LLM: {e}")
+            # Fallback: assume not complete (conservative)
+            return False
+    
+    @staticmethod
+    def _build_completion_yes_no_system_prompt() -> str:
+        return """You are making a quick yes/no decision: is the task complete?
+
+A task is complete when:
+- The user's main request has been fulfilled
+- Required data has been extracted (if extraction was requested)
+- Target page has been reached (if navigation was requested)
+- Success indicators are visible (if form submission was requested)
+
+A task is NOT complete when:
+- Still on wrong page or intermediate page
+- Required interactions haven't been performed
+- Data extraction hasn't occurred (if extraction was requested)
+- Task is clearly in progress
+
+Respond with just is_complete (true/false)."""
+    
+    def _build_completion_yes_no_prompt(self, state: EnvironmentState) -> str:
+        """Build a lightweight prompt for yes/no completion decision"""
+        interaction_summary = self._summarize_interactions(state.interaction_history)
+        
+        return f"""
+QUICK COMPLETION CHECK
+======================
+
+USER PROMPT: "{self.user_prompt}"
+
+CURRENT STATE:
+- URL: {state.current_url}
+- Page Title: {state.page_title}
+- Visible Text: {state.visible_text[:500] if state.visible_text else "None"}...
+
+INTERACTIONS: {interaction_summary[:300]}...
+
+QUESTION: Is the task complete? (true/false only)
+"""
+    
     def _build_system_prompt(self) -> str:
         """Build system prompt that guides the LLM on how to evaluate completion"""
         partial_guidance = ""
@@ -155,10 +253,35 @@ Evaluation Guidelines:
 - Consider the intent: a "navigate" task completes when the target page loads
 - **CRITICAL for extraction tasks: If the user prompt involves extracting, getting, finding, or collecting data, the task is ONLY complete if an EXTRACT interaction has been successfully performed AND the extracted data matches what was requested. Do NOT mark complete if data is just visible on the page - extraction must have actually occurred.**
 - Consider data collection: a "collect info" task completes when required data is visible/collected AND extraction has been performed
-- Consider form submission: a "submit" task completes when confirmation appears or success indicators are visible
+- Consider form submission: a "submit" or "login" task completes when:
+  * Confirmation appears or success indicators are visible, OR
+  * Navigation to a new page occurs (URL changed), OR  
+  * The final action (clicking submit/login button) was performed - if the user's goal explicitly states "click the login button" or "click submit", and that action has been executed, consider the task complete even if there's no immediate page change
+  **STRICT MODE: If strict_mode is enabled, ONLY check if the explicitly requested actions have been executed. Do NOT infer that login/submit must succeed - if the user asked to "click the login button", consider it complete after clicking, regardless of success/failure or error messages.**
+  
+  **STRICT MODE EXAMPLES:**
+  - User goal: "click the login button"
+    * Strict mode: Task is COMPLETE after the login button is clicked, even if a "Wrong password!" error appears
+    * Non-strict mode: Task is NOT complete if login fails (would infer success is required)
+  
+  - User goal: "Fill in username 'exampleuser2' and when I say 'continue', click the login button"
+    * Strict mode: Task is COMPLETE if:
+      ✓ Username was filled in
+      ✓ "continue" command was received (check user inputs/interaction history)
+      ✓ Login button was clicked
+    * Do NOT check if password was correct, do NOT check if login succeeded, do NOT consider error messages as failure
+  
+  - User goal: "navigate to https://example.com and click submit"
+    * Strict mode: Task is COMPLETE if:
+      ✓ Navigation to the URL occurred (URL matches)
+      ✓ Submit button was clicked
+    * Do NOT check if form submission succeeded, do NOT check for validation errors
+  
+  **Key principle: In strict mode, completion = all explicitly requested actions were performed, regardless of outcomes, errors, or success indicators.**
 - Look for explicit success indicators: confirmation messages, success pages, completion banners
 - Consider navigation patterns: unexpected navigation away from target may indicate failure
 - Be aware of intermediate states: don't mark complete during multi-step workflows unless truly finished
+- **Note: Also consider the interaction history - if the user requested specific actions and they appear to have been executed successfully, this can support completion even if page state hasn't changed yet**
 {partial_guidance}
 
 Your evaluation should be:
@@ -174,7 +297,7 @@ Return your evaluation as structured JSON with:
 - remaining_steps: (DEPRECATED - leave empty) This field is not used. Actions are determined reactively.
 """
     
-    def _build_evaluation_prompt(self, state: EnvironmentState) -> str:
+    def _build_evaluation_prompt(self, state: EnvironmentState, user_inputs: List[Dict[str, Any]] = None) -> str:
         """Build detailed prompt with all environment context"""
         
         # Summarize interactions
@@ -214,6 +337,10 @@ NAVIGATION HISTORY:
 
 INTERACTIONS PERFORMED:
 {interaction_summary}
+{f"""
+USER-PROVIDED INPUTS (from defer_input commands):
+{chr(10).join([f"- {entry.get('prompt', 'Input')}: \"{entry.get('response', '')}\"" for entry in reversed(user_inputs[-3:])])}
+""" if user_inputs else ""}
 
 TASK PROGRESS:
 - Started at: {state.task_start_url}
@@ -231,9 +358,25 @@ The agent will determine what to do next reactively based on the current viewpor
 
 Consider:
 - Whether the current page/state matches what would be expected after task completion
-- Whether all required interactions have been performed
+- Whether all required interactions have been performed (review the INTERACTIONS PERFORMED section)
+- Whether the user's explicitly stated final action (if any) has been executed
 - Whether success indicators are present
+- Whether error messages indicate a problem or are transient/disappearing
 - Whether the task reached a natural completion point vs. being in progress
+{f"""
+{"="*60}
+STRICT MODE IS ENABLED - EVALUATION RULES:
+{"="*60}
+The user prompt has been rewritten to explicitly state completion criteria.
+
+Your job: Check if all actions explicitly listed in the user prompt have been performed.
+- Review the INTERACTIONS PERFORMED section
+- Review the USER-PROVIDED INPUTS section for conditional commands (e.g., "continue")
+- DO NOT check outcomes, error messages, success indicators, or page navigation unless explicitly required
+
+The rewritten prompt explicitly states what constitutes completion - follow it exactly.
+{"="*60}
+""" if self.strict_mode else ""}
 """
         return prompt
     
@@ -279,6 +422,23 @@ Consider:
                     element_desc = interaction.target_element_info.get('description', '')[:50]
                     if element_desc:
                         summary += f" on element: {element_desc}"
+                # Add effectiveness indicators
+                if not interaction.success:
+                    summary += f" ❌ FAILED"
+                elif interaction.before_state and interaction.after_state:
+                    # Check if page changed (effective action)
+                    url_changed = interaction.before_state.url != interaction.after_state.url
+                    # Check DOM change by comparing dom_snapshot if available
+                    dom_changed = False
+                    if interaction.before_state.dom_snapshot and interaction.after_state.dom_snapshot:
+                        dom_changed = interaction.before_state.dom_snapshot != interaction.after_state.dom_snapshot
+                    elif url_changed:
+                        # If URL changed, DOM likely changed too
+                        dom_changed = True
+                    if not url_changed and not dom_changed:
+                        summary += f" ⚠️ (no page change)"
+                    else:
+                        summary += f" ✅ (effective)"
             
             summary_parts.append(summary)
         

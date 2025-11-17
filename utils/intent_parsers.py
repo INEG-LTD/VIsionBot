@@ -151,7 +151,8 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
     if not t:
         return None
     # Accept forms like "click: payload" or "click action: payload"
-    m = re.match(r"^\s*([a-z][a-z0-9\-]*)(?:\s+action)?\s*:\s*(.*)$", t, flags=re.IGNORECASE)
+    # Allow underscores and hyphens in keywords (e.g., "defer_input", "sub-focus")
+    m = re.match(r"^\s*([a-z][a-z0-9_\-]*)(?:\s+action)?\s*:\s*(.*)$", t, flags=re.IGNORECASE)
     if m:
         kw = m.group(1).lower().replace("-", "_")
         payload = (m.group(2) or "").strip()

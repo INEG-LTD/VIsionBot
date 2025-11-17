@@ -773,7 +773,9 @@ class PlanGenerator:
 
         prompt = (
             "You are given a page screenshot and a list of numbered overlay summaries.\n"
-            "Pick the overlay number that best satisfies the browsing instruction.\n"
+            "Your job is to pick the overlay number that best satisfies the browsing instruction.\n"
+            "If NONE of the overlays clearly match the instruction (their text/aria labels do not correspond to the requested control), "
+            "respond with 0 to indicate that there is no suitable element.\n"
             f"Instruction: \"{instruction}\"\n"
             f"Instruction terms to align with: {goal_token_str}.\n"
         )
@@ -791,14 +793,19 @@ class PlanGenerator:
             "- Choose concise clickable controls (buttons/links) that directly execute the request.\n"
             "- Prefer overlays whose visible text or aria labels contain several instruction or must-have terms.\n"
             "- Reject overlays that describe entire job cards, long descriptions, or containers that lack a primary action.\n"
-            "Respond with ONLY the overlay number (e.g., 5). No explanation, no JSON.\n"
+            "- If you cannot find any overlay that reasonably matches the instruction, respond with 0.\n"
+            "Respond with ONLY the overlay number as an integer (e.g., 5), or 0 if there is no match. No explanation, no JSON.\n"
             "Overlays:\n" + "\n".join(samples)
         )
 
         try:
             raw_response = generate_text(
                 prompt=prompt,
-                system_prompt="You select the overlay index that best fits the instruction. Reply with just the index as an integer.",
+                system_prompt=(
+                    "You select the overlay index that best fits the instruction.\n"
+                    "If no overlay is a reasonable match, reply with 0.\n"
+                    "Reply with just the index as an integer (e.g., 5 or 0)."
+                ),
                 image=screenshot,
             )
         except Exception as e:
@@ -813,6 +820,10 @@ class PlanGenerator:
             return None
 
         overlay_index = int(match.group())
+        if overlay_index == 0:
+            print(f"[PlanGen][NL] no suitable overlay chosen (raw='{raw_response}')")
+            return None
+
         print(f"[PlanGen][NL] overlay #{overlay_index} chosen (raw='{raw_response}')")
         return overlay_index
 

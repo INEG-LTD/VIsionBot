@@ -14,14 +14,15 @@ bot.page.goto("https://google.com")
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.agentic_mode(
-    "go to elon musk's wikipedia page",
+    "Go to https://finance.yahoo.com/most-active and list the top 5 most active stocks with their prices and percentage change.",
     base_knowledge=[
         "just press enter after you've typed a search term into a search field",
         "if asked to search use the best search box contextually available",
         "if you encounter a captcha, give control to the user",
         "if there is a cookie banner, accept all cookies",
     ],
-    allow_partial_completion=True
+    allow_partial_completion=True,
+    strict_mode=True
 )
 
 # Check if task succeeded

@@ -209,8 +209,10 @@ class ExecutionTimer:
             print(f"\n🔄 Iterations: {len(summary['iterations'])}")
             print(f"   Total iteration time: {self._format_duration(total_iter_time)}")
             print(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
-            print(f"   Fastest iteration: {min(iter_data['duration_formatted'] for iter_data in summary['iterations'])}")
-            print(f"   Slowest iteration: {max(iter_data['duration_formatted'] for iter_data in summary['iterations'])}")
+            fastest_iter = min(summary['iterations'], key=lambda x: x['duration_seconds'])
+            slowest_iter = max(summary['iterations'], key=lambda x: x['duration_seconds'])
+            print(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
+            print(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
         
         # Command timings
         if summary["commands"]:
@@ -257,6 +259,16 @@ class BrowserVisionBot:
         plan_cache_ttl: float = 6.0,
         plan_cache_max_reuse: int = 1,
         parallel_completion_and_action: bool = True,
+        # Stuck detector configuration
+        stuck_detector_enabled: bool = True,
+        stuck_detector_window_size: int = 5,
+        stuck_detector_threshold: float = 0.6,
+        stuck_detector_weight_repeated_action: float = 0.15,
+        stuck_detector_weight_repetitive_action_no_change: float = 0.4,
+        stuck_detector_weight_no_state_change: float = 0.3,
+        stuck_detector_weight_no_progress: float = 0.2,
+        stuck_detector_weight_error_spiral: float = 0.2,
+        stuck_detector_weight_high_confidence_no_progress: float = 0.1,
     ):
         """
         Initialize BrowserVisionBot.
@@ -326,6 +338,17 @@ class BrowserVisionBot:
         
         # Parallel execution of completion check and next action determination
         self.parallel_completion_and_action = parallel_completion_and_action
+        
+        # Stuck detector configuration
+        self.stuck_detector_enabled = stuck_detector_enabled
+        self.stuck_detector_window_size = stuck_detector_window_size
+        self.stuck_detector_threshold = stuck_detector_threshold
+        self.stuck_detector_weight_repeated_action = stuck_detector_weight_repeated_action
+        self.stuck_detector_weight_repetitive_action_no_change = stuck_detector_weight_repetitive_action_no_change
+        self.stuck_detector_weight_no_state_change = stuck_detector_weight_no_state_change
+        self.stuck_detector_weight_no_progress = stuck_detector_weight_no_progress
+        self.stuck_detector_weight_error_spiral = stuck_detector_weight_error_spiral
+        self.stuck_detector_weight_high_confidence_no_progress = stuck_detector_weight_high_confidence_no_progress
         
         # Auto-run actions on page load (opt-in)
         self._auto_on_load_enabled: bool = False
@@ -1634,7 +1657,11 @@ class BrowserVisionBot:
         track_ineffective_actions: bool = True,
         base_knowledge: Optional[List[str]] = None,
         allow_partial_completion: bool = False,
-        check_ineffective_actions: Optional[bool] = None
+        check_ineffective_actions: Optional[bool] = None,
+        show_completion_reasoning_every_iteration: bool = False,
+        strict_mode: bool = False,
+        clarification_callback: Optional[Callable[[str], str]] = None,
+        max_clarification_rounds: int = 3
     ) -> AgentResult:
         """
         Run agentic mode (Step 1: Basic Reactive Agent).
@@ -1653,6 +1680,15 @@ class BrowserVisionBot:
             allow_partial_completion: If True, allow CompletionContract to mark tasks complete when major deliverables are satisfied, even if minor items remain.
             check_ineffective_actions: Optional override to enable/disable ineffective-action detection. If provided, supersedes track_ineffective_actions.
                                        Default: True (recommended for better performance)
+            show_completion_reasoning_every_iteration: If True, show and log the completion reasoning on every iteration, not just when the task is complete.
+                                                       Useful for debugging why the agent doesn't recognize completion.
+            strict_mode: If True, the agent will follow instructions exactly without inferring extra requirements.
+                        For example, if asked to "click the login button", it will consider the task complete after clicking,
+                        even if login fails. Default: False.
+            clarification_callback: Optional callback function(message: str) -> str for asking the user clarification questions
+                                   when the agent wants to infer extra information. If provided and strict_mode is False,
+                                   the agent will ask before inferring. Default: None.
+            max_clarification_rounds: Maximum number of clarification rounds. Default: 3.
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            These rules influence what actions the agent takes.
                            Example: ["just press enter after you've typed a search term into a search field"]
@@ -1695,7 +1731,20 @@ class BrowserVisionBot:
                 track_ineffective_actions=track_ineffective_actions,
                 base_knowledge=base_knowledge,
                 allow_partial_completion=allow_partial_completion,
-                parallel_completion_and_action=self.parallel_completion_and_action
+                parallel_completion_and_action=self.parallel_completion_and_action,
+                show_completion_reasoning_every_iteration=show_completion_reasoning_every_iteration,
+                strict_mode=strict_mode,
+                clarification_callback=clarification_callback,
+                max_clarification_rounds=max_clarification_rounds,
+                stuck_detector_enabled=self.stuck_detector_enabled,
+                stuck_detector_window_size=self.stuck_detector_window_size,
+                stuck_detector_threshold=self.stuck_detector_threshold,
+                stuck_detector_weight_repeated_action=self.stuck_detector_weight_repeated_action,
+                stuck_detector_weight_repetitive_action_no_change=self.stuck_detector_weight_repetitive_action_no_change,
+                stuck_detector_weight_no_state_change=self.stuck_detector_weight_no_state_change,
+                stuck_detector_weight_no_progress=self.stuck_detector_weight_no_progress,
+                stuck_detector_weight_error_spiral=self.stuck_detector_weight_error_spiral,
+                stuck_detector_weight_high_confidence_no_progress=self.stuck_detector_weight_high_confidence_no_progress,
             )
             controller.max_iterations = max_iterations
             
@@ -1750,29 +1799,42 @@ class BrowserVisionBot:
         try:
             if scope == "full_page":
                 screenshot = self.page.screenshot(full_page=True)
-                # Get full page text
-                visible_text = self.page.evaluate("document.body.innerText")[:2000]
+                # Get full page text - use larger limit for full page
+                visible_text = self.page.evaluate("document.body.innerText") or ""
             elif scope == "element":
                 # For element scope, we'll use vision to find the element first
                 screenshot = self.page.screenshot(full_page=False)
-                visible_text = self.page.evaluate("document.body.innerText")[:1000]
+                visible_text = self.page.evaluate("document.body.innerText") or ""
             else:  # viewport
                 screenshot = self.page.screenshot(full_page=False)
-                visible_text = self.page.evaluate("document.body.innerText")[:1000]
+                visible_text = self.page.evaluate("document.body.innerText") or ""
         except Exception as e:
             raise RuntimeError(f"Failed to capture screenshot: {e}")
         
-        # Build extraction prompt for LLM
+        # Clean and prepare the text (remove excessive whitespace but keep structure)
+        if visible_text:
+            # Remove excessive newlines but keep some structure
+            import re
+            visible_text = re.sub(r'\n{3,}', '\n\n', visible_text.strip())
+        
+        # Build extraction prompt for LLM with full page text for grounding
         extraction_prompt = f"""
-Extract the following information from this webpage:
+Extract the following information from this webpage screenshot:
 {prompt}
 
 Current page context:
 - URL: {self.page.url}
 - Title: {self.page.title()}
-- Visible text preview: {visible_text[:500]}...
 
-Please extract the requested information accurately.
+FULL PAGE TEXT CONTENT (use this to verify your extraction):
+{visible_text if visible_text else "(No text content found on page)"}
+
+IMPORTANT INSTRUCTIONS:
+1. Use the FULL PAGE TEXT CONTENT above to verify that the information you extract actually exists on the page
+2. Only extract information that appears in BOTH the screenshot AND the text content provided above
+3. Do NOT make up or infer data that is not present in the text content
+4. If the requested information is not found in the text content, return an empty object {{}} or indicate "not available"
+5. Cross-reference your visual extraction with the text content to ensure accuracy
 """
         
         # Try extraction with retries
@@ -1780,11 +1842,16 @@ Please extract the requested information accurately.
         for attempt in range(max_retries + 1):
             try:
                 if output_format == "text":
-                    # Simple text extraction using vision
-                    question = f"What is the {prompt}? Return only the extracted text, no explanations."
+                    # Simple text extraction using vision, grounded with page text
+                    question = f"""What is the {prompt}? 
+
+FULL PAGE TEXT CONTENT (use this to verify your extraction):
+{visible_text if visible_text else "(No text content found on page)"}
+
+Return only the extracted text that appears in the text content above. Do not make up text that isn't in the provided content."""
                     result_text = generate_text(
                         prompt=question,
-                        system_prompt="You are extracting text from a webpage. Return only the extracted text, no explanations or formatting.",
+                        system_prompt="You are extracting text from a webpage. The user has provided the FULL PAGE TEXT CONTENT. You must verify that the text you extract actually exists in the provided content. Return only the extracted text that appears in the content, no explanations or formatting.",
                         image=screenshot,
                         image_detail="high"
                     )
@@ -1812,13 +1879,30 @@ Please extract the requested information accurately.
                     result = generate_model(
                         prompt=extraction_prompt,
                         model_object_type=ExtractionResult,
-                        system_prompt="You are extracting structured data from a webpage. Extract the requested information and return it as a JSON object string with appropriate keys. The extracted_data field should be a valid JSON string.",
+                        system_prompt="You are extracting structured data from a webpage screenshot. The user has provided the FULL PAGE TEXT CONTENT in the prompt. CRITICAL: You must verify every piece of extracted data against the provided text content. Only extract information that appears in BOTH the screenshot AND the text content. Do NOT make up, infer, or guess data. If information is not found in the text content, it does not exist on the page - return an empty object {} or mark it as 'not available'. The extracted_data field should be a valid JSON string containing only verified data that exists in the provided text content.",
                         image=screenshot,
                         image_detail="high"
                     )
                     
+                    # Check if result is actually an ExtractionResult instance (parsing might have failed)
+                    if not isinstance(result, ExtractionResult):
+                        # Try manual parsing as fallback
+                        from ai_utils import _manual_parse_structured_output
+                        manual_result = _manual_parse_structured_output(str(result), ExtractionResult)
+                        if manual_result and isinstance(manual_result, ExtractionResult):
+                            print("✅ Successfully parsed extraction result using manual parser")
+                            result = manual_result
+                        else:
+                            # Parsing failed completely
+                            error_msg = str(result)[:200] if result else "Empty response"
+                            raise ValueError(f"Failed to parse extraction result as ExtractionResult. Got raw text instead: {error_msg}")
+                    
                     if result.confidence < confidence_threshold:
                         raise ValueError(f"Extraction confidence {result.confidence} below threshold {confidence_threshold}")
+                    
+                    # Warn if confidence is low (but above threshold)
+                    if result.confidence < 0.8:
+                        print(f"⚠️ Low extraction confidence ({result.confidence:.2f}). Verify extracted data matches what's actually on the page.")
                     
                     # Parse the JSON string
                     import json
@@ -1826,6 +1910,53 @@ Please extract the requested information accurately.
                         extracted_dict = json.loads(result.extracted_data)
                     except json.JSONDecodeError as e:
                         raise ValueError(f"Failed to parse extracted_data as JSON: {e}. Raw data: {result.extracted_data}")
+                    
+                    # Validate that extracted_dict is actually a dict (not a list or other type)
+                    if not isinstance(extracted_dict, dict):
+                        raise ValueError(f"Expected extracted_data to be a JSON object (dict), but got {type(extracted_dict).__name__}: {extracted_dict}")
+                    
+                    # Validate extracted values against page text to catch hallucinations
+                    if visible_text:
+                        page_text_lower = visible_text.lower()
+                        validation_warnings = []
+                        
+                        def validate_value(value, key_path=""):
+                            """Recursively validate that extracted values exist in page text"""
+                            if isinstance(value, dict):
+                                for k, v in value.items():
+                                    validate_value(v, f"{key_path}.{k}" if key_path else k)
+                            elif isinstance(value, list):
+                                for i, item in enumerate(value):
+                                    validate_value(item, f"{key_path}[{i}]" if key_path else f"[{i}]")
+                            elif isinstance(value, str) and value.strip():
+                                # Check if the value (or significant parts of it) appear in page text
+                                value_clean = value.strip().lower()
+                                # For longer strings, check if key parts appear
+                                if len(value_clean) > 20:
+                                    # Check if at least 50% of words appear
+                                    words = value_clean.split()
+                                    if words:
+                                        words_found = sum(1 for word in words if len(word) > 3 and word in page_text_lower)
+                                        if words_found < len(words) * 0.5:
+                                            validation_warnings.append(f"Value at '{key_path}' may not exist on page: '{value[:50]}...'")
+                                else:
+                                    # For shorter strings, require exact or near-exact match
+                                    if value_clean not in page_text_lower and len(value_clean) > 5:
+                                        # Check if it's a number or percentage (these might be formatted differently)
+                                        if not (value_clean.replace('.', '').replace('-', '').replace('%', '').replace('$', '').replace(',', '').isdigit()):
+                                            validation_warnings.append(f"Value at '{key_path}' may not exist on page: '{value}'")
+                        
+                        # Validate all extracted values
+                        for key, value in extracted_dict.items():
+                            if not key.startswith('_'):  # Skip metadata fields
+                                validate_value(value, key)
+                        
+                        if validation_warnings:
+                            print("⚠️ Validation warnings - some extracted values may not exist on page:")
+                            for warning in validation_warnings[:5]:  # Show first 5 warnings
+                                print(f"   - {warning}")
+                            if len(validation_warnings) > 5:
+                                print(f"   ... and {len(validation_warnings) - 5} more warnings")
                     
                     # Add metadata
                     extracted_dict["_confidence"] = result.confidence
@@ -1872,8 +2003,15 @@ Please extract the requested information accurately.
             
             except Exception as e:
                 last_error = e
+                error_msg = str(e)
+                # Provide more context for common errors
+                if "list indices must be integers" in error_msg:
+                    error_msg = f"Response parsing error (list indices): {e}. This may indicate an unexpected response format from the model."
+                elif "not str" in error_msg or "must be" in error_msg:
+                    error_msg = f"Type error during extraction: {e}. This may indicate a malformed response from the model."
+                
                 if attempt < max_retries:
-                    print(f"[Extract] Attempt {attempt + 1} failed: {e}, retrying...")
+                    print(f"[Extract] Attempt {attempt + 1} failed: {error_msg}, retrying...")
                     import time
                     time.sleep(0.5)
                 else:
@@ -1884,9 +2022,9 @@ Please extract the requested information accurately.
                         extraction_prompt=prompt,
                         extracted_data=None,
                         success=False,
-                        error_message=str(e)
+                        error_message=error_msg
                     )
-                    raise RuntimeError(f"Extraction failed after {max_retries + 1} attempts: {e}")
+                    raise RuntimeError(f"Extraction failed after {max_retries + 1} attempts: {error_msg}")
         
         # Record failed extraction if we exhausted all retries
         if last_error:
@@ -2570,16 +2708,24 @@ Please extract the requested information accurately.
         print(f"[FastMode] Overlay selection response: {selection}")
 
         if selection is None:
-            print("❌ Fast mode: overlay selection failed – falling back")
-            return None
+            print("❌ Fast mode: overlay selection failed – action failed")
+            try:
+                self.overlay_manager.remove_overlays()
+            except Exception:
+                pass
+            return False
 
         overlay_index = selection
         print(f"[FastMode] LLM chose overlay #{overlay_index}")
 
         matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
         if not matching_data:
-            print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data")
-            return None
+            print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data – action failed")
+            try:
+                self.overlay_manager.remove_overlays()
+            except Exception:
+                pass
+            return False
 
         try:
             self.overlay_manager.remove_overlays()

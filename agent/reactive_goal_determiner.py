@@ -362,11 +362,15 @@ Your job is to look at the screenshot ({screenshot_note}) and decide:
 {exploration_rules}
 {base_knowledge_section}
 CRITICAL RULES:
-1. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, or collecting data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
+1. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
    - Examples: "extract the price" → "extract: price"
    - Examples: "get the stock price" → "extract: stock price"  
    - Examples: "find the current price" → "extract: current price"
    - Examples: "collect product information" → "extract: product information"
+   - Examples: "list the top 5 stocks" → "extract: top 5 stocks with prices and percentage change"
+   - Examples: "show me the prices" → "extract: prices"
+   - Examples: "display the results" → "extract: results"
+   - Examples: "what are the top stocks?" → "extract: top stocks with prices and percentage change"
    - **CRITICAL: If data is already visible on the page and the user wants it extracted, use "extract:" immediately. Do not click/type/scroll unless needed to make the data visible first.**
 2. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
 3. Determine ONE action at a time - be reactive, not pre-planned
@@ -376,7 +380,7 @@ CRITICAL RULES:
 7. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
 8. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
 9. Format actions as executable commands:
-   - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price"
+   - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch, list, show, display, return, output, print, read, scan, capture, obtain, acquire, present, report, summarize, detail, enumerate, itemize, catalog, record, document, save, export, download, copy, quote, cite) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price", "extract: top 5 stocks with prices and percentage change"
    - **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be specific** - e.g., "click: Google Search button", "click: first article link titled 'Introduction'", "click: search suggestion 'yahoo finance' link", "click: Accept all cookies button". NEVER use vague terms like 'first element', 'that button', or ambiguous text without element type like "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.).
    - **For TYPE commands: MUST include element type** - e.g., "type: John Doe in name input field", "type: john@example.com in email input field". NEVER use vague terms like 'the field' or 'it'.
    - **For PRESS commands: MUST be brief** - just the key name (e.g., "press: Enter", "press: Escape", "press: Tab"). Do NOT add descriptions or context.
