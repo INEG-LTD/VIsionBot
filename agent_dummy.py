@@ -1,3 +1,4 @@
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, RecordingConfig, ElementConfig, DebugConfig
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
 from utils.event_logger import EventType
@@ -11,19 +12,32 @@ def custom_event_callback(event):
     elif event.event_type == EventType.AGENT_ITERATION:
         print(f"🔄 {event.message}")
 
-# Create bot with debug_mode=True (default) to see all prints
-# Set debug_mode=False for normal mode (only callbacks, no prints)
-bot = BrowserVisionBot(
-    save_gif=True,
-    agent_model_name="gpt-5-mini",
-    command_model_name="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
-    element_selection_fallback_model="gemini/gemini-2.5-flash-lite",
-    element_selection_retry_attempts=2,
-    reasoning_level=ReasoningLevel.NONE,
-    overlay_only_planning=True,
-    fast_mode=True,
-    debug_mode=False,  # Set to False to use callbacks only
+# Create configuration using the new BotConfig API
+config = BotConfig(
+    model=ModelConfig(
+        agent_model="gpt-5-mini",
+        command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+        reasoning_level=ReasoningLevel.NONE
+    ),
+    execution=ExecutionConfig(
+        fast_mode=True,
+        max_attempts=30
+    ),
+    elements=ElementConfig(
+        element_selection_fallback_model="gemini/gemini-2.5-flash-lite",
+        selection_retry_attempts=2,
+        overlay_only_planning=True
+    ),
+    recording=RecordingConfig(
+        save_gif=True
+    ),
+    logging=DebugConfig(
+        debug_mode=False  # Set to False to use callbacks only
+    )
 )
+
+# Create bot with config
+bot = BrowserVisionBot(config=config)
 
 # Optional: Register custom callback (works in both modes)
 bot.event_logger.register_callback(custom_event_callback)

@@ -73,6 +73,7 @@ from ai_utils import (
 from agent import AgentController
 from agent.agent_result import AgentResult
 from pydantic import BaseModel, Field
+from bot_config import BotConfig
 
 
 class ExecutionTimer:
@@ -240,133 +241,91 @@ class ExecutionTimer:
 class BrowserVisionBot:
     """Modular vision-based web automation bot"""
 
+
     def __init__(
         self,
+        config: Optional[BotConfig] = None,
         page: Page = None,
-        model_name: str = "gpt-5-mini",
-        reasoning_level: ReasoningLevel = ReasoningLevel.MEDIUM,
-        command_model_name: Optional[str] = None,
-        agent_model_name: Optional[str] = None,
-        command_reasoning_level: Optional[ReasoningLevel] = None,
-        agent_reasoning_level: Optional[ReasoningLevel] = None,
-        max_attempts: int = 10,
-        max_detailed_elements: int = 400,
-        include_detailed_elements: bool = True,
-        two_pass_planning: bool = True,
-        max_coordinate_overlays: int = 600,
-        save_gif: bool = False,
-        gif_output_dir: str = "gif_recordings",
-        merge_overlay_selection: bool = True,
-        overlay_only_planning: bool = False,
-        overlay_selection_max_samples: Optional[int] = None,
-        fast_mode: bool = False,
-        plan_cache_enabled: bool = True,
-        plan_cache_ttl: float = 6.0,
-        plan_cache_max_reuse: int = 1,
-        parallel_completion_and_action: bool = True,
-        element_selection_retry_attempts: int = 3,
-        element_selection_fallback_model: Optional[str] = None,
-        # Stuck detector configuration
-        stuck_detector_enabled: bool = True,
-        stuck_detector_window_size: int = 5,
-        stuck_detector_threshold: float = 0.6,
-        stuck_detector_weight_repeated_action: float = 0.15,
-        stuck_detector_weight_repetitive_action_no_change: float = 0.4,
-        stuck_detector_weight_no_state_change: float = 0.3,
-        stuck_detector_weight_no_progress: float = 0.2,
-        stuck_detector_weight_error_spiral: float = 0.2,
-        stuck_detector_weight_high_confidence_no_progress: float = 0.1,
-        debug_mode: bool = True,  # Default to True for backward compatibility
-        event_logger: Optional[EventLogger] = None,  # Allow custom logger
+        event_logger: Optional[EventLogger] = None,
     ):
         """
         Initialize BrowserVisionBot.
         
         Args:
-            parallel_completion_and_action: If True, run completion check and next action determination in parallel
-                                            for faster feedback. Default: True.
-                                            Note: Set to False primarily for debugging purposes, as sequential execution
-                                            makes it easier to trace the execution flow and understand which LLM call
-                                            is running at any given time.
-            element_selection_retry_attempts: Number of retry attempts when element selection fails in fast mode.
-                                             Default: 3. The agent will retry up to this many times before giving up.
-            element_selection_fallback_model: Optional model name to use for retry attempts. If set, this model will
-                                             be used for retry attempts instead of the default command model.
-                                             Useful for using a more capable model when the initial attempt fails.
+            config: BotConfig object with all settings. If not provided, uses defaults.
+            page: Optional Playwright Page object. If not provided, will create new browser.
+            event_logger: Optional custom event logger. If not provided, creates default logger.
         """
+        # Create default config if not provided
+        if config is None:
+            config = BotConfig()
+        
         self.page = page
 
-        if command_model_name is None:
-            command_model_name = model_name
-        if agent_model_name is None:
-            agent_model_name = command_model_name
-
-        if command_reasoning_level is None:
-            command_reasoning_level = reasoning_level
-        if agent_reasoning_level is None:
-            agent_reasoning_level = reasoning_level
-
-        self.command_model_name = command_model_name
-        self.agent_model_name = agent_model_name
+        # Extract model configuration
+        self.command_model_name = config.model.command_model
+        self.agent_model_name = config.model.agent_model
         self.model_name = self.command_model_name
 
-        self.command_reasoning_level = ReasoningLevel.coerce(command_reasoning_level)
-        self.agent_reasoning_level = ReasoningLevel.coerce(agent_reasoning_level)
+        self.command_reasoning_level = ReasoningLevel.coerce(config.model.command_reasoning_level)
+        self.agent_reasoning_level = ReasoningLevel.coerce(config.model.agent_reasoning_level)
         self.reasoning_level = self.command_reasoning_level
 
         # Set the centralized model configuration
         set_default_model(self.command_model_name)
-        # Set the centralized reasoning level configuration
         set_default_reasoning_level(self.command_reasoning_level)
         set_default_agent_model(self.agent_model_name)
         set_default_agent_reasoning_level(self.agent_reasoning_level)
-        self.max_attempts = max_attempts
+        
+        # Extract execution configuration
+        self.max_attempts = config.execution.max_attempts
+        self.fast_mode = config.execution.fast_mode
+        self.parallel_completion_and_action = config.execution.parallel_completion_and_action
+        self.dedup_mode = config.execution.dedup_mode
+        
         self.started = False
-        # Controls for how much element detail to include in planning prompts
-        self.max_detailed_elements = max_detailed_elements
-        self.include_detailed_elements = include_detailed_elements
-        # Two-pass planning: pre-select relevant overlays to shrink prompt
-        self.two_pass_planning = two_pass_planning
-        # Hard cap for how many overlay coordinates to include in prompts
-        self.max_coordinate_overlays = max_coordinate_overlays
-        # Merge overlay selection with plan generation (single LLM call)
-        self.merge_overlay_selection = merge_overlay_selection
-        # Return only overlay index from planning (test mode)
-        self.overlay_only_planning = overlay_only_planning
+        
+        # Extract element configuration
+        self.max_detailed_elements = config.elements.max_detailed_elements
+        self.include_detailed_elements = config.elements.include_detailed_elements
+        self.two_pass_planning = config.elements.two_pass_planning
+        self.max_coordinate_overlays = config.elements.max_coordinate_overlays
+        self.merge_overlay_selection = config.elements.merge_overlay_selection
+        self.overlay_only_planning = config.elements.overlay_only_planning
+        
+        _overlay_max_samples = config.elements.overlay_selection_max_samples
         self.overlay_selection_max_samples = (
-            None if overlay_selection_max_samples is not None and overlay_selection_max_samples <= 0 else overlay_selection_max_samples
+            None if _overlay_max_samples is not None and _overlay_max_samples <= 0 else _overlay_max_samples
         )
-        # Fast mode: direct keyword -> action execution without full planning
-        self.fast_mode = fast_mode
+        
         self._fast_mode_original_evaluations: Dict[Type["BaseGoal"], Callable] = {}
-        # Planning cache controls
-        self.plan_cache_enabled = plan_cache_enabled
-        self.plan_cache_ttl = max(plan_cache_ttl, 0.0)
+        
+        # Extract cache configuration
+        self.plan_cache_enabled = config.cache.enabled
+        self.plan_cache_ttl = max(config.cache.ttl, 0.0)
+        
         try:
-            self.plan_cache_max_reuse = int(plan_cache_max_reuse)
+            self.plan_cache_max_reuse = int(config.cache.max_reuse)
         except (TypeError, ValueError):
             self.plan_cache_max_reuse = 1
         if self.plan_cache_max_reuse < -1:
             self.plan_cache_max_reuse = -1
         self._plan_cache_entry: Optional[Dict[str, Any]] = None
         
-        # Parallel execution of completion check and next action determination
-        self.parallel_completion_and_action = parallel_completion_and_action
-        
         # Element selection retry configuration
-        self.element_selection_retry_attempts = max(1, int(element_selection_retry_attempts))
-        self.element_selection_fallback_model = element_selection_fallback_model
+        self.element_selection_retry_attempts = max(1, int(config.elements.selection_retry_attempts))
+        self.element_selection_fallback_model = config.elements.selection_fallback_model
         
-        # Stuck detector configuration
-        self.stuck_detector_enabled = stuck_detector_enabled
-        self.stuck_detector_window_size = stuck_detector_window_size
-        self.stuck_detector_threshold = stuck_detector_threshold
-        self.stuck_detector_weight_repeated_action = stuck_detector_weight_repeated_action
-        self.stuck_detector_weight_repetitive_action_no_change = stuck_detector_weight_repetitive_action_no_change
-        self.stuck_detector_weight_no_state_change = stuck_detector_weight_no_state_change
-        self.stuck_detector_weight_no_progress = stuck_detector_weight_no_progress
-        self.stuck_detector_weight_error_spiral = stuck_detector_weight_error_spiral
-        self.stuck_detector_weight_high_confidence_no_progress = stuck_detector_weight_high_confidence_no_progress
+        # Extract stuck detector configuration
+        self.stuck_detector_enabled = config.stuck_detector.enabled
+        self.stuck_detector_window_size = config.stuck_detector.window_size
+        self.stuck_detector_threshold = config.stuck_detector.threshold
+        self.stuck_detector_weight_repeated_action = config.stuck_detector.weight_repeated_action
+        self.stuck_detector_weight_repetitive_action_no_change = config.stuck_detector.weight_repetitive_action_no_change
+        self.stuck_detector_weight_no_state_change = config.stuck_detector.weight_no_state_change
+        self.stuck_detector_weight_no_progress = config.stuck_detector.weight_no_progress
+        self.stuck_detector_weight_error_spiral = config.stuck_detector.weight_error_spiral
+        self.stuck_detector_weight_high_confidence_no_progress = config.stuck_detector.weight_high_confidence_no_progress
         
         # Auto-run actions on page load (opt-in)
         self._auto_on_load_enabled: bool = False
@@ -382,10 +341,6 @@ class BrowserVisionBot:
         self._pending_auto_on_load: bool = False
         self._pending_auto_on_load_url: Optional[str] = None
         
-        # Dedup policy: detect from prompt by default ('auto').
-        # 'off' = never dedup, 'on' = always dedup, 'auto' = only when prompt asks.
-        self.dedup_mode: str = "auto"
-        
         # Command history for "do that again" functionality
         self.command_history: List[str] = []
         self.max_command_history: int = 10  # Keep last 10 commands
@@ -397,9 +352,9 @@ class BrowserVisionBot:
         self.action_queue = ActionQueue()
         self._auto_process_queue = True  # Auto-process queue after each act()
 
-        # GIF recording functionality
-        self.save_gif = save_gif
-        self.gif_output_dir = gif_output_dir
+        # Extract recording configuration
+        self.save_gif = config.recording.save_gif
+        self.gif_output_dir = config.recording.output_dir
         self.gif_recorder: Optional[GIFRecorder] = None
 
         # Bot termination state
@@ -407,6 +362,9 @@ class BrowserVisionBot:
 
         # Initialize logger
         self.logger = get_logger()
+        
+        # Extract debug configuration
+        _debug_mode = config.logging.debug_mode
         
         # Initialize event logger early (before any methods that might use it)
         # Create a safe logger that never fails
@@ -421,7 +379,7 @@ class BrowserVisionBot:
         # This MUST never fail - use SafeLogger as ultimate fallback
         try:
             if event_logger is None:
-                event_logger = EventLogger(debug_mode=debug_mode)
+                event_logger = EventLogger(debug_mode=_debug_mode)
             self.event_logger = event_logger
             try:
                 set_event_logger(event_logger)  # Set as global
@@ -440,7 +398,7 @@ class BrowserVisionBot:
                 self.event_logger = SafeLogger()
 
         # Deduplication history settings (-1 = unlimited)
-        self.dedup_history_quantity: int = -1
+        self.dedup_history_quantity: int = config.execution.dedup_history_quantity
 
         # Interpretation / semantic resolution helpers
         self.default_interpretation_mode: str = "literal"

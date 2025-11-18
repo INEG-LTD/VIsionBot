@@ -13859,3 +13859,61 @@ Log File: bot_automation.log
   "goal_description": "click: 'Information Technology Jobs in London' link (Reed)"
 }
 [2025-11-18T21:53:53.862430] SUCCESS  GOAL         Goal completed: click: 'Information Technology Jobs in London' link (Reed) (took 2219.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763504521
+Start Time: 2025-11-18T22:22:01.895766
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763504589
+Start Time: 2025-11-18T22:23:09.877126
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763504597
+Start Time: 2025-11-18T22:23:17.781574
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763505313
+Start Time: 2025-11-18T22:35:13.363166
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763507691
+Start Time: 2025-11-18T23:14:51.894675
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-18T23:15:03.841628] INFO     GOAL         Starting goal: click: 全部接受 button
+    Details: {
+  "goal_description": "click: \u5168\u90e8\u63a5\u53d7 button"
+}
+[2025-11-18T23:15:07.785309] SUCCESS  GOAL         Goal completed: click: 全部接受 button (took 3943.8ms) ✅
+[2025-11-18T23:15:16.352722] INFO     GOAL         Starting goal: type: reed it jobs london in search input field
+    Details: {
+  "goal_description": "type: reed it jobs london in search input field"
+}
+[2025-11-18T23:15:20.962782] ERROR    GOAL         Goal failed: type: reed it jobs london in search input field (took 4610.1ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-18T23:15:31.461649] INFO     GOAL         Starting goal: navigate: https://www.reed.co.uk/jobs/it-jobs-in-london
+    Details: {
+  "goal_description": "navigate: https://www.reed.co.uk/jobs/it-jobs-in-london"
+}
+[2025-11-18T23:15:32.853392] SUCCESS  GOAL         Goal completed: navigate: https://www.reed.co.uk/jobs/it-jobs-in-london (took 1391.8ms) ✅
