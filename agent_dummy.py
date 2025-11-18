@@ -1,6 +1,18 @@
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
+from utils.event_logger import EventType
 
+# Example: Custom callback for normal mode (no debug prints)
+def custom_event_callback(event):
+    """Custom callback to handle events in normal mode"""
+    # Only show important events
+    if event.level in ["ERROR", "SUCCESS"]:
+        print(f"[{event.level}] {event.message}")
+    elif event.event_type == EventType.AGENT_ITERATION:
+        print(f"🔄 {event.message}")
+
+# Create bot with debug_mode=True (default) to see all prints
+# Set debug_mode=False for normal mode (only callbacks, no prints)
 bot = BrowserVisionBot(
     save_gif=True,
     agent_model_name="gpt-5-mini",
@@ -10,7 +22,11 @@ bot = BrowserVisionBot(
     reasoning_level=ReasoningLevel.NONE,
     overlay_only_planning=True,
     fast_mode=True,
+    debug_mode=False,  # Set to False to use callbacks only
 )
+
+# Optional: Register custom callback (works in both modes)
+bot.event_logger.register_callback(custom_event_callback)
 bot.start()
 bot.page.goto("https://google.com")
 

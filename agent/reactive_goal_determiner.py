@@ -17,6 +17,7 @@ from ai_utils import (
     get_default_agent_model,
     get_default_agent_reasoning_level,
 )
+from utils.event_logger import get_event_logger
 
 
 class NextAction(BaseModel):
@@ -266,10 +267,15 @@ class ReactiveGoalDeterminer:
                         action = "scroll: down"
                     print(f"   Converted to: {action}")
             
-            print(f"💡 Next action determined: {action}")
-            print(f"   Reasoning: {response.reasoning}")
-            print(f"   Confidence: {response.confidence:.2f}")
-            print(f"   Expected outcome: {response.expected_outcome}")
+            try:
+                get_event_logger().action_determined(
+                    action=action,
+                    reasoning=response.reasoning,
+                    confidence=response.confidence,
+                    expected_outcome=response.expected_outcome
+                )
+            except Exception:
+                pass
             if response.needs_exploration and not is_exploring:
                 print("   🔍 Needs exploration: element not visible in viewport")
             

@@ -135,6 +135,16 @@ class AgentController:
                                             is running at any given time.
         """
         self.bot = bot
+        # Access event logger from bot
+        self.event_logger = getattr(bot, 'event_logger', None)
+        if self.event_logger is None:
+            from utils.event_logger import get_event_logger
+            self.event_logger = get_event_logger()
+        
+        # Ensure event_logger is never None - create a dummy one if needed
+        if self.event_logger is None:
+            from utils.event_logger import EventLogger
+            self.event_logger = EventLogger(debug_mode=True)
         self.max_iterations = 50
         self.iteration_delay = 0.5
         self.task_start_url: Optional[str] = None
@@ -238,7 +248,10 @@ class AgentController:
         role = "Main agent"
         if agent_context and agent_context.parent_agent_id:
             role = f"Sub-agent helper (task: {agent_context.instruction})"
-        print(f"🤖 Active role: {role}")
+        try:
+            self.event_logger.system_info(f"Active role: {role}")
+        except Exception:
+            pass
 
         self.sub_agent_results = []
         self.orchestration_events = []
@@ -294,8 +307,7 @@ class AgentController:
                         )
         
         agent_type = "Sub-agent" if (self.agent_context and self.agent_context.parent_agent_id) else "Main agent"
-        print(f"🤖 Starting agentic mode ({agent_type}): {user_prompt}")
-        print(f"   Max iterations: {self.max_iterations}")
+        self.event_logger.agent_start(user_prompt, agent_type=agent_type, max_iterations=self.max_iterations)
 
         self._log_event(
             "agent_start",
@@ -330,39 +342,39 @@ class AgentController:
         )
         
         if not self.bot.started:
-            print("❌ Bot not started. Call bot.start() first.")
+            self.event_logger.system_error("Bot not started. Call bot.start() first.")
             self._log_event("agent_complete", status="failed", reason="bot_not_started")
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
                 self.bot.execution_timer.log_summary()
-            return GoalResult(
+            result = GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
                 reasoning="Bot not started",
                 evidence=self._build_evidence()
             )
+            self.event_logger.agent_complete(success=False, reasoning="Bot not started")
+            return result
         
         if self.bot.page.url.startswith("about:blank"):
-            print("❌ Page is on initial blank page.")
+            self.event_logger.system_error("Page is on initial blank page.")
             self._log_event("agent_complete", status="failed", reason="blank_page")
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
                 self.bot.execution_timer.log_summary()
-            return GoalResult(
+            result = GoalResult(
                 status=GoalStatus.FAILED,
                 confidence=1.0,
                 reasoning="Page is blank",
                 evidence=self._build_evidence()
             )
+            self.event_logger.agent_complete(success=False, reasoning="Page is blank")
+            return result
         
         # Main reactive loop
         for iteration in range(self.max_iterations):
-            print(f"\n{'='*60}")
-            print(f"🔄 Iteration {iteration + 1}/{self.max_iterations}")
-            print(f"{'='*60}")
-            
             # Start iteration timer
             self.bot.execution_timer.start_iteration()
             
@@ -375,8 +387,7 @@ class AgentController:
             
             # 1. Observe: Capture browser state (start with viewport)
             snapshot = self._capture_snapshot(full_page=False)
-            print(f"📍 Current URL: {snapshot.url}")
-            print(f"📄 Page title: {snapshot.title}")
+            self.event_logger.agent_iteration(iteration + 1, self.max_iterations, url=snapshot.url, title=snapshot.title)
             
             # Calculate screenshot hash for phase-out tracking (at start of iteration)
             if snapshot.screenshot:
@@ -389,7 +400,10 @@ class AgentController:
                     if self._consecutive_page_changes >= 2:
                         if self.failed_actions or self.ineffective_actions:
                             total = len(self.failed_actions) + len(self.ineffective_actions)
-                            print(f"   🔄 {self._consecutive_page_changes} consecutive screenshot changes detected - phasing out {total} failed/ineffective action(s)")
+                            try:
+                                self.event_logger.system_info(f"{self._consecutive_page_changes} consecutive screenshot changes detected - phasing out {total} failed/ineffective action(s)")
+                            except Exception:
+                                pass
                             self.failed_actions.clear()
                             self.ineffective_actions.clear()
                             self._consecutive_page_changes = 0  # Reset counter after phase-out
@@ -461,7 +475,10 @@ class AgentController:
             latest_evaluation: Optional[CompletionEvaluation] = None
             if current_action is None:
                 if self.parallel_completion_and_action:
-                    print("🔄 Running completion check, next action determination, and subagent policy check in parallel...")
+                    try:
+                        self.event_logger.system_debug("Running completion check, next action determination, and subagent policy check in parallel...")
+                    except Exception:
+                        pass
                     
                     def run_completion_check():
                         """Run completion evaluation"""
@@ -473,10 +490,13 @@ class AgentController:
                     def run_next_action_determination():
                         """Run next action determination"""
                         if self.track_ineffective_actions:
-                            if self.failed_actions:
-                                print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
-                            if self.ineffective_actions:
-                                print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                            try:
+                                if self.failed_actions:
+                                    self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
+                                if self.ineffective_actions:
+                                    self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                            except Exception:
+                                pass
                         return goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
@@ -512,10 +532,7 @@ class AgentController:
                         subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
                         
                         if is_complete:
-                            print(f"✅ Task complete: {completion_reasoning}")
-                            print(f"   Confidence: {evaluation.confidence:.2f}")
-                            if evaluation.evidence:
-                                print(f"   Evidence: {evaluation.evidence}")
+                            self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
                             evidence_dict: Dict[str, Any] = {}
                             if evaluation.evidence:
                                 try:
@@ -540,6 +557,7 @@ class AgentController:
                             except Exception:
                                 pass  # Ignore timeout, task is complete anyway
                             # Next action result will be ignored (task is complete)
+                            self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
                             return GoalResult(
                                 status=GoalStatus.ACHIEVED,
                                 confidence=evaluation.confidence,
@@ -547,9 +565,9 @@ class AgentController:
                                 evidence=evidence_dict
                             )
                         else:
-                            print(f"🔄 Task not complete: {completion_reasoning}")
+                            self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
                             # Task not complete, so we need the next action - wait for it
-                            print("🔍 Determining next action based on current viewport...")
+                            self.event_logger.system_debug("Determining next action based on current viewport...")
                             current_action, needs_exploration = next_action_future.result()
                             
                             # Wait for subagent policy check and update policy
@@ -567,9 +585,14 @@ class AgentController:
                                 self.sub_agent_policy_rationale = new_rationale
                                 
                                 if level_changed or score_changed or rationale_changed:
-                                    print(f"📊 Sub-agent utilization policy → {self._policy_display_name(new_level)} "
-                                          f"(score {new_score:.2f})")
-                                    print(f"   Reason: {new_rationale}")
+                                    try:
+                                        self.event_logger.sub_agent_policy(
+                                            policy=self._policy_display_name(new_level),
+                                            score=new_score,
+                                            reason=new_rationale
+                                        )
+                                    except Exception:
+                                        pass
                                     self._log_event(
                                         "sub_agent_policy_update",
                                         policy=new_level.value,
@@ -597,10 +620,7 @@ class AgentController:
                     latest_evaluation = evaluation
                     
                     if is_complete:
-                        print(f"✅ Task complete: {completion_reasoning}")
-                        print(f"   Confidence: {evaluation.confidence:.2f}")
-                        if evaluation.evidence:
-                            print(f"   Evidence: {evaluation.evidence}")
+                        self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
                         evidence_dict: Dict[str, Any] = {}
                         if evaluation.evidence:
                             try:
@@ -619,6 +639,7 @@ class AgentController:
                         # End task timer and log summary
                         self.bot.execution_timer.end_task()
                         self.bot.execution_timer.log_summary()
+                        self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
                         return GoalResult(
                             status=GoalStatus.ACHIEVED,
                             confidence=evaluation.confidence,
@@ -626,14 +647,14 @@ class AgentController:
                             evidence=evidence_dict
                         )
                     else:
-                        print(f"🔄 Task not complete: {completion_reasoning}")
+                        self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
                         # Task not complete, determine next action
-                        print("🔍 Determining next action based on current viewport...")
+                        self.event_logger.system_debug("Determining next action based on current viewport...")
                         if self.track_ineffective_actions:
                             if self.failed_actions:
-                                print(f"   ⚠️ Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
+                                self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
                             if self.ineffective_actions:
-                                print(f"   ⚠️ Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                                self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
                         current_action, needs_exploration = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
@@ -643,7 +664,7 @@ class AgentController:
                         )
             else:
                 # We have a queued action, so we still need to check completion
-                print("🔄 Running completion check (next action already queued)...")
+                self.event_logger.system_debug("Running completion check (next action already queued)...")
                 is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
                     environment_state,
                     screenshot=snapshot.screenshot
@@ -652,10 +673,7 @@ class AgentController:
                 latest_evaluation = evaluation
                 
                 if is_complete:
-                    print(f"✅ Task complete: {completion_reasoning}")
-                    print(f"   Confidence: {evaluation.confidence:.2f}")
-                    if evaluation.evidence:
-                        print(f"   Evidence: {evaluation.evidence}")
+                    self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
                     evidence_dict: Dict[str, Any] = {}
                     if evaluation.evidence:
                         try:
@@ -674,6 +692,7 @@ class AgentController:
                     # End task timer and log summary
                     self.bot.execution_timer.end_task()
                     self.bot.execution_timer.log_summary()
+                    self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
                     return GoalResult(
                         status=GoalStatus.ACHIEVED,
                         confidence=evaluation.confidence,
@@ -681,7 +700,7 @@ class AgentController:
                         evidence=evidence_dict
                     )
                 else:
-                    print(f"🔄 Task not complete: {completion_reasoning}")
+                    self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
             
             # Update adaptive sub-agent utilization policy (only if not already done in parallel path)
             # In parallel path, policy is updated after next_action_future.result()
@@ -848,7 +867,10 @@ class AgentController:
                 time.sleep(self.iteration_delay)
                 continue
             
-            print(f"🎯 Next action: {current_action}")
+            try:
+                self.event_logger.system_info(f"Next action: {current_action}")
+            except Exception:
+                pass
             
             # 4. Check if this is an extraction command or detect extraction needs from natural language
             extraction_prompt = self._detect_extraction_need(current_action, user_prompt)
@@ -867,7 +889,10 @@ class AgentController:
                 self._extraction_prompt_map[normalized_key] = canonical_prompt
                 task_description = self._build_extraction_task_description(subject, extraction_prompt)
                 self._register_task(normalized_key, task_description, "extraction")
-                print(f"📊 Extraction detected: {canonical_prompt}")
+                try:
+                    self.event_logger.extraction_detected(canonical_prompt)
+                except Exception:
+                    pass
                 already_completed = normalized_key in self._completed_extractions
                 task_entry = self._task_tracker.get(normalized_key)
                 if task_entry and not already_completed:
@@ -875,14 +900,20 @@ class AgentController:
                     task_entry["updated_at"] = time.time()
                 
                 if already_completed:
-                    print(f"ℹ️ Extraction skipped (already completed): {canonical_prompt}")
+                    try:
+                        self.event_logger.system_info(f"Extraction skipped (already completed): {canonical_prompt}")
+                    except Exception:
+                        pass
                     if task_entry:
                         task_entry["status"] = "completed"
                     self._activate_primary_output_task("Required Wikipedia fields already captured.")
                     time.sleep(self.iteration_delay)
                     continue
                 if self._should_skip_extraction(normalized_key):
-                    print(f"⚠️ Extraction skipped after repeated failures: {canonical_prompt}")
+                    try:
+                        self.event_logger.system_warning(f"Extraction skipped after repeated failures: {canonical_prompt}")
+                    except Exception:
+                        pass
                     time.sleep(self.iteration_delay)
                     continue
                 
@@ -908,13 +939,19 @@ class AgentController:
                         }
                     )
                     self._activate_primary_output_task("Extraction completed successfully.")
-                    print(f"✅ Extraction completed: {result}")
+                    try:
+                        self.event_logger.extraction_success(canonical_prompt, result=result)
+                    except Exception:
+                        pass
                     
                     # Continue to next iteration (extraction is complete)
                     time.sleep(self.iteration_delay)
                     continue
                 except Exception as e:
-                    print(f"⚠️ Extraction failed: {e}")
+                    try:
+                        self.event_logger.extraction_failure(canonical_prompt, error=str(e))
+                    except Exception:
+                        pass
                     import traceback
                     traceback.print_exc()
                     self._record_extraction_failure(normalized_key)
@@ -932,8 +969,11 @@ class AgentController:
                         if action_lower != "none":
                             self._queued_action = retarget_decision.action
                             self._queued_action_reason = retarget_decision.rationale
-                            print(f"🔁 Retargeting after extraction failure → {retarget_decision.action}")
-                            print(f"   Rationale: {retarget_decision.rationale}")
+                            try:
+                                self.event_logger.system_info(f"Retargeting after extraction failure → {retarget_decision.action}")
+                                self.event_logger.system_info(f"   Rationale: {retarget_decision.rationale}")
+                            except Exception:
+                                pass
                             self._log_event(
                                 "retarget_suggested",
                                 action=retarget_decision.action,
@@ -960,15 +1000,20 @@ class AgentController:
             act_params = self._parse_action_for_act_params(current_action, user_prompt)
             
             # Log parameters being passed to act()
-            print("📋 act() parameters:")
-            print(f"   goal_description: {act_params['goal_description']}")
-            print(f"   additional_context: {act_params['additional_context']}")
-            print(f"   interpretation_mode: {act_params['interpretation_mode']}")
-            print(f"   target_context_guard: {act_params['target_context_guard']}")
-            print(f"   modifier: {act_params['modifier']}")
-            print("   max_attempts: 5")
-            print("   max_retries: 1")
-            print(f"   allow_non_clickable_clicks: {self.allow_non_clickable_clicks}")
+            try:
+                params = {
+                    'goal_description': act_params['goal_description'],
+                    'additional_context': act_params['additional_context'],
+                    'interpretation_mode': act_params['interpretation_mode'],
+                    'target_context_guard': str(act_params['target_context_guard']) if act_params['target_context_guard'] else None,
+                    'modifier': act_params['modifier'],
+                    'max_attempts': 5,
+                    'max_retries': 1,
+                    'allow_non_clickable_clicks': self.allow_non_clickable_clicks
+                }
+                self.event_logger.action_params(params)
+            except Exception:
+                pass
             
             # Capture page state BEFORE action
             state_before = self._get_page_state()
@@ -1017,34 +1062,63 @@ class AgentController:
                         else:
                             # Successful command but no page change - add to ineffective actions
                             if is_click_action and self.detect_ineffective_actions:
-                                print(f"⚠️ Action succeeded but did not yield any change: {current_action}")
-                                print(f"   URL before: {state_before['url']}")
-                                print(f"   URL after: {state_after['url']}")
-                                print("   DOM signature unchanged")
+                                try:
+                                    self.event_logger.action_state_change(
+                                        f"Action succeeded but did not yield any change: {current_action}",
+                                        url_before=state_before['url'],
+                                        url_after=state_after['url'],
+                                        dom_changed=False
+                                    )
+                                except Exception:
+                                    pass
                                 # Add to ineffective actions list (nudge to try something different)
                                 if current_action not in self.ineffective_actions:
                                     self.ineffective_actions.append(current_action)
-                                    print("   📝 Added to ineffective actions list (will try different approach in future iterations)")
+                                    try:
+                                        self.event_logger.system_info("Added to ineffective actions list (will try different approach in future iterations)")
+                                    except Exception:
+                                        pass
                             else:
                                 if self.detect_ineffective_actions:
-                                    print(f"ℹ️ Non-click action succeeded without visible change: {current_action}")
+                                    try:
+                                        self.event_logger.system_info(f"Non-click action succeeded without visible change: {current_action}")
+                                    except Exception:
+                                        pass
                     else:
                         # Failed command - check if it yielded any change
                         if not page_changed:
-                            print(f"⚠️ Action failed and did not yield any change: {current_action}")
-                            print(f"   URL before: {state_before['url']}")
-                            print(f"   URL after: {state_after['url']}")
-                            print("   DOM signature unchanged")
+                            try:
+                                self.event_logger.system_warning(f"Action failed and did not yield any change: {current_action}")
+                            except Exception:
+                                pass
+                            try:
+                                self.event_logger.action_state_change(
+                                    f"Action failed and did not yield any change: {current_action}",
+                                    url_before=state_before['url'],
+                                    url_after=state_after['url'],
+                                    dom_changed=False
+                                )
+                            except Exception:
+                                pass
                             # Add to failed actions list (avoid trying this again)
                             if current_action not in self.failed_actions:
                                 self.failed_actions.append(current_action)
-                                print("   📝 Added to failed actions list (will avoid in future iterations)")
+                                try:
+                                    self.event_logger.system_info("Added to failed actions list (will avoid in future iterations)")
+                                except Exception:
+                                    pass
                         else:
                             # Action failed but page changed - still add to failed actions since the action itself failed
-                            print(f"⚠️ Action failed (page changed but action execution failed): {current_action}")
+                            try:
+                                self.event_logger.system_warning(f"Action failed (page changed but action execution failed): {current_action}")
+                            except Exception:
+                                pass
                             if current_action not in self.failed_actions:
                                 self.failed_actions.append(current_action)
-                                print("   📝 Added to failed actions list (will avoid in future iterations)")
+                                try:
+                                    self.event_logger.system_info("Added to failed actions list (will avoid in future iterations)")
+                                except Exception:
+                                    pass
                 
                 self._record_action_outcome(
                     current_action,
@@ -1063,7 +1137,10 @@ class AgentController:
                         url_after=state_after["url"],
                     )
                 else:
-                    print(f"⚠️ Action failed: {current_action}")
+                    try:
+                        self.event_logger.action_failure(f"Action failed: {current_action}")
+                    except Exception:
+                        pass
                     self._log_event(
                         "action_completed",
                         action=current_action,
@@ -1123,11 +1200,12 @@ class AgentController:
         self.bot.execution_timer.end_task()
         self.bot.execution_timer.log_summary()
         # Max iterations reached
-        print(f"❌ Max iterations ({self.max_iterations}) reached")
+        reasoning = f"Max iterations ({self.max_iterations}) reached without completion"
+        self.event_logger.agent_complete(success=False, reasoning=reasoning)
         return GoalResult(
             status=GoalStatus.FAILED,
             confidence=0.5,
-            reasoning=f"Max iterations ({self.max_iterations}) reached without completion",
+            reasoning=reasoning,
             evidence=self._build_evidence({"max_iterations": self.max_iterations})
         )
     
@@ -2717,9 +2795,14 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
         self.sub_agent_policy_rationale = new_rationale
         
         if level_changed or score_changed or rationale_changed:
-            print(f"📊 Sub-agent utilization policy → {self._policy_display_name(new_level)} "
-                  f"(score {new_score:.2f})")
-            print(f"   Reason: {new_rationale}")
+            try:
+                self.event_logger.sub_agent_policy(
+                    policy=self._policy_display_name(new_level),
+                    score=new_score,
+                    reason=new_rationale
+                )
+            except Exception:
+                pass
             self._log_event(
                 "sub_agent_policy_update",
                 policy=new_level.value,
@@ -2742,7 +2825,14 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
                                        called from _update_sub_agent_policy to avoid duplicate prints)
         """
         if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
-            print("📊 Sub-agent policy decision: controller or tab manager unavailable (forcing single-threaded).")
+            try:
+                self.event_logger.sub_agent_policy(
+                    policy="Single Threaded",
+                    score=0.0,
+                    reason="Sub-agent policy decision: controller or tab manager unavailable (forcing single-threaded)."
+                )
+            except Exception:
+                pass
             return (
                 SubAgentPolicyLevel.SINGLE_THREADED,
                 0.0,
@@ -2755,7 +2845,14 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
                 SubAgentPolicyLevel.SINGLE_THREADED: 0.0,
                 SubAgentPolicyLevel.PARALLELIZED: 1.0
             }[level]
-            print(f"📊 Sub-agent policy override active → {self._policy_display_name(level)} (score {score_override:.2f}).")
+            try:
+                self.event_logger.sub_agent_policy(
+                    policy=self._policy_display_name(level),
+                    score=score_override,
+                    reason="Sub-agent policy override active"
+                )
+            except Exception:
+                pass
             return (
                 level,
                 score_override,
@@ -2771,7 +2868,14 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
         # If no sub-agents needed, return immediately without detailed evaluation
         if not needs_sub_agents:
             if not suppress_quick_check_print:
-                print("📊 Sub-agent policy (quick check) → Single Threaded")
+                try:
+                    self.event_logger.sub_agent_policy(
+                        policy="Single Threaded",
+                        score=0.0,
+                        reason="Quick check: no sub-agents needed"
+                    )
+                except Exception:
+                    pass
             return (
                 SubAgentPolicyLevel.SINGLE_THREADED,
                 0.0,
@@ -2804,8 +2908,14 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
         score_clamped = max(0.0, min(1.0, score if isinstance(score, (int, float)) else (1.0 if policy_level == SubAgentPolicyLevel.PARALLELIZED else 0.0)))
         rationale_text = rationale or "LLM policy evaluation."
         
-        print(f"📊 Sub-agent policy (LLM) → {self._policy_display_name(policy_level)} (score {score_clamped:.2f})")
-        print(f"   Reason: {rationale_text}")
+        try:
+            self.event_logger.sub_agent_policy(
+                policy=self._policy_display_name(policy_level),
+                score=score_clamped,
+                reason=rationale_text
+            )
+        except Exception:
+            pass
         
         return policy_level, score_clamped, rationale_text
     

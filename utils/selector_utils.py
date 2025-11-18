@@ -22,7 +22,11 @@ class SelectorUtils:
             self._remove_overlays()
             time.sleep(0.2)  # Longer delay to ensure overlays are fully removed
             
-            print(f"    🔍 Looking for element at pixel coordinates: ({x}, {y})")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_debug(f"Looking for element at pixel coordinates: ({x}, {y})")
+            except Exception:
+                pass
             
             js_code = f"""
             (function() {{
@@ -136,7 +140,11 @@ class SelectorUtils:
             
             selector = self.page.evaluate(js_code)
             if selector:
-                print(f"    ✅ Found reliable selector: {selector}")
+                try:
+                    from utils.event_logger import get_event_logger
+                    get_event_logger().system_debug(f"Found reliable selector: {selector}")
+                except Exception:
+                    pass
                 return selector
             else:
                 print(f"    ⚠️ First attempt failed, trying alternative approach...")

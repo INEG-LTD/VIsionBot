@@ -7,6 +7,7 @@ from playwright.sync_api import BrowserContext, Page
 import uuid
 
 from .tab_info import TabInfo
+from utils.event_logger import get_event_logger
 
 
 class TabManager:
@@ -78,7 +79,10 @@ class TabManager:
                     except Exception:
                         pass
                     
-                    print(f"📑 Tab already registered: {tab_id} ({tab_info.purpose}) - {tab_info.url} - updating metadata")
+                    try:
+                        get_event_logger().tab_registered(tab_id=tab_id, purpose=tab_info.purpose, url=tab_info.url)
+                    except Exception:
+                        pass
                     return tab_id
         
         # Generate unique tab ID for new page
@@ -111,7 +115,10 @@ class TabManager:
         if self.active_tab_id is None:
             self.active_tab_id = tab_id
         
-        print(f"📑 Registered tab: {tab_id} ({purpose}) - {url}")
+        try:
+            get_event_logger().tab_registered(tab_id=tab_id, purpose=purpose, url=url)
+        except Exception:
+            pass
         
         return tab_id
     

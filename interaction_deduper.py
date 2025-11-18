@@ -242,7 +242,11 @@ class InteractionDeduper:
 
         if self.dedup_enabled:
             text_preview = (element_snapshot.get('text') or element_snapshot.get('description') or '')[:30]
-            print(f"📝 Marked element as {interaction_type}ed: {text_preview}...")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_debug(f"Marked element as {interaction_type}ed: {text_preview}...")
+            except Exception:
+                pass
 
     def clear_interacted_elements(self) -> None:
         """Clear all interacted elements from dedup tracking"""

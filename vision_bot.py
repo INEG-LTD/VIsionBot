@@ -12,6 +12,7 @@ import uuid
 from typing import Any, Optional, List, Dict, Tuple, Union, Type, Callable
 
 from playwright.sync_api import Browser, Page, Playwright
+from playwright_stealth import stealth_sync
 
 from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType, PageInfo
@@ -59,6 +60,7 @@ from focus_manager import FocusManager
 from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
+from utils.event_logger import EventLogger, set_event_logger
 from gif_recorder import GIFRecorder
 from command_ledger import CommandLedger
 from ai_utils import (
@@ -194,42 +196,45 @@ class ExecutionTimer:
         """Log timing summary to console"""
         summary = self.get_summary()
         
-        print("\n" + "="*60)
-        print("⏱️  EXECUTION TIMING SUMMARY")
-        print("="*60)
-        
-        # Task timing
-        if summary["task"]:
-            print(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
-        
-        # Iteration timings
-        if summary["iterations"]:
-            total_iter_time = sum(iter_data["duration_seconds"] for iter_data in summary["iterations"])
-            avg_iter_time = total_iter_time / len(summary["iterations"])
-            print(f"\n🔄 Iterations: {len(summary['iterations'])}")
-            print(f"   Total iteration time: {self._format_duration(total_iter_time)}")
-            print(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
-            fastest_iter = min(summary['iterations'], key=lambda x: x['duration_seconds'])
-            slowest_iter = max(summary['iterations'], key=lambda x: x['duration_seconds'])
-            print(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
-            print(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
-        
-        # Command timings
-        if summary["commands"]:
-            total_cmd_time = sum(cmd_data["duration_seconds"] for cmd_data in summary["commands"])
-            avg_cmd_time = total_cmd_time / len(summary["commands"])
-            print(f"\n🎯 Commands: {len(summary['commands'])}")
-            print(f"   Total command time: {self._format_duration(total_cmd_time)}")
-            print(f"   Average per command: {self._format_duration(avg_cmd_time)}")
+        try:
+            self.event_logger.system_info("\n" + "="*60)
+            self.event_logger.system_info("⏱️  EXECUTION TIMING SUMMARY")
+            self.event_logger.system_info("="*60)
             
-            # Show top 5 slowest commands
-            sorted_commands = sorted(summary["commands"], key=lambda x: x["duration_seconds"], reverse=True)
-            print("\n   Top 5 slowest commands:")
-            for i, cmd in enumerate(sorted_commands[:5], 1):
-                cmd_text = cmd["command"][:50] + "..." if len(cmd.get("command", "")) > 50 else cmd.get("command", "")
-                print(f"   {i}. {cmd['command_id']}: {cmd['duration_formatted']} - {cmd_text}")
-        
-        print("="*60 + "\n")
+            # Task timing
+            if summary["task"]:
+                self.event_logger.system_info(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
+            
+            # Iteration timings
+            if summary["iterations"]:
+                total_iter_time = sum(iter_data["duration_seconds"] for iter_data in summary["iterations"])
+                avg_iter_time = total_iter_time / len(summary["iterations"])
+                self.event_logger.system_info(f"\n🔄 Iterations: {len(summary['iterations'])}")
+                self.event_logger.system_info(f"   Total iteration time: {self._format_duration(total_iter_time)}")
+                self.event_logger.system_info(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
+                fastest_iter = min(summary['iterations'], key=lambda x: x['duration_seconds'])
+                slowest_iter = max(summary['iterations'], key=lambda x: x['duration_seconds'])
+                self.event_logger.system_info(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
+                self.event_logger.system_info(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
+            
+            # Command timings
+            if summary["commands"]:
+                total_cmd_time = sum(cmd_data["duration_seconds"] for cmd_data in summary["commands"])
+                avg_cmd_time = total_cmd_time / len(summary["commands"])
+                self.event_logger.system_info(f"\n🎯 Commands: {len(summary['commands'])}")
+                self.event_logger.system_info(f"   Total command time: {self._format_duration(total_cmd_time)}")
+                self.event_logger.system_info(f"   Average per command: {self._format_duration(avg_cmd_time)}")
+                
+                # Show top 5 slowest commands
+                sorted_commands = sorted(summary["commands"], key=lambda x: x["duration_seconds"], reverse=True)
+                self.event_logger.system_info("\n   Top 5 slowest commands:")
+                for i, cmd in enumerate(sorted_commands[:5], 1):
+                    cmd_text = cmd["command"][:50] + "..." if len(cmd.get("command", "")) > 50 else cmd.get("command", "")
+                    self.event_logger.system_info(f"   {i}. {cmd['command_id']}: {cmd['duration_formatted']} - {cmd_text}")
+            
+            self.event_logger.system_info("="*60 + "\n")
+        except Exception:
+            pass
 
 
 class BrowserVisionBot:
@@ -271,6 +276,8 @@ class BrowserVisionBot:
         stuck_detector_weight_no_progress: float = 0.2,
         stuck_detector_weight_error_spiral: float = 0.2,
         stuck_detector_weight_high_confidence_no_progress: float = 0.1,
+        debug_mode: bool = True,  # Default to True for backward compatibility
+        event_logger: Optional[EventLogger] = None,  # Allow custom logger
     ):
         """
         Initialize BrowserVisionBot.
@@ -400,6 +407,37 @@ class BrowserVisionBot:
 
         # Initialize logger
         self.logger = get_logger()
+        
+        # Initialize event logger early (before any methods that might use it)
+        # Create a safe logger that never fails
+        class SafeLogger:
+            """Fallback logger that accepts any method call and does nothing"""
+            def __getattr__(self, name):
+                def noop(*args, **kwargs):
+                    pass
+                return noop
+        
+        # Try to create real logger, fallback to safe logger
+        # This MUST never fail - use SafeLogger as ultimate fallback
+        try:
+            if event_logger is None:
+                event_logger = EventLogger(debug_mode=debug_mode)
+            self.event_logger = event_logger
+            try:
+                set_event_logger(event_logger)  # Set as global
+            except Exception:
+                pass  # Ignore global setter errors
+        except Exception:
+            # Fallback: create a minimal logger if initialization fails
+            try:
+                self.event_logger = EventLogger(debug_mode=True)
+                try:
+                    set_event_logger(self.event_logger)
+                except Exception:
+                    pass
+            except Exception:
+                # Ultimate fallback - safe logger that does nothing
+                self.event_logger = SafeLogger()
 
         # Deduplication history settings (-1 = unlimited)
         self.dedup_history_quantity: int = -1
@@ -415,6 +453,15 @@ class BrowserVisionBot:
         
         # Execution timer for tracking task, iteration, and command timings
         self.execution_timer = ExecutionTimer()
+    
+    def _safe_event_log(self, method_name: str, *args, **kwargs):
+        """Safely call any event logger method - never raises exceptions"""
+        try:
+            method = getattr(self.event_logger, method_name, None)
+            if method:
+                method(*args, **kwargs)
+        except Exception:
+            pass  # Silently ignore all event logger errors
         
     def init_browser(self) -> tuple[Playwright, Browser, Page]:
         # Local import to avoid dependency when not running as script
@@ -442,6 +489,9 @@ class BrowserVisionBot:
         else:
             page = browser.new_page()
         
+        # Apply stealth to the page
+        stealth_sync(page)
+        
         return p, browser, page
     
     # ---------- Plan caching helpers ----------
@@ -452,7 +502,10 @@ class BrowserVisionBot:
         if not self._plan_cache_entry:
             return
         if reason:
-            print(f"🧹 Clearing cached plan ({reason})")
+            try:
+                self.event_logger.plan_cleared(reason=reason)
+            except Exception:
+                pass
         self._plan_cache_entry = None
 
     def _store_plan_in_cache(
@@ -488,7 +541,10 @@ class BrowserVisionBot:
             "agent_mode": agent_mode,
             "target_context_guard": guard_key,
         }
-        print(f"💾 Cached plan for goal '{description_key}' (signature {short_sig})")
+        try:
+            self.event_logger.plan_cached(goal_description=description_key, signature=short_sig)
+        except Exception:
+            pass
 
     def _get_cached_plan(
         self,
@@ -531,7 +587,10 @@ class BrowserVisionBot:
             return None
         entry["reuse_count"] += 1
         entry["timestamp"] = time.time()
-        print("♻️ Reusing cached plan (skipped LLM planning)")
+        try:
+            self.event_logger.plan_reused()
+        except Exception:
+            pass
         return entry["plan"].copy(deep=True)
     
     def set_defer_input_handler(self, handler: Optional[Callable[[str, GoalContext], str]]) -> None:
@@ -543,7 +602,10 @@ class BrowserVisionBot:
             message = prompt.strip() if prompt and prompt.strip() else "Please provide the requested input to continue."
             return input(f"{message}\n> ")
         except EOFError:
-            print("[Defer] Warning: input stream unavailable; returning empty response.")
+            try:
+                self.event_logger.system_warning("[Defer] Warning: input stream unavailable; returning empty response.")
+            except Exception:
+                pass
             return ""
 
     def _request_defer_input(self, prompt: str, context: GoalContext) -> str:
@@ -625,7 +687,10 @@ class BrowserVisionBot:
             else:
                 self.tab_manager: Optional[TabManager] = None
         except Exception as e:
-            print(f"⚠️ Failed to initialize TabManager: {e}")
+            try:
+                self.event_logger.system_error("Failed to initialize TabManager", error=e)
+            except Exception:
+                pass
             self.tab_manager: Optional[TabManager] = None
         self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
@@ -647,7 +712,10 @@ class BrowserVisionBot:
         if self.save_gif:
             self.gif_recorder = GIFRecorder(page, self.gif_output_dir)
             self.gif_recorder.start_recording()
-            print("🎬 GIF recording started")
+            try:
+                self.event_logger.gif_start()
+            except Exception:
+                pass
         
         # Initialize action executor with deduper, GIF recorder, and command ledger
         self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
@@ -668,7 +736,10 @@ class BrowserVisionBot:
         try:
             self._attach_new_page_listener()
         except Exception as e:
-            print(f"⚠️ Failed to attach new page listener: {e}")
+            try:
+                self.event_logger.system_error("Failed to attach new page listener", error=e)
+            except Exception:
+                pass
 
         self.started = True
 
@@ -696,36 +767,60 @@ class BrowserVisionBot:
             Optional[str]: Path to the generated GIF if recording was enabled, None otherwise
         """
         if self.terminated:
-            print("⚠️ Bot is already terminated")
+            try:
+                self.event_logger.system_warning("Bot is already terminated")
+            except Exception:
+                pass
             return None
             
-        print("🛑 Terminating bot...")
+        try:
+            self.event_logger.system_info("Terminating bot...")
+        except Exception:
+            pass
         
         # Stop GIF recording first
         gif_path = None
         if self.save_gif and self.gif_recorder:
-            print("🎬 Stopping GIF recording...")
+            try:
+                self.event_logger.system_info("Stopping GIF recording...")
+            except Exception:
+                pass
             gif_path = self.gif_recorder.stop_recording()
             self.gif_recorder = None
             if gif_path:
-                print(f"✅ GIF saved to: {gif_path}")
+                try:
+                    self.event_logger.gif_stop(gif_path=gif_path)
+                except Exception:
+                    pass
         
         # Close browser and cleanup
         try:
             if hasattr(self, 'browser') and self.browser:
-                print("🔒 Closing browser...")
+                try:
+                    self.event_logger.system_info("Closing browser...")
+                except Exception:
+                    pass
                 self.browser.close()
         except Exception as e:
-            print(f"⚠️ Error closing browser: {e}")
+            try:
+                self.event_logger.system_error("Error closing browser", error=e)
+            except Exception:
+                pass
         
         # Mark as terminated
         self.terminated = True
         self.started = False
         
-        print("✅ Bot terminated successfully")
+        try:
+            self.event_logger.system_info("Bot terminated successfully")
+        except Exception:
+            pass
         
         if gif_path:
-            print(f"📁 GIF recording available at: {gif_path}")
+            try:
+                self.event_logger.system_info(f"GIF recording available at: {gif_path}")
+            except Exception:
+                pass
         
         return gif_path
 
@@ -751,22 +846,22 @@ class BrowserVisionBot:
                     new_page.wait_for_load_state("domcontentloaded", timeout=5000)
                 except Exception:
                     pass
-                print("🆕 New page/tab detected by context listener → switching…")
+                self.event_logger.system_info("New page/tab detected by context listener → switching…")
                 
                 # If TabManager is available, detect and register the new tab
                 if self.tab_manager:
                     tab_id = self.tab_manager.detect_new_tab(new_page)
                     if tab_id:
-                        print(f"📑 New tab registered: {tab_id}")
+                        self.event_logger.tab_new(tab_id=tab_id, url=new_page.url)
                 
                 self.switch_to_page(new_page)
             except Exception as e:
-                print(f"⚠️ Error handling new page event: {e}")
+                self.event_logger.system_error("Error handling new page event", error=e)
 
         try:
             ctx.on("page", _on_new_page)
         except Exception as e:
-            print(f"⚠️ Could not register context 'page' listener: {e}")
+            self.event_logger.system_error("Could not register context 'page' listener", error=e)
 
     def switch_to_page(self, new_page: Page) -> None:
         """Switch all components to a different active Page (new tab/window)."""
@@ -840,7 +935,7 @@ class BrowserVisionBot:
             except Exception:
                 pass
 
-            print(f"🔀 Switched active context to new tab: {getattr(new_page, 'url', '')}")
+            self.event_logger.tab_switch(tab_id=str(id(new_page)), url=getattr(new_page, 'url', ''))
             # Re-attach auto-on-load handler for the new page if feature is enabled
             try:
                 if self._auto_on_load_enabled:
@@ -850,7 +945,7 @@ class BrowserVisionBot:
             except Exception:
                 pass
         except Exception as e:
-            print(f"⚠️ Failed to switch to new page: {e}")
+            self.event_logger.system_error("Failed to switch to new page", error=e)
 
     # ---------- Auto actions on page load ----------
     def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True, command_id: Optional[str] = None) -> None:
@@ -995,7 +1090,10 @@ class BrowserVisionBot:
             
             for i, prompt in enumerate(self._auto_on_load_actions, 1):
                 try:
-                    print(f"⚡ Auto-on-load: act('{prompt}')")
+                    try:
+                        self.event_logger.system_info(f"Auto-on-load: act('{prompt}')")
+                    except Exception:
+                        pass
                     # Snapshot current goals and user prompt so auto-action does not disrupt ongoing task
                     saved_goal = getattr(self.goal_monitor, 'active_goal', None) if hasattr(self, 'goal_monitor') else None
                     saved_user_prompt = getattr(self.goal_monitor, 'user_prompt', "") if hasattr(self, 'goal_monitor') else ""
@@ -1019,7 +1117,10 @@ class BrowserVisionBot:
                                         # Only restore goals that haven't been completed
                                         # Check if goal has a _completed attribute and if it's False
                                         if hasattr(g, '_completed') and g._completed:
-                                            print(f"🔄 Skipping restoration of completed goal: {g}")
+                                            try:
+                                                self.event_logger.system_debug(f"Skipping restoration of completed goal: {g}")
+                                            except Exception:
+                                                pass
                                             continue
                                         self.goal_monitor.add_goal(g)
                                     except Exception:
@@ -1031,7 +1132,10 @@ class BrowserVisionBot:
                         except Exception:
                             pass
                 except Exception as e:
-                    print(f"⚠️ Auto-on-load action failed: {e}")
+                    try:
+                        self.event_logger.system_error("Auto-on-load action failed", error=e)
+                    except Exception:
+                        pass
             
             # Complete parent command
             if parent_cmd_id:
@@ -1114,7 +1218,10 @@ class BrowserVisionBot:
             # If not achieved, allow normal planning to proceed
             return None
         except Exception as e:
-            print(f"⚠️ Simple-goal bypass failed: {e}")
+            try:
+                self.event_logger.system_error("Simple-goal bypass failed", error=e)
+            except Exception:
+                pass
             return None
 
     def _try_direct_click_bypass(self, prompt_text: str) -> Optional[bool]:
@@ -1182,14 +1289,14 @@ class BrowserVisionBot:
         try:
             if not self.started:
                 self.logger.log_error("Bot not started", "act() called before bot.start()")
-                print("❌ Bot not started")
+                self.event_logger.system_error("Bot not started")
                 if self.execution_timer.current_command_start is not None:
                     self.execution_timer.end_command()
                 return False
             
             if self.page.url.startswith("about:blank"):
                 self.logger.log_error("Page is on initial blank page", "act() called before navigation")
-                print("❌ Page is on the initial blank page")
+                self.event_logger.system_error("Page is on the initial blank page")
                 if self.execution_timer.current_command_start is not None:
                     self.execution_timer.end_command()
                 return False
@@ -1208,7 +1315,7 @@ class BrowserVisionBot:
             
             # Log goal start
             self.logger.log_goal_start(goal_description)
-            print(f"🎯 Starting goal: {goal_description} [ID: {command_id}]")
+            self.event_logger.goal_start(goal_description, command_id=command_id)
             
             # Add command to history
             self._add_to_command_history(goal_description)
@@ -1237,7 +1344,7 @@ class BrowserVisionBot:
             # Check for extract commands
             if goal_description.strip().lower().startswith("extract:"):
                 extraction_prompt = goal_description.replace("extract:", "").strip()
-                print(f"📊 Extraction command: {extraction_prompt}")
+                self.event_logger.extraction_start(extraction_prompt)
                 
                 try:
                     # Perform extraction
@@ -1246,19 +1353,19 @@ class BrowserVisionBot:
                         output_format="json",
                         scope="viewport"
                     )
-                    print(f"✅ Extraction completed: {result}")
+                    self.event_logger.extraction_success(extraction_prompt, result=result)
                     self.command_ledger.complete_command(command_id, success=True)
                     self.execution_timer.end_command()
                     return True
                 except Exception as e:
-                    print(f"❌ Extraction failed: {e}")
+                    self.event_logger.extraction_failure(extraction_prompt, error=str(e))
                     self.command_ledger.complete_command(command_id, success=False)
                     self.execution_timer.end_command()
                     return False
 
             # Clear any existing goals before starting a new goal
             if self.goal_monitor.active_goal:
-                print(f"🧹 Clearing {self.goal_monitor.active_goal} previous goals")
+                self.event_logger.system_info(f"Clearing {self.goal_monitor.active_goal} previous goals")
                 self.goal_monitor.clear_all_goals()
             
             # Reset goal monitor state for fresh start
@@ -1307,12 +1414,18 @@ class BrowserVisionBot:
                     self._enable_fast_mode_goal_evaluation()
             elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
                 # Handle reference commands that were returned from IF evaluation
-                print(f"🔄 Executing reference command from IF evaluation: {transformed_goal_description}")
+                try:
+                    self.event_logger.system_info(f"Executing reference command from IF evaluation: {transformed_goal_description}")
+                except Exception:
+                    pass
                 result = self._handle_ref_commands(transformed_goal_description)
                 self.execution_timer.end_command()
                 return result
             else:
-                print("ℹ️ No smart goal setup")
+                try:
+                    self.event_logger.system_info("No smart goal setup")
+                except Exception:
+                    pass
                 self.execution_timer.end_command()
                 return True
             
@@ -1320,11 +1433,17 @@ class BrowserVisionBot:
             if not goal_description.strip():
                 duration_ms = (time.time() - start_time) * 1000
                 self.logger.log(LogLevel.INFO, LogCategory.GOAL, "No actionable goal after condition evaluation (no-op)", duration_ms=duration_ms)
-                print("ℹ️ No actionable goal after condition evaluation (no-op). Skipping.")
+                try:
+                    self.event_logger.system_info("No actionable goal after condition evaluation (no-op). Skipping.")
+                except Exception:
+                    pass
                 self.execution_timer.end_command()
                 return True
             
-            print(f"🔍 Smart goals setup: {goal}\n")
+            try:
+                self.event_logger.system_info(f"Smart goals setup: {goal}\n")
+            except Exception:
+                pass
 
             # Simple goal bypass (no LLM): handle press/scroll-only flows directly
             simple_result = self._try_simple_goal_bypass(command_id=command_id)
@@ -1336,24 +1455,36 @@ class BrowserVisionBot:
             
             for attempt in range(effective_max_attempts):
                 self.current_attempt = attempt + 1
-                print(f"\n--- Attempt {self.current_attempt}/{effective_max_attempts} ---")
+                try:
+                    self.event_logger.system_info(f"\n--- Attempt {self.current_attempt}/{effective_max_attempts} ---")
+                except Exception:
+                    pass
                 
                 # Show retry context at the start of each new attempt (but don't reset yet)
                 if attempt > 0:  # Don't reset on first attempt
                     retry_goal = self.goal_monitor.check_for_retry_request()
                     if retry_goal:
-                        print(f"🔄 Starting attempt {self.current_attempt} with retry state from previous attempt")
-                        print(f"   🔄 {retry_goal}: Retry attempt {retry_goal.retry_count}/{retry_goal.max_retries}")
+                        try:
+                            self.event_logger.system_info(f"Starting attempt {self.current_attempt} with retry state from previous attempt")
+                            self.event_logger.system_info(f"   {retry_goal}: Retry attempt {retry_goal.retry_count}/{retry_goal.max_retries}")
+                        except Exception:
+                            pass
                         # Don't reset retry state here - let it persist until after plan generation
                     else:
-                        print("ℹ️ No retry state from previous attempt")
+                        try:
+                            self.event_logger.system_info("No retry state from previous attempt")
+                        except Exception:
+                            pass
                 
                 # Check if goal is already achieved
                 goal_result = self.goal_monitor.evaluate_goal()
                 if goal_result.status == GoalStatus.ACHIEVED:
                     duration_ms = (time.time() - start_time) * 1000
                     self.logger.log_goal_success(goal_description, duration_ms)
-                    print("✅ Smart goal achieved!")
+                    try:
+                        self.event_logger.goal_success("Smart goal achieved!")
+                    except Exception:
+                        pass
                     self._print_goal_summary()
                     return True
                 
@@ -1395,18 +1526,27 @@ class BrowserVisionBot:
                             changes.append("Text content changed")
                         
                         if changes:
-                            print("🔄 DOM changes detected:")
-                            for change in changes:
-                                print(f"   • {change}")
+                            try:
+                                self.event_logger.system_info("DOM changes detected:")
+                                for change in changes:
+                                    self.event_logger.system_info(f"   • {change}")
+                            except Exception:
+                                pass
                         else:
-                            print("✅ No DOM changes detected")
+                            try:
+                                self.event_logger.system_info("No DOM changes detected")
+                            except Exception:
+                                pass
                     
                     # Store current components for next comparison
                     self.last_dom_components = (current_url, current_scroll, current_elements, current_text)
                     
                 except Exception:
                     sig_src = f"{self.page.url}|{page_info.scroll_y}|{page_info.scroll_x}"
-                    print("⚠️ Using fallback DOM signature (evaluation failed)")
+                    try:
+                        self.event_logger.system_warning("Using fallback DOM signature (evaluation failed)")
+                    except Exception:
+                        pass
                 sig_hash = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
                 
                 # Check if a small passive scroll occurred
@@ -1418,10 +1558,13 @@ class BrowserVisionBot:
                 # Disable this check in agent mode (agent handles its own retry logic)
                 retry_goal = self.goal_monitor.check_for_retry_request()
                 if sig_hash == self.last_dom_signature and not retry_goal and not self._agent_mode:
-                    print("⚠️ Same DOM signature as last attempt, scrolling to break loop")
-                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
-                    print(f"   📊 Previous interactions count: {len(self.deduper.interacted_elements) if hasattr(self, 'deduper') and self.deduper else 'unknown'}")
-                    print("   🎯 Reason: Page hasn't changed but goal needs new elements (likely due to deduplication)")
+                    try:
+                        self.event_logger.system_warning("Same DOM signature as last attempt, scrolling to break loop")
+                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
+                        self.event_logger.system_info(f"   Previous interactions count: {len(self.deduper.interacted_elements) if hasattr(self, 'deduper') and self.deduper else 'unknown'}")
+                        self.event_logger.system_info("   Reason: Page hasn't changed but goal needs new elements (likely due to deduplication)")
+                    except Exception:
+                        pass
                     from action_executor import ScrollReason
                     self.page_utils.scroll_page(
                         reason=ScrollReason.DOM_UNCHANGED,
@@ -1431,8 +1574,11 @@ class BrowserVisionBot:
                     continue
                 elif sig_hash == self.last_dom_signature and not retry_goal and self._agent_mode:
                     # In agent mode, just log and continue (don't scroll)
-                    print("ℹ️ Same DOM signature as last attempt (agent mode - check disabled)")
-                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
+                    try:
+                        self.event_logger.system_info("Same DOM signature as last attempt (agent mode - check disabled)")
+                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
+                    except Exception:
+                        pass
                 elif is_small_scroll:
                     # # Small passive scroll detected - trigger intentional scroll to force DOM change
                     # print("⚠️ Small passive scroll detected (< 100px), triggering intentional scroll")
@@ -1445,18 +1591,27 @@ class BrowserVisionBot:
                     # )
                     continue
                 elif sig_hash == self.last_dom_signature and retry_goal:
-                    print("🔄 Same DOM but retry requested - proceeding with retry attempt")
-                    print(f"   🔍 DOM signature: {sig_hash[:8]}...")
+                    try:
+                        self.event_logger.system_info("Same DOM but retry requested - proceeding with retry attempt")
+                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
+                    except Exception:
+                        pass
                 if sig_hash != self.last_dom_signature:
                     if self.last_dom_signature is not None:
                         self._invalidate_plan_cache("DOM signature changed")
-                    print(f"🔄 DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
+                    try:
+                        self.event_logger.system_info(f"DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
+                    except Exception:
+                        pass
                     # Invalidate cache when DOM changes
                     self._cached_screenshot_with_overlays = None
                     self._cached_clean_screenshot = None
                     self._cached_overlay_data = None
                     self._cached_dom_signature = None
-                    print("🗑️ Invalidated screenshot and overlay cache")
+                    try:
+                        self.event_logger.system_debug("Invalidated screenshot and overlay cache")
+                    except Exception:
+                        pass
                 self.last_dom_signature = sig_hash
                 
                 # Decide whether detection will be needed to avoid an extra screenshot
@@ -1514,30 +1669,43 @@ class BrowserVisionBot:
                     plan = None
                     
                     goal_eval_result = self.goal_monitor.evaluate_goal()
-                    print(f"🔍 Smart goal {goal_description} for goal {self.goal_monitor.active_goal.__class__.__name__} evaluation result: {goal_eval_result}")
+                    try:
+                        self.event_logger.system_debug(f"Smart goal {goal_description} for goal {self.goal_monitor.active_goal.__class__.__name__} evaluation result: {goal_eval_result}")
+                    except Exception:
+                        pass
                     if goal_eval_result.status == GoalStatus.ACHIEVED:
                         duration_ms = (time.time() - start_time) * 1000
                         self.logger.log_goal_success(goal_description, duration_ms)
-                        print(f"✅ Smart goal {goal_description} achieved during plan execution!")
+                        try:
+                            self.event_logger.goal_success(f"Smart goal {goal_description} achieved during plan execution!")
+                        except Exception:
+                            pass
                         self._print_goal_summary()
                         self.execution_timer.end_command()
                         return True
                     else:
-                        print(f"⏳ Smart goal {goal_description} pending further evaluation")
+                        try:
+                            self.event_logger.system_info(f"Smart goal {goal_description} pending further evaluation")
+                        except Exception:
+                            pass
 
                 if not plan or not plan.action_steps:
-                    print(f"❌ No valid plan generated for goal: {goal_description}")
+                    try:
+                        self.event_logger.goal_failure(f"No valid plan generated for goal: {goal_description}")
+                    except Exception:
+                        pass
                     continue
                 
                 # Reset retry state after plan generation (retry context has been used)
                 retry_goal = self.goal_monitor.check_for_retry_request()
                 if retry_goal:
-                    print("🔄 Retry context used in plan generation, resetting retry state")
+                    try:
+                        self.event_logger.system_info("Retry context used in plan generation, resetting retry state")
+                    except Exception:
+                        pass
                     self.goal_monitor.reset_retry_request()
                 
-                print(f"📋 Generated plan with {len(plan.action_steps)} steps")
-                print(f"🤔 Action steps: {plan.action_steps}")
-                print(f"🤔 Reasoning: {plan.reasoning}")
+                self.event_logger.plan_generated(step_count=len(plan.action_steps), reasoning=plan.reasoning, action_steps=str(plan.action_steps))
                 
                 # Execute the plan
                 success = self.action_executor.execute_plan(
@@ -1557,18 +1725,27 @@ class BrowserVisionBot:
                     retry_goal = self.goal_monitor.check_for_retry_request()
                     if retry_goal:
                         self._invalidate_plan_cache("goal requested retry")
-                        print("🔄 Goal requested retry after plan execution - regenerating plan")
-                        print(f"   🔄 {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        try:
+                            self.event_logger.system_info("Goal requested retry after plan execution - regenerating plan")
+                            self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
+                        except Exception:
+                            pass
                         # Don't reset retry requests here - let them persist for the next iteration
                         continue
                     
-                    print(f"🔍 Goal result: {goal_result}")
+                    try:
+                        self.event_logger.system_debug(f"Goal result: {goal_result}")
+                    except Exception:
+                        pass
                     
                     if goal_result.status == GoalStatus.ACHIEVED:
                         self._invalidate_plan_cache("goal achieved")
                         duration_ms = (time.time() - start_time) * 1000
                         self.logger.log_goal_success(goal_description, duration_ms)
-                        print(f"✅ Smart goal {goal_description} achieved during plan execution!")
+                        try:
+                            self.event_logger.goal_success(f"Smart goal {goal_description} achieved during plan execution!")
+                        except Exception:
+                            pass
                         self._print_goal_summary()
                         # Mark command as completed successfully
                         self.command_ledger.complete_command(command_id, success=True)
@@ -2421,23 +2598,35 @@ Return only the extracted text that appears in the text content above. Do not ma
         """Collect overlay metadata and screenshots, with caching and dedup filtering."""
         current_focus_context = self.focus_manager.get_current_focus_context()
         
-        print("🔢 Numbering interactive elements...")
+        try:
+            self.event_logger.system_debug("Numbering interactive elements...")
+        except Exception:
+            pass
         clean_screenshot = None
         try:
             clean_screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
         except Exception as e:
-            print(f"⚠️ Failed to capture clean screenshot before overlays: {e}")
+            try:
+                self.event_logger.system_error("Failed to capture clean screenshot before overlays", error=e)
+            except Exception:
+                pass
 
         element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive") or []
 
         if current_focus_context:
-            print("🎯 Filtering elements based on current focus context...")
+            try:
+                self.event_logger.system_debug("Filtering elements based on current focus context...")
+            except Exception:
+                pass
             element_data = self._filter_elements_by_focus(element_data)
 
         self._pre_dedup_element_data = element_data.copy() if element_data else []
         self._cached_focus_context = current_focus_context
 
-        print("📸 Capturing screenshot with overlays...")
+        try:
+            self.event_logger.system_debug("Capturing screenshot with overlays...")
+        except Exception:
+            pass
         screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
         self._cached_screenshot_with_overlays = screenshot_with_overlays
         self._cached_clean_screenshot = clean_screenshot
@@ -2445,7 +2634,10 @@ Return only the extracted text that appears in the text content above. Do not ma
             self._pre_dedup_element_data.copy() if hasattr(self, "_pre_dedup_element_data") else element_data.copy()
         )
         self._cached_dom_signature = self.last_dom_signature
-        print(f"💾 Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
+        try:
+            self.event_logger.system_debug(f"Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
+        except Exception:
+            pass
 
         if (
             self.deduper
@@ -2613,7 +2805,10 @@ Return only the extracted text that appears in the text content above. Do not ma
         duration_ms = (time.time() - start_time) * 1000
         if result:
             self.logger.log_goal_success(goal_description, duration_ms)
-            print(f"✅ Fast mode completed: {goal_description}")
+            try:
+                self.event_logger.fast_mode_complete(goal_description=goal_description, success=True)
+            except Exception:
+                pass
             self.command_ledger.complete_command(command_id, success=True)
         else:
             self.logger.log_goal_failure(goal_description, "Fast mode execution failed", duration_ms)
@@ -2688,7 +2883,10 @@ Return only the extracted text that appears in the text content above. Do not ma
             if disable_vision_tag_hint and hasattr(self.action_executor, "enable_vision_tag_hint"):
                 self.action_executor.enable_vision_tag_hint = original_tag_hint_state
 
-        print(f"[FastMode] Execution result: {success}")
+        try:
+            self.event_logger.system_debug(f"[FastMode] Execution result: {success}")
+        except Exception:
+            pass
         return success
 
     def _fast_overlay_action(
@@ -2730,7 +2928,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 selection_model = self.element_selection_fallback_model
                 print(f"[FastMode] Using fallback model: {selection_model}")
 
-            print(f"[FastMode] Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+            try:
+                self.event_logger.fast_mode_overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+            except Exception:
+                pass
             selection = self.plan_generator.select_best_overlay(
                 instruction=instruction,
                 element_data=element_data,
@@ -2738,7 +2939,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 screenshot=clean_screenshot or screenshot_with_overlays,
                 model=selection_model,
             )
-            print(f"[FastMode] Overlay selection response: {selection}")
+            try:
+                self.event_logger.fast_mode_overlay_selection(f"Overlay selection response: {selection}")
+            except Exception:
+                pass
 
             if selection is None:
                 if attempt < max_attempts:
@@ -2756,7 +2960,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 return False
 
             overlay_index = selection
-            print(f"[FastMode] LLM chose overlay #{overlay_index}")
+            try:
+                self.event_logger.fast_mode_overlay_selection(f"LLM chose overlay #{overlay_index}")
+            except Exception:
+                pass
 
             matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
             if not matching_data:
@@ -2824,7 +3031,10 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         target_hint = self._fast_normalize_hint(target_hint_raw)
         request_instruction = self._fast_normalize_hint(goal_description)
-        print(f"[FastMode] Executing fast click for instruction='{goal_description}' target_hint='{target_hint}'")
+        try:
+            self.event_logger.fast_mode_start(instruction=goal_description, target_hint=target_hint)
+        except Exception:
+            pass
 
         selection_instruction = self._fast_compose_selection_instruction(
             request_instruction=request_instruction,
@@ -3932,7 +4142,10 @@ Return only the extracted text that appears in the text content above. Do not ma
             # Keep only the last max_command_history commands
             if len(self.command_history) > self.max_command_history:
                 self.command_history = self.command_history[-self.max_command_history:]
-            print(f"📝 Added to command history: '{command.strip()}'")
+            try:
+                self.event_logger.command_history(command.strip())
+            except Exception:
+                pass
     
     def _handle_focus_commands(self, goal_description: str, overlay_manager: OverlayManager) -> Optional[bool]:
         """

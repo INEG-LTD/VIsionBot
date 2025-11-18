@@ -347,7 +347,11 @@ class GoalMonitor:
         except Exception:
             pass
 
-        print(f"[GoalMonitor] Recorded {interaction_type} interaction")
+        try:
+            from utils.event_logger import get_event_logger
+            get_event_logger().interaction_recorded(interaction_type=interaction_type.value if hasattr(interaction_type, 'value') else str(interaction_type))
+        except Exception:
+            pass
     
     def _evaluate_post_interaction_goals(self, interaction_type: InteractionType) -> None:
         """Evaluate goals that want AFTER or BOTH timing after an interaction"""

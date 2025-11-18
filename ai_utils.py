@@ -832,10 +832,17 @@ def _perform_completion(
     text = _extract_text_from_response(response)
     cost_usd, usage = _extract_usage(response, model)
 
-    print(
-        f"Prompt Cost: {cost_usd} USD, Input Tokens: {usage['input_tokens']}, "
-        f"Output Tokens: {usage['output_tokens']}, Total Tokens: {usage['total_tokens']}"
-    )
+    try:
+        from utils.event_logger import get_event_logger
+        get_event_logger().llm_cost(
+            cost_usd=cost_usd,
+            input_tokens=usage['input_tokens'],
+            output_tokens=usage['output_tokens'],
+            total_tokens=usage['total_tokens'],
+            model=model
+        )
+    except Exception:
+        pass
 
     return text, cost_usd, usage, response
 

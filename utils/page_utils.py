@@ -51,7 +51,11 @@ class PageUtils:
                 doc_height=int(self.page.evaluate("document.body.scrollHeight"))
             )
         except Exception as e:
-            print(f"⚠️ Error getting page info: {e}")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_error(f"Error getting page info: {e}")
+            except Exception:
+                pass
             # Return safe defaults
             return PageInfo(
                 width=1280, height=800, scroll_x=0, scroll_y=0,

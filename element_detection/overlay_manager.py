@@ -252,10 +252,18 @@ class OverlayManager:
         
         try:
             element_data = self.page.evaluate(js_code)
-            print(f"🔢 Created {len(element_data)} numbered element overlays")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_debug(f"Created {len(element_data)} numbered element overlays")
+            except Exception:
+                pass
             return element_data or []
         except Exception as e:
-            print(f"⚠️ Error creating numbered overlays: {e}")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_error("Error creating numbered overlays", error=e)
+            except Exception:
+                pass
             return []
     
     def remove_overlays(self) -> None:
@@ -273,6 +281,14 @@ class OverlayManager:
         try:
             count = self.page.evaluate(js_code)
             if count > 0:
-                print(f"🧹 Removed {count} element overlays")
+                try:
+                    from utils.event_logger import get_event_logger
+                    get_event_logger().system_debug(f"Removed {count} element overlays")
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"⚠️ Error removing element overlays: {e}")
+            try:
+                from utils.event_logger import get_event_logger
+                get_event_logger().system_error("Error removing element overlays", error=e)
+            except Exception:
+                pass

@@ -13,6 +13,7 @@ from models import VisionPlan, PageElements
 from models.core_models import DetectedElement, PageSection, ActionStep, PageInfo, ActionType
 from utils.semantic_targets import SemanticTarget
 from utils.intent_parsers import parse_action_intent
+from utils.event_logger import get_event_logger
 
 
 class PlanGenerator:
@@ -753,8 +754,12 @@ class PlanGenerator:
             max_samples = None
 
         samples: List[str] = []
+        candidate_lines: List[str] = []
         if element_data:
-            print("[PlanGen][NL] Candidate overlays for LLM selection:")
+            try:
+                get_event_logger().plan_overlay_candidates([])  # Will be populated below
+            except Exception:
+                pass
         iterable = element_data if max_samples is None else element_data[:max_samples]
         for elem in iterable:
             idx = elem.get("index")
@@ -774,8 +779,14 @@ class PlanGenerator:
             text_str = f' txt="{text_snip}"' if text_snip else ""
             role_part = f" role={role_str}" if role_str else ""
             log_line = f"  • #{idx} tag={tag_str}{role_part}{text_str}{aria_str}"
-            print(log_line)
+            candidate_lines.append(log_line)
             samples.append(f"- #{idx} tag={tag_str}{role_part}{text_str}{aria_str}")
+        
+        if candidate_lines:
+            try:
+                get_event_logger().plan_overlay_candidates(candidate_lines)
+            except Exception:
+                pass
 
         prompt = (
             "You are given a page screenshot and a list of numbered overlay summaries.\n"
@@ -828,10 +839,16 @@ class PlanGenerator:
 
         overlay_index = int(match.group())
         if overlay_index == 0:
-            print(f"[PlanGen][NL] no suitable overlay chosen (raw='{raw_response}')")
+            try:
+                get_event_logger().plan_overlay_chosen(overlay_index=0, raw_response=raw_response)
+            except Exception:
+                pass
             return None
 
-        print(f"[PlanGen][NL] overlay #{overlay_index} chosen (raw='{raw_response}')")
+        try:
+            get_event_logger().plan_overlay_chosen(overlay_index=overlay_index, raw_response=raw_response)
+        except Exception:
+            pass
         return overlay_index
 
     def _normalized_area_ratio(self, element: Dict[str, Any]) -> float:
