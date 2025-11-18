@@ -259,6 +259,8 @@ class BrowserVisionBot:
         plan_cache_ttl: float = 6.0,
         plan_cache_max_reuse: int = 1,
         parallel_completion_and_action: bool = True,
+        element_selection_retry_attempts: int = 3,
+        element_selection_fallback_model: Optional[str] = None,
         # Stuck detector configuration
         stuck_detector_enabled: bool = True,
         stuck_detector_window_size: int = 5,
@@ -279,6 +281,11 @@ class BrowserVisionBot:
                                             Note: Set to False primarily for debugging purposes, as sequential execution
                                             makes it easier to trace the execution flow and understand which LLM call
                                             is running at any given time.
+            element_selection_retry_attempts: Number of retry attempts when element selection fails in fast mode.
+                                             Default: 3. The agent will retry up to this many times before giving up.
+            element_selection_fallback_model: Optional model name to use for retry attempts. If set, this model will
+                                             be used for retry attempts instead of the default command model.
+                                             Useful for using a more capable model when the initial attempt fails.
         """
         self.page = page
 
@@ -338,6 +345,10 @@ class BrowserVisionBot:
         
         # Parallel execution of completion check and next action determination
         self.parallel_completion_and_action = parallel_completion_and_action
+        
+        # Element selection retry configuration
+        self.element_selection_retry_attempts = max(1, int(element_selection_retry_attempts))
+        self.element_selection_fallback_model = element_selection_fallback_model
         
         # Stuck detector configuration
         self.stuck_detector_enabled = stuck_detector_enabled
@@ -2691,41 +2702,80 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        page_info = self.page_utils.get_page_info()
-        element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
-        if not element_data:
-            print("❌ Fast mode: no interactive elements detected")
-            return False
-
+        max_attempts = self.element_selection_retry_attempts
         instruction = selection_instruction or goal_description
-        print("[FastMode] Requesting overlay selection from LLM")
-        selection = self.plan_generator.select_best_overlay(
-            instruction=instruction,
-            element_data=element_data,
-            semantic_hint=None,
-            screenshot=clean_screenshot or screenshot_with_overlays,
-        )
-        print(f"[FastMode] Overlay selection response: {selection}")
+        
+        page_info = None
+        element_data = None
+        overlay_index = None
+        
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                print(f"[FastMode] Retry attempt {attempt}/{max_attempts} for element selection")
+                # Small delay before retry to allow page to stabilize
+                time.sleep(0.5)
+            
+            page_info = self.page_utils.get_page_info()
+            element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
+            if not element_data:
+                if attempt < max_attempts:
+                    print(f"⚠️ Fast mode: no interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
+                    continue
+                print("❌ Fast mode: no interactive elements detected after all retries")
+                return False
 
-        if selection is None:
-            print("❌ Fast mode: overlay selection failed – action failed")
-            try:
-                self.overlay_manager.remove_overlays()
-            except Exception:
-                pass
-            return False
+            # Use fallback model for retry attempts if configured
+            selection_model = None
+            if attempt > 1 and self.element_selection_fallback_model:
+                selection_model = self.element_selection_fallback_model
+                print(f"[FastMode] Using fallback model: {selection_model}")
 
-        overlay_index = selection
-        print(f"[FastMode] LLM chose overlay #{overlay_index}")
+            print(f"[FastMode] Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+            selection = self.plan_generator.select_best_overlay(
+                instruction=instruction,
+                element_data=element_data,
+                semantic_hint=None,
+                screenshot=clean_screenshot or screenshot_with_overlays,
+                model=selection_model,
+            )
+            print(f"[FastMode] Overlay selection response: {selection}")
 
-        matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
-        if not matching_data:
-            print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data – action failed")
-            try:
-                self.overlay_manager.remove_overlays()
-            except Exception:
-                pass
-            return False
+            if selection is None:
+                if attempt < max_attempts:
+                    print(f"⚠️ Fast mode: overlay selection failed (attempt {attempt}/{max_attempts}), retrying...")
+                    try:
+                        self.overlay_manager.remove_overlays()
+                    except Exception:
+                        pass
+                    continue
+                print("❌ Fast mode: overlay selection failed after all retries")
+                try:
+                    self.overlay_manager.remove_overlays()
+                except Exception:
+                    pass
+                return False
+
+            overlay_index = selection
+            print(f"[FastMode] LLM chose overlay #{overlay_index}")
+
+            matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
+            if not matching_data:
+                if attempt < max_attempts:
+                    print(f"⚠️ Fast mode: Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
+                    try:
+                        self.overlay_manager.remove_overlays()
+                    except Exception:
+                        pass
+                    continue
+                print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
+                try:
+                    self.overlay_manager.remove_overlays()
+                except Exception:
+                    pass
+                return False
+            
+            # Success - break out of retry loop
+            break
 
         try:
             self.overlay_manager.remove_overlays()

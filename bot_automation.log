@@ -12979,3 +12979,613 @@ Log File: bot_automation.log
   "goal_description": "click: Accept all button"
 }
 [2025-11-17T01:55:39.127943] SUCCESS  GOAL         Goal completed: click: Accept all button (took 4917.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763395726
+Start Time: 2025-11-17T16:08:46.407342
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T16:08:54.738657] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T16:09:01.563708] SUCCESS  GOAL         Goal completed: click: Accept all button (took 6825.1ms) ✅
+[2025-11-17T16:09:08.072744] INFO     GOAL         Starting goal: type: Elon Musk Wikipedia in search input field
+    Details: {
+  "goal_description": "type: Elon Musk Wikipedia in search input field"
+}
+[2025-11-17T16:09:12.900007] SUCCESS  GOAL         Goal completed: type: Elon Musk Wikipedia in search input field (took 4827.3ms) ✅
+[2025-11-17T16:09:17.776739] INFO     GOAL         Starting goal: click: search suggestion 'elon musk wikipedia' link
+    Details: {
+  "goal_description": "click: search suggestion 'elon musk wikipedia' link"
+}
+[2025-11-17T16:09:21.299591] SUCCESS  GOAL         Goal completed: click: search suggestion 'elon musk wikipedia' link (took 3522.9ms) ✅
+[2025-11-17T16:09:28.274404] INFO     GOAL         Starting goal: click: Elon Musk link
+    Details: {
+  "goal_description": "click: Elon Musk link"
+}
+[2025-11-17T16:09:30.583039] SUCCESS  GOAL         Goal completed: click: Elon Musk link (took 2308.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763395801
+Start Time: 2025-11-17T16:10:01.499991
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T16:10:10.434262] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T16:10:12.801078] SUCCESS  GOAL         Goal completed: click: Accept all button (took 2366.8ms) ✅
+[2025-11-17T16:10:17.735933] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T16:10:19.963687] ERROR    GOAL         Goal failed: type: reed job website in search input field (took 2227.7ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T16:10:27.198798] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+[2025-11-17T16:10:30.672580] ERROR    GOAL         Goal failed: type: reed job website in search input (took 3473.8ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T16:10:38.899987] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+[2025-11-17T16:10:40.339174] ERROR    GOAL         Goal failed: type: reed job website in search input (took 1439.2ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T16:10:48.125891] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763397178
+Start Time: 2025-11-17T16:32:58.804234
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T16:33:07.825830] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T16:33:19.884633] SUCCESS  GOAL         Goal completed: click: Accept all button (took 12058.8ms) ✅
+[2025-11-17T16:33:25.847242] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T16:33:39.884553] ERROR    GOAL         Goal failed: type: reed job website in search input field (took 14037.2ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T16:33:48.350575] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763397247
+Start Time: 2025-11-17T16:34:07.691714
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T16:34:13.987768] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T16:34:19.049041] SUCCESS  GOAL         Goal completed: click: Accept all button (took 5061.3ms) ✅
+[2025-11-17T16:34:25.040523] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T16:34:33.231316] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 8190.8ms) ✅
+[2025-11-17T16:34:41.379291] INFO     GOAL         Starting goal: click: search suggestion "reed job website" link
+    Details: {
+  "goal_description": "click: search suggestion \"reed job website\" link"
+}
+[2025-11-17T16:34:47.370019] SUCCESS  GOAL         Goal completed: click: search suggestion "reed job website" link (took 5990.7ms) ✅
+[2025-11-17T16:34:53.182558] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T16:34:58.131498] SUCCESS  GOAL         Goal completed: click: Not now button (took 4949.0ms) ✅
+[2025-11-17T16:35:06.053321] INFO     GOAL         Starting goal: scroll: down
+    Details: {
+  "goal_description": "scroll: down"
+}
+[2025-11-17T16:35:06.967393] SUCCESS  GOAL         Goal completed: scroll: down (took 914.1ms) ✅
+[2025-11-17T16:35:13.267870] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T16:35:23.397106] ERROR    GOAL         Goal failed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 10129.2ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T16:35:31.189340] INFO     GOAL         Starting goal: click: Reed Co UK link
+    Details: {
+  "goal_description": "click: Reed Co UK link"
+}
+[2025-11-17T16:35:38.844968] SUCCESS  GOAL         Goal completed: click: Reed Co UK link (took 7655.6ms) ✅
+[2025-11-17T16:35:46.382861] INFO     GOAL         Starting goal: click: Accept All button
+    Details: {
+  "goal_description": "click: Accept All button"
+}
+[2025-11-17T16:35:52.306212] SUCCESS  GOAL         Goal completed: click: Accept All button (took 5923.4ms) ✅
+[2025-11-17T16:36:00.471411] INFO     GOAL         Starting goal: type: it jobs in What text input
+    Details: {
+  "goal_description": "type: it jobs in What text input"
+}
+[2025-11-17T16:36:10.451062] SUCCESS  GOAL         Goal completed: type: it jobs in What text input (took 9979.7ms) ✅
+[2025-11-17T16:36:18.290502] INFO     GOAL         Starting goal: type: london in town or postcode input field
+    Details: {
+  "goal_description": "type: london in town or postcode input field"
+}
+[2025-11-17T16:36:23.431606] SUCCESS  GOAL         Goal completed: type: london in town or postcode input field (took 5141.1ms) ✅
+[2025-11-17T16:36:30.133774] INFO     GOAL         Starting goal: click: London link
+    Details: {
+  "goal_description": "click: London link"
+}
+[2025-11-17T16:36:40.067612] SUCCESS  GOAL         Goal completed: click: London link (took 9933.9ms) ✅
+[2025-11-17T16:36:46.143807] INFO     GOAL         Starting goal: click: Search jobs button
+    Details: {
+  "goal_description": "click: Search jobs button"
+}
+[2025-11-17T16:36:51.669194] SUCCESS  GOAL         Goal completed: click: Search jobs button (took 5525.4ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763413613
+Start Time: 2025-11-17T21:06:53.604078
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T21:07:02.996899] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T21:07:08.483370] SUCCESS  GOAL         Goal completed: click: Accept all button (took 5486.5ms) ✅
+[2025-11-17T21:07:13.681016] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T21:07:24.768606] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 11087.6ms) ✅
+[2025-11-17T21:07:30.882371] INFO     GOAL         Starting goal: click: Google Search button
+    Details: {
+  "goal_description": "click: Google Search button"
+}
+[2025-11-17T21:07:32.906895] SUCCESS  GOAL         Goal completed: click: Google Search button (took 2024.5ms) ✅
+[2025-11-17T21:07:37.176810] INFO     GOAL         Starting goal: click: first search suggestion link titled 'reed job website'
+    Details: {
+  "goal_description": "click: first search suggestion link titled 'reed job website'"
+}
+[2025-11-17T21:07:42.655257] SUCCESS  GOAL         Goal completed: click: first search suggestion link titled 'reed job website' (took 5478.5ms) ✅
+[2025-11-17T21:07:49.569207] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T21:07:56.613602] SUCCESS  GOAL         Goal completed: click: Not now button (took 7044.4ms) ✅
+[2025-11-17T21:08:03.909488] INFO     GOAL         Starting goal: scroll: down
+    Details: {
+  "goal_description": "scroll: down"
+}
+[2025-11-17T21:08:04.811416] SUCCESS  GOAL         Goal completed: scroll: down (took 901.9ms) ✅
+[2025-11-17T21:08:12.995424] INFO     GOAL         Starting goal: click: Reed link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site'
+    Details: {
+  "goal_description": "click: Reed link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site'"
+}
+[2025-11-17T21:08:23.612773] SUCCESS  GOAL         Goal completed: click: Reed link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site' (took 10617.4ms) ✅
+[2025-11-17T21:08:29.630971] INFO     GOAL         Starting goal: click: Accept All button
+    Details: {
+  "goal_description": "click: Accept All button"
+}
+[2025-11-17T21:08:34.083765] SUCCESS  GOAL         Goal completed: click: Accept All button (took 4452.8ms) ✅
+[2025-11-17T21:08:41.111381] INFO     GOAL         Starting goal: type: it jobs in What text input
+    Details: {
+  "goal_description": "type: it jobs in What text input"
+}
+[2025-11-17T21:08:45.259159] SUCCESS  GOAL         Goal completed: type: it jobs in What text input (took 4147.8ms) ✅
+[2025-11-17T21:08:51.297288] INFO     GOAL         Starting goal: type: london in town or postcode input field
+    Details: {
+  "goal_description": "type: london in town or postcode input field"
+}
+[2025-11-17T21:08:59.089565] SUCCESS  GOAL         Goal completed: type: london in town or postcode input field (took 7792.3ms) ✅
+[2025-11-17T21:09:07.340769] INFO     GOAL         Starting goal: click: London link
+    Details: {
+  "goal_description": "click: London link"
+}
+[2025-11-17T21:09:17.327022] SUCCESS  GOAL         Goal completed: click: London link (took 9986.3ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763416080
+Start Time: 2025-11-17T21:48:00.641188
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T21:48:27.339038] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T21:48:34.177937] SUCCESS  GOAL         Goal completed: click: Accept all button (took 6838.9ms) ✅
+[2025-11-17T21:48:41.862305] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T21:48:55.366832] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 13504.5ms) ✅
+[2025-11-17T21:49:02.873023] INFO     GOAL         Starting goal: click: search suggestion "reed job website" link
+    Details: {
+  "goal_description": "click: search suggestion \"reed job website\" link"
+}
+[2025-11-17T21:49:10.550130] SUCCESS  GOAL         Goal completed: click: search suggestion "reed job website" link (took 7677.2ms) ✅
+[2025-11-17T21:49:19.019497] INFO     GOAL         Starting goal: click: Jobs in London link
+    Details: {
+  "goal_description": "click: Jobs in London link"
+}
+[2025-11-17T21:49:28.750410] SUCCESS  GOAL         Goal completed: click: Jobs in London link (took 9730.9ms) ✅
+[2025-11-17T21:49:38.138014] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T21:49:46.567795] SUCCESS  GOAL         Goal completed: click: Not now button (took 8429.8ms) ✅
+[2025-11-17T21:49:54.081964] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T21:50:02.534435] SUCCESS  GOAL         Goal completed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 8452.5ms) ✅
+[2025-11-17T21:50:10.957780] INFO     GOAL         Starting goal: type: it jobs in What input field
+    Details: {
+  "goal_description": "type: it jobs in What input field"
+}
+[2025-11-17T21:50:15.930194] SUCCESS  GOAL         Goal completed: type: it jobs in What input field (took 4972.6ms) ✅
+[2025-11-17T21:50:23.430762] INFO     GOAL         Starting goal: click: Allow All button
+    Details: {
+  "goal_description": "click: Allow All button"
+}
+[2025-11-17T21:50:28.076507] SUCCESS  GOAL         Goal completed: click: Allow All button (took 4644.1ms) ✅
+[2025-11-17T21:50:53.743022] INFO     GOAL         Starting goal: type: london in Where input field
+    Details: {
+  "goal_description": "type: london in Where input field"
+}
+[2025-11-17T21:51:03.358285] ERROR    GOAL         Goal failed: type: london in Where input field (took 9615.6ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T21:51:19.364797] INFO     GOAL         Starting goal: click: Search by location link
+    Details: {
+  "goal_description": "click: Search by location link"
+}
+[2025-11-17T21:51:24.747755] SUCCESS  GOAL         Goal completed: click: Search by location link (took 5383.1ms) ✅
+[2025-11-17T21:51:37.352447] INFO     GOAL         Starting goal: click: Search jobs button
+    Details: {
+  "goal_description": "click: Search jobs button"
+}
+[2025-11-17T21:51:43.285056] SUCCESS  GOAL         Goal completed: click: Search jobs button (took 5932.6ms) ✅
+[2025-11-17T21:51:52.925451] INFO     GOAL         Starting goal: type: it in What input field
+    Details: {
+  "goal_description": "type: it in What input field"
+}
+[2025-11-17T21:52:00.786975] SUCCESS  GOAL         Goal completed: type: it in What input field (took 7861.7ms) ✅
+[2025-11-17T21:52:08.364220] INFO     GOAL         Starting goal: type: london in town or postcode input field
+    Details: {
+  "goal_description": "type: london in town or postcode input field"
+}
+[2025-11-17T21:52:16.632146] SUCCESS  GOAL         Goal completed: type: london in town or postcode input field (took 8267.9ms) ✅
+[2025-11-17T21:52:27.165988] INFO     GOAL         Starting goal: click: London link
+    Details: {
+  "goal_description": "click: London link"
+}
+[2025-11-17T21:52:37.774503] SUCCESS  GOAL         Goal completed: click: London link (took 10608.6ms) ✅
+[2025-11-17T21:52:47.488966] INFO     GOAL         Starting goal: type: it in What input field
+    Details: {
+  "goal_description": "type: it in What input field"
+}
+[2025-11-17T21:52:52.254650] SUCCESS  GOAL         Goal completed: type: it in What input field (took 4765.8ms) ✅
+[2025-11-17T21:53:02.338852] INFO     GOAL         Starting goal: type: london in town or postcode input field
+    Details: {
+  "goal_description": "type: london in town or postcode input field"
+}
+[2025-11-17T21:53:06.710221] SUCCESS  GOAL         Goal completed: type: london in town or postcode input field (took 4371.5ms) ✅
+[2025-11-17T21:53:16.294162] INFO     GOAL         Starting goal: click: London link
+    Details: {
+  "goal_description": "click: London link"
+}
+[2025-11-17T21:53:21.360373] SUCCESS  GOAL         Goal completed: click: London link (took 5066.5ms) ✅
+[2025-11-17T21:53:30.301648] INFO     GOAL         Starting goal: click: Search jobs button
+    Details: {
+  "goal_description": "click: Search jobs button"
+}
+[2025-11-17T21:53:37.104318] SUCCESS  GOAL         Goal completed: click: Search jobs button (took 6802.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763416962
+Start Time: 2025-11-17T22:02:42.942625
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T22:03:14.471072] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T22:03:17.657826] SUCCESS  GOAL         Goal completed: click: Accept all button (took 3186.8ms) ✅
+[2025-11-17T22:03:24.229509] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+[2025-11-17T22:03:39.307546] SUCCESS  GOAL         Goal completed: type: reed job website in search input (took 15078.2ms) ✅
+[2025-11-17T22:03:46.501815] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:03:47.603877] SUCCESS  GOAL         Goal completed: press: Enter (took 1102.1ms) ✅
+[2025-11-17T22:03:55.895546] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T22:03:58.517829] SUCCESS  GOAL         Goal completed: click: Not now button (took 2622.3ms) ✅
+[2025-11-17T22:04:05.259150] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T22:04:09.492010] SUCCESS  GOAL         Goal completed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 4232.9ms) ✅
+[2025-11-17T22:04:16.609029] INFO     GOAL         Starting goal: click: Choose area link
+    Details: {
+  "goal_description": "click: Choose area link"
+}
+[2025-11-17T22:04:23.362812] SUCCESS  GOAL         Goal completed: click: Choose area link (took 6753.8ms) ✅
+[2025-11-17T22:04:34.318063] INFO     GOAL         Starting goal: click: close button
+    Details: {
+  "goal_description": "click: close button"
+}
+[2025-11-17T22:04:37.943423] SUCCESS  GOAL         Goal completed: click: close button (took 3625.4ms) ✅
+[2025-11-17T22:04:54.227444] INFO     GOAL         Starting goal: type: IT jobs in London in search input field
+    Details: {
+  "goal_description": "type: IT jobs in London in search input field"
+}
+[2025-11-17T22:04:58.148562] SUCCESS  GOAL         Goal completed: type: IT jobs in London in search input field (took 3921.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763417407
+Start Time: 2025-11-17T22:10:07.629636
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T22:10:19.135957] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T22:10:24.598621] SUCCESS  GOAL         Goal completed: click: Accept all button (took 5462.7ms) ✅
+[2025-11-17T22:10:31.522352] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T22:10:39.404498] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 7882.2ms) ✅
+[2025-11-17T22:10:45.726077] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:10:46.764264] SUCCESS  GOAL         Goal completed: press: Enter (took 1038.2ms) ✅
+[2025-11-17T22:10:54.371513] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T22:11:04.779661] SUCCESS  GOAL         Goal completed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 10408.2ms) ✅
+[2025-11-17T22:11:16.960501] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T22:11:22.721999] SUCCESS  GOAL         Goal completed: click: Not now button (took 5761.5ms) ✅
+[2025-11-17T22:11:35.432944] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T22:11:41.550773] SUCCESS  GOAL         Goal completed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 6117.9ms) ✅
+[2025-11-17T22:11:55.751080] INFO     GOAL         Starting goal: click: Choose area link
+    Details: {
+  "goal_description": "click: Choose area link"
+}
+[2025-11-17T22:11:59.242421] SUCCESS  GOAL         Goal completed: click: Choose area link (took 3491.4ms) ✅
+[2025-11-17T22:12:12.703324] INFO     GOAL         Starting goal: click: Close button
+    Details: {
+  "goal_description": "click: Close button"
+}
+[2025-11-17T22:12:16.841671] SUCCESS  GOAL         Goal completed: click: Close button (took 4138.3ms) ✅
+[2025-11-17T22:12:26.126299] INFO     GOAL         Starting goal: type: reed.co.uk IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed.co.uk IT jobs London in search input field"
+}
+[2025-11-17T22:12:30.016933] SUCCESS  GOAL         Goal completed: type: reed.co.uk IT jobs London in search input field (took 3890.7ms) ✅
+[2025-11-17T22:12:38.138816] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:12:39.250281] SUCCESS  GOAL         Goal completed: press: Enter (took 1111.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763417609
+Start Time: 2025-11-17T22:13:29.002978
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T22:13:41.860837] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T22:13:47.245088] SUCCESS  GOAL         Goal completed: click: Accept all button (took 5384.3ms) ✅
+[2025-11-17T22:13:54.026097] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T22:14:03.525604] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 9499.5ms) ✅
+[2025-11-17T22:14:10.934903] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:14:12.077548] SUCCESS  GOAL         Goal completed: press: Enter (took 1142.7ms) ✅
+[2025-11-17T22:14:20.058298] INFO     GOAL         Starting goal: click: link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site'
+    Details: {
+  "goal_description": "click: link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site'"
+}
+[2025-11-17T22:14:32.316335] SUCCESS  GOAL         Goal completed: click: link titled 'Jobs and Recruitment on Reed.co.uk, the UK's #1 job site' (took 12258.1ms) ✅
+[2025-11-17T22:14:40.629023] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T22:14:47.752465] SUCCESS  GOAL         Goal completed: click: Not now button (took 7123.5ms) ✅
+[2025-11-17T22:14:56.441383] INFO     GOAL         Starting goal: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link
+    Details: {
+  "goal_description": "click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link"
+}
+[2025-11-17T22:15:01.732526] SUCCESS  GOAL         Goal completed: click: Jobs and Recruitment on Reed.co.uk, the UK's #1 job site link (took 5291.2ms) ✅
+[2025-11-17T22:15:10.205286] INFO     GOAL         Starting goal: type: IT in What text input with current value e.g. "teacher"
+    Details: {
+  "goal_description": "type: IT in What text input with current value e.g. \"teacher\""
+}
+[2025-11-17T22:15:44.557956] SUCCESS  GOAL         Goal completed: type: IT in What text input with current value e.g. "teacher" (took 34352.7ms) ✅
+[2025-11-17T22:15:59.349071] INFO     GOAL         Starting goal: click: Allow All button
+    Details: {
+  "goal_description": "click: Allow All button"
+}
+[2025-11-17T22:16:02.817958] SUCCESS  GOAL         Goal completed: click: Allow All button (took 3468.9ms) ✅
+[2025-11-17T22:16:11.163086] INFO     GOAL         Starting goal: type: london in town or postcode input field
+    Details: {
+  "goal_description": "type: london in town or postcode input field"
+}
+[2025-11-17T22:16:16.175517] SUCCESS  GOAL         Goal completed: type: london in town or postcode input field (took 5012.4ms) ✅
+[2025-11-17T22:16:30.448079] INFO     GOAL         Starting goal: click: Search jobs button
+    Details: {
+  "goal_description": "click: Search jobs button"
+}
+[2025-11-17T22:16:34.705472] SUCCESS  GOAL         Goal completed: click: Search jobs button (took 4257.4ms) ✅
+[2025-11-17T22:16:56.541750] INFO     GOAL         Starting goal: click: Search jobs button
+    Details: {
+  "goal_description": "click: Search jobs button"
+}
+[2025-11-17T22:17:01.760915] SUCCESS  GOAL         Goal completed: click: Search jobs button (took 5219.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763418003
+Start Time: 2025-11-17T22:20:03.953475
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T22:20:13.082039] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T22:20:19.644210] SUCCESS  GOAL         Goal completed: click: Accept all button (took 6562.2ms) ✅
+[2025-11-17T22:20:28.040680] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-17T22:20:34.198641] SUCCESS  GOAL         Goal completed: type: reed job website in search input field (took 6158.0ms) ✅
+[2025-11-17T22:20:40.436104] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:20:41.502072] SUCCESS  GOAL         Goal completed: press: Enter (took 1066.0ms) ✅
+[2025-11-17T22:20:51.124014] INFO     GOAL         Starting goal: click: Reeds Jobs - Latest Jobs In Stoke Gifford link
+    Details: {
+  "goal_description": "click: Reeds Jobs - Latest Jobs In Stoke Gifford link"
+}
+[2025-11-17T22:21:02.057879] SUCCESS  GOAL         Goal completed: click: Reeds Jobs - Latest Jobs In Stoke Gifford link (took 10933.9ms) ✅
+[2025-11-17T22:21:10.903065] INFO     GOAL         Starting goal: click: Not now button
+    Details: {
+  "goal_description": "click: Not now button"
+}
+[2025-11-17T22:21:14.545291] SUCCESS  GOAL         Goal completed: click: Not now button (took 3642.2ms) ✅
+[2025-11-17T22:21:21.243750] INFO     GOAL         Starting goal: click: link titled Reed.ai
+    Details: {
+  "goal_description": "click: link titled Reed.ai"
+}
+[2025-11-17T22:21:31.382812] SUCCESS  GOAL         Goal completed: click: link titled Reed.ai (took 10139.1ms) ✅
+[2025-11-17T22:21:38.803465] INFO     GOAL         Starting goal: click: Allow all cookies button
+    Details: {
+  "goal_description": "click: Allow all cookies button"
+}
+[2025-11-17T22:21:43.925117] SUCCESS  GOAL         Goal completed: click: Allow all cookies button (took 5121.7ms) ✅
+[2025-11-17T22:21:54.892992] INFO     GOAL         Starting goal: scroll: down
+    Details: {
+  "goal_description": "scroll: down"
+}
+[2025-11-17T22:21:56.039344] SUCCESS  GOAL         Goal completed: scroll: down (took 1146.4ms) ✅
+[2025-11-17T22:22:08.371762] INFO     GOAL         Starting goal: type: IT jobs in london in search input
+    Details: {
+  "goal_description": "type: IT jobs in london in search input"
+}
+[2025-11-17T22:22:20.590832] ERROR    GOAL         Goal failed: type: IT jobs in london in search input (took 12219.0ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T22:22:32.014206] INFO     GOAL         Starting goal: click: Candidate sign-up button
+    Details: {
+  "goal_description": "click: Candidate sign-up button"
+}
+[2025-11-17T22:22:35.474318] SUCCESS  GOAL         Goal completed: click: Candidate sign-up button (took 3460.1ms) ✅
+[2025-11-17T22:22:44.298788] INFO     GOAL         Starting goal: scroll: down
+    Details: {
+  "goal_description": "scroll: down"
+}
+[2025-11-17T22:22:45.515488] SUCCESS  GOAL         Goal completed: scroll: down (took 1216.7ms) ✅
+[2025-11-17T22:23:05.047336] INFO     GOAL         Starting goal: click: Candidate sign-up button
+    Details: {
+  "goal_description": "click: Candidate sign-up button"
+}
+[2025-11-17T22:23:08.457603] SUCCESS  GOAL         Goal completed: click: Candidate sign-up button (took 3410.3ms) ✅
+[2025-11-17T22:23:23.145722] INFO     GOAL         Starting goal: type: AI recruitment agent in search input field
+    Details: {
+  "goal_description": "type: AI recruitment agent in search input field"
+}
+[2025-11-17T22:23:27.091621] ERROR    GOAL         Goal failed: type: AI recruitment agent in search input field (took 3945.9ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-17T22:23:35.402815] INFO     GOAL         Starting goal: click: Candidate sign-up button
+    Details: {
+  "goal_description": "click: Candidate sign-up button"
+}
+[2025-11-17T22:23:40.214023] SUCCESS  GOAL         Goal completed: click: Candidate sign-up button (took 4811.2ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763418251
+Start Time: 2025-11-17T22:24:11.316003
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-17T22:24:25.360450] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-17T22:24:37.956747] SUCCESS  GOAL         Goal completed: click: Accept all button (took 12596.4ms) ✅
+[2025-11-17T22:24:53.150449] INFO     GOAL         Starting goal: type: site:reed.co.uk IT jobs London in Google search input field
+    Details: {
+  "goal_description": "type: site:reed.co.uk IT jobs London in Google search input field"
+}
+[2025-11-17T22:24:59.849593] SUCCESS  GOAL         Goal completed: type: site:reed.co.uk IT jobs London in Google search input field (took 6699.1ms) ✅
+[2025-11-17T22:25:10.499390] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-17T22:25:11.539191] SUCCESS  GOAL         Goal completed: press: Enter (took 1039.8ms) ✅
+[2025-11-17T22:25:21.735620] INFO     GOAL         Starting goal: click: 'IT & Telecoms Jobs in London' link (Reed)
+    Details: {
+  "goal_description": "click: 'IT & Telecoms Jobs in London' link (Reed)"
+}
+[2025-11-17T22:25:28.581530] SUCCESS  GOAL         Goal completed: click: 'IT & Telecoms Jobs in London' link (Reed) (took 6845.9ms) ✅

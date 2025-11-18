@@ -427,10 +427,14 @@ class PlanGenerator:
         semantic_hint: Optional[SemanticTarget] = None,
         screenshot: Optional[bytes] = None,
         max_samples: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> Optional[int]:
         """
         Lightweight helper that asks the LLM to pick a single overlay number.
         Returns the overlay index as an int, or None if selection fails.
+        
+        Args:
+            model: Optional model name to use for this selection. If None, uses default model.
         """
         selection = self._select_overlay_with_language(
             instruction,
@@ -438,6 +442,7 @@ class PlanGenerator:
             semantic_hint=semantic_hint,
             screenshot=screenshot,
             max_samples=max_samples,
+            model=model,
         )
         if selection is None:
             return None
@@ -732,6 +737,7 @@ class PlanGenerator:
         semantic_hint: Optional[SemanticTarget] = None,
         screenshot: Optional[bytes] = None,
         max_samples: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> Optional[int]:
         if not element_data:
             return None
@@ -807,6 +813,7 @@ class PlanGenerator:
                     "Reply with just the index as an integer (e.g., 5 or 0)."
                 ),
                 image=screenshot,
+                model=model,
             )
         except Exception as e:
             print(f"[PlanGen][NL] LLM selection error: {e}")

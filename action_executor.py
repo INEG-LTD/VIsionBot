@@ -1097,22 +1097,70 @@ class ActionExecutor:
             )
         
         try:
-            # Try to clear existing text first (select-all then delete)
-            try:
-                self.page.keyboard.press('Meta+a')  # macOS
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press('Control+a')  # Windows/Linux
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press('Delete')
-            except Exception:
-                pass
-            self.page.keyboard.type(step.text_to_type, delay=50)
-            success = True
-            error_msg = None
+            # Try to get element selector and use fill() which automatically clears the field
+            element_selector = None
+            if x is not None and y is not None:
+                try:
+                    element_selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+                    if element_selector:
+                        print(f"  📝 Using fill() method with selector: {element_selector}")
+                        # Use locator for more reliable filling
+                        locator = self.page.locator(element_selector).first
+                        locator.fill(step.text_to_type)
+                        success = True
+                        error_msg = None
+                    else:
+                        raise ValueError("Could not get element selector")
+                except Exception as e:
+                    print(f"  ⚠️ fill() method failed, falling back to keyboard: {e}")
+                    element_selector = None
+            
+            # Fallback to keyboard method if fill() didn't work
+            if not element_selector:
+                # Try to clear using JavaScript first (most reliable)
+                if x is not None and y is not None:
+                    try:
+                        # Get element at coordinates and clear it via JavaScript
+                        element_js = f"""
+                        (function() {{
+                            const element = document.elementFromPoint({x}, {y});
+                            if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
+                                element.focus();
+                                element.value = '';
+                                element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                return true;
+                            }}
+                            return false;
+                        }})();
+                        """
+                        cleared = self.page.evaluate(element_js)
+                        if cleared:
+                            print(f"  ✅ Cleared field using JavaScript")
+                            time.sleep(0.1)
+                        else:
+                            # If JS clear didn't work, try clicking and keyboard method
+                            self.page.mouse.click(x, y)
+                            time.sleep(0.2)
+                            # Select all and delete
+                            self.page.keyboard.press('Control+a')
+                            time.sleep(0.1)
+                            self.page.keyboard.press('Delete')
+                            time.sleep(0.1)
+                    except Exception as e:
+                        print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+                        # Fallback: click, select all, delete
+                        self.page.mouse.click(x, y)
+                        time.sleep(0.2)
+                        self.page.keyboard.press('Control+a')
+                        time.sleep(0.1)
+                        self.page.keyboard.press('Delete')
+                        time.sleep(0.1)
+                
+                # Type the new text
+                self.page.keyboard.type(step.text_to_type, delay=50)
+                success = True
+                error_msg = None
         except Exception as e:
             success = False
             error_msg = str(e)
