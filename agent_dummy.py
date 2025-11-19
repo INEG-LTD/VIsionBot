@@ -1,3 +1,4 @@
+from middlewares.error_handling_middleware import ErrorHandlingMiddleware
 from pathlib import Path
 from browser_provider import BrowserConfig
 from bot_config import BotConfig, ModelConfig, ExecutionConfig, RecordingConfig, ElementConfig, DebugConfig
@@ -21,7 +22,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-mini",
+        agent_model="gpt-5-nano",
         command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.NONE
     ),
@@ -38,7 +39,7 @@ config = BotConfig(
         save_gif=True
     ),
     logging=DebugConfig(
-        debug_mode=False  # Set to False to use callbacks only
+        debug_mode=True  # Set to False to use callbacks only
     ),
     browser=BrowserConfig(
         provider_type="persistent",
@@ -53,6 +54,7 @@ bot = BrowserVisionBot(config=config)
 
 # Optional: Register custom callback (works in both modes)
 bot.event_logger.register_callback(custom_event_callback)
+bot.use(ErrorHandlingMiddleware())
 bot.start()
 bot.page.goto("https://google.com")
 

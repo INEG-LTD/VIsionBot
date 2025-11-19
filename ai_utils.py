@@ -379,10 +379,15 @@ def _extract_usage(response: dict[str, Any], model: str) -> Tuple[float, dict[st
     }
 
 
-def _build_response_format(model_object_type: Optional[Type[BaseModel]]) -> dict[str, Any]:
+def _build_response_format(model_object_type: Optional[Type[BaseModel]], model: str = "") -> dict[str, Any]:
     """Construct a LiteLLM-compatible response schema when structured output is requested."""
     if model_object_type is None:
         return {"type": "json_object"}
+    
+    # Gemini models don't support strict json_schema mode well, use basic json_object
+    if "gemini" in model.lower() or "google" in model.lower():
+        return {"type": "json_object"}
+    
     try:
         schema = model_object_type.model_json_schema()
     except AttributeError:
@@ -461,6 +466,51 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
             return _manual_parse_completion_evaluation(text, model_object_type)
         if model_object_type.__name__ == "ExtractionResult":
             return _manual_parse_extraction_result(text, model_object_type)
+        
+        # Try to parse simple yes/no boolean responses like "is_complete (false)" or "needs_sub_agents false"
+        cleaned = text.strip()
+        
+        # First, try to match "field_name: value" patterns
+        simple_bool_match = re.match(r'^(\w+)\s*[\(:]?\s*(true|false|yes|no)\s*[\)]?$', cleaned, re.IGNORECASE)
+        if simple_bool_match:
+            field_name = simple_bool_match.group(1)
+            value_str = simple_bool_match.group(2).lower()
+            bool_value = value_str in ('true', 'yes')
+            try:
+                if hasattr(model_object_type, "model_validate"):
+                    return model_object_type.model_validate({field_name: bool_value})
+                return model_object_type(**{field_name: bool_value})
+            except ValidationError as exc:
+                print(f"⚠️ Simple boolean parse failed validation for {model_object_type.__name__}: {exc}")
+        
+        # Handle plain boolean text like "false" or "true" by inferring field name from schema
+        if cleaned.lower() in ('true', 'false', 'yes', 'no'):
+            bool_value = cleaned.lower() in ('true', 'yes')
+            try:
+                # Try to get the schema to find boolean field names
+                schema = model_object_type.model_json_schema() if hasattr(model_object_type, "model_json_schema") else model_object_type.schema()
+                properties = schema.get('properties', {})
+                # Find boolean fields
+                bool_fields = [name for name, prop in properties.items() if prop.get('type') == 'boolean']
+                if len(bool_fields) == 1:
+                    # If there's only one boolean field, use it
+                    field_name = bool_fields[0]
+                    if hasattr(model_object_type, "model_validate"):
+                        return model_object_type.model_validate({field_name: bool_value})
+                    return model_object_type(**{field_name: bool_value})
+            except Exception as exc:
+                print(f"⚠️ Plain boolean inference failed for {model_object_type.__name__}: {exc}")
+        
+        # Generic fallback: try to extract JSON from markdown-wrapped responses
+        json_obj = _extract_json_object(text)
+        if isinstance(json_obj, dict):
+            try:
+                if hasattr(model_object_type, "model_validate"):
+                    return model_object_type.model_validate(json_obj)
+                return model_object_type(**json_obj)
+            except ValidationError as exc:
+                print(f"⚠️ Generic JSON extraction failed validation for {model_object_type.__name__}: {exc}")
+                return None
     except Exception as exc:
         print(f"⚠️ Manual parse helper error for {model_object_type.__name__}: {exc}")
     return None
@@ -1060,11 +1110,24 @@ def generate_model_with_cost(
         model = get_default_model()
     _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
-    response_format = _build_response_format(model_object_type)
+    response_format = _build_response_format(model_object_type, model)
+    
+    # Add explicit JSON instructions to system prompt for all models when using structured output
+    # This is a workaround for LiteLLM bug #16813 where models don't return proper JSON
+    enhanced_system_prompt = system_prompt
+    if model_object_type:
+        json_instruction = "\n\nIMPORTANT: You MUST respond with valid JSON only. Do not include any markdown formatting, explanations, or text outside the JSON object."
+        # Include schema for better guidance
+        try:
+            schema = model_object_type.model_json_schema()
+        except AttributeError:
+            schema = model_object_type.schema()
+        json_instruction += f"\n\nExpected JSON schema:\n{json.dumps(schema, indent=2)}"
+        enhanced_system_prompt = (system_prompt + json_instruction) if system_prompt else json_instruction.strip()
 
     text, cost_usd, usage, response = _perform_completion(
         prompt=prompt,
-        system_prompt=system_prompt,
+        system_prompt=enhanced_system_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -1082,8 +1145,29 @@ def generate_model_with_cost(
             choices = [{}]
         message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
         parsed_obj = message.get("parsed") if isinstance(message, dict) else None
+        
+        # Check if parsed_obj is valid - it should be a dict or a Pydantic model instance
         if parsed_obj is not None:
-            parsed_result = parsed_obj
+            # If it's already a Pydantic model instance, use it
+            if isinstance(parsed_obj, model_object_type):
+                parsed_result = parsed_obj
+            # If it's a dict, validate it
+            elif isinstance(parsed_obj, dict):
+                try:
+                    if hasattr(model_object_type, "model_validate"):
+                        parsed_result = model_object_type.model_validate(parsed_obj)
+                    else:
+                        parsed_result = model_object_type(**parsed_obj)
+                except ValidationError as exc:
+                    print(f"⚠️ Pre-parsed object validation failed for {model_object_type.__name__}: {exc}")
+                    # Fall back to manual parsing
+                    manual = _manual_parse_structured_output(text, model_object_type)
+                    parsed_result = manual if manual is not None else text
+            # If it's a primitive type (bool, str, int, etc.), try to parse from text instead
+            else:
+                print(f"⚠️ LLM returned primitive type {type(parsed_obj).__name__} instead of object for {model_object_type.__name__}")
+                manual = _manual_parse_structured_output(text, model_object_type)
+                parsed_result = manual if manual is not None else text
         else:
             try:
                 parsed_result = model_object_type.model_validate_json(text)  # type: ignore[attr-defined]

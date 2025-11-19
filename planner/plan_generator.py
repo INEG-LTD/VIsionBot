@@ -767,20 +767,53 @@ class PlanGenerator:
             tag = (elem.get("tagName") or "").lower()
             text = (elem.get("textContent") or "").strip()
             aria = (elem.get("ariaLabel") or "").strip()
-            text_snip = text.strip()[:60]
-            aria_snip = aria.strip()[:40]
-            if not text_snip and not aria_snip:
+            
+            # Get additional helpful attributes
+            placeholder = (elem.get("placeholder") or "").strip()
+            name = (elem.get("name") or "").strip()
+            elem_id = (elem.get("id") or "").strip()
+            elem_type = (elem.get("type") or "").strip()
+            value = (elem.get("value") or "").strip()
+            href = (elem.get("href") or "").strip()
+            
+            # Increase snippet lengths for better context
+            text_snip = text.strip()[:100]  # Increased from 60
+            aria_snip = aria.strip()[:60]   # Increased from 40
+            
+            # Skip elements with no useful text/aria/placeholder
+            if not text_snip and not aria_snip and not placeholder:
                 continue
+                
             role_str = role or "unknown"
             tag_str = tag or "unknown"
             if role_str == tag_str:
                 role_str = ""
-            aria_str = f' aria="{aria_snip}"' if aria_snip else ""
-            text_str = f' txt="{text_snip}"' if text_snip else ""
-            role_part = f" role={role_str}" if role_str else ""
-            log_line = f"  • #{idx} tag={tag_str}{role_part}{text_str}{aria_str}"
+            
+            # Build comprehensive description
+            parts = []
+            parts.append(f"#{idx} tag={tag_str}")
+            if role_str:
+                parts.append(f"role={role_str}")
+            if elem_type:
+                parts.append(f"type={elem_type}")
+            if aria_snip:
+                parts.append(f'aria="{aria_snip}"')
+            if text_snip:
+                parts.append(f'txt="{text_snip}"')
+            if placeholder:
+                parts.append(f'placeholder="{placeholder[:40]}"')
+            if name:
+                parts.append(f'name="{name[:30]}"')
+            if elem_id:
+                parts.append(f'id="{elem_id[:30]}"')
+            if value and len(value) < 40:
+                parts.append(f'value="{value}"')
+            if href and len(href) < 60:
+                parts.append(f'href="{href}"')
+            
+            log_line = f"  • {' '.join(parts)}"
             candidate_lines.append(log_line)
-            samples.append(f"- #{idx} tag={tag_str}{role_part}{text_str}{aria_str}")
+            samples.append(f"- {' '.join(parts)}")
         
         if candidate_lines:
             try:
@@ -808,9 +841,17 @@ class PlanGenerator:
         prompt += (
             "Guidance:\n"
             "- Choose concise clickable controls (buttons/links) that directly execute the request.\n"
-            "- Prefer overlays whose visible text or aria labels contain several instruction or must-have terms.\n"
+            "- Prefer overlays whose visible text, aria labels, or placeholders contain several instruction or must-have terms.\n"
+            "- For search/input tasks, look for elements with type='text', type='search', role='combobox', or 'search' in aria/placeholder.\n"
+            "- For typing tasks, prioritize input/textarea elements with matching placeholder, name, or aria labels.\n"
             "- Reject overlays that describe entire job cards, long descriptions, or containers that lack a primary action.\n"
             "- If you cannot find any overlay that reasonably matches the instruction, respond with 0.\n"
+            "\n"
+            "Examples:\n"
+            "- Instruction: 'type into search box' → Choose: textarea role=combobox aria='Search' or input type='search'\n"
+            "- Instruction: 'enter email' → Choose: input type='email' or input placeholder='Email'\n"
+            "- Instruction: 'click submit button' → Choose: button txt='Submit' or input type='submit'\n"
+            "\n"
             "Respond with ONLY the overlay number as an integer (e.g., 5), or 0 if there is no match. No explanation, no JSON.\n"
             "Overlays:\n" + "\n".join(samples)
         )

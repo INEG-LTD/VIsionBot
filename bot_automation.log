@@ -14181,3 +14181,319 @@ Log File: bot_automation.log
     Details: {
   "goal_description": "type: site:reed"
 }
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763553080
+Start Time: 2025-11-19T11:51:20.666078
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T11:51:31.990581] INFO     GOAL         Starting goal: type: reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in search input field"
+}
+[2025-11-19T11:51:33.186520] ERROR    GOAL         Goal failed: type: reed IT jobs London in search input field (took 1196.0ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763554238
+Start Time: 2025-11-19T12:10:38.121498
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:10:50.308696] INFO     GOAL         Starting goal: type: reed IT jobs London in Google search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in Google search input field"
+}
+[2025-11-19T12:10:57.471520] SUCCESS  GOAL         Goal completed: type: reed IT jobs London in Google search input field (took 7162.9ms) ✅
+[2025-11-19T12:11:03.567610] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-19T12:11:04.475120] SUCCESS  GOAL         Goal completed: press: Enter (took 907.5ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763554544
+Start Time: 2025-11-19T12:15:44.612280
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:15:55.245633] INFO     GOAL         Starting goal: type: IT jobs London site:reed
+    Details: {
+  "goal_description": "type: IT jobs London site:reed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555436
+Start Time: 2025-11-19T12:30:36.469565
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:30:43.463984] INFO     GOAL         Starting goal: type: reed it jobs london in Google search input field
+    Details: {
+  "goal_description": "type: reed it jobs london in Google search input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555480
+Start Time: 2025-11-19T12:31:20.364141
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555534
+Start Time: 2025-11-19T12:32:14.399453
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:32:24.444208] INFO     GOAL         Starting goal: type: reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in search input field"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555552
+Start Time: 2025-11-19T12:32:32.990391
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555573
+Start Time: 2025-11-19T12:32:53.820927
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555589
+Start Time: 2025-11-19T12:33:09.326403
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555963
+Start Time: 2025-11-19T12:39:23.770977
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763555985
+Start Time: 2025-11-19T12:39:45.472576
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:39:54.168376] INFO     GOAL         Starting goal: type: reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in search input field"
+}
+[2025-11-19T12:40:04.573234] ERROR    GOAL         Goal failed: type: reed IT jobs London in search input field (took 10404.9ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556079
+Start Time: 2025-11-19T12:41:19.437567
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:41:29.748328] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-19T12:41:37.638473] ERROR    GOAL         Goal failed: type: reed job website in search input field (took 7890.2ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-19T12:41:55.948957] INFO     GOAL         Starting goal: type: reed jobs in search input field
+    Details: {
+  "goal_description": "type: reed jobs in search input field"
+}
+[2025-11-19T12:42:00.258359] SUCCESS  GOAL         Goal completed: type: reed jobs in search input field (took 4309.5ms) ✅
+[2025-11-19T12:42:05.387971] INFO     GOAL         Starting goal: click: search suggestion 'reed jobs london' link
+    Details: {
+  "goal_description": "click: search suggestion 'reed jobs london' link"
+}
+[2025-11-19T12:42:07.117746] SUCCESS  GOAL         Goal completed: click: search suggestion 'reed jobs london' link (took 1729.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556132
+Start Time: 2025-11-19T12:42:12.109336
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:42:18.366976] INFO     GOAL         Starting goal: type: reed job website in search input",
+    Details: {
+  "goal_description": "type: reed job website in search input\","
+}
+[2025-11-19T12:42:19.734647] ERROR    GOAL         Goal failed: type: reed job website in search input", (took 1367.7ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556181
+Start Time: 2025-11-19T12:43:01.038538
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:43:07.531088] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+[2025-11-19T12:43:09.049832] ERROR    GOAL         Goal failed: type: reed job website in search input (took 1518.8ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-19T12:43:25.651246] INFO     GOAL         Starting goal: type: reed job website in search input field
+    Details: {
+  "goal_description": "type: reed job website in search input field"
+}
+[2025-11-19T12:43:27.142553] ERROR    GOAL         Goal failed: type: reed job website in search input field (took 1491.3ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556216
+Start Time: 2025-11-19T12:43:36.313394
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:43:42.722051] INFO     GOAL         Starting goal: type: reed job website in search input
+    Details: {
+  "goal_description": "type: reed job website in search input"
+}
+[2025-11-19T12:43:44.008743] ERROR    GOAL         Goal failed: type: reed job website in search input (took 1286.7ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-19T12:43:55.968998] INFO     GOAL         Starting goal: scroll: down
+    Details: {
+  "goal_description": "scroll: down"
+}
+[2025-11-19T12:43:56.885079] SUCCESS  GOAL         Goal completed: scroll: down (took 916.1ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556261
+Start Time: 2025-11-19T12:44:21.666524
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556479
+Start Time: 2025-11-19T12:47:59.216719
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:48:06.225001] INFO     GOAL         Starting goal: type: reed job website in Google search input field
+    Details: {
+  "goal_description": "type: reed job website in Google search input field"
+}
+[2025-11-19T12:48:11.941531] SUCCESS  GOAL         Goal completed: type: reed job website in Google search input field (took 5716.6ms) ✅
+[2025-11-19T12:48:16.599053] INFO     GOAL         Starting goal: click: first search suggestion 'reed it jobs' link
+    Details: {
+  "goal_description": "click: first search suggestion 'reed it jobs' link"
+}
+[2025-11-19T12:48:23.654600] SUCCESS  GOAL         Goal completed: click: first search suggestion 'reed it jobs' link (took 7055.5ms) ✅
+[2025-11-19T12:48:31.237949] INFO     GOAL         Starting goal: click: first link titled 'IT & Telecoms Jobs | Reed.co.uk'
+    Details: {
+  "goal_description": "click: first link titled 'IT & Telecoms Jobs | Reed.co.uk'"
+}
+[2025-11-19T12:48:43.342513] SUCCESS  GOAL         Goal completed: click: first link titled 'IT & Telecoms Jobs | Reed.co.uk' (took 12104.6ms) ✅
+[2025-11-19T12:48:48.179576] INFO     GOAL         Starting goal: click: first job link titled 'IT & Telecoms Jobs'
+    Details: {
+  "goal_description": "click: first job link titled 'IT & Telecoms Jobs'"
+}
+[2025-11-19T12:48:57.743975] SUCCESS  GOAL         Goal completed: click: first job link titled 'IT & Telecoms Jobs' (took 9564.4ms) ✅
+[2025-11-19T12:49:01.252208] INFO     GOAL         Starting goal: click: Use precise location button
+    Details: {
+  "goal_description": "click: Use precise location button"
+}
+[2025-11-19T12:49:07.479837] SUCCESS  GOAL         Goal completed: click: Use precise location button (took 6227.6ms) ✅
+[2025-11-19T12:49:10.873994] INFO     GOAL         Starting goal: click: Use precise location button
+    Details: {
+  "goal_description": "click: Use precise location button"
+}
+[2025-11-19T12:49:21.047669] SUCCESS  GOAL         Goal completed: click: Use precise location button (took 10173.7ms) ✅
+[2025-11-19T12:49:24.805400] INFO     GOAL         Starting goal: click: Use precise location button
+    Details: {
+  "goal_description": "click: Use precise location button"
+}
+[2025-11-19T12:49:36.456001] SUCCESS  GOAL         Goal completed: click: Use precise location button (took 11650.6ms) ✅
+[2025-11-19T12:49:40.130243] INFO     GOAL         Starting goal: click: first job link titled 'IT & Telecoms Jobs'
+    Details: {
+  "goal_description": "click: first job link titled 'IT & Telecoms Jobs'"
+}
+[2025-11-19T12:49:48.906273] SUCCESS  GOAL         Goal completed: click: first job link titled 'IT & Telecoms Jobs' (took 8776.1ms) ✅
+[2025-11-19T12:49:52.956979] INFO     GOAL         Starting goal: click: first job link titled 'IT Jobs at Reed'
+    Details: {
+  "goal_description": "click: first job link titled 'IT Jobs at Reed'"
+}
+[2025-11-19T12:49:57.132858] ERROR    GOAL         Goal failed: click: first job link titled 'IT Jobs at Reed' (took 4175.9ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763556837
+Start Time: 2025-11-19T12:53:57.360911
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T12:54:08.448914] INFO     GOAL         Starting goal: type: reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in search input field"
+}
+[2025-11-19T12:54:10.978354] ERROR    GOAL         Goal failed: type: reed IT jobs London in search input field (took 2529.4ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763558355
+Start Time: 2025-11-19T13:19:15.810726
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T13:19:27.854662] INFO     GOAL         Starting goal: type: Reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: Reed IT jobs London in search input field"
+}
+[2025-11-19T13:19:36.004705] SUCCESS  GOAL         Goal completed: type: Reed IT jobs London in search input field (took 8150.1ms) ✅
+[2025-11-19T13:19:42.666806] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-19T13:19:43.729952] SUCCESS  GOAL         Goal completed: press: Enter (took 1063.2ms) ✅
+[2025-11-19T13:19:59.108033] INFO     GOAL         Starting goal: click: 'Information Technology Jobs in London' link (Reed)
+    Details: {
+  "goal_description": "click: 'Information Technology Jobs in London' link (Reed)"
+}
+[2025-11-19T13:20:08.150278] SUCCESS  GOAL         Goal completed: click: 'Information Technology Jobs in London' link (Reed) (took 9042.2ms) ✅
