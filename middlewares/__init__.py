@@ -6,6 +6,7 @@ from .metrics import MetricsMiddleware
 from .human_in_loop import HumanInTheLoopMiddleware
 from .retry import RetryMiddleware
 from .caching import CachingMiddleware
+from .error_handling_middleware import ErrorHandlingMiddleware
 
 __all__ = [
     'LoggingMiddleware',
@@ -14,4 +15,5 @@ __all__ = [
     'HumanInTheLoopMiddleware',
     'RetryMiddleware',
     'CachingMiddleware',
+    'ErrorHandlingMiddleware',
 ]

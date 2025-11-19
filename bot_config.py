@@ -238,6 +238,41 @@ class DebugConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class ErrorHandlingConfig(BaseModel):
+    """Error handling and recovery configuration."""
+    
+    screenshot_on_error: bool = Field(
+        default=True,
+        description="Take screenshot when errors occur"
+    )
+    screenshot_dir: str = Field(
+        default="error_screenshots",
+        description="Directory for error screenshots"
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        description="Maximum retry attempts for recoverable errors"
+    )
+    retry_delay: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="Delay between retries in seconds"
+    )
+    retry_backoff: float = Field(
+        default=2.0,
+        ge=1.0,
+        description="Backoff multiplier for exponential retry"
+    )
+    abort_on_critical: bool = Field(
+        default=True,
+        description="Abort automation on critical errors"
+    )
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class BotConfig(BaseModel):
     """
     Main configuration object for BrowserVisionBot.
@@ -285,6 +320,10 @@ class BotConfig(BaseModel):
     browser: BrowserProviderConfig = Field(
         default_factory=BrowserProviderConfig,
         description="Browser provider configuration"
+    )
+    error_handling: ErrorHandlingConfig = Field(
+        default_factory=ErrorHandlingConfig,
+        description="Error handling and recovery configuration"
     )
     
     class Config:
