@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pycache_tmp/
 
 # Virtual environment
 .venv/
@@ -11,4 +12,32 @@ __pycache__/
 
 # Pytest
 .pytest_cache/
+
+# Logs
+*.log
 bot_automation.log
+logs/
+
+# Screenshots and recordings
+*.png
+*.jpg
+*.jpeg
+*.gif
+focus_screenshots/
+gif_recordings/
+error_screenshots/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+browser_vision_bot.egg-info/
+dist/
+build/
+*.egg-info/
