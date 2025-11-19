@@ -74,6 +74,8 @@ from agent import AgentController
 from agent.agent_result import AgentResult
 from pydantic import BaseModel, Field
 from bot_config import BotConfig
+from browser_provider import BrowserProvider, create_browser_provider
+from middleware import MiddlewareManager, ActionContext
 
 
 class ExecutionTimer:
@@ -245,7 +247,8 @@ class BrowserVisionBot:
     def __init__(
         self,
         config: Optional[BotConfig] = None,
-        page: Page = None,
+        browser_provider: Optional[BrowserProvider] = None,
+        page: Page = None,  # Deprecated: use browser_provider instead
         event_logger: Optional[EventLogger] = None,
     ):
         """
@@ -253,14 +256,24 @@ class BrowserVisionBot:
         
         Args:
             config: BotConfig object with all settings. If not provided, uses defaults.
-            page: Optional Playwright Page object. If not provided, will create new browser.
+            browser_provider: BrowserProvider implementation. If not provided, creates from config.
+            page: (Deprecated) Optional Playwright Page object. Use browser_provider instead.
             event_logger: Optional custom event logger. If not provided, creates default logger.
         """
         # Create default config if not provided
         if config is None:
             config = BotConfig()
         
-        self.page = page
+        # Handle browser provider
+        if browser_provider is None:
+            # Create provider from config
+            browser_provider = create_browser_provider(config.browser)
+        
+        self.browser_provider = browser_provider
+        self.page = page  # Will be set in start() if None
+        
+        # Initialize middleware manager
+        self.middleware = MiddlewareManager()
 
         # Extract model configuration
         self.command_model_name = config.model.command_model
@@ -590,22 +603,34 @@ class BrowserVisionBot:
         self._pending_defer_input = None
         return payload
     
+    def use(self, middleware) -> 'BrowserVisionBot':
+        """
+        Add middleware to the bot.
+        
+        Args:
+            middleware: Middleware instance to add
+            
+        Returns:
+            Self for method chaining
+            
+        Example:
+            >>> bot.use(LoggingMiddleware()) \\
+            ...    .use(CostTrackingMiddleware(max_cost=1.00))
+        """
+        self.middleware.use(middleware)
+        return self
+    
     def start(self) -> None:
         """Start the bot"""
-        # If page was already provided, use it instead of initializing new browser
+        # Get page from browser provider if not already provided
         if self.page is None:
-            playwright, browser, page = self.init_browser()
-            self.playwright = playwright
-            self.browser = browser
-            self.page = page
-        else:
-            # Page was provided, get browser and context from it
-            try:
-                self.browser = self.page.context.browser
-                # Note: playwright instance not available when page is provided externally
-                # This is fine for most use cases
-            except Exception:
-                pass
+            self.page = self.browser_provider.get_page()
+        
+        # Try to get browser reference for compatibility
+        try:
+            self.browser = self.page.context.browser
+        except Exception:
+            self.browser = None
         
         # State tracking
         self.current_attempt = 0
@@ -751,14 +776,14 @@ class BrowserVisionBot:
                 except Exception:
                     pass
         
-        # Close browser and cleanup
+        # Close browser provider and cleanup
         try:
-            if hasattr(self, 'browser') and self.browser:
+            if hasattr(self, 'browser_provider') and self.browser_provider:
                 try:
                     self.event_logger.system_info("Closing browser...")
                 except Exception:
                     pass
-                self.browser.close()
+                self.browser_provider.close()
         except Exception as e:
             try:
                 self.event_logger.system_error("Error closing browser", error=e)
@@ -1868,6 +1893,26 @@ class BrowserVisionBot:
         """
         # Set agent mode flag
         self._agent_mode = True
+        
+        # Create middleware context
+        context = ActionContext(
+            action_type='agentic_mode',
+            action_data={
+                'user_prompt': user_prompt,
+                'max_iterations': max_iterations,
+                'strict_mode': strict_mode
+            },
+            bot=self,
+            metadata={}
+        )
+        
+        # Execute before hooks
+        context = self.middleware.execute_before(context)
+        
+        # Check if middleware wants to skip execution
+        if not context.should_continue:
+            return context.cached_result
+        
         try:
             if check_ineffective_actions is not None:
                 track_ineffective_actions = check_ineffective_actions
@@ -1896,8 +1941,18 @@ class BrowserVisionBot:
             
             goal_result = controller.run_agentic_mode(user_prompt)
             
-            # Create and return AgentResult with extracted data
-            return AgentResult(goal_result, controller.extracted_data)
+            # Create result
+            result = AgentResult(goal_result, controller.extracted_data)
+            
+            # Execute after hooks
+            result = self.middleware.execute_after(context, result)
+            
+            return result
+            
+        except Exception as e:
+            # Execute error hooks
+            self.middleware.execute_on_error(context, e)
+            raise
         finally:
             # Reset agent mode flag when done
             self._agent_mode = False

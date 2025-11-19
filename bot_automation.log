@@ -13917,3 +13917,158 @@ Log File: bot_automation.log
   "goal_description": "navigate: https://www.reed.co.uk/jobs/it-jobs-in-london"
 }
 [2025-11-18T23:15:32.853392] SUCCESS  GOAL         Goal completed: navigate: https://www.reed.co.uk/jobs/it-jobs-in-london (took 1391.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763508761
+Start Time: 2025-11-18T23:32:41.147067
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763508769
+Start Time: 2025-11-18T23:32:49.176671
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509312
+Start Time: 2025-11-18T23:41:52.428759
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-18T23:42:17.289302] INFO     GOAL         Starting goal: click: Prijať všetko button
+    Details: {
+  "goal_description": "click: Prija\u0165 v\u0161etko button"
+}
+[2025-11-18T23:42:19.704376] SUCCESS  GOAL         Goal completed: click: Prijať všetko button (took 2415.1ms) ✅
+[2025-11-18T23:42:31.124318] INFO     GOAL         Starting goal: type: reed it jobs London in Google search input field
+    Details: {
+  "goal_description": "type: reed it jobs London in Google search input field"
+}
+[2025-11-18T23:42:36.200655] SUCCESS  GOAL         Goal completed: type: reed it jobs London in Google search input field (took 5076.4ms) ✅
+[2025-11-18T23:42:45.649834] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-18T23:42:47.266568] SUCCESS  GOAL         Goal completed: press: Enter (took 1616.7ms) ✅
+[2025-11-18T23:42:57.456364] INFO     GOAL         Starting goal: defer: Please complete the reCAPTCHA on the page (check the 'Nie som robot' box) to continue.
+    Details: {
+  "goal_description": "defer: Please complete the reCAPTCHA on the page (check the 'Nie som robot' box) to continue."
+}
+[2025-11-18T23:42:57.509161] INFO     SYSTEM       Defer pause started
+    Details: {
+  "prompt": "Please complete the reCAPTCHA on the page (check the 'Nie som robot' box) to continue.",
+  "page_title": "https://www.google.com/search?q=reed+it+jobs+London&sca_esv=d8140a1b87a5a1ad&source=hp&ei=QgQdadjWFeLX7M8PweHMqQY&iflsig=AOw8s4IAAAAAaR0SUvJAwuRz94r9KpFbsWLoqbqQFUKg&ved=0ahUKEwjY__WR8PyQAxXiK_sDHcEwM2UQ4dUDCA4&uact=5&oq=reed+it+jobs+London&gs_lp=Egdnd3Mtd2l6IhNyZWVkIGl0IGpvYnMgTG9uZG9uMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB5Is2NQ2gRY0xFwAXgAkAEAmAFHoAGvCaoBAjE5uAEDyAEA-AEBmAIToALrCagCAMICCxAuGIAEGNEDGMcBwgIFEAAYgATCAgUQLhiABMICCxAuGIAEGMcBGK8BwgIHEAAYgAQYE8ICCBAAGBMYFhgewgIKEAAYExgWGAoYHsICBRAAGO8FwgIIEAAYgAQYogSYAwKSBwIxOaAH8IoBsgcCMTm4B-sJwgcGMC4xOC4xyAcn&sclient=gws-wiz&sei=dQQdaeOcNYWdkdUP1dCUoQ4",
+  "page_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dreed%2Bit%2Bjobs%2BLondon%26sca_esv%3Dd8140a1b87a5a1ad%26source%3Dhp%26ei%3DQgQdadjWFeLX7M8PweHMqQY%26iflsig%3DAOw8s4IAAAAAaR0SUvJAwuRz94r9KpFbsWLoqbqQFUKg%26ved%3D0ahUKEwjY__WR8PyQAxXiK_sDHcEwM2UQ4dUDCA4%26uact%3D5%26oq%3Dreed%2Bit%2Bjobs%2BLondon%26gs_lp%3DEgdnd3Mtd2l6IhNyZWVkIGl0IGpvYnMgTG9uZG9uMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB4yBhAAGBYYHjIGEAAYFhgeMgYQABgWGB5Is2NQ2gRY0xFwAXgAkAEAmAFHoAGvCaoBAjE5uAEDyAEA-AEBmAIToALrCagCAMICCxAuGIAEGNEDGMcBwgIFEAAYgATCAgUQLhiABMICCxAuGIAEGMcBGK8BwgIHEAAYgAQYE8ICCBAAGBMYFhgewgIKEAAYExgWGAoYHsICBRAAGO8FwgIIEAAYgAQYogSYAwKSBwIxOaAH8IoBsgcCMTm4B-sJwgcGMC4xOC4xyAcn%26sclient%3Dgws-wiz%26sei%3DdQQdaeOcNYWdkdUP1dCUoQ4&q=EgQzvyKDGPWI9MgGIjCSsr1GFG-bJrxzUeci67P_jVYj0Zzd5eC_ISVAOgB23gG3GTl82C8gmpACzhvyqBAyAVJaAUM"
+}
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509407
+Start Time: 2025-11-18T23:43:27.548972
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509419
+Start Time: 2025-11-18T23:43:39.021941
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509435
+Start Time: 2025-11-18T23:43:55.180982
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509448
+Start Time: 2025-11-18T23:44:08.893718
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509462
+Start Time: 2025-11-18T23:44:22.038419
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-18T23:44:39.632043] INFO     GOAL         Starting goal: click: 'Alle akzeptieren' button
+    Details: {
+  "goal_description": "click: 'Alle akzeptieren' button"
+}
+[2025-11-18T23:44:44.395144] SUCCESS  GOAL         Goal completed: click: 'Alle akzeptieren' button (took 4763.2ms) ✅
+[2025-11-18T23:44:56.098363] INFO     GOAL         Starting goal: type: site:reed.co.uk IT jobs London in search input field
+    Details: {
+  "goal_description": "type: site:reed.co.uk IT jobs London in search input field"
+}
+[2025-11-18T23:45:02.492686] ERROR    GOAL         Goal failed: type: site:reed.co.uk IT jobs London in search input field (took 6394.3ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-18T23:45:13.005920] INFO     GOAL         Starting goal: type: reed IT jobs London in search input field
+    Details: {
+  "goal_description": "type: reed IT jobs London in search input field"
+}
+[2025-11-18T23:45:17.149707] ERROR    GOAL         Goal failed: type: reed IT jobs London in search input field (took 4143.8ms) ❌
+    Details: {
+  "error": "Fast mode execution failed"
+}
+[2025-11-18T23:45:28.063488] INFO     GOAL         Starting goal: navigate: https://www.reed.co.uk/jobs/it-jobs-in-london
+    Details: {
+  "goal_description": "navigate: https://www.reed.co.uk/jobs/it-jobs-in-london"
+}
+[2025-11-18T23:45:29.342019] SUCCESS  GOAL         Goal completed: navigate: https://www.reed.co.uk/jobs/it-jobs-in-london (took 1278.6ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509928
+Start Time: 2025-11-18T23:52:08.170800
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763509950
+Start Time: 2025-11-18T23:52:30.572916
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763511323
+Start Time: 2025-11-19T00:15:23.172136
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763511331
+Start Time: 2025-11-19T00:15:31.685154
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763512691
+Start Time: 2025-11-19T00:38:11.127891
+Log File: bot_automation.log
+================================================================================
+

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Optional
 from pydantic import BaseModel, Field
 from ai_utils import ReasoningLevel
+from browser_provider import BrowserConfig as BrowserProviderConfig
 
 
 class ModelConfig(BaseModel):
@@ -280,6 +281,10 @@ class BotConfig(BaseModel):
     logging: DebugConfig = Field(
         default_factory=DebugConfig,
         description="Debug and logging configuration"
+    )
+    browser: BrowserProviderConfig = Field(
+        default_factory=BrowserProviderConfig,
+        description="Browser provider configuration"
     )
     
     class Config:
