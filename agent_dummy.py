@@ -1,3 +1,4 @@
+from pathlib import Path
 from browser_provider import BrowserConfig
 from bot_config import BotConfig, ModelConfig, ExecutionConfig, RecordingConfig, ElementConfig, DebugConfig
 from ai_utils import ReasoningLevel
@@ -12,6 +13,10 @@ def custom_event_callback(event):
         print(f"[{event.level}] {event.message}")
     elif event.event_type == EventType.AGENT_ITERATION:
         print(f"🔄 {event.message}")
+
+# Ensure the user data directory exists
+user_data_path = Path.home() / "Desktop" / "bot_user_data_dir"
+user_data_path.mkdir(parents=True, exist_ok=True)
 
 # Create configuration using the new BotConfig API
 config = BotConfig(
@@ -38,7 +43,8 @@ config = BotConfig(
     browser=BrowserConfig(
         provider_type="persistent",
         headless=False,
-        user_data_dir="/Users/chris_ineg/Library/Application Support/Google/Chrome/Default"
+        apply_stealth=False,
+        user_data_dir=str(user_data_path)
     )
 )
 

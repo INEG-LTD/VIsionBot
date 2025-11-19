@@ -14080,3 +14080,104 @@ Start Time: 2025-11-19T00:49:19.848060
 Log File: bot_automation.log
 ================================================================================
 
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763551312
+Start Time: 2025-11-19T11:21:52.166145
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T11:22:02.724933] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-19T11:22:04.376521] SUCCESS  GOAL         Goal completed: click: Accept all button (took 1651.7ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763551432
+Start Time: 2025-11-19T11:23:52.748307
+Log File: bot_automation.log
+================================================================================
+
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763552531
+Start Time: 2025-11-19T11:42:11.879632
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T11:42:22.711427] INFO     GOAL         Starting goal: type: IT jobs London site:reed
+    Details: {
+  "goal_description": "type: IT jobs London site:reed"
+}
+[2025-11-19T11:42:33.690011] INFO     GOAL         Starting goal: type: IT jobs London site:reed
+    Details: {
+  "goal_description": "type: IT jobs London site:reed"
+}
+[2025-11-19T11:42:47.231906] INFO     GOAL         Starting goal: type: Reed IT jobs London in Google search input field
+    Details: {
+  "goal_description": "type: Reed IT jobs London in Google search input field"
+}
+[2025-11-19T11:42:53.515393] SUCCESS  GOAL         Goal completed: type: Reed IT jobs London in Google search input field (took 6283.4ms) ✅
+[2025-11-19T11:43:00.878502] INFO     GOAL         Starting goal: press: Enter
+    Details: {
+  "goal_description": "press: Enter"
+}
+[2025-11-19T11:43:01.873455] SUCCESS  GOAL         Goal completed: press: Enter (took 995.0ms) ✅
+[2025-11-19T11:43:09.006340] INFO     GOAL         Starting goal: click: Information Technology Jobs in London link
+    Details: {
+  "goal_description": "click: Information Technology Jobs in London link"
+}
+[2025-11-19T11:43:12.714430] SUCCESS  GOAL         Goal completed: click: Information Technology Jobs in London link (took 3708.1ms) ✅
+[2025-11-19T11:43:21.676342] INFO     GOAL         Starting goal: click: link titled "Experienced School IT Technician 1st Line Support"
+    Details: {
+  "goal_description": "click: link titled \"Experienced School IT Technician 1st Line Support\""
+}
+[2025-11-19T11:43:24.313628] SUCCESS  GOAL         Goal completed: click: link titled "Experienced School IT Technician 1st Line Support" (took 2637.3ms) ✅
+[2025-11-19T11:43:31.536682] INFO     GOAL         Starting goal: click: Apply on reed link
+    Details: {
+  "goal_description": "click: Apply on reed link"
+}
+[2025-11-19T11:43:33.715058] SUCCESS  GOAL         Goal completed: click: Apply on reed link (took 2178.4ms) ✅
+[2025-11-19T11:43:49.893369] INFO     GOAL         Starting goal: click: Accept All button
+    Details: {
+  "goal_description": "click: Accept All button"
+}
+[2025-11-19T11:43:52.077203] SUCCESS  GOAL         Goal completed: click: Accept All button (took 2183.8ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763552694
+Start Time: 2025-11-19T11:44:54.143060
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T11:45:02.453775] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-19T11:45:03.989441] SUCCESS  GOAL         Goal completed: click: Accept all button (took 1535.9ms) ✅
+
+================================================================================
+BOT AUTOMATION SESSION STARTED
+Session ID: session_1763552930
+Start Time: 2025-11-19T11:48:50.610101
+Log File: bot_automation.log
+================================================================================
+
+[2025-11-19T11:48:59.074339] INFO     GOAL         Starting goal: click: Accept all button
+    Details: {
+  "goal_description": "click: Accept all button"
+}
+[2025-11-19T11:49:02.688636] SUCCESS  GOAL         Goal completed: click: Accept all button (took 3614.4ms) ✅
+[2025-11-19T11:49:11.711876] INFO     GOAL         Starting goal: type: site:reed
+    Details: {
+  "goal_description": "type: site:reed"
+}
+[2025-11-19T11:49:20.107134] INFO     GOAL         Starting goal: type: site:reed
+    Details: {
+  "goal_description": "type: site:reed"
+}
