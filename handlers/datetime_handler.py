@@ -8,16 +8,16 @@ from playwright.sync_api import Page
 from models import ActionStep, PageElements, PageInfo  # DetectedElement not used
 from utils import SelectorUtils
 from vision_utils import validate_and_clamp_coordinates
-from goals.base import InteractionType
+from session_tracker import InteractionType
 
 
 class DateTimeHandler:
     """Handles datetime field interactions"""
     
-    def __init__(self, page: Page, goal_monitor=None):
+    def __init__(self, page: Page, session_tracker=None):
         self.page = page
         self.selector_utils = SelectorUtils(page)
-        self.goal_monitor = goal_monitor
+        self.session_tracker = session_tracker
     
     def set_page(self, page: Page) -> None:
         if not page or page is self.page:
@@ -124,8 +124,8 @@ class DateTimeHandler:
             print(f"    ✅ Datetime field updated. Final value: '{final_value}'")
             
             # Record the interaction with goal monitor
-            if self.goal_monitor:
-                self.goal_monitor.record_interaction(
+            if self.session_tracker:
+                self.session_tracker.record_interaction(
                     InteractionType.TYPE,  # Treat datetime as a type interaction
                     coordinates=(x, y),
                     text_input=formatted_value,

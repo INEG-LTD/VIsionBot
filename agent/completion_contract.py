@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 
-from goals.base import BrowserState, Interaction, InteractionType
+from session_tracker import BrowserState, Interaction, InteractionType
 from ai_utils import (
     generate_model,
     ReasoningLevel,

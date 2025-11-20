@@ -7,7 +7,8 @@ import hashlib
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-from goals.base import BrowserState, GoalResult, GoalStatus
+from session_tracker import BrowserState
+from .task_result import TaskResult
 from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
 from agent.reactive_goal_determiner import ReactiveGoalDeterminer
 from agent.agent_context import AgentContext
@@ -233,7 +234,7 @@ class AgentController:
         self.agent_context: Optional[AgentContext] = None
         self.sub_agent_controller: Optional[SubAgentController] = None
     
-    def run_agentic_mode(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> GoalResult:
+    def run_agentic_mode(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> TaskResult:
         """
         Run basic agentic mode.
         
@@ -242,7 +243,7 @@ class AgentController:
             agent_context: Optional agent context (for sub-agents)
             
         Returns:
-            GoalResult indicating success or failure
+            TaskResult indicating success or failure
         """
         # Reset per-run state
         role = "Main agent"
@@ -329,7 +330,7 @@ class AgentController:
         
         # Set base knowledge on goal monitor for goal evaluation
         if self.base_knowledge:
-            self.bot.goal_monitor.set_base_knowledge(self.base_knowledge)
+            self.bot.session_tracker.set_base_knowledge(self.base_knowledge)
         
         # Create completion contract (Step 2: LLM-based)
         completion_contract = CompletionContract(
@@ -348,8 +349,8 @@ class AgentController:
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
                 self.bot.execution_timer.log_summary()
-            result = GoalResult(
-                status=GoalStatus.FAILED,
+            result = TaskResult(
+                success=False,
                 confidence=1.0,
                 reasoning="Bot not started",
                 evidence=self._build_evidence()
@@ -364,8 +365,8 @@ class AgentController:
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
                 self.bot.execution_timer.log_summary()
-            result = GoalResult(
-                status=GoalStatus.FAILED,
+            result = TaskResult(
+                success=False,
                 confidence=1.0,
                 reasoning="Page is blank",
                 evidence=self._build_evidence()
@@ -416,15 +417,15 @@ class AgentController:
             # 2. Prepare environment state for parallel LLM calls
             environment_state = EnvironmentState(
                 browser_state=snapshot,
-                interaction_history=self.bot.goal_monitor.interaction_history,
+                interaction_history=self.bot.session_tracker.interaction_history,
                 user_prompt=user_prompt,
                 task_start_url=self.task_start_url,
                 task_start_time=self.task_start_time,
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 visible_text=snapshot.visible_text,
-                url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
-                url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
+                url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
+                url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
             )
             
             # 2.1. Check for stuck state at the beginning of iteration (before determining action)
@@ -558,8 +559,8 @@ class AgentController:
                                 pass  # Ignore timeout, task is complete anyway
                             # Next action result will be ignored (task is complete)
                             self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                            return GoalResult(
-                                status=GoalStatus.ACHIEVED,
+                            return TaskResult(
+                                success=True,
                                 confidence=evaluation.confidence,
                                 reasoning=completion_reasoning,
                                 evidence=evidence_dict
@@ -640,8 +641,8 @@ class AgentController:
                         self.bot.execution_timer.end_task()
                         self.bot.execution_timer.log_summary()
                         self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                        return GoalResult(
-                            status=GoalStatus.ACHIEVED,
+                        return TaskResult(
+                            success=True,
                             confidence=evaluation.confidence,
                             reasoning=completion_reasoning,
                             evidence=evidence_dict
@@ -693,8 +694,8 @@ class AgentController:
                     self.bot.execution_timer.end_task()
                     self.bot.execution_timer.log_summary()
                     self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                    return GoalResult(
-                        status=GoalStatus.ACHIEVED,
+                    return TaskResult(
+                        success=True,
                         confidence=evaluation.confidence,
                         reasoning=completion_reasoning,
                         evidence=evidence_dict
@@ -781,15 +782,15 @@ class AgentController:
                 snapshot = self._capture_snapshot(full_page=True)
                 environment_state = EnvironmentState(
                     browser_state=snapshot,
-                    interaction_history=self.bot.goal_monitor.interaction_history,
+                    interaction_history=self.bot.session_tracker.interaction_history,
                     user_prompt=user_prompt,
                     task_start_url=self.task_start_url,
                     task_start_time=self.task_start_time,
                     current_url=snapshot.url,
                     page_title=snapshot.title,
                     visible_text=snapshot.visible_text,
-                    url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
-                    url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
+                    url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
+                    url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
                 )
                 
                 # Retry logic for exploration mode
@@ -1159,15 +1160,15 @@ class AgentController:
             snapshot_after = self._capture_snapshot(full_page=False)
             environment_state_after = EnvironmentState(
                 browser_state=snapshot_after,
-                interaction_history=self.bot.goal_monitor.interaction_history,
+                interaction_history=self.bot.session_tracker.interaction_history,
                 user_prompt=user_prompt,
                 task_start_url=self.task_start_url,
                 task_start_time=self.task_start_time,
                 current_url=snapshot_after.url,
                 page_title=snapshot_after.title,
                 visible_text=snapshot_after.visible_text,
-                url_history=self.bot.goal_monitor.url_history.copy() if self.bot.goal_monitor.url_history else [],
-                url_pointer=getattr(self.bot.goal_monitor, "url_pointer", None)
+                url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
+                url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
             )
             # Use stored completion reasoning and evaluation from this iteration
             if latest_completion_reasoning and latest_evaluation:
@@ -1202,8 +1203,8 @@ class AgentController:
         # Max iterations reached
         reasoning = f"Max iterations ({self.max_iterations}) reached without completion"
         self.event_logger.agent_complete(success=False, reasoning=reasoning)
-        return GoalResult(
-            status=GoalStatus.FAILED,
+        return TaskResult(
+            success=False,
             confidence=0.5,
             reasoning=reasoning,
             evidence=self._build_evidence({"max_iterations": self.max_iterations})
@@ -1217,7 +1218,7 @@ class AgentController:
             full_page: If True, capture full page screenshot (for exploration mode)
                       If False, capture viewport only (normal mode)
         """
-        snapshot = self.bot.goal_monitor._capture_current_state()
+        snapshot = self.bot.session_tracker._capture_current_state()
         
         # Override screenshot if full_page is requested
         if full_page:
@@ -2340,7 +2341,7 @@ class AgentController:
         if recent_actions and recent_actions[-1].interaction_type.value == "scroll":
             # Check if we've scrolled multiple times total
             total_scrolls = sum(
-                1 for action in self.bot.goal_monitor.interaction_history
+                1 for action in self.bot.session_tracker.interaction_history
                 if action.interaction_type.value == "scroll"
             )
             # If we've scrolled 3+ times total, likely exploring

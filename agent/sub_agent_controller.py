@@ -6,7 +6,7 @@ Phase 3: Sub-Agent Infrastructure
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, Callable
 import time
 
-from goals.base import GoalStatus
+from .task_result import TaskResult
 
 from .agent_context import AgentContext
 from .sub_agent_result import SubAgentResult
@@ -172,13 +172,13 @@ class SubAgentController:
         try:
             page_url = tab_info.page.url
             bot_url = self.main_bot.page.url if getattr(self.main_bot, "page", None) else "no page"
-            goal_monitor_page = getattr(self.main_bot.goal_monitor, "page", None) if getattr(self.main_bot, "goal_monitor", None) else None
-            goal_monitor_url = goal_monitor_page.url if goal_monitor_page else "no page"
+            session_tracker_page = getattr(self.main_bot.session_tracker, "page", None) if getattr(self.main_bot, "session_tracker", None) else None
+            session_tracker_url = session_tracker_page.url if session_tracker_page else "no page"
             
             print(f"   ✅ Switched to tab")
             print(f"      Page URL: {page_url}")
             print(f"      Bot.page URL: {bot_url}")
-            print(f"      GoalMonitor.page URL: {goal_monitor_url}")
+            print(f"      SessionTracker.page URL: {session_tracker_url}")
         except Exception as e:
             print(f"   ⚠️ Error verifying page switch: {e}")
         
@@ -196,17 +196,23 @@ class SubAgentController:
             end_time = time.time()
             
             # Mark as completed
-            success = goal_result.status == GoalStatus.ACHIEVED
+            success = goal_result.success if isinstance(goal_result, TaskResult) else getattr(goal_result, 'success', False)
+            status_str = 'achieved' if success else 'failed'
+            # Handle both TaskResult and legacy GoalResult for compatibility
+            if hasattr(goal_result, 'status') and isinstance(goal_result.status, str):
+                status_str = goal_result.status
+            elif hasattr(goal_result, 'status') and hasattr(goal_result.status, 'value'):
+                status_str = goal_result.status.value
             result = SubAgentResult(
                 agent_id=sub_agent_id,
                 tab_id=sub_agent_context.tab_id,
                 instruction=sub_agent_context.instruction,
                 success=success,
-                status=goal_result.status.value,
-                confidence=goal_result.confidence,
-                reasoning=goal_result.reasoning,
-                evidence=goal_result.evidence or {},
-                error=None if success else goal_result.reasoning,
+                status=status_str,
+                confidence=getattr(goal_result, 'confidence', 0.0),
+                reasoning=getattr(goal_result, 'reasoning', ''),
+                evidence=getattr(goal_result, 'evidence', None) or {},
+                error=None if success else getattr(goal_result, 'reasoning', ''),
                 started_at=start_time,
                 completed_at=end_time,
                 metadata=sub_agent_context.metadata.copy()
@@ -228,7 +234,7 @@ class SubAgentController:
                 tab_id=sub_agent_context.tab_id,
                 instruction=sub_agent_context.instruction,
                 success=False,
-                status=GoalStatus.FAILED.value,
+                status='failed',
                 confidence=0.0,
                 reasoning=f"Sub-agent execution failed: {error_msg}",
                 evidence={},
@@ -355,8 +361,8 @@ class SubAgentController:
         )
 
     def _get_base_knowledge(self) -> Optional[List[str]]:
-        if hasattr(self.main_bot, "goal_monitor"):
-            base = getattr(self.main_bot.goal_monitor, "base_knowledge", None)
+        if hasattr(self.main_bot, "session_tracker"):
+            base = getattr(self.main_bot.session_tracker, "base_knowledge", None)
             if base:
                 base_list = base.copy()
             else:

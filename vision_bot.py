@@ -21,28 +21,8 @@ from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from utils import PageUtils
 from action_queue import ActionQueue, QueuedAction
-from goals import (
-    GoalMonitor,
-    ClickGoal,
-    GoalStatus,
-    FormFillGoal,
-    TypeGoal,
-    DateGoal,
-    SelectGoal,
-    NavigationGoal,
-    IfGoal,
-    WhileGoal,
-    ForGoal,
-    PressGoal,
-    ScrollGoal,
-    BaseGoal,
-    BackGoal,
-    ForwardGoal,
-    DeferGoal,
-    GoalResult,
-    GoalContext,
-)
-from goals.defer_goal import TimedSleepGoal
+from session_tracker import SessionTracker, InteractionType
+# Removed goal imports - goals system no longer used
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     extract_click_target,
@@ -309,7 +289,7 @@ class BrowserVisionBot:
             None if _overlay_max_samples is not None and _overlay_max_samples <= 0 else _overlay_max_samples
         )
         
-        self._goal_evaluation_overrides: Dict[Type["BaseGoal"], Callable] = {}
+        # Removed goal evaluation overrides (no longer needed without goals)
         
         # Extract cache configuration
         self.plan_cache_enabled = config.cache.enabled
@@ -648,9 +628,7 @@ class BrowserVisionBot:
         page = self.page
         
         # Initialize components
-        self.goal_monitor: GoalMonitor = GoalMonitor(page)
-        # Set bot reference in goal monitor for goals that need it
-        self.goal_monitor.bot_reference = self
+        self.session_tracker: SessionTracker = SessionTracker(page)
         self.overlay_manager = OverlayManager(page)
         
         # Initialize tab management (Phase 1)
@@ -699,7 +677,7 @@ class BrowserVisionBot:
                 pass
         
         # Initialize action executor with deduper, GIF recorder, and command ledger
-        self.action_executor: ActionExecutor = ActionExecutor(page, self.goal_monitor, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
+        self.action_executor: ActionExecutor = ActionExecutor(page, self.session_tracker, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
         
         # Set action_executor on focus_manager for scroll tracking
         self.focus_manager.action_executor = self.action_executor
@@ -883,8 +861,8 @@ class BrowserVisionBot:
             except Exception:
                 pass
             try:
-                if self.goal_monitor:
-                    self.goal_monitor.switch_to_page(new_page)
+                if self.session_tracker:
+                    self.session_tracker.switch_to_page(new_page)
             except Exception:
                 pass
             try:
@@ -1075,9 +1053,8 @@ class BrowserVisionBot:
                         self.event_logger.system_info(f"Auto-on-load: act('{prompt}')")
                     except Exception:
                         pass
-                    # Snapshot current goals and user prompt so auto-action does not disrupt ongoing task
-                    saved_goal = getattr(self.goal_monitor, 'active_goal', None) if hasattr(self, 'goal_monitor') else None
-                    saved_user_prompt = getattr(self.goal_monitor, 'user_prompt', "") if hasattr(self, 'goal_monitor') else ""
+                    # Snapshot user prompt so auto-action does not disrupt ongoing task
+                    saved_user_prompt = getattr(self.session_tracker, 'user_prompt', "") if hasattr(self, 'session_tracker') else ""
                     
                     # Generate child command ID if we have a parent
                     child_cmd_id = f"{parent_cmd_id}_action{i}" if parent_cmd_id else None
@@ -1087,29 +1064,10 @@ class BrowserVisionBot:
                         # and _auto_on_load_running avoids re-entrancy loops
                         self.act(prompt, command_id=child_cmd_id)
                     finally:
-                        # Restore previous goals/user prompt if they existed prior
+                        # Restore previous user prompt if it existed prior
                         try:
-                            if hasattr(self, 'goal_monitor') and saved_goal is not None:
-                                self.goal_monitor.clear_all_goals()
-                                # Handle single goal or list of goals
-                                goals_to_restore = saved_goal if isinstance(saved_goal, list) else [saved_goal]
-                                for g in goals_to_restore:
-                                    try:
-                                        # Only restore goals that haven't been completed
-                                        # Check if goal has a _completed attribute and if it's False
-                                        if hasattr(g, '_completed') and g._completed:
-                                            try:
-                                                self.event_logger.system_debug(f"Skipping restoration of completed goal: {g}")
-                                            except Exception:
-                                                pass
-                                            continue
-                                        self.goal_monitor.add_goal(g)
-                                    except Exception:
-                                        pass
-                                try:
-                                    self.goal_monitor.set_user_prompt(saved_user_prompt)
-                                except Exception:
-                                    pass
+                            if hasattr(self, 'session_tracker') and saved_user_prompt:
+                                self.session_tracker.set_user_prompt(saved_user_prompt)
                         except Exception:
                             pass
                 except Exception as e:
@@ -1147,13 +1105,8 @@ class BrowserVisionBot:
         Returns True/False if executed, or None to fall back to normal planning.
         """
         try:
-            if not self.goal_monitor or not self.goal_monitor.active_goal:
-                return None
-            from goals import PressGoal, ScrollGoal
-            goal = self.goal_monitor.active_goal
-            # Only bypass for Press/Scroll; Back/Forward use history + AI selection
-            if not isinstance(goal, (PressGoal, ScrollGoal)):
-                return None
+            # Simple bypass removed - keyword commands handle these directly
+            return None
 
             # Build minimal plan
             steps: List[ActionStep] = []
@@ -1189,15 +1142,9 @@ class BrowserVisionBot:
                 self.execution_timer.end_command()
                 return False
 
-            # Evaluate goals after execution
-            goal_result = self.goal_monitor.evaluate_goal()
-            if goal_result.status == GoalStatus.ACHIEVED:
-                self._print_goal_summary()
-                self.execution_timer.end_command()
-                return True
-
-            # If not achieved, allow normal planning to proceed
-            return None
+            # Simple bypass completed successfully
+            self.execution_timer.end_command()
+            return True
         except Exception as e:
             try:
                 self.event_logger.system_error("Simple-goal bypass failed", error=e)
@@ -1344,15 +1291,7 @@ class BrowserVisionBot:
                     self.execution_timer.end_command()
                     return False
 
-            # Clear any existing goals before starting a new goal
-            if self.goal_monitor.active_goal:
-                self.event_logger.system_info(f"Clearing {self.goal_monitor.active_goal} previous goals")
-                self.goal_monitor.clear_all_goals()
-            
-            # Reset goal monitor state for fresh start
-            self.goal_monitor.reset_retry_request()
-            
-            # Reset DOM signature for new goal - don't check against previous goal's signature
+            # Reset DOM signature for new command - don't check against previous command's signature
             # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
 
@@ -1367,426 +1306,11 @@ class BrowserVisionBot:
             if keyword_command_result is not None:
                 return keyword_command_result
 
-            self.goal_monitor.set_user_prompt(goal_description)
-            # Set up smart goal monitoring if enabled
-            # Store kwargs temporarily for goal creation
-            self._temp_goal_kwargs = kwargs
-            # Add max_retries to kwargs if provided, so goals can use it
-            if max_retries is not None:
-                self._temp_goal_kwargs['max_retries'] = max_retries
-            # Add allow_non_clickable_clicks if provided
-            if 'allow_non_clickable_clicks' in kwargs:
-                self._temp_goal_kwargs['allow_non_clickable_clicks'] = kwargs['allow_non_clickable_clicks']
-            goal, transformed_goal_description = self._create_goal_from_description(goal_description, modifier)
-            self._temp_goal_kwargs = {}
-
-            if isinstance(goal, WhileGoal):
-                return self._execute_while_loop(goal, start_time)
-            
-            if isinstance(goal, ForGoal):
-                return self._execute_for_loop(goal, start_time, parent_command_id=command_id)
-            
-
-            if goal:
-                goal_description = transformed_goal_description
-                self.goal_monitor.add_goal(goal)
-                self._enable_goal_evaluation_override()
-            elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
-                # Handle reference commands that were returned from IF evaluation
-                try:
-                    self.event_logger.system_info(f"Executing reference command from IF evaluation: {transformed_goal_description}")
-                except Exception:
-                    pass
-                result = self._handle_ref_commands(transformed_goal_description)
-                self.execution_timer.end_command()
-                return result
-            else:
-                try:
-                    self.event_logger.system_info("No smart goal setup")
-                except Exception:
-                    pass
-                self.execution_timer.end_command()
-                return True
-            
-            # If conditional evaluation resulted in a deliberate no-op (no fail action and condition false)
-            if not goal_description.strip():
-                duration_ms = (time.time() - start_time) * 1000
-                self.logger.log(LogLevel.INFO, LogCategory.GOAL, "No actionable goal after condition evaluation (no-op)", duration_ms=duration_ms)
-                try:
-                    self.event_logger.system_info("No actionable goal after condition evaluation (no-op). Skipping.")
-                except Exception:
-                    pass
-                self.execution_timer.end_command()
-                return True
-            
-            try:
-                self.event_logger.system_info(f"Smart goals setup: {goal}\n")
-            except Exception:
-                pass
-
-            # Simple goal bypass (no LLM): handle press/scroll-only flows directly
-            simple_result = self._try_simple_goal_bypass(command_id=command_id)
-            if simple_result is not None:
-                return simple_result
-
-            # Use custom max_attempts if provided, otherwise use bot's default
-            effective_max_attempts = max_attempts if max_attempts is not None else self.max_attempts
-            
-            for attempt in range(effective_max_attempts):
-                self.current_attempt = attempt + 1
-                try:
-                    self.event_logger.system_info(f"\n--- Attempt {self.current_attempt}/{effective_max_attempts} ---")
-                except Exception:
-                    pass
-                
-                # Show retry context at the start of each new attempt (but don't reset yet)
-                if attempt > 0:  # Don't reset on first attempt
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
-                        try:
-                            self.event_logger.system_info(f"Starting attempt {self.current_attempt} with retry state from previous attempt")
-                            self.event_logger.system_info(f"   {retry_goal}: Retry attempt {retry_goal.retry_count}/{retry_goal.max_retries}")
-                        except Exception:
-                            pass
-                        # Don't reset retry state here - let it persist until after plan generation
-                    else:
-                        try:
-                            self.event_logger.system_info("No retry state from previous attempt")
-                        except Exception:
-                            pass
-                
-                # Check if goal is already achieved
-                goal_result = self.goal_monitor.evaluate_goal()
-                if goal_result.status == GoalStatus.ACHIEVED:
-                    duration_ms = (time.time() - start_time) * 1000
-                    self.logger.log_goal_success(goal_description, duration_ms)
-                    try:
-                        self.event_logger.goal_success("Smart goal achieved!")
-                    except Exception:
-                        pass
-                    self._print_goal_summary()
-                    return True
-                
-                # Get current page state
-                page_info = self.page_utils.get_page_info()
-                
-                # Fast DOM signature: avoid screenshot if the page hasn't changed
-                try:
-                    sig_src = self.page.evaluate(
-                        """
-                        () => {
-                            const url = location.href || '';
-                            const y = (window.scrollY||0) + ':' + (window.scrollX||0);
-                            const cnt = document.body ? document.body.getElementsByTagName('*').length : 0;
-                            const txt = (document.body && document.body.innerText) ? document.body.innerText.slice(0, 4000) : '';
-                            return `${url}|${y}|${cnt}|${txt}`;
-                        }
-                        """
-                    )
-                    current_components = sig_src.split('|')
-                    current_url = current_components[0]
-                    current_scroll = current_components[1]
-                    current_elements = int(current_components[2])
-                    current_text = current_components[3]
-                    
-                    # Compare with previous signature if available
-                    if hasattr(self, 'last_dom_components') and self.last_dom_components:
-                        prev_url, prev_scroll, prev_elements, prev_text = self.last_dom_components
-                        changes = []
-                        
-                        if current_url != prev_url:
-                            changes.append(f"URL: {prev_url} → {current_url}")
-                        if current_scroll != prev_scroll:
-                            changes.append(f"Scroll: {prev_scroll} → {current_scroll}")
-                        if current_elements != prev_elements:
-                            diff = current_elements - prev_elements
-                            changes.append(f"Elements: {prev_elements} → {current_elements} ({diff:+d})")
-                        if current_text != prev_text:
-                            changes.append("Text content changed")
-                        
-                        if changes:
-                            try:
-                                self.event_logger.system_info("DOM changes detected:")
-                                for change in changes:
-                                    self.event_logger.system_info(f"   • {change}")
-                            except Exception:
-                                pass
-                        else:
-                            try:
-                                self.event_logger.system_info("No DOM changes detected")
-                            except Exception:
-                                pass
-                    
-                    # Store current components for next comparison
-                    self.last_dom_components = (current_url, current_scroll, current_elements, current_text)
-                    
-                except Exception:
-                    sig_src = f"{self.page.url}|{page_info.scroll_y}|{page_info.scroll_x}"
-                    try:
-                        self.event_logger.system_warning("Using fallback DOM signature (evaluation failed)")
-                    except Exception:
-                        pass
-                sig_hash = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
-                
-                # Check if a small passive scroll occurred
-                is_small_scroll = self.page_utils.is_small_passive_scroll(
-                    page_info.scroll_y, page_info.scroll_x
-                )
-                
-                # Skip if DOM signature hasn't changed and no retry requested
-                # Disable this check in agent mode (agent handles its own retry logic)
-                retry_goal = self.goal_monitor.check_for_retry_request()
-                if sig_hash == self.last_dom_signature and not retry_goal and not self._agent_mode:
-                    try:
-                        self.event_logger.system_warning("Same DOM signature as last attempt, scrolling to break loop")
-                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
-                        self.event_logger.system_info(f"   Previous interactions count: {len(self.deduper.interacted_elements) if hasattr(self, 'deduper') and self.deduper else 'unknown'}")
-                        self.event_logger.system_info("   Reason: Page hasn't changed but goal needs new elements (likely due to deduplication)")
-                    except Exception:
-                        pass
-                    from action_executor import ScrollReason
-                    self.page_utils.scroll_page(
-                        reason=ScrollReason.DOM_UNCHANGED,
-                        action_executor=self.action_executor,
-                        amount=50
-                    )
-                    continue
-                elif sig_hash == self.last_dom_signature and not retry_goal and self._agent_mode:
-                    # In agent mode, just log and continue (don't scroll)
-                    try:
-                        self.event_logger.system_info("Same DOM signature as last attempt (agent mode - check disabled)")
-                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
-                    except Exception:
-                        pass
-                elif is_small_scroll:
-                    # # Small passive scroll detected - trigger intentional scroll to force DOM change
-                    # print("⚠️ Small passive scroll detected (< 100px), triggering intentional scroll")
-                    # print("   📏 Passive scroll amount detected")
-                    # print("   🎯 Forcing intentional scroll to ensure DOM signature changes")
-                    # from action_executor import ScrollReason
-                    # self.page_utils.scroll_page(
-                    #     reason=ScrollReason.DOM_UNCHANGED,
-                    #     action_executor=self.action_executor
-                    # )
-                    continue
-                elif sig_hash == self.last_dom_signature and retry_goal:
-                    try:
-                        self.event_logger.system_info("Same DOM but retry requested - proceeding with retry attempt")
-                        self.event_logger.system_info(f"   DOM signature: {sig_hash[:8]}...")
-                    except Exception:
-                        pass
-                if sig_hash != self.last_dom_signature:
-                    if self.last_dom_signature is not None:
-                        self._invalidate_plan_cache("DOM signature changed")
-                    try:
-                        self.event_logger.system_info(f"DOM signature changed: {self.last_dom_signature[:8] if self.last_dom_signature else 'none'} → {sig_hash[:8]}")
-                    except Exception:
-                        pass
-                    # Invalidate cache when DOM changes
-                    self._cached_screenshot_with_overlays = None
-                    self._cached_clean_screenshot = None
-                    self._cached_overlay_data = None
-                    self._cached_dom_signature = None
-                    try:
-                        self.event_logger.system_debug("Invalidated screenshot and overlay cache")
-                    except Exception:
-                        pass
-                self.last_dom_signature = sig_hash
-                
-                # Decide whether detection will be needed to avoid an extra screenshot
-                needs_detection = self.goal_monitor.active_goal.needs_detection if self.goal_monitor.active_goal else True
-                # Only take a screenshot now when not running detection
-                screenshot = None
-                if not needs_detection:
-                    # Lower quality for model-bound screenshot to reduce payload
-                    screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
-
-                if self._agent_mode:
-                    target_context_guard = None
-
-                plan: Optional[VisionPlan] = None
-                current_interpretation_mode = self._get_current_interpretation_mode()
-                if isinstance(goal, NavigationGoal):
-                    plan = self._build_navigation_plan(goal)
-                elif goal.needs_plan:
-                    plan = self._get_cached_plan(
-                        goal_description=goal_description,
-                        dom_signature=sig_hash,
-                        page_info=page_info,
-                        additional_context=additional_context,
-                        interpretation_mode=current_interpretation_mode,
-                        agent_mode=self._agent_mode,
-                        target_context_guard=target_context_guard,
-                    )
-
-                    if not plan:
-                        # Generate plan using vision model (conditional goals are already resolved to their sub-goals)
-                        plan = self._generate_plan(
-                            goal_description,
-                            additional_context,
-                            screenshot,
-                            page_info,
-                            target_context_guard,
-                        )
-
-                        if plan and plan.action_steps:
-                            self._store_plan_in_cache(
-                                goal_description=goal_description,
-                                dom_signature=sig_hash,
-                                page_info=page_info,
-                                plan=plan,
-                                additional_context=additional_context,
-                                interpretation_mode=current_interpretation_mode,
-                                agent_mode=self._agent_mode,
-                                target_context_guard=target_context_guard,
-                            )
-                    try:
-                        self.overlay_manager.remove_overlays()
-                    except Exception:
-                        pass
-                else:
-                    plan = None
-                    
-                    goal_eval_result = self.goal_monitor.evaluate_goal()
-                    try:
-                        self.event_logger.system_debug(f"Smart goal {goal_description} for goal {self.goal_monitor.active_goal.__class__.__name__} evaluation result: {goal_eval_result}")
-                    except Exception:
-                        pass
-                    if goal_eval_result.status == GoalStatus.ACHIEVED:
-                        duration_ms = (time.time() - start_time) * 1000
-                        self.logger.log_goal_success(goal_description, duration_ms)
-                        try:
-                            self.event_logger.goal_success(f"Smart goal {goal_description} achieved during plan execution!")
-                        except Exception:
-                            pass
-                        self._print_goal_summary()
-                        self.execution_timer.end_command()
-                        return True
-                    else:
-                        try:
-                            self.event_logger.system_info(f"Smart goal {goal_description} pending further evaluation")
-                        except Exception:
-                            pass
-
-                if not plan or not plan.action_steps:
-                    try:
-                        self.event_logger.goal_failure(f"No valid plan generated for goal: {goal_description}")
-                    except Exception:
-                        pass
-                    continue
-                
-                # Reset retry state after plan generation (retry context has been used)
-                retry_goal = self.goal_monitor.check_for_retry_request()
-                if retry_goal:
-                    try:
-                        self.event_logger.system_info("Retry context used in plan generation, resetting retry state")
-                    except Exception:
-                        pass
-                    self.goal_monitor.reset_retry_request()
-                
-                self.event_logger.plan_generated(step_count=len(plan.action_steps), reasoning=plan.reasoning, action_steps=str(plan.action_steps))
-                
-                # Execute the plan
-                success = self.action_executor.execute_plan(
-                    plan,
-                    page_info,
-                    target_context_guard=target_context_guard,
-                    skip_post_guard_refinement=skip_post_guard_refinement,
-                    confirm_before_interaction=confirm_before_interaction,
-                    command_id=command_id,
-                )
-                if success:
-                    
-                    # Check if goals were achieved during execution
-                    goal_result = self.goal_monitor.evaluate_goal()
-                    
-                    # Check for retry requests after goal evaluation
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
-                        self._invalidate_plan_cache("goal requested retry")
-                        try:
-                            self.event_logger.system_info("Goal requested retry after plan execution - regenerating plan")
-                            self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
-                        except Exception:
-                            pass
-                        # Don't reset retry requests here - let them persist for the next iteration
-                        continue
-                    
-                    try:
-                        self.event_logger.system_debug(f"Goal result: {goal_result}")
-                    except Exception:
-                        pass
-                    
-                    if goal_result.status == GoalStatus.ACHIEVED:
-                        self._invalidate_plan_cache("goal achieved")
-                        duration_ms = (time.time() - start_time) * 1000
-                        self.logger.log_goal_success(goal_description, duration_ms)
-                        try:
-                            self.event_logger.goal_success(f"Smart goal {goal_description} achieved during plan execution!")
-                        except Exception:
-                            pass
-                        self._print_goal_summary()
-                        # Mark command as completed successfully
-                        self.command_ledger.complete_command(command_id, success=True)
-                        # End command timer
-                        self.execution_timer.end_command()
-                        return True
-                    
-                    # If plan executed successfully but no goals achieved, scroll down one viewport height
-                    # to explore more of the page instead of waiting for duplicate screenshots
-                    # Disable auto-scroll in agent mode (agent handles its own navigation)
-                    self._invalidate_plan_cache("goal incomplete after execution")
-                    if not self._agent_mode:
-                        print("📜 Plan executed successfully, scrolling down to explore more content")
-                        from action_executor import ScrollReason
-                        self.page_utils.scroll_page(
-                            reason=ScrollReason.EXPLORE_CONTENT,
-                            action_executor=self.action_executor
-                        )
-                        continue
-                    else:
-                        print("📜 Plan executed successfully (agent mode - auto-scroll disabled)")
-                        continue
-                else:
-                    self._invalidate_plan_cache("plan execution failed")
-                    # Plan execution failed - check if it was due to retry request
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
-                        # Check if max retries have been reached
-                        if retry_goal.retry_count >= retry_goal.max_retries:
-                            # Disable auto-scroll in agent mode (agent handles its own navigation)
-                            if not self._agent_mode:
-                                print(f"⚠️ Max retries ({retry_goal.max_retries}) reached for {retry_goal}. Scrolling to explore more content.")
-                                from action_executor import ScrollReason
-                                self.page_utils.scroll_page(
-                                    reason=ScrollReason.EXPLORE_CONTENT,
-                                    action_executor=self.action_executor
-                                )
-                            else:
-                                print(f"⚠️ Max retries ({retry_goal.max_retries}) reached for {retry_goal} (agent mode - auto-scroll disabled)")
-                            # Reset retry state so we can try fresh on next attempt
-                            retry_goal.reset_retry_state()
-                            continue
-                        else:
-                            print("🔄 Plan execution aborted due to retry request - regenerating plan")
-                            # Don't reset retry requests here - let them persist for the next iteration
-                            # The retry state will be used to inform the next plan generation
-                            continue
-                    else:
-                        failure_reason = getattr(self.action_executor, "last_failure_reason", None)
-                        if failure_reason:
-                            print(f"❌ Plan execution failed: {failure_reason}")
-                        else:
-                            print("❌ Plan execution failed for unknown reason")
-                        continue
-            
+            # If keyword execution can't handle it, fail immediately
             duration_ms = (time.time() - start_time) * 1000
-            self.logger.log_goal_failure(goal_description, f"Failed after {effective_max_attempts} attempts", duration_ms)
-            print(f"❌ Failed to achieve goal after {effective_max_attempts} attempts")
-            self._print_goal_summary()
-            # Mark command as failed
-            self.command_ledger.complete_command(command_id, success=False, error_message=f"Failed after {effective_max_attempts} attempts")
-            # End command timer
+            self.logger.log_goal_failure(goal_description, f"Could not parse command as keyword action", duration_ms)
+            print(f"❌ Could not parse command: {goal_description}")
+            self.command_ledger.complete_command(command_id, success=False, error_message="Could not parse command as keyword action")
             self.execution_timer.end_command()
             return False
         finally:
@@ -1798,10 +1322,6 @@ class BrowserVisionBot:
             self._in_act = False
             if self._interpretation_mode_stack:
                 self._interpretation_mode_stack.pop()
-            try:
-                self._restore_goal_evaluations()
-            except Exception as e:
-                print(f"⚠️ Failed to restore goal evaluation overrides: {e}")
             try:
                 self._flush_pending_auto_on_load()
             except Exception:
@@ -1934,10 +1454,10 @@ class BrowserVisionBot:
             )
             controller.max_iterations = max_iterations
             
-            goal_result = controller.run_agentic_mode(user_prompt)
+            task_result = controller.run_agentic_mode(user_prompt)
             
             # Create result
-            result = AgentResult(goal_result, controller.extracted_data)
+            result = AgentResult(task_result, controller.extracted_data)
             
             # Execute after hooks
             result = self.middleware.execute_after(context, result)
@@ -2054,8 +1574,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     extracted_text = result_text.strip()
                     
                     # Record extraction in interaction history
-                    from goals.base import InteractionType
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data={"text": extracted_text},
@@ -2159,8 +1678,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     extracted_dict["_reasoning"] = result.reasoning
                     
                     # Record extraction in interaction history
-                    from goals.base import InteractionType
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=extracted_dict,
@@ -2185,7 +1703,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     # Record extraction in interaction history
                     # Convert Pydantic model to dict for storage
                     extracted_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict()
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=extracted_dict,
@@ -2212,8 +1730,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     time.sleep(0.5)
                 else:
                     # Record failed extraction in interaction history
-                    from goals.base import InteractionType
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=None,
@@ -2222,10 +1739,9 @@ Return only the extracted text that appears in the text content above. Do not ma
                     )
                     raise RuntimeError(f"Extraction failed after {max_retries + 1} attempts: {error_msg}")
         
-        # Record failed extraction if we exhausted all retries
+            # Record failed extraction if we exhausted all retries
         if last_error:
-            from goals.base import InteractionType
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.EXTRACT,
                 extraction_prompt=prompt,
                 extracted_data=None,
@@ -2334,26 +1850,26 @@ Return only the extracted text that appears in the text content above. Do not ma
         
         self.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
         self.url = url
-        # Ensure GoalMonitor history reflects the first real navigation instead of about:blank
+        # Ensure SessionTracker history reflects the first real navigation instead of about:blank
         try:
-            if hasattr(self, 'goal_monitor') and self.goal_monitor:
-                hist = getattr(self.goal_monitor, 'url_history', None)
-                ptr = getattr(self.goal_monitor, 'url_pointer', None)
+            if hasattr(self, 'session_tracker') and self.session_tracker:
+                hist = getattr(self.session_tracker, 'url_history', None)
+                ptr = getattr(self.session_tracker, 'url_pointer', None)
                 current = self.page.url
                 # If we only have the initial about:blank entry, replace it with the real URL
                 if isinstance(hist, list) and len(hist) == 1 and (hist[0] or '').startswith('about:blank'):
-                    self.goal_monitor.url_history = [current]
-                    self.goal_monitor.url_pointer = 0
+                    self.session_tracker.url_history = [current]
+                    self.session_tracker.url_pointer = 0
                 # If history exists but pointer is not at the end, truncate forward stack and append
                 elif isinstance(hist, list) and isinstance(ptr, int) and 0 <= ptr < len(hist):
                     if hist[ptr] != current:
                         # Truncate any forward entries
                         if ptr < (len(hist) - 1):
-                            self.goal_monitor.url_history = hist[: ptr + 1]
+                            self.session_tracker.url_history = hist[: ptr + 1]
                         # Append only if it's not already the last entry
-                        if not self.goal_monitor.url_history or self.goal_monitor.url_history[-1] != current:
-                            self.goal_monitor.url_history.append(current)
-                        self.goal_monitor.url_pointer = len(self.goal_monitor.url_history) - 1
+                        if not self.session_tracker.url_history or self.session_tracker.url_history[-1] != current:
+                            self.session_tracker.url_history.append(current)
+                        self.session_tracker.url_pointer = len(self.session_tracker.url_history) - 1
         except Exception:
             # Non-fatal: history sync is best-effort
             pass
@@ -3376,11 +2892,13 @@ Return only the extracted text that appears in the text content above. Do not ma
 
     def _enable_goal_evaluation_override(self) -> List[Type[BaseGoal]]:
         """Override goal evaluation with automatic success."""
+        # Goal system removed - return empty list
         goal_types: List[Type[BaseGoal]] = []
-        if not self.goal_monitor or not self.goal_monitor.active_goal:
-            return goal_types
+        return goal_types
 
-        goal = self.goal_monitor.active_goal
+        # Removed goal_monitor logic - goals system no longer exists
+        if False:  # Never reached
+            goal = None
         goal_cls = goal.__class__
 
         # Skip overriding defer-style goals that must run their own evaluation logic.
@@ -3414,22 +2932,8 @@ Return only the extracted text that appears in the text content above. Do not ma
 
     def _restore_goal_evaluations(self) -> None:
         """Restore original goal evaluation behavior after keyword command completes."""
-        if not self.goal_monitor or not self.goal_monitor.active_goal:
-            return
-
-        goal = self.goal_monitor.active_goal
-        goal_cls = goal.__class__
-
-        original_eval = self._goal_evaluation_overrides.get(goal_cls)
-        if original_eval is not None:
-            if original_eval:
-                goal.evaluate = original_eval.__get__(goal, goal_cls)  # type: ignore[attr-defined]
-            else:
-                try:
-                    delattr(goal, "evaluate")
-                except Exception:
-                    pass
-            del self._goal_evaluation_overrides[goal_cls]
+        # Goal system removed - no-op
+        return
 
     def _generate_plan(
         self,
@@ -3445,8 +2949,8 @@ Return only the extracted text that appears in the text content above. Do not ma
         if self._agent_mode:
             target_context_guard = None
 
-        # Check if any active goal needs element detection
-        needs_detection = self.goal_monitor.active_goal.needs_detection if self.goal_monitor.active_goal else True
+        # Goal system removed - always do detection
+        needs_detection = True
 
         current_mode = self._get_current_interpretation_mode()
         semantic_hint = self._get_semantic_target(goal_description)
@@ -3466,8 +2970,8 @@ Return only the extracted text that appears in the text content above. Do not ma
                 detected_elements=PageElements(elements=[]),
                 page_info=page_info,
                 screenshot=screenshot,
-                active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
-                retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
+                active_goal=None,
+                retry_goal=None,
                 page=self.page,
                 command_history=self.command_history,
                 dedup_context=dedup_context,
@@ -3492,8 +2996,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             element_data=element_data,
             screenshot_with_overlays=screenshot_with_overlays,
             page_info=page_info,
-            active_goal=self.goal_monitor.active_goal if self.goal_monitor else None,
-            retry_goal=self.goal_monitor.check_for_retry_request() if self.goal_monitor else None,
+            active_goal=None,
+            retry_goal=None,
             page=self.page,
             command_history=self.command_history,
             interpretation_mode=current_mode,
@@ -3670,9 +3174,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             if m:
                 steps = max(1, int(m.group(1)))
             try:
-                pointer = getattr(self.goal_monitor, 'url_pointer', None)
-                start_index = pointer if pointer is not None else (len(self.goal_monitor.url_history) - 1 if self.goal_monitor and self.goal_monitor.url_history else 0)
-                start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
+                pointer = getattr(self.session_tracker, 'url_pointer', None) if self.session_tracker else None
+                start_index = pointer if pointer is not None else (len(self.session_tracker.url_history) - 1 if self.session_tracker and self.session_tracker.url_history else 0)
+                start_url = self.session_tracker.url_history[start_index] if self.session_tracker and self.session_tracker.url_history and 0 <= start_index < len(self.session_tracker.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
             return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
@@ -3683,9 +3187,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             if m:
                 steps = max(1, int(m.group(1)))
             try:
-                pointer = getattr(self.goal_monitor, 'url_pointer', None)
-                start_index = pointer if pointer is not None else (len(self.goal_monitor.url_history) - 1 if self.goal_monitor and self.goal_monitor.url_history else 0)
-                start_url = self.goal_monitor.url_history[start_index] if self.goal_monitor and self.goal_monitor.url_history and 0 <= start_index < len(self.goal_monitor.url_history) else (self.page.url if self.page else "")
+                pointer = getattr(self.session_tracker, 'url_pointer', None) if self.session_tracker else None
+                start_index = pointer if pointer is not None else (len(self.session_tracker.url_history) - 1 if self.session_tracker and self.session_tracker.url_history else 0)
+                start_url = self.session_tracker.url_history[start_index] if self.session_tracker and self.session_tracker.url_history and 0 <= start_index < len(self.session_tracker.url_history) else (self.page.url if self.page else "")
             except Exception:
                 start_index, start_url = 0, (self.page.url if self.page else "")
             return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
@@ -3829,15 +3333,14 @@ Return only the extracted text that appears in the text content above. Do not ma
         loop_description = goal.description or f"For loop: {goal.loop_prompt}"
         print(f"🔄 Starting for loop: {loop_description}")
 
-        # Clear any existing goals and reset retry state
-        if self.goal_monitor.active_goal:
-            self.goal_monitor.clear_all_goals()
-        self.goal_monitor.reset_retry_request()
+        # Goal system removed - no-op for goal clearing
+        # Clear any existing goals and reset retry state (removed)
 
         # Execute the for loop
         while True:
             try:
-                context = self.goal_monitor._build_goal_context()
+                # Goal system removed - build context without goal_monitor
+                context = None  # self.goal_monitor._build_goal_context() - removed
             except Exception as e:
                 error_msg = f"Unable to build context for for loop evaluation: {e}"
                 print(f"❌ {error_msg}")
@@ -3908,14 +3411,13 @@ Return only the extracted text that appears in the text content above. Do not ma
         print(f"🔁 Starting while loop: {loop_description}")
 
         iterations = 0
-        # Ensure we evaluate a clean condition on the first pass
-        if self.goal_monitor.active_goal:
-            self.goal_monitor.clear_all_goals()
-        self.goal_monitor.reset_retry_request()
+        # Goal system removed - no-op for goal clearing
+        # Ensure we evaluate a clean condition on the first pass (removed)
 
         while True:
             try:
-                context = self.goal_monitor._build_goal_context()
+                # Goal system removed - build context without goal_monitor
+                context = None  # self.goal_monitor._build_goal_context() - removed
             except Exception as e:
                 error_msg = f"Unable to build context for while loop evaluation: {e}"
                 print(f"❌ {error_msg}")
@@ -3981,10 +3483,8 @@ Return only the extracted text that appears in the text content above. Do not ma
                     print(f"⚠️  Loop body failed on iteration {iterations}, continuing loop (fail_on_body_failure=False)")
                     # Loop continues to next iteration
 
-            # Reset goal monitor state before the next condition check
-            if self.goal_monitor.active_goal:
-                self.goal_monitor.clear_all_goals()
-            self.goal_monitor.reset_retry_request()
+            # Goal system removed - no-op for goal clearing
+            # Reset goal monitor state before the next condition check (removed)
 
     def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str], route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[IfGoal]:
         """Create IfGoal from explicit parts with route determination."""
@@ -4135,13 +3635,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None, ""
 
     def _print_goal_summary(self) -> None:
-        """Print a summary of all goal statuses"""
-        summary = self.goal_monitor.get_status_summary()
-        
-        print("\n📊 Goal Summary:")
-        print(f"   ✅ Achieved: {summary['achieved']}")
-        print(f"   ⏳ Pending: {summary['pending']}")
-        print(f"   ❌ Failed: {summary['failed']}")
+        """Print a summary of all goal statuses - deprecated, kept for compatibility"""
+        # Goal summaries no longer available without goal system
+        pass
 
     def _add_to_command_history(self, command: str) -> None:
         """Add a command to the history, maintaining max size"""

@@ -4,7 +4,7 @@ Agent Result - Structured return type for agentic mode execution.
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 
-from goals.base import GoalResult, GoalStatus
+from .task_result import TaskResult
 
 
 @dataclass
@@ -17,7 +17,7 @@ class AgentResult:
     - extracted_data: Dictionary of extracted data (key: extraction prompt, value: extracted result)
     - reasoning: Explanation of the result
     - confidence: Confidence score (0.0-1.0)
-    - goal_result: Original GoalResult for advanced access
+    - task_result: Original TaskResult for advanced access
     """
     success: bool
     extracted_data: Dict[str, Any] = field(default_factory=dict)
@@ -25,33 +25,33 @@ class AgentResult:
     orchestration: Dict[str, Any] = field(default_factory=dict)
     reasoning: str = ""
     confidence: float = 0.0
-    goal_result: Optional[GoalResult] = None
+    task_result: Optional[TaskResult] = None
     
     def __init__(
         self,
-        goal_result: GoalResult,
+        task_result: TaskResult,
         extracted_data: Optional[Dict[str, Any]] = None,
         sub_agent_results: Optional[List[Dict[str, Any]]] = None,
         orchestration: Optional[Dict[str, Any]] = None,
     ):
         """
-        Initialize AgentResult from GoalResult.
+        Initialize AgentResult from TaskResult.
         
         Args:
-            goal_result: The GoalResult from agent execution
+            task_result: The TaskResult from agent execution
             extracted_data: Optional dictionary of extracted data
         """
-        self.success = goal_result.status == GoalStatus.ACHIEVED
+        self.success = task_result.success
         self.extracted_data = extracted_data or {}
         self.sub_agent_results = sub_agent_results or []
         self.orchestration = orchestration or {}
-        self.reasoning = goal_result.reasoning
-        self.confidence = goal_result.confidence
-        self.goal_result = goal_result
+        self.reasoning = task_result.reasoning
+        self.confidence = task_result.confidence
+        self.task_result = task_result
         
-        # Also extract any extracted_data from goal_result evidence if present
-        if goal_result.evidence:
-            evidence = goal_result.evidence
+        # Also extract any extracted_data from task_result evidence if present
+        if task_result.evidence:
+            evidence = task_result.evidence
             if "extracted_data" in evidence:
                 self.extracted_data.update(evidence["extracted_data"])
             if "sub_agents" in evidence and not self.sub_agent_results:

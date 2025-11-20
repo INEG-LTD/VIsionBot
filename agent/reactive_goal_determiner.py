@@ -9,7 +9,7 @@ from typing import Optional, List, ClassVar, Set, Union
 from pydantic import BaseModel, Field, field_validator
 import re
 
-from goals.base import BrowserState, Interaction
+from session_tracker import BrowserState, Interaction
 from agent.completion_contract import EnvironmentState
 from ai_utils import (
     generate_model,

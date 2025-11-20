@@ -5,7 +5,7 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 ## 🌟 Key Features
 
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection
-- **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to achieve complex goals
+- **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
 - **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
@@ -146,7 +146,7 @@ This approach is more robust to changes in page structure and works even when tr
 The agent system enables autonomous task completion:
 
 - **Reactive Loop**: Observe → Evaluate Completion → Determine Next Action → Execute → Repeat
-- **Completion Evaluation**: LLM-based assessment of whether the goal is achieved
+- **Completion Evaluation**: LLM-based assessment of whether the task is completed
 - **Adaptive Planning**: Dynamically adjusts strategy based on page state and history
 - **Stuck Detection**: Identifies when the agent is stuck in a loop and takes corrective action
 
@@ -308,11 +308,11 @@ result = bot.act("Press Enter")
 - `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
 - `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
 - `command_id` (str, optional): Optional command ID for tracking (auto-generated if not provided)
-- `modifier` (List[str], optional): Optional list of modifier strings to pass to goals
+- `modifier` (List[str], optional): Optional list of modifier strings (deprecated, no longer used)
 - `max_attempts` (int, optional): Override bot's max_attempts for this command
-- `max_retries` (int, optional): Override goal's max_retries for this command
+- `max_retries` (int, optional): Maximum retries for this command (deprecated, no longer used)
 
-**Returns:** `bool` - True if goal was achieved, False otherwise
+**Returns:** `bool` - True if command executed successfully, False otherwise
 
 ##### `extract(prompt, **kwargs) -> Union[str, Dict[str, Any], BaseModel]`
 
@@ -561,19 +561,22 @@ bot.act("dedup: off")
 
 ## Creating Custom Conditions
 
-The conditional goal system (used in `IfGoal`, `WhileGoal`, etc.) allows you to create custom conditions for evaluating page state, computational logic, or external factors.
+> **Note**: The conditional goal system (`IfGoal`, `WhileGoal`, etc.) has been removed. The bot now uses keyword-based command execution only. If a command cannot be parsed as a keyword action, execution will fail.
 
-### Condition Types
+### Condition Types (Deprecated)
+
+The following condition types were previously available but are no longer supported:
 
 1. **Environment State Conditions**: Test browser/page state (element existence, page content, form state, etc.)
 2. **Computational Conditions**: Perform calculations or logic operations (date/time checks, math expressions, etc.)
 3. **User-Defined Conditions**: Custom conditions for specific use cases (API calls, file system checks, etc.)
 
-### Creating a Condition
+### Creating a Condition (Deprecated)
 
 ```python
-from goals.base import ConditionType, create_environment_condition, create_computational_condition, create_user_defined_condition
-from goals.base import GoalContext
+# This functionality has been removed
+# from goals.base import ConditionType, create_environment_condition, create_computational_condition, create_user_defined_condition
+# from goals.base import GoalContext
 
 def my_condition_evaluator(context: GoalContext) -> bool:
     """

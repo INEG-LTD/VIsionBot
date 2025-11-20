@@ -16,7 +16,7 @@ from unittest.mock import Mock
 from utils.page_utils import PageUtils
 from utils.context_guard import ContextGuard, GuardDecision
 from vision_utils import get_gemini_box_2d_center_pixels
-from goals import GoalMonitor, InteractionType, GoalStatus
+from session_tracker import SessionTracker, InteractionType
 from interaction_deduper import InteractionDeduper
 from command_ledger import CommandLedger
 
@@ -63,9 +63,9 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, goal_monitor: GoalMonitor, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None, preferred_click_method: str = "programmatic"):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None, preferred_click_method: str = "programmatic"):
         self.page = page
-        self.goal_monitor = goal_monitor
+        self.session_tracker = session_tracker
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
         self.gif_recorder = gif_recorder
@@ -88,23 +88,26 @@ class ActionExecutor:
         self.last_click_method: str = preferred_click_method
         
         # Initialize specialized handlers
-        self.datetime_handler = DateTimeHandler(page, goal_monitor)
+        # DateTimeHandler may still need goal_monitor for compatibility, but we'll update it
+        # For now, pass session_tracker instead
+        try:
+            from handlers.datetime_handler import DateTimeHandler
+            self.datetime_handler = DateTimeHandler(page, session_tracker)
+        except Exception:
+            # Fallback if DateTimeHandler hasn't been updated yet
+            self.datetime_handler = None
         self.select_handler = SelectHandler(page)
         self.upload_handler = UploadHandler(page)
         self.selector_utils = SelectorUtils(page)
-        analyzer = getattr(goal_monitor, "element_analyzer", None)
-        self.context_guard = ContextGuard(page, analyzer)
+        # ContextGuard doesn't need element_analyzer anymore
+        self.context_guard = ContextGuard(page, None)
         
         # Vision-assisted refinements
         self.enable_vision_tag_hint: bool = True
         
-        # Access event logger from goal_monitor's bot reference
-        bot = getattr(goal_monitor, 'bot_reference', None)
-        if bot and hasattr(bot, 'event_logger'):
-            self.event_logger = bot.event_logger
-        else:
-            from utils.event_logger import get_event_logger
-            self.event_logger = get_event_logger()
+        # Get event logger directly
+        from utils.event_logger import get_event_logger
+        self.event_logger = get_event_logger()
         
         # Ensure event_logger is never None - create a dummy one if needed
         if self.event_logger is None:
@@ -186,7 +189,7 @@ class ActionExecutor:
             else:
                 self.selector_utils.page = page
         if self.context_guard:
-            self.context_guard.set_page(page, getattr(self.goal_monitor, "element_analyzer", None))
+            self.context_guard.set_page(page, None)
         # Reset click tracking state for new page
         self.last_click_selector = None
         self.last_click_url = None
@@ -448,12 +451,11 @@ class ActionExecutor:
                     # Use the goal's target_description for field matching (not the option value)
                     # The option value is separate and used for the actual selection
                     target_description = step.select_option_text
-                    if self.goal_monitor.active_goal and hasattr(self.goal_monitor.active_goal, 'target_description'):
-                        # For SelectGoal, use the field description (not the option value) for matching
-                        target_description = self.goal_monitor.active_goal.target_description
+                    # Use target description from step
+                    target_description = step.select_option_text
                     
-                    # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    self.goal_monitor.record_planned_interaction(
+                    # Record interaction
+                    self.session_tracker.record_interaction(
                         InteractionType.SELECT,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=target_description,
@@ -461,8 +463,9 @@ class ActionExecutor:
                     )
                     
                     # Check for retry requests from goals immediately after evaluation
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
+                    # Removed retry goal check - retries are handled elsewhere
+                    retry_goal = None
+                    if False:  # Disabled retry check
                         try:
                             self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
                             self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
@@ -483,7 +486,7 @@ class ActionExecutor:
                     step_success = True  # Assume success for handlers that don't return values yet
                     
                     # Record the select interaction
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.SELECT,
                         coordinates=(step.x, step.y) if step.x and step.y else None,
                         target_element_info={
@@ -498,7 +501,8 @@ class ActionExecutor:
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    self.goal_monitor.record_planned_interaction(
+                    # Record interaction (planned -> actual)
+                    self.session_tracker.record_interaction(
                         InteractionType.UPLOAD,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=step.upload_file_path,
@@ -506,8 +510,9 @@ class ActionExecutor:
                     )
                     
                     # Check for retry requests from goals immediately after evaluation
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
+                    # Removed retry goal check - retries are handled elsewhere
+                    retry_goal = None
+                    if False:  # Disabled retry check
                         try:
                             self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
                             self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
@@ -531,7 +536,8 @@ class ActionExecutor:
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
                     # Record planned interaction with goal monitor and get pre-interaction evaluations
-                    self.goal_monitor.record_planned_interaction(
+                    # Record interaction (planned -> actual)
+                    self.session_tracker.record_interaction(
                         InteractionType.DATETIME,
                         coordinates=(x, y) if x is not None and y is not None else None,
                         target_description=step.datetime_value or "date field",
@@ -539,8 +545,9 @@ class ActionExecutor:
                     )
                     
                     # Check for retry requests from goals immediately after evaluation
-                    retry_goal = self.goal_monitor.check_for_retry_request()
-                    if retry_goal:
+                    # Removed retry goal check - retries are handled elsewhere
+                    retry_goal = None
+                    if False:  # Disabled retry check
                         try:
                             self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
                             self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
@@ -561,7 +568,7 @@ class ActionExecutor:
                     step_success = True  # Assume success for handlers that don't return values yet
                     
                     # Record the datetime interaction
-                    self.goal_monitor.record_interaction(
+                    self.session_tracker.record_interaction(
                         InteractionType.DATETIME,
                         coordinates=(step.x, step.y) if step.x and step.y else None,
                         target_element_info={
@@ -591,10 +598,7 @@ class ActionExecutor:
                     print(f"❌ Step {i+1} failed - aborting plan execution")
                     return False
                 
-                # Only check for goal achievement AFTER the action executes
-                if self._check_goal_achieved():
-                    print("✅ Goal achieved during step execution. Ending plan early.")
-                    return True
+                # Goal checking removed - keyword commands handle completion directly
 
                 # Small delay between actions
                 time.sleep(0.5)
@@ -621,7 +625,7 @@ class ActionExecutor:
         )
         try:
             overlay_index = step.overlay_index
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.CONTEXT_GUARD,
                 target_element_info={
                     "overlay_index": overlay_index,
@@ -803,7 +807,7 @@ class ActionExecutor:
             print(f"  ❌ Back navigation failed: {e}")
         # Record navigation interaction
         try:
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
                 target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
                 success=success,
@@ -829,7 +833,7 @@ class ActionExecutor:
             print(f"  ❌ Forward navigation failed: {e}")
         # Record navigation interaction
         try:
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
                 target_element_info={"direction": "forward", "from": prev_url, "to": self.page.url if success else prev_url},
                 success=success,
@@ -916,15 +920,10 @@ class ActionExecutor:
             except Exception:
                 target_selector = None
 
-        pre_evaluations = self.goal_monitor.record_planned_interaction(
-            InteractionType.CLICK,
-            coordinates=(x, y),
-            target_selector=target_selector,
-        )
-        
-        # Check for retry requests from goals immediately after evaluation
-        retry_goal = self.goal_monitor.check_for_retry_request()
-        if retry_goal:
+        # Removed planned interaction tracking (was for goal evaluation)
+        # Check for retry requests - disabled as retries are handled elsewhere
+        retry_goal = None
+        if False:  # Disabled retry check
             try:
                 self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
                 self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
@@ -1062,7 +1061,7 @@ class ActionExecutor:
             self.last_click_method = click_method_used
         
         # Record actual interaction with goal monitor
-        self.goal_monitor.record_interaction(
+        self.session_tracker.record_interaction(
             InteractionType.CLICK,
             coordinates=(x, y),
             success=success,
@@ -1105,16 +1104,12 @@ class ActionExecutor:
         x, y = self._get_click_coordinates(step, elements, page_info)
         box = None
         
-        # Record planned interaction with goal monitor and get pre-interaction evaluations
-        self.goal_monitor.record_planned_interaction(
-            InteractionType.TYPE,
-            coordinates=(x, y) if x is not None and y is not None else None,
-            target_description=step.text_to_type,
-            text_to_type=step.text_to_type,
-        )
+        # Record planned interaction - removed (was for goal evaluation)
         
         # Check for retry requests from goals immediately after evaluation
-        retry_goal = self.goal_monitor.check_for_retry_request()
+        # Removed retry goal check - retries are handled elsewhere
+        retry_goal = None
+        # retry_goal = self.goal_monitor.check_for_retry_request()
         if retry_goal:
             try:
                 self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
@@ -1269,7 +1264,7 @@ class ActionExecutor:
             print(f"  ❌ Typing failed: {e}")
         
         # Record type interaction with goal monitor
-        self.goal_monitor.record_interaction(
+        self.session_tracker.record_interaction(
             InteractionType.TYPE,
             coordinates=(x, y) if x is not None and y is not None else None,
             text_input=step.text_to_type,
@@ -1308,7 +1303,8 @@ class ActionExecutor:
         try:
             # Find active ScrollGoal
             from goals import ScrollGoal
-            scroll_goal = self.goal_monitor.active_goal if isinstance(self.goal_monitor.active_goal, ScrollGoal) else None
+            # Removed scroll goal check
+            scroll_goal = None
             
             if not scroll_goal:
                 return None
@@ -1416,16 +1412,14 @@ class ActionExecutor:
         )
         
         # Record planned interaction with goal monitor and get pre-interaction evaluations
-        pre_evaluations = self.goal_monitor.record_planned_interaction(
-            InteractionType.SCROLL,
-            target_x=target_x,
-            target_y=target_y,
-            scroll_direction=direction,
-            scroll_axis=axis
-        )
+        # Removed planned interaction tracking (was for goal evaluation)
+        pre_evaluations = None
+        # Removed planned interaction tracking (was for goal evaluation)
         
         # Check for retry requests from the goal immediately after evaluation
-        retry_goal = self.goal_monitor.check_for_retry_request()
+        # Removed retry goal check - retries are handled elsewhere
+        retry_goal = None
+        # retry_goal = self.goal_monitor.check_for_retry_request()
         if retry_goal:
             try:
                 self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
@@ -1474,7 +1468,7 @@ class ActionExecutor:
             print(f"  ❌ Scroll failed: {e}")
         
         # Record actual interaction with goal monitor
-        self.goal_monitor.record_interaction(
+        self.session_tracker.record_interaction(
             InteractionType.SCROLL,
             target_x=target_x,
             target_y=target_y,
@@ -1550,13 +1544,14 @@ class ActionExecutor:
             )
         
         # Record planned interaction with goal monitor
-        pre_evaluations = self.goal_monitor.record_planned_interaction(
-            InteractionType.PRESS,
-            keys_to_press=step.keys_to_press
-        )
+        # Removed planned interaction tracking (was for goal evaluation)
+        pre_evaluations = None
+        # Removed planned interaction tracking (was for goal evaluation)
         
         # Check for retry requests from goals immediately after evaluation
-        retry_goal = self.goal_monitor.check_for_retry_request()
+        # Removed retry goal check - retries are handled elsewhere
+        retry_goal = None
+        # retry_goal = self.goal_monitor.check_for_retry_request()
         if retry_goal:
             try:
                 self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
@@ -1587,7 +1582,7 @@ class ActionExecutor:
             print(f"  ❌ Key press failed: {e}")
         
         # Record actual interaction with goal monitor
-        self.goal_monitor.record_interaction(
+        self.session_tracker.record_interaction(
             InteractionType.PRESS,
             keys_pressed=step.keys_to_press,
             success=success,
@@ -2179,12 +2174,9 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
         return True
 
     def _check_goal_achieved(self) -> bool:
-        """Helper to check if any active goal has been achieved"""
-        try:
-            result = self.goal_monitor.evaluate_goal() if self.goal_monitor else None
-            return result.status == GoalStatus.ACHIEVED if result else False
-        except Exception:
-            return False
+        """Check if goal has been achieved - deprecated, always returns False"""
+        # Goal checking removed - keyword commands handle completion directly
+        return False
     
     def _mark_element_as_interacted(self, step: ActionStep, elements: PageElements, interaction_type: str) -> None:
         """Mark an element as interacted with for deduplication"""
@@ -2264,7 +2256,7 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
         url = (step.url or "").strip()
         if not url:
             print("❌ OPEN action missing URL")
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
                 navigation_url="",
                 success=False,
@@ -2272,13 +2264,11 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
             )
             return False
 
-        # Record planned interaction for goal evaluation
-        self.goal_monitor.record_planned_interaction(
-            InteractionType.NAVIGATION,
-            url=url,
-        )
+        # Removed planned interaction tracking (was for goal evaluation)
 
-        retry_goal = self.goal_monitor.check_for_retry_request()
+        # Removed retry goal check - retries are handled elsewhere
+        retry_goal = None
+        # retry_goal = self.goal_monitor.check_for_retry_request()
         if retry_goal:
             try:
                 self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
@@ -2299,7 +2289,7 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
             error_message = str(e)
             print(f"  ❌ Open navigation failed: {e}")
 
-        self.goal_monitor.record_interaction(
+        self.session_tracker.record_interaction(
             InteractionType.NAVIGATION,
             target_element_info={"url": url},
             navigation_url=url if success else None,
@@ -2325,7 +2315,7 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
             print(f"  ❌ Back navigation failed: {e}")
         # Record navigation interaction
         try:
-            self.goal_monitor.record_interaction(
+            self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
                 target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
                 success=success,
