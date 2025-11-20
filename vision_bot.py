@@ -3,7 +3,6 @@ Vision Bot - Clean modular version.
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import time
@@ -20,17 +19,14 @@ from element_detection import ElementDetector
 from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from utils import PageUtils
-from action_queue import ActionQueue, QueuedAction
-from session_tracker import SessionTracker, InteractionType
+from action_queue import ActionQueue
+from session_tracker import SessionTracker
 # Removed goal imports - goals system no longer used
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     extract_click_target,
     extract_press_target,
     parse_action_intent,
-    parse_structured_if,
-    parse_structured_while,
-    parse_structured_for,
     parse_keyword_command,
     parse_focus_command,
     parse_undo_command,
@@ -397,7 +393,7 @@ class BrowserVisionBot:
         self._semantic_target_cache: Dict[str, Optional[SemanticTarget]] = {}
         
         # Deferred input handling
-        self.defer_input_handler: Optional[Callable[[str, GoalContext], str]] = None
+        self.defer_input_handler: Optional[Callable[[str, Any], str]] = None
         self._pending_defer_input: Optional[Dict[str, Any]] = None
         
         # Execution timer for tracking task, iteration, and command timings
@@ -542,11 +538,11 @@ class BrowserVisionBot:
             pass
         return entry["plan"].copy(deep=True)
     
-    def set_defer_input_handler(self, handler: Optional[Callable[[str, GoalContext], str]]) -> None:
+    def set_defer_input_handler(self, handler: Optional[Callable[[str, Any], str]]) -> None:
         """Register a custom handler for defer goals that request user input."""
         self.defer_input_handler = handler
 
-    def _default_defer_input_handler(self, prompt: str, context: GoalContext) -> str:
+    def _default_defer_input_handler(self, prompt: str, context: Any) -> str:
         try:
             message = prompt.strip() if prompt and prompt.strip() else "Please provide the requested input to continue."
             return input(f"{message}\n> ")
@@ -557,7 +553,7 @@ class BrowserVisionBot:
                 pass
             return ""
 
-    def _request_defer_input(self, prompt: str, context: GoalContext) -> str:
+    def _request_defer_input(self, prompt: str, context: Any) -> str:
         handler = self.defer_input_handler or self._default_defer_input_handler
         response = handler(prompt, context)
         if response is None:
@@ -1104,53 +1100,8 @@ class BrowserVisionBot:
         
         Returns True/False if executed, or None to fall back to normal planning.
         """
-        try:
-            # Simple bypass removed - keyword commands handle these directly
-            return None
-
-            # Build minimal plan
-            steps: List[ActionStep] = []
-            if isinstance(goal, PressGoal):
-                if getattr(goal, 'target_keys', None):
-                    steps.append(ActionStep(action=ActionType.PRESS, keys_to_press=goal.target_keys))
-            elif isinstance(goal, ScrollGoal):
-                # Heuristic direction from request; executor will refine using ScrollGoal
-                req = (getattr(goal, 'user_request', '') or '').lower()
-                direction = 'down'
-                if 'up' in req:
-                    direction = 'up'
-                elif 'left' in req:
-                    direction = 'left'
-                elif 'right' in req:
-                    direction = 'right'
-                steps.append(ActionStep(action=ActionType.SCROLL, scroll_direction=direction))
-                # Intentionally skip Back/Forward here to avoid duplicate/conflicting navigation
-
-            # Always add STOP to return quickly
-            steps.append(ActionStep(action=ActionType.STOP))
-
-            fast_plan = VisionPlan(
-                detected_elements=PageElements(elements=[]),
-                action_steps=steps,
-                reasoning="Simple-goal bypass: executing press/scroll without planning",
-                confidence=0.99,
-            )
-
-            page_info = self.page_utils.get_page_info()
-            ok = self.action_executor.execute_plan(fast_plan, page_info, command_id=command_id)
-            if not ok:
-                self.execution_timer.end_command()
-                return False
-
-            # Simple bypass completed successfully
-            self.execution_timer.end_command()
-            return True
-        except Exception as e:
-            try:
-                self.event_logger.system_error("Simple-goal bypass failed", error=e)
-            except Exception:
-                pass
-            return None
+        # Goal system removed - simple goal bypass no longer supported
+        return None
 
     def _try_direct_click_bypass(self, prompt_text: str) -> Optional[bool]:
         """Direct DOM bypass removed; rely on vision planning."""
@@ -1308,7 +1259,7 @@ class BrowserVisionBot:
 
             # If keyword execution can't handle it, fail immediately
             duration_ms = (time.time() - start_time) * 1000
-            self.logger.log_goal_failure(goal_description, f"Could not parse command as keyword action", duration_ms)
+            self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action", duration_ms)
             print(f"❌ Could not parse command: {goal_description}")
             self.command_ledger.complete_command(command_id, success=False, error_message="Could not parse command as keyword action")
             self.execution_timer.end_command()
@@ -1501,6 +1452,8 @@ class BrowserVisionBot:
             - If output_format="structured" and model_schema provided: model instance
         """
         from ai_utils import generate_text, generate_model
+        # Import InteractionType locally to avoid linter false positive
+        from session_tracker import InteractionType as IT
         
         self._check_termination()
         
@@ -1575,7 +1528,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     
                     # Record extraction in interaction history
                     self.session_tracker.record_interaction(
-                        InteractionType.EXTRACT,
+                        IT.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data={"text": extracted_text},
                         success=True
@@ -1679,7 +1632,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     
                     # Record extraction in interaction history
                     self.session_tracker.record_interaction(
-                        InteractionType.EXTRACT,
+                        IT.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=extracted_dict,
                         success=True
@@ -1690,8 +1643,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 elif output_format == "structured":
                     if not model_schema:
                         raise ValueError("model_schema is required when output_format='structured'")
-                    
-                    from goals.base import InteractionType
                     result = generate_model(
                         prompt=extraction_prompt,
                         model_object_type=model_schema,
@@ -1704,7 +1655,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     # Convert Pydantic model to dict for storage
                     extracted_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict()
                     self.session_tracker.record_interaction(
-                        InteractionType.EXTRACT,
+                        IT.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=extracted_dict,
                         success=True
@@ -1731,7 +1682,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 else:
                     # Record failed extraction in interaction history
                     self.session_tracker.record_interaction(
-                        InteractionType.EXTRACT,
+                        IT.EXTRACT,
                         extraction_prompt=prompt,
                         extracted_data=None,
                         success=False,
@@ -1742,7 +1693,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             # Record failed extraction if we exhausted all retries
         if last_error:
             self.session_tracker.record_interaction(
-                InteractionType.EXTRACT,
+                IT.EXTRACT,
                 extraction_prompt=prompt,
                 extracted_data=None,
                 success=False,
@@ -2055,7 +2006,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             "reason": reason,
         }
 
-    def _build_navigation_plan(self, goal: NavigationGoal) -> Optional[VisionPlan]:
+    def _build_navigation_plan(self, goal: Any) -> Optional[VisionPlan]:
         """Construct a single-step plan that opens the requested URL."""
         url = (goal.navigation_intent or "").strip()
         if not url:
@@ -2890,45 +2841,10 @@ Return only the extracted text that appears in the text content above. Do not ma
             return f"{domain}{path}"
         return None
 
-    def _enable_goal_evaluation_override(self) -> List[Type[BaseGoal]]:
+    def _enable_goal_evaluation_override(self) -> List:
         """Override goal evaluation with automatic success."""
         # Goal system removed - return empty list
-        goal_types: List[Type[BaseGoal]] = []
-        return goal_types
-
-        # Removed goal_monitor logic - goals system no longer exists
-        if False:  # Never reached
-            goal = None
-        goal_cls = goal.__class__
-
-        # Skip overriding defer-style goals that must run their own evaluation logic.
-        defer_like = getattr(goal, "request_user_input", None) is not None or goal_cls.__name__ in {"DeferGoal", "TimedSleepGoal"}
-        if defer_like:
-            print(f"[KeywordCommand] Leaving goal evaluation intact for {goal_cls.__name__}")
-            return goal_types
-
-        goal_types.append(goal_cls)
-
-        if goal_cls not in self._goal_evaluation_overrides:
-            original_eval = getattr(goal, "evaluate", None)
-
-            def _override_evaluate(_: GoalContext) -> GoalResult:  # type: ignore[override]
-                return GoalResult(
-                    status=GoalStatus.ACHIEVED,
-                    confidence=1.0,
-                    reasoning="Skipping goal evaluation.",
-                )
-
-            self._goal_evaluation_overrides[goal_cls] = original_eval
-            goal.evaluate = _override_evaluate.__get__(goal, goal_cls)  # type: ignore[attr-defined]
-
-            # Ensure evaluation timing won't prevent immediate success
-            try:
-                goal.EVALUATION_TIMING = GoalStatus.ACHIEVED  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-        return goal_types
+        return []
 
     def _restore_goal_evaluations(self) -> None:
         """Restore original goal evaluation behavior after keyword command completes."""
@@ -3024,220 +2940,15 @@ Return only the extracted text that appears in the text content above. Do not ma
     # -------------------- Public memory helpers (general) --------------------
     # Memory store methods removed - deduplication now handled by focus manager
 
-    def _create_goal_from_description(self, goal_description: str, modifier: Optional[List[str]] = None) -> tuple[BaseGoal, str]:
-        """Set up smart goals based on the goal description and return the updated description"""
-        # 1) Structured syntax (explicit) takes precedence
-        try:
-            sw = parse_structured_while(goal_description)
-            if sw:
-                print(f"🔁 WhileGoal (structured): '{sw}'")
-                if len(sw) == 4:
-                    cond_text, body_text, route, fail_on_body_failure = sw
-                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, route, modifier, fail_on_body_failure)
-                elif len(sw) == 3:
-                    # Backward compatibility for 3-tuple
-                    cond_text, body_text, route = sw
-                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, route, modifier)
-                else:
-                    # Old format without route
-                    cond_text, body_text = sw
-                    wg = self._create_while_goal_from_parts(goal_description, cond_text, body_text, None, modifier)
-                
-                if wg:
-                    print(f"🔁 Created WhileGoal (structured): '{wg.description}'")
-                    return wg, body_text
-                else:
-                    print(f"ℹ️ No WhileGoal created from structured while parse for goal description: '{goal_description}'")
-            else:
-                print(f"ℹ️ No structured while parse for goal description: '{goal_description}'")
-        except Exception as e:
-            print(f"⚠️ Structured while parse failed: {e}")
-
-        try:
-            parsed_if = parse_structured_if(goal_description)
-            if parsed_if:
-                print(f"🔀 Structured IF parse: {parsed_if}")
-                if len(parsed_if) == 4:
-                    condition_text, success_action, fail_action, route = parsed_if
-                    if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action, route, modifier)
-                else:
-                    # Old format without route
-                    condition_text, success_action, fail_action = parsed_if
-                    if_goal = self._create_if_goal_from_parts(condition_text, success_action, fail_action, None, modifier)
-                print(f"🔀 Created IfGoal (structured): '{if_goal.description}'")
-                if if_goal:
-                    result_goal, result_description = self._evaluate_if_goal(if_goal)
-                    print(f"🔀 IfGoal (structured) evaluation result: {result_goal}")
-                    if result_goal:
-                        print(f"🔀 Added IfGoal (structured) active sub-goal: {result_goal.__class__.__name__} - '{result_goal.description}'")
-                        return result_goal, result_description
-                    elif result_description and result_description.strip().lower().startswith('ref:'):
-                        print(f"🔀 IfGoal (structured) evaluation result: Reference command '{result_description}'")
-                        return None, result_description
-                    elif result_description == "":
-                        print("ℹ️ Structured IF evaluated false with no fail action → no-op")
-                        return None, ""
-                else:
-                    print(f"ℹ️ No IfGoal created from structured if parse for goal description: '{goal_description}'")
-            else:
-                print(f"ℹ️ No structured if parse for goal description: '{goal_description}'")
-            
-        except Exception as e:
-            print(f"⚠️ Structured IF parse failed: {e}")
-
-        # 1.5) Structured FOR loops
-        try:
-            parsed_for = parse_structured_for(goal_description)
-            if parsed_for:
-                print(f"🔄 Structured FOR parse: {parsed_for}")
-                iteration_mode, iteration_target, loop_body, break_conditions = parsed_for
-                for_goal = self._create_for_goal_from_parts(iteration_mode, iteration_target, loop_body, break_conditions)
-                if for_goal:
-                    print(f"🔄 Created ForGoal (structured): '{for_goal.description}'")
-                    return for_goal, goal_description
-                else:
-                    print(f"ℹ️ No ForGoal created from structured for parse for goal description: '{goal_description}'")
-            else:
-                print(f"ℹ️ No structured for parse for goal description: '{goal_description}'")
-        except Exception as e:
-            print(f"⚠️ Structured for parse failed: {e}")
-
-        # 2) Single-keyword commands (fast path)
-        try:
-            kw = parse_keyword_command(goal_description)
-            if kw:
-                keyword, payload, _helper = kw
-
-                goal = self._create_goal_from_keyword(keyword, payload)
-                if goal:
-                    print(f"✅ Created {goal.__class__.__name__} via keyword '{keyword}': '{goal.description}'")
-                    # Focus plan generation on the payload/action text
-                    return goal, payload or goal_description
-                else:
-                    print(f"ℹ️ No goal created from keyword command for goal description: '{goal_description}'")
-                    return None, goal_description
-            else:
-                print(f"ℹ️ No keyword command parse for goal description: '{goal_description}'")
-                return None, goal_description
-        except Exception as e:
-            print(f"⚠️ Keyword command parse failed: {e}")
-
-
-        print(f"ℹ️ No goal created from goal description: '{goal_description}'")
+    def _create_goal_from_description(self, goal_description: str, modifier: Optional[List[str]] = None) -> tuple[None, str]:
+        """Goal system removed - returns None, description"""
         return None, goal_description
 
-    def _create_goal_from_keyword(self, keyword: str, payload: str) -> Optional[BaseGoal]:
-        """Create a specific goal from a single keyword and payload."""
-        k = (keyword or "").lower().strip()
-        p = (payload or "").strip()
-        
-        # Get kwargs from temp kwargs if available
-        temp_kwargs = getattr(self, '_temp_goal_kwargs', {})
-        max_retries = temp_kwargs.get('max_retries', 3)
-
-        if k == "press":
-            keys = p or extract_press_target(p)
-            if keys:
-                return PressGoal(description=f"Press action: {keys}", target_keys=keys, max_retries=max_retries)
-        if k == "scroll":
-            if p:
-                return ScrollGoal(description=f"Scroll action: {p}", user_request=p, max_retries=max_retries)
-            else:
-                return ScrollGoal(description="Scroll action: down", user_request="scroll down", max_retries=max_retries)
-        if k == "click":
-            target = p or extract_click_target(p)
-            if target:
-                return ClickGoal(description=f"Click action: {target}", target_description=target, **temp_kwargs)
-        if k == "navigate":
-            target = p
-            if target:
-                return NavigationGoal(description=f"Navigation action: {target}", navigation_intent=target, max_retries=max_retries)
-        if k == "form":
-            desc = p or "Fill the form"
-            return FormFillGoal(description=f"Form fill action: {desc}", trigger_on_submit=False, trigger_on_field_input=True, max_retries=max_retries)
-        if k == "type":
-            target = p or extract_click_target(p)
-            if target:
-                return TypeGoal(description=f"Type in: {target}", target_description=target, max_retries=max_retries)
-        if k == "date":
-            target = p or extract_click_target(p)
-            if target:
-                return DateGoal(description=f"Set date: {target}", target_description=target, max_retries=max_retries)
-        if k == "select":
-            target = p or extract_click_target(p)
-            if target:
-                return SelectGoal(description=f"Select: {target}", target_description=target, max_retries=max_retries)
-        if k == "back":
-            import re as _re
-            steps = 1
-            m = _re.match(r"^(\d+)$", p)
-            if m:
-                steps = max(1, int(m.group(1)))
-            try:
-                pointer = getattr(self.session_tracker, 'url_pointer', None) if self.session_tracker else None
-                start_index = pointer if pointer is not None else (len(self.session_tracker.url_history) - 1 if self.session_tracker and self.session_tracker.url_history else 0)
-                start_url = self.session_tracker.url_history[start_index] if self.session_tracker and self.session_tracker.url_history and 0 <= start_index < len(self.session_tracker.url_history) else (self.page.url if self.page else "")
-            except Exception:
-                start_index, start_url = 0, (self.page.url if self.page else "")
-            return BackGoal(description=f"Back action: {steps}", steps_back=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
-        if k == "forward":
-            import re as _re
-            steps = 1
-            m = _re.match(r"^(\d+)$", p)
-            if m:
-                steps = max(1, int(m.group(1)))
-            try:
-                pointer = getattr(self.session_tracker, 'url_pointer', None) if self.session_tracker else None
-                start_index = pointer if pointer is not None else (len(self.session_tracker.url_history) - 1 if self.session_tracker and self.session_tracker.url_history else 0)
-                start_url = self.session_tracker.url_history[start_index] if self.session_tracker and self.session_tracker.url_history and 0 <= start_index < len(self.session_tracker.url_history) else (self.page.url if self.page else "")
-            except Exception:
-                start_index, start_url = 0, (self.page.url if self.page else "")
-            return ForwardGoal(description=f"Forward action: {steps}", steps_forward=steps, start_index=start_index, start_url=start_url, needs_detection=False, max_retries=max_retries)
-        if k in {"defer", "defer_input"}:
-            # Check if payload contains a number (timed defer)
-            import re
-            number_match = re.match(r'^(\d+)(?:\s+(.*))?$', p.strip() if p else "")
-            if number_match:
-                delay_seconds = int(number_match.group(1))
-                custom_message = number_match.group(2) if number_match.group(2) else None
-                # For timed defer, return a special goal that uses time.sleep
-                return TimedSleepGoal(
-                    description=f"Timed defer action: {delay_seconds} seconds",
-                    delay_seconds=delay_seconds,
-                    prompt=custom_message,
-                    max_retries=max_retries
-                )
-            else:
-                # Regular defer (manual control)
-                message = p or "Manual control active"
-                response_key = None
-                if message:
-                    response_key_match = re.match(r"^(?:response[_\-]?key\s*=\s*)([^|]+)\|(.+)$", message, flags=re.IGNORECASE)
-                    if response_key_match:
-                        response_key = response_key_match.group(1).strip()
-                        message = response_key_match.group(2).strip()
-                request_input = (k == "defer_input")
-                return DeferGoal(
-                    description=f"Defer action: {message}",
-                    prompt=message,
-                    max_retries=max_retries,
-                    request_user_input=request_input,
-                    response_key=response_key,
-                    input_callback=self._request_defer_input if request_input else None,
-                )
-        # if k == "ref":
-        #     goal_description = keyword + ": " + payload
-        #     print(f"🔄 Handling ref command: '{goal_description}'")
-        #     ref_result = self._handle_ref_commands(goal_description)
-        #     if ref_result is not None:
-        #         print("✅ Created RefGoal (structured)")
-        #         return BaseGoal.make_ref_goal(goal_description, payload, ref_result)
-        #     else:
-        #         print(f"ℹ️ No ref result for ref command: '{goal_description}'")
-        #         return BaseGoal.make_ref_goal(goal_description, payload, False)
+    def _create_goal_from_keyword(self, keyword: str, payload: str) -> None:
+        """Goal system removed - returns None"""
         return None
 
-    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None, fail_on_body_failure: Optional[bool] = None) -> Optional[WhileGoal]:
+    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None, fail_on_body_failure: Optional[bool] = None) -> Optional[Any]:
         """Create WhileGoal from explicit condition/body parts with route determination."""
         try:
             # Determine route: modifier first, then parsed route, then fail
@@ -3262,231 +2973,61 @@ Return only the extracted text that appears in the text content above. Do not ma
                 raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
             
             # Get max_retries and fail_on_body_failure from temp kwargs if available
-            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)  # Unused - goal system removed
             if fail_on_body_failure is None:
                 fail_on_body_failure = getattr(self, '_temp_goal_kwargs', {}).get('fail_on_body_failure', True)
             
-            wg = WhileGoal(
-                condition_text=cond_text,
-                loop_prompt=body_text,
-                route=determined_route,
-                description=goal_description,
-                max_retries=max_retries,
-                fail_on_body_failure=fail_on_body_failure,
-            )
-            return wg
+            # Goal system removed - WhileGoal no longer exists
+            return None
         except Exception as e:
             print(f"⚠️ Error creating structured WhileGoal: {e}")
             return None
 
-    def _create_for_goal_from_parts(self, iteration_mode: str, iteration_target: str, loop_body: str, break_conditions: Optional[str] = None) -> Optional[ForGoal]:
+    def _create_for_goal_from_parts(self, iteration_mode: str, iteration_target: str, loop_body: str, break_conditions: Optional[str] = None) -> Optional[Any]:
         """Create ForGoal from parsed iteration parts."""
         try:
-            # Parse iteration target based on mode
+            # Parse iteration target based on mode (unused - goal system removed)
             if iteration_mode == "count":
-                target_count = int(iteration_target)
-                target = target_count
+                _target_count = int(iteration_target)
+                _target = _target_count
             elif iteration_mode == "elements":
-                target = iteration_target
+                _target = iteration_target
             elif iteration_mode == "items":
                 # Parse "item|list" format
                 if "|" in iteration_target:
                     item, item_list = iteration_target.split("|", 1)
                     # For now, create a simple list - in real implementation, this would parse the actual list
-                    target = [item.strip(), "item2", "item3"]  # Placeholder
+                    _target = [item.strip(), "item2", "item3"]  # Placeholder
                 else:
-                    target = [iteration_target]
+                    _target = [iteration_target]
             else:
                 print(f"⚠️ Unsupported iteration mode: {iteration_mode}")
                 return None
             
-            # Parse break conditions
-            break_conds = [break_conditions] if break_conditions else []
+            # Parse break conditions (unused - goal system removed)
+            _break_conds = [break_conditions] if break_conditions else []
             
-            # Get max_retries from temp kwargs if available
-            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
+            # Get max_retries from temp kwargs if available (unused - goal system removed)
+            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
             
-            for_goal = ForGoal(
-                iteration_mode=iteration_mode,
-                iteration_target=target,
-                loop_prompt=loop_body,
-                break_conditions=break_conds,
-                description=f"For loop: {iteration_mode} iteration of '{iteration_target}'",
-                max_retries=max_retries,
-            )
-            
-            return for_goal
+            # Goal system removed - ForGoal no longer exists
+            return None
             
         except Exception as e:
             print(f"⚠️ Error creating structured ForGoal: {e}")
             return None
 
-    def _execute_for_loop(self, goal: ForGoal, start_time: float, parent_command_id: Optional[str] = None) -> bool:
-        """
-        Execute a ForGoal using target resolution and contextual execution.
-        
-        Args:
-            goal: The ForGoal to execute
-            start_time: Start time for duration tracking
-            parent_command_id: Optional parent command ID for tracking iterations
-        """
-        loop_description = goal.description or f"For loop: {goal.loop_prompt}"
-        print(f"🔄 Starting for loop: {loop_description}")
+    def _execute_for_loop(self, goal: Any, start_time: float, parent_command_id: Optional[str] = None) -> bool:
+        """Goal system removed - for loops no longer supported"""
+        print("❌ For loops are no longer supported (goal system removed)")
+        return False
 
-        # Goal system removed - no-op for goal clearing
-        # Clear any existing goals and reset retry state (removed)
+    def _execute_while_loop(self, goal: Any, start_time: float) -> bool:
+        """Goal system removed - while loops no longer supported"""
+        print("❌ While loops are no longer supported (goal system removed)")
+        return False
 
-        # Execute the for loop
-        while True:
-            try:
-                # Goal system removed - build context without goal_monitor
-                context = None  # self.goal_monitor._build_goal_context() - removed
-            except Exception as e:
-                error_msg = f"Unable to build context for for loop evaluation: {e}"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
-                return False
-
-            try:
-                result = goal.evaluate(context)
-            except Exception as e:
-                error_msg = f"For loop evaluation error: {e}"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
-                return False
-
-            # Check if loop is complete
-            if result.status == GoalStatus.ACHIEVED:
-                duration_ms = (time.time() - start_time) * 1000
-                print("✅ For loop completed successfully")
-                self.logger.log_goal_success(loop_description, duration_ms, result.evidence)
-                return True
-            elif result.status == GoalStatus.FAILED:
-                duration_ms = (time.time() - start_time) * 1000
-                error_msg = result.reasoning or "For loop failed"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
-                return False
-            elif result.status == GoalStatus.PENDING:
-                # Execute the next action
-                if result.next_actions:
-                    action = result.next_actions[0]
-                    print(f"🔄 Executing for loop action: {action}")
-                    
-                    # Generate iteration command ID
-                    iteration_num = goal.progress.current_target_index + 1
-                    iter_cmd_id = f"{parent_command_id}_iter{iteration_num}" if parent_command_id else None
-                    
-                    # Execute the action
-                    action_success = self.act(action, command_id=iter_cmd_id)
-                    
-                    # Notify the for goal of the result
-                    goal.on_iteration_complete(action_success)
-                    
-                    # Check if we should continue
-                    if not action_success and not goal.can_retry():
-                        duration_ms = (time.time() - start_time) * 1000
-                        error_msg = "For loop iteration failed and max retries exceeded"
-                        print(f"❌ {error_msg}")
-                        self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
-                        return False
-                else:
-                    # No next actions, loop might be stuck
-                    duration_ms = (time.time() - start_time) * 1000
-                    error_msg = "For loop has no next actions"
-                    print(f"❌ {error_msg}")
-                    self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
-                    return False
-            else:
-                # Unknown status
-                duration_ms = (time.time() - start_time) * 1000
-                error_msg = f"Unknown for loop status: {result.status}"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, duration_ms)
-                return False
-
-    def _execute_while_loop(self, goal: WhileGoal, start_time: float) -> bool:
-        """Execute a WhileGoal using standard while-loop semantics."""
-        loop_description = goal.description or f"While loop: {goal.loop_prompt}"
-        print(f"🔁 Starting while loop: {loop_description}")
-
-        iterations = 0
-        # Goal system removed - no-op for goal clearing
-        # Ensure we evaluate a clean condition on the first pass (removed)
-
-        while True:
-            try:
-                # Goal system removed - build context without goal_monitor
-                context = None  # self.goal_monitor._build_goal_context() - removed
-            except Exception as e:
-                error_msg = f"Unable to build context for while loop evaluation: {e}"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
-                return False
-
-            try:
-                condition_result = bool(goal.condition.evaluator(context))
-            except Exception as e:
-                error_msg = f"While condition error: {e}"
-                print(f"❌ {error_msg}")
-                self.logger.log_goal_failure(loop_description, error_msg, (time.time() - start_time) * 1000)
-                return False
-
-            goal.progress.last_condition_result = condition_result
-            self.logger.log_condition_evaluation(goal.condition.description, condition_result)
-            print(f"🔍 While condition '{goal.condition.description}' → {condition_result}")
-
-            if not condition_result:
-                duration_ms = (time.time() - start_time) * 1000
-                print(f"✅ While loop condition false after {iterations} iteration{'s' if iterations != 1 else ''}")
-                if goal.else_prompt and goal.else_prompt.strip():
-                    print(f"➡️ Executing while-else prompt: {goal.else_prompt}")
-                    else_result = bool(self.act(goal.else_prompt))
-                    if else_result:
-                        self.logger.log_goal_success(loop_description, duration_ms, {"iterations": iterations, "outcome": "else"})
-                    else:
-                        self.logger.log_goal_failure(loop_description, f"Else prompt failed: {goal.else_prompt}", duration_ms)
-                    return else_result
-
-                self.logger.log_goal_success(loop_description, duration_ms, {"iterations": iterations, "outcome": "completed"})
-                return True
-
-            if iterations >= goal.max_iterations:
-                duration_ms = (time.time() - start_time) * 1000
-                reason = f"Loop exceeded max iterations ({goal.max_iterations})"
-                print(f"❌ {reason}")
-                self.logger.log_goal_failure(loop_description, reason, duration_ms)
-                return False
-
-            if not goal.loop_prompt or not goal.loop_prompt.strip():
-                duration_ms = (time.time() - start_time) * 1000
-                reason = "While loop body is empty"
-                print(f"❌ {reason}")
-                self.logger.log_goal_failure(loop_description, reason, duration_ms)
-                return False
-
-            iterations += 1
-            goal.progress.iterations = iterations
-            print(f"🔄 While loop iteration {iterations}: executing body '{goal.loop_prompt}'")
-
-            body_result = bool(self.act(goal.loop_prompt))
-            if not body_result:
-                if goal.fail_on_body_failure:
-                    # Current behavior: fail entire loop
-                    duration_ms = (time.time() - start_time) * 1000
-                    reason = f"Loop body failed on iteration {iterations}"
-                    print(f"❌ {reason}")
-                    self.logger.log_goal_failure(loop_description, reason, duration_ms)
-                    return False
-                else:
-                    # New behavior: log warning but continue
-                    print(f"⚠️  Loop body failed on iteration {iterations}, continuing loop (fail_on_body_failure=False)")
-                    # Loop continues to next iteration
-
-            # Goal system removed - no-op for goal clearing
-            # Reset goal monitor state before the next condition check (removed)
-
-    def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str], route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[IfGoal]:
+    def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str], route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[Any]:
         """Create IfGoal from explicit parts with route determination."""
         try:
             # Determine route: modifier first, then parsed route, then fail
@@ -3517,8 +3058,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             normalized_success = success_text.strip()
             if normalized_success.lower().startswith("ref:"):
                 # Create a simple placeholder goal for reference commands
-                from goals.base import BaseGoal
-                class RefPlaceholderGoal(BaseGoal):
+                # Goal system removed - RefPlaceholderGoal removed
+                class RefPlaceholderGoal:
                     def __init__(self, description: str):
                         super().__init__(description)
                     def evaluate(self, context):
@@ -3539,10 +3080,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 normalized_fail = fail_text.strip()
                 if normalized_fail.lower().startswith("ref:"):
                     # Create a simple placeholder goal for reference commands
-                    from goals.base import BaseGoal
-                    class RefPlaceholderGoal(BaseGoal):
+                    # Goal system removed - BaseGoal removed
+                    class RefPlaceholderGoal:
                         def __init__(self, description: str):
-                            super().__init__(description)
+                            self.description = description
                         def evaluate(self, context):
                             return None  # Will be handled by _evaluate_if_goal
                         def get_description(self, context):
@@ -3555,84 +3096,21 @@ Return only the extracted text that appears in the text content above. Do not ma
             else:
                 fail_goal = None
 
-            fail_desc = fail_goal.description if fail_goal else "(no fail action)"
+            # Unused variables (goal system removed)
+            _fail_desc = fail_goal.description if fail_goal else "(no fail action)"
+            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
             
-            # Get max_retries from temp kwargs if available
-            max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
-            
-            if_goal = IfGoal(
-                condition_text=condition_text,
-                success_goal=success_goal,
-                fail_goal=fail_goal,
-                route=determined_route,
-                description=f"If {condition_text} then {success_goal.description} else {fail_desc}",
-                max_retries=max_retries,
-            )
-            return if_goal
+            # Goal system removed - IfGoal no longer exists
+            return None
         except Exception as e:
             print(f"⚠️ Error creating structured IfGoal: {e}")
             return None
 
 
-    def _evaluate_if_goal(self, if_goal: IfGoal) -> tuple[Optional[BaseGoal], str]:
-        """Evaluate a conditional goal immediately and return the active sub-goal and updated description"""
-
-        def _execute_branch_goal(branch_goal: Optional[BaseGoal], branch_name: str) -> Optional[tuple[Optional[BaseGoal], str]]:
-            if not branch_goal:
-                return None
-            desc = getattr(branch_goal, "description", "") or ""
-            fast_desc = getattr(branch_goal, "fast_command_text", "")
-            command_text = fast_desc or desc
-            if desc.strip().lower().startswith("ref:"):
-                print(f"🔀 {branch_name} branch resolved to reference command: {desc} (execution deferred)")
-                return None, desc
-
-            print(f"🔀 {branch_name} branch invoking act() with '{command_text}' to leverage fast/regular execution pipeline")
-            try:
-                self.act(command_text)
-            except Exception as branch_error:
-                print(f"⚠️ IfGoal {branch_name.lower()} branch act() execution failed: {branch_error}")
-            return None, ""
-
-        try:
-            # Create a basic context for evaluation
-            from goals.base import GoalContext, BrowserState
-            page_info = self.page_utils.get_page_info()
-            
-            basic_context = GoalContext(
-                initial_state=BrowserState(
-                    timestamp=0, url=page_info.url, title=page_info.title,
-                    page_width=page_info.width, page_height=page_info.height,
-                    scroll_x=0, scroll_y=0
-                ),
-                current_state=BrowserState(
-                    timestamp=0, url=page_info.url, title=page_info.title,
-                    page_width=page_info.width, page_height=page_info.height,
-                    scroll_x=0, scroll_y=0
-                ),
-                page_reference=self.page
-            )
-            
-            # Evaluate the condition first
-            if_goal.evaluate(basic_context)
-            
-            if if_goal._last_condition_result:
-                branch_result = _execute_branch_goal(if_goal.success_goal, "Success")
-                if branch_result is not None:
-                    return branch_result
-                return if_goal.success_goal, getattr(if_goal.success_goal, "description", "")
-
-            if if_goal.fail_goal:
-                branch_result = _execute_branch_goal(if_goal.fail_goal, "Fail")
-                if branch_result is not None:
-                    return branch_result
-                return if_goal.fail_goal, if_goal.fail_goal.description
-
-            return None, ""
-                
-        except Exception as e:
-            print(f"⚠️ Error evaluating IfGoal: {e}")
-            return None, ""
+    def _evaluate_if_goal(self, if_goal: Any) -> tuple[Optional[Any], str]:
+        """Goal system removed - if goals no longer supported"""
+        print("❌ If goals are no longer supported (goal system removed)")
+        return None, ""
 
     def _print_goal_summary(self) -> None:
         """Print a summary of all goal statuses - deprecated, kept for compatibility"""

@@ -859,8 +859,8 @@ class AgentController:
                     # End task timer and log summary
                     self.bot.execution_timer.end_task()
                     self.bot.execution_timer.log_summary()
-                    return GoalResult(
-                        status=GoalStatus.FAILED,
+                    return TaskResult(
+                        success=False,
                         confidence=0.5,
                         reasoning="Could not determine next action",
                         evidence=self._build_evidence({"iterations": iteration + 1})
@@ -1220,14 +1220,17 @@ class AgentController:
         """
         snapshot = self.bot.session_tracker._capture_current_state()
         
-        # Override screenshot if full_page is requested
-        if full_page:
-            try:
+        # Always capture screenshot - agent needs it to see the page
+        try:
+            if full_page:
                 snapshot.screenshot = self.bot.page.screenshot(full_page=True)
                 print("📸 Using full-page screenshot for exploration mode")
-            except Exception as e:
-                print(f"⚠️ Failed to capture full-page screenshot: {e}")
-                # Fall back to viewport screenshot
+            else:
+                # Capture viewport screenshot (agent needs this to see what's visible)
+                snapshot.screenshot = self.bot.page.screenshot(full_page=False)
+        except Exception as e:
+            print(f"⚠️ Failed to capture screenshot: {e}")
+            snapshot.screenshot = None
         
         # Compute screenshot hash for change detection
         screenshot_data = getattr(snapshot, "screenshot", None)

@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 
 from ai_utils import generate_model, generate_text
-from goals.base import BaseGoal
+from typing import Any
 from models import VisionPlan, PageElements
 from models.core_models import DetectedElement, PageSection, ActionStep, PageInfo, ActionType
 from utils.semantic_targets import SemanticTarget
@@ -47,8 +47,8 @@ class PlanGenerator:
         detected_elements: PageElements,
         page_info: PageInfo,
         screenshot: bytes,
-        active_goal: Optional[BaseGoal] = None,
-        retry_goal: Optional[BaseGoal] = None,
+        active_goal: Optional[Any] = None,
+        retry_goal: Optional[Any] = None,
         page: Any = None,
         command_history: Optional[List[str]] = None,
         dedup_context: Optional[Dict[str, Any]] = None,
@@ -147,8 +147,8 @@ class PlanGenerator:
         screenshot_with_overlays: bytes,
         page_info: PageInfo,
         command_history: Optional[List[str]] = None,
-        active_goal: Optional[BaseGoal] = None,
-        retry_goal: Optional[BaseGoal] = None,
+        active_goal: Optional[Any] = None,
+        retry_goal: Optional[Any] = None,
         page: Any = None,
         interpretation_mode: str = "literal",
         semantic_hint: Optional[SemanticTarget] = None,
@@ -577,10 +577,10 @@ class PlanGenerator:
     def _build_goal_context_block(
         self,
         goal_description: str,
-        active_goal: Optional[BaseGoal],
+        active_goal: Optional[Any],
         page_info: PageInfo,
         page: Any,
-        retry_goal: Optional[BaseGoal],
+        retry_goal: Optional[Any],
         command_history: List[str],
     ) -> str:
         """Assemble a textual block describing current goals and recent commands."""
@@ -675,8 +675,9 @@ class PlanGenerator:
 
         plan.action_steps = filtered_steps
 
-    def _is_click_goal(self, goal_description: str, active_goal: Optional[BaseGoal]) -> bool:
-        if active_goal and active_goal.__class__.__name__ == "ClickGoal":
+    def _is_click_goal(self, goal_description: str, active_goal: Optional[Any]) -> bool:
+        # Goal system removed - always return False
+        if False and active_goal and hasattr(active_goal, '__class__') and active_goal.__class__.__name__ == "ClickGoal":
             return True
         text = (goal_description or "").strip().lower()
         if not text:

@@ -73,7 +73,8 @@ class DummyBot:
         self.tab_manager = tab_manager
         self.started = True
         self.page = DummyPage()
-        self.goal_monitor = SimpleNamespace(url_history=[], url_pointer=None, interaction_history=[])
+        # Goal system removed - goal_monitor replaced with session_tracker
+        self.session_tracker = SimpleNamespace(url_history=[], url_pointer=None, interaction_history=[])
 
     def switch_to_page(self, page):  # pragma: no cover
         self.page = page

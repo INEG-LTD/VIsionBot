@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 from playwright.sync_api import Page
 
 from ai_utils import answer_question_with_vision
-from goals.element_analyzer import ElementAnalyzer
+from utils.element_analyzer import ElementAnalyzer
 from models import ActionStep, VisionPlan, PageInfo
 from models.core_models import ActionType, DetectedElement
 from vision_utils import get_gemini_box_2d_center_pixels

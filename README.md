@@ -670,7 +670,7 @@ def is_business_hours_condition() -> Condition:
 ### Using Conditions in Goals
 
 ```python
-from goals.if_goal import IfGoal
+# Goal system removed - conditional goals (IfGoal, WhileGoal, ForGoal) no longer available
 
 # Create your condition
 condition = my_condition_evaluator()

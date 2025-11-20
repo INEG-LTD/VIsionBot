@@ -932,17 +932,7 @@ class ActionExecutor:
             # Return False to indicate plan should be regenerated
             return False
         
-        # Check if the goal was achieved before the click (informational only)
-        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
-            try:
-                self.event_logger.goal_success("Goal achieved before click (pre-eval)! Proceeding with click as requested.")
-            except Exception:
-                pass
-            print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
-            print("⚠️ Goal evaluation suggests this click may not achieve the target:")
-            print(f"   ❌ {pre_evaluations.reasoning}")
-            # Continue with click anyway - the user's plan should be executed
+        # Goal system removed - pre-evaluation checks removed
         
         # Determine preferred click method (use preferred method, but switch if retry detected)
         preferred_method = self.preferred_click_method
@@ -1302,15 +1292,14 @@ class ActionExecutor:
         """Get the interpreted scroll target position from active ScrollGoal"""
         try:
             # Find active ScrollGoal
-            from goals import ScrollGoal
-            # Removed scroll goal check
+            # Goal system removed - ScrollGoal removed
             scroll_goal = None
             
             if not scroll_goal:
                 return None
             
-            # Create a basic context for interpretation
-            from goals.base import GoalContext, BrowserState
+            # Goal system removed - BrowserState moved to session_tracker
+            from session_tracker import BrowserState
             if self.page_utils:
                 page_info = self.page_utils.get_page_info()
             else:
@@ -1340,14 +1329,9 @@ class ActionExecutor:
             
             print(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
             
-            # Create goal context
-            context = GoalContext(
-                initial_state=browser_state,
-                current_state=browser_state,
-            )
-            
-            # Get interpreted scroll from ScrollGoal
-            interpretation = scroll_goal.interpret_request(context)
+            # Goal system removed - ScrollGoal interpretation removed
+            # Scroll interpretation no longer available
+            interpretation = None
             if interpretation:
                 print(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
                 return interpretation
@@ -1429,17 +1413,7 @@ class ActionExecutor:
             # Return False to indicate plan should be regenerated
             return False
         
-        # Check if the goal was achieved before the scroll (informational only)
-        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
-            try:
-                self.event_logger.goal_success("Goal achieved before scroll (pre-eval)! Proceeding with scroll as requested.")
-            except Exception:
-                pass
-            print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
-            print("⚠️ Goal evaluation suggests this scroll may not achieve the target:")
-            print(f"   ❌ {pre_evaluations.reasoning}")
-            # Continue with scroll anyway - the user's plan should be executed
+        # Goal system removed - pre-evaluation checks removed
         
         print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
         
@@ -1560,16 +1534,7 @@ class ActionExecutor:
                 pass
             return False
         
-        # Check if the goal was achieved before the press (informational only)
-        if pre_evaluations and pre_evaluations.status == GoalStatus.ACHIEVED:
-            try:
-                self.event_logger.goal_success("Goal achieved before key press (pre-eval)! Proceeding with press as requested.")
-            except Exception:
-                pass
-            print(f"   ✅ {pre_evaluations.reasoning}")
-        elif pre_evaluations and pre_evaluations.status == GoalStatus.FAILED:
-            print("⚠️ Goal evaluation suggests this key press may not achieve the target:")
-            print(f"   ❌ {pre_evaluations.reasoning}")
+        # Goal system removed - pre-evaluation checks removed
         
         try:
             # Parse and execute the key combination

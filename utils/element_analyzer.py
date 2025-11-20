@@ -1,5 +1,5 @@
 """
-Element analysis utilities for the goal framework.
+Element analysis utilities.
 """
 from typing import Any, Dict
 
@@ -229,7 +229,7 @@ class ElementAnalyzer:
             
             # Cache the result
             self._description_cache[cache_key] = description_str
-            print(f"[GoalFramework] Element description with AI: {description_str}")
+            print(f"[ElementAnalyzer] Element description with AI: {description_str}")
             
             return description_str
             
@@ -239,5 +239,6 @@ class ElementAnalyzer:
             element_type = element_info.get('elementType', 'element')
             text = element_info.get('text', '')[:50]
             fallback_desc = f"{element_type} containing '{text}'" if text else element_type
-            print(f"[GoalFramework] Element description with fallback: {fallback_desc}")
+            print(f"[ElementAnalyzer] Element description with fallback: {fallback_desc}")
             return fallback_desc
+
