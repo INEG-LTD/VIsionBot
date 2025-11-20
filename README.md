@@ -22,7 +22,6 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
 - [Advanced Features](#advanced-features)
-- [Creating Custom Conditions](#creating-custom-conditions)
 - [Architecture](#architecture)
 - [Examples](#examples)
 - [Development](#development)
@@ -561,132 +560,7 @@ bot.act("dedup: off")
 
 ## Creating Custom Conditions
 
-> **Note**: The conditional goal system (`IfGoal`, `WhileGoal`, etc.) has been removed. The bot now uses keyword-based command execution only. If a command cannot be parsed as a keyword action, execution will fail.
-
-### Condition Types (Deprecated)
-
-The following condition types were previously available but are no longer supported:
-
-1. **Environment State Conditions**: Test browser/page state (element existence, page content, form state, etc.)
-2. **Computational Conditions**: Perform calculations or logic operations (date/time checks, math expressions, etc.)
-3. **User-Defined Conditions**: Custom conditions for specific use cases (API calls, file system checks, etc.)
-
-### Creating a Condition (Deprecated)
-
-```python
-# This functionality has been removed
-# from goals.base import ConditionType, create_environment_condition, create_computational_condition, create_user_defined_condition
-# from goals.base import GoalContext
-
-def my_condition_evaluator(context: GoalContext) -> bool:
-    """
-    Evaluate whether the condition is met.
-    
-    Args:
-        context: Complete browser state and interaction history
-        
-    Returns:
-        True if condition is met, False otherwise
-    """
-    try:
-        if not context.page_reference:
-            return False
-        # Your condition logic here
-        # Access context.current_state, context.page_reference, etc.
-        return True  # or False based on your logic
-    except Exception as e:
-        # Log error and return False for safety
-        print(f"Error in condition evaluator: {e}")
-        return False
-
-# Create the condition
-condition = create_environment_condition(
-    description="My custom condition",
-    evaluator=my_condition_evaluator,
-    confidence_threshold=0.9  # Optional, defaults to 0.8
-)
-```
-
-### Common Patterns
-
-#### Check Element Properties
-
-```python
-def element_has_text_condition(selector: str, expected_text: str) -> Condition:
-    """Check if an element contains specific text"""
-    def evaluator(context: GoalContext) -> bool:
-        if not context.page_reference:
-            return False
-        try:
-            element = context.page_reference.query_selector(selector)
-            if not element:
-                return False
-            actual_text = element.text_content() or ""
-            return expected_text.lower() in actual_text.lower()
-        except Exception:
-            return False
-    
-    return create_environment_condition(
-        f"Element '{selector}' contains text '{expected_text}'",
-        evaluator
-    )
-```
-
-#### Check Page State
-
-```python
-def page_loaded_condition() -> Condition:
-    """Check if page has finished loading"""
-    def evaluator(context: GoalContext) -> bool:
-        if not context.page_reference:
-            return False
-        try:
-            return context.page_reference.evaluate("document.readyState") == "complete"
-        except Exception:
-            return False
-    
-    return create_environment_condition(
-        "Page has finished loading",
-        evaluator
-    )
-```
-
-#### Date/Time Checks
-
-```python
-def is_business_hours_condition() -> Condition:
-    """Check if current time is during business hours (9 AM - 5 PM)"""
-    def evaluator(context: GoalContext) -> bool:
-        import datetime
-        now = datetime.datetime.now()
-        return 9 <= now.hour < 17 and now.weekday() < 5
-    
-    return create_computational_condition(
-        "Current time is during business hours",
-        evaluator
-    )
-```
-
-### Using Conditions in Goals
-
-```python
-# Goal system removed - conditional goals (IfGoal, WhileGoal, ForGoal) no longer available
-
-# Create your condition
-condition = my_condition_evaluator()
-
-# Create sub-goals
-success_goal = ClickGoal("Click submit button")
-fail_goal = TypeGoal("Type error message")
-
-# Create the conditional goal
-if_goal = IfGoal(condition, success_goal, fail_goal)
-
-# Use it via bot.act()
-bot.act("If the form is valid, click submit, otherwise type an error")
-```
-
-For more details on creating conditions, see the condition system implementation in `goals/condition_utils.py` and `goals/base.py`.
+> **Note**: The conditional goal system has been removed. The bot now uses keyword-based command execution only. Use direct keyword commands like `click:`, `type:`, `press:`, etc. For complex workflows, use agentic mode which handles conditionals automatically.
 
 ## 🏗️ Architecture
 
@@ -717,13 +591,13 @@ For more details on creating conditions, see the condition system implementation
 - **vision_bot.py**: Main orchestrator, handles `act()`, `extract()`, and `agentic_mode()`
 - **agent/agent_controller.py**: Implements reactive agent loop with completion evaluation
 - **action_executor.py**: Low-level action execution with retries and fallbacks
+- **session_tracker.py**: Tracks browser state, interactions, and navigation history
 - **ai_utils.py**: LLM and vision API calls for planning and analysis
 - **tab_management/**: Tab tracking, decision engine, and sub-agent coordination
 - **element_detection/**: Element detection and overlay management
 - **handlers/**: Specialized handlers for selects, uploads, datetime pickers
 - **middlewares/**: Extensible middleware for cross-cutting concerns
 - **utils/**: Utilities for logging, parsing, vision, and page operations
-- **goals/**: Goal evaluators for different action types
 - **planner/**: Plan generation for AI-based action planning
 
 ### Data Flow
@@ -732,8 +606,9 @@ For more details on creating conditions, see the condition system implementation
 2. **Vision Analysis** → Screenshot + overlay generation
 3. **LLM Planning** → Determine action plan
 4. **Action Execution** → Execute via ActionExecutor
-5. **Completion Check** → Evaluate if goal achieved
-6. **Result** → Return success/failure with evidence
+5. **Session Tracking** → Record interactions and browser state
+6. **Completion Check** → Evaluate if task completed (agent mode only)
+7. **Result** → Return success/failure with evidence
 
 ## 📖 Examples
 
@@ -808,13 +683,18 @@ for sub_result in result.sub_agent_results:
     print(f"Data: {sub_result.extracted_data}")
 ```
 
-### Example 4: Conditional Actions
+### Example 4: Agentic Mode for Complex Tasks
 
 ```python
-# Use conditional goals
-bot.act("If the login form is visible, fill it with username 'user' and password 'pass', otherwise navigate to /login")
-bot.act("While there are more pages, click the 'Next' button")
-bot.act("For each item in the list, click it and extract the title")
+# Use agentic mode for complex workflows that require conditional logic
+result = bot.agentic_mode(
+    "Navigate to the login page, fill in username 'user' and password 'pass', then click login"
+)
+
+# Agentic mode handles conditionals automatically
+result = bot.agentic_mode(
+    "Go through all pages of search results and extract each product name and price"
+)
 ```
 
 ### Example 5: Complete Workflow
@@ -875,7 +755,7 @@ browser-vision-bot/
 │   ├── agent_context.py       # Agent context
 │   ├── agent_result.py        # Agent results
 │   ├── completion_contract.py # Completion evaluation
-│   ├── reactive_goal_determiner.py # Goal determination
+│   ├── reactive_goal_determiner.py # Next action determination
 │   ├── stuck_detector.py      # Stuck detection
 │   └── sub_agent_controller.py # Sub-agent management
 ├── tab_management/           # Tab orchestration
@@ -910,15 +790,7 @@ browser-vision-bot/
 │   └── ...
 ├── planner/                  # Planning system
 │   └── plan_generator.py     # Plan generation
-├── goals/                    # Goal evaluators
-│   ├── base.py               # Base goal classes
-│   ├── click_goal.py         # Click actions
-│   ├── type_goal.py          # Typing actions
-│   ├── form_goal.py          # Form filling
-│   ├── if_goal.py            # Conditional goals
-│   ├── while_goal.py         # Loop goals
-│   ├── for_goal.py           # Iteration goals
-│   └── ...
+├── session_tracker.py        # Session state tracking
 ├── tests/                    # Test suite
 │   ├── unit/                 # Unit tests
 │   └── integration/          # Integration tests

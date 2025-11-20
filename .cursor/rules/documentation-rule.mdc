@@ -2,3 +2,4 @@
 alwaysApply: true
 ---
 You must always update the README.md file when neccesary after every change to the codebase
+You must always ensure that any code you add is properly commented like a human would so as to make it easy for other developers to understand
