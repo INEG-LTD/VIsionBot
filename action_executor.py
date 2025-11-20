@@ -221,15 +221,6 @@ class ActionExecutor:
             except Exception:
                 pass
     
-    def clear_pre_action_callbacks(self) -> None:
-        """Remove all registered pre-action callbacks"""
-        count = len(self.pre_action_callbacks)
-        self.pre_action_callbacks.clear()
-        try:
-            self.event_logger.system_debug(f"Cleared {count} pre-action callback(s)")
-        except Exception:
-            pass
-    
     def track_scroll_event(self, reason: ScrollReason) -> None:
         """
         Track that a scroll event occurred with a reason.
@@ -275,15 +266,6 @@ class ActionExecutor:
                 self.event_logger.system_debug(f"Unregistered post-action callback: {callback.__name__}")
             except Exception:
                 pass
-    
-    def clear_post_action_callbacks(self) -> None:
-        """Remove all registered callbacks"""
-        count = len(self.post_action_callbacks)
-        self.post_action_callbacks.clear()
-        try:
-            self.event_logger.system_debug(f"Cleared {count} post-action callback(s)")
-        except Exception:
-            pass
     
     def _trigger_pre_action_hooks(
         self,

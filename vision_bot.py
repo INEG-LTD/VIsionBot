@@ -43,7 +43,6 @@ from goals import (
     GoalContext,
 )
 from goals.defer_goal import TimedSleepGoal
-# from goals.condition_engine import create_predicate_condition as create_predicate
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     extract_click_target,
@@ -4389,12 +4388,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             print(f"⚠️ Error handling ref commands: {e}")
             return False
     
-    def write_session_log(self):
-        """Write the session summary to the log file"""
-        if hasattr(self, 'logger') and self.logger:
-            self.logger.write_session_summary()
-            print(f"📝 Session log written to: {self.logger.log_file}")
-    
     def _filter_elements_by_focus(self, element_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Filter element data based on current focus context.
@@ -4477,46 +4470,3 @@ Return only the extracted text that appears in the text content above. Do not ma
         
         return executed
     
-    def clear_queue(self) -> None:
-        """Clear all queued actions"""
-        self.action_queue.clear()
-        print("🧹 Cleared action queue")
-    
-    def inspect_queue(self) -> List[QueuedAction]:
-        """Inspect queued actions without processing"""
-        return self.action_queue.inspect()
-    
-    def queue_size(self) -> int:
-        """Get current queue size"""
-        return self.action_queue.size()
-
-
-# Example usage
-if __name__ == "__main__":
-    bot = BrowserVisionBot()
-    bot.start()
-    bot.goto("https://www.reed.co.uk/jobs/ios-developer-jobs")
-    bot.default_interpretation_mode = "semantic"
-    # bot.on_new_page_load(["if: cookie banner visible then: click: the button to accept cookies: look for a button like 'Accept' or 'Accept all' in the cookie banner"])
-    bot.act("dedup: enable")
-    bot.act("defer")
-    bot.register_prompts([
-        "click: the next ios job listing button/link: look for text surrounding a list of relevant job listings that are relevant to the search, e.g 'IOS Developer', 'Senior iOS Developer', 'Junior iOS Developer', etc",
-        "click: the apply button: look for a button like 'Apply' or 'Apply Now' in the job listing. it could also look like an Easy Apply button, those are also valid",
-        "click: the button to submit the application: look for a button like 'Submit' or 'Submit Application' in modal.",
-        "press: escape"
-    ], "job_loop_commands", all_must_be_true=True)
-    bot.act("while: not at the bottom of the page do: ref: job_loop_commands")
-    
-    # bot.act("click: an ios job listing button", interpretation_mode="semantic")
-    # bot.act("click: the apply button", interpretation_mode="semantic")
-    
-    
-    while True:
-        user_input = input('\n👤 New task or "q" to quit: ')
-        if user_input.lower() == "q":
-            break
-        bot.act(user_input)
-    
-    # Write session log when done
-    bot.write_session_log()

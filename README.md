@@ -22,6 +22,7 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
 - [Advanced Features](#advanced-features)
+- [Creating Custom Conditions](#creating-custom-conditions)
 - [Architecture](#architecture)
 - [Examples](#examples)
 - [Development](#development)
@@ -63,7 +64,6 @@ OPENAI_API_KEY=your_openai_api_key_here
 ```python
 from playwright.sync_api import sync_playwright
 from vision_bot import BrowserVisionBot
-from bot_config import BotConfig
 
 # Create a Playwright browser
 with sync_playwright() as p:
@@ -179,7 +179,8 @@ BrowserVisionBot uses Pydantic models for type-safe configuration:
 ### Configuration Groups
 
 ```python
-from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig, RecordingConfig, ErrorHandlingConfig
+from ai_utils import ReasoningLevel
 
 config = BotConfig(
     # AI Model Settings
@@ -235,6 +236,38 @@ config = BotConfig.production()
 config = BotConfig.minimal()
 ```
 
+### Configuration Options
+
+#### ModelConfig
+- `model_name`: Default model for all operations (default: "gpt-5-mini")
+- `agent_model`: Model used for high-level agent decisions
+- `command_model`: Model used for command generation
+- `reasoning_level`: Default reasoning level (LOW, MEDIUM, HIGH)
+
+#### ExecutionConfig
+- `max_attempts`: Maximum number of attempts for task completion (default: 10)
+- `fast_mode`: Enable fast mode with direct keyword → action execution (default: False)
+- `parallel_completion_and_action`: Run completion check and next action in parallel (default: True)
+- `dedup_mode`: Deduplication mode: "auto", "on", or "off" (default: "auto")
+- `dedup_history_quantity`: Number of interactions to track for dedup (-1 = unlimited)
+
+#### CacheConfig
+- `enabled`: Enable plan caching (default: True)
+- `ttl`: Time-to-live for cached plans in seconds (default: 6.0)
+- `max_reuse`: Maximum times a plan can be reused (-1 = unlimited, default: 1)
+
+#### RecordingConfig
+- `save_gif`: Enable GIF recording of browser interactions (default: False)
+- `output_dir`: Directory for saving GIF recordings (default: "gif_recordings")
+
+#### ErrorHandlingConfig
+- `screenshot_on_error`: Take screenshot when errors occur (default: True)
+- `screenshot_dir`: Directory for error screenshots (default: "error_screenshots")
+- `max_retries`: Maximum retry attempts for recoverable errors (default: 3)
+- `retry_delay`: Delay between retries in seconds (default: 2.0)
+- `retry_backoff`: Backoff multiplier for exponential retry (default: 2.0)
+- `abort_on_critical`: Abort automation on critical errors (default: True)
+
 ## 📚 API Reference
 
 ### BrowserVisionBot
@@ -256,13 +289,13 @@ bot = BrowserVisionBot(
 
 ##### `start()`
 
-Initialize the bot and register the initial page.
+Initialize the bot and register the initial page. Must be called before using other methods.
 
 ```python
 bot.start()
 ```
 
-##### `act(goal_description, **kwargs)`
+##### `act(goal_description, **kwargs) -> bool`
 
 Execute a single action based on natural language description.
 
@@ -276,19 +309,28 @@ result = bot.act("Press Enter")
 - `goal_description` (str): Natural language description of the action
 - `additional_context` (str, optional): Extra context for the action
 - `interpretation_mode` (str, optional): "keyword" or "vision"
-- `max_attempts` (int, optional): Maximum retry attempts
+- `target_context_guard` (str, optional): Guard condition for actions
+- `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
+- `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
+- `command_id` (str, optional): Optional command ID for tracking (auto-generated if not provided)
+- `modifier` (List[str], optional): Optional list of modifier strings to pass to goals
+- `max_attempts` (int, optional): Override bot's max_attempts for this command
+- `max_retries` (int, optional): Override goal's max_retries for this command
 
-**Returns:** `GoalResult` with success status, confidence, and reasoning
+**Returns:** `bool` - True if goal was achieved, False otherwise
 
-##### `extract(prompt, **kwargs)`
+##### `extract(prompt, **kwargs) -> Union[str, Dict[str, Any], BaseModel]`
 
-Extract data from the current page.
+Extract data from the current page based on natural language description.
 
 ```python
 # Extract text
-title = bot.extract("What is the page title?")
+title = bot.extract("What is the page title?", output_format="text")
 
-# Extract structured data
+# Extract JSON
+data = bot.extract("Extract product information", output_format="json")
+
+# Extract structured data with Pydantic model
 from pydantic import BaseModel
 
 class Product(BaseModel):
@@ -304,15 +346,17 @@ product = bot.extract(
 ```
 
 **Parameters:**
-- `prompt` (str): What to extract
-- `output_format` (str): "text", "json", or "structured"
+- `prompt` (str): Natural language description of what to extract
+- `output_format` (str): "json" (default), "text", or "structured"
 - `model_schema` (Type[BaseModel], optional): Pydantic model for structured output
-- `scope` (str): "viewport", "full_page", or "element"
-- `confidence_threshold` (float): Minimum confidence (0.0-1.0)
+- `scope` (str): "viewport" (default), "full_page", or "element"
+- `element_description` (str, optional): Required if scope="element"
+- `max_retries` (int): Maximum retry attempts if extraction fails (default: 2)
+- `confidence_threshold` (float): Minimum confidence to return result 0.0-1.0 (default: 0.6)
 
 **Returns:** Extracted data in requested format
 
-##### `agentic_mode(user_prompt, **kwargs)`
+##### `agentic_mode(user_prompt, **kwargs) -> AgentResult`
 
 Run autonomous agent to complete a complex task.
 
@@ -320,7 +364,8 @@ Run autonomous agent to complete a complex task.
 result = bot.agentic_mode(
     user_prompt="Research the top 3 AI companies and extract their names",
     max_iterations=20,
-    base_knowledge="Focus on companies founded after 2015"
+    base_knowledge=["Focus on companies founded after 2015"],
+    strict_mode=False
 )
 
 if result.success:
@@ -330,20 +375,41 @@ if result.success:
 
 **Parameters:**
 - `user_prompt` (str): High-level task description
-- `max_iterations` (int): Maximum agent iterations
-- `base_knowledge` (str, optional): Domain knowledge or constraints
-- `agent_context` (AgentContext, optional): For sub-agents
+- `max_iterations` (int): Maximum agent iterations (default: 50)
+- `track_ineffective_actions` (bool): Track and avoid repeating ineffective actions (default: True)
+- `base_knowledge` (List[str], optional): Domain knowledge or constraints that guide agent behavior
+- `allow_partial_completion` (bool): Allow completion when major deliverables are satisfied (default: False)
+- `check_ineffective_actions` (bool, optional): Override for ineffective-action detection
+- `show_completion_reasoning_every_iteration` (bool): Show completion reasoning on every iteration (default: False)
+- `strict_mode` (bool): Follow instructions exactly without inferring extra requirements (default: False)
+- `clarification_callback` (Callable[[str], str], optional): Callback for asking user clarification questions
+- `max_clarification_rounds` (int): Maximum number of clarification rounds (default: 3)
 
-**Returns:** `AgentResult` with success, extracted data, and orchestration details
+**Returns:** `AgentResult` object with:
+- `success`: Whether the task completed successfully
+- `extracted_data`: Dictionary of extracted data (key: extraction prompt, value: extracted result)
+- `reasoning`: Explanation of the result
+- `confidence`: Confidence score (0.0-1.0)
+- `sub_agent_results`: Results from sub-agents if any
 
-##### `switch_to_page(page)`
+##### `switch_to_page(page) -> None`
 
-Switch to a different browser tab/page.
+Switch to a different browser tab/page. All bot components will be synchronized to the new page.
 
 ```python
 new_page = context.new_page()
 bot.switch_to_page(new_page)
 ```
+
+##### `end() -> Optional[str]`
+
+Terminate the bot, stop GIF recording, and prevent any subsequent operations.
+
+```python
+gif_path = bot.end()  # Returns path to GIF if recording was enabled
+```
+
+**Returns:** Optional[str] - Path to the generated GIF if recording was enabled, None otherwise
 
 ### Browser Provider
 
@@ -372,20 +438,29 @@ bot = BrowserVisionBot(browser_provider=provider)
 Extend bot behavior with middleware.
 
 ```python
-from middleware import MiddlewareManager
+from middleware import MiddlewareManager, Middleware, ActionContext
 from middlewares import LoggingMiddleware, CachingMiddleware, RetryMiddleware
 
 # Create middleware manager
 middleware = MiddlewareManager()
 
-# Add middleware
+# Add built-in middleware
 middleware.use(LoggingMiddleware())
 middleware.use(CachingMiddleware(ttl=300))
 middleware.use(RetryMiddleware(max_retries=3))
 
-# Use with bot
-bot = BrowserVisionBot(page=page)
-bot.middleware_manager = middleware
+# Create custom middleware
+class CustomLoggingMiddleware(Middleware):
+    async def before_action(self, context: ActionContext):
+        print(f"About to execute: {context.action}")
+        context.metadata["start_time"] = time.time()
+    
+    async def after_action(self, context: ActionContext):
+        duration = time.time() - context.metadata["start_time"]
+        print(f"Action took {duration:.2f}s")
+
+# Use middleware
+bot.middleware = middleware
 ```
 
 ## 🔥 Advanced Features
@@ -397,19 +472,17 @@ Track and audit all actions with the command ledger:
 ```python
 from command_ledger import CommandLedger
 
-ledger = CommandLedger()
-
-# Enable ledger
-bot.command_ledger = ledger
+# Command ledger is automatically initialized
+# Access it via bot.command_ledger
 
 # After actions, query the ledger
-commands = ledger.get_all_commands()
+commands = bot.command_ledger.get_all_commands()
 for cmd in commands:
     print(f"{cmd.command_id}: {cmd.command_text} - {cmd.status}")
 
 # Get commands by status
-failed = ledger.get_commands_by_status("failed")
-successful = ledger.get_commands_by_status("completed")
+failed = bot.command_ledger.get_commands_by_status("failed")
+successful = bot.command_ledger.get_commands_by_status("completed")
 ```
 
 ### Action Queue
@@ -432,56 +505,22 @@ while not queue.is_empty():
     bot.act(action)
 ```
 
-### Post-Action Hooks
-
-Execute callbacks after actions:
-
-```python
-def log_action(context):
-    print(f"Action completed: {context.action}")
-    print(f"Success: {context.result.success}")
-
-def take_screenshot(context):
-    if not context.result.success:
-        context.page.screenshot(path=f"error_{context.action_id}.png")
-
-# Register hooks
-bot.register_post_action_hook(log_action)
-bot.register_post_action_hook(take_screenshot)
-```
-
-### Sub-Agents
-
-Spawn independent agents for parallel workflows:
-
-```python
-# Agent mode automatically manages sub-agents
-result = bot.agentic_mode(
-    user_prompt="Research 5 different topics and compile a report",
-    max_iterations=30
-)
-
-# Sub-agents are spawned automatically for parallel research
-# Results are aggregated in result.sub_agent_results
-```
-
 ### Focus Management
 
 Track and manage element focus:
 
 ```python
-from focus_manager import FocusManager
-
-focus_mgr = FocusManager(page)
+# Focus manager is automatically initialized
+# Access it via bot.focus_manager
 
 # Set focus context
-focus_mgr.set_focus_context("login_form")
+bot.act("focus: login_form")
 
 # Get focused elements
-elements = focus_mgr.get_focused_elements()
+elements = bot.focus_manager.get_focused_elements()
 
 # Clear focus
-focus_mgr.clear_focus()
+bot.act("undofocus:")
 ```
 
 ### Error Handling
@@ -489,7 +528,7 @@ focus_mgr.clear_focus()
 Robust error handling with retries and recovery:
 
 ```python
-from error_handling import ErrorHandler, ErrorRecoveryStrategy
+from bot_config import BotConfig, ErrorHandlingConfig
 
 # Configure error handling
 config = BotConfig(
@@ -506,6 +545,151 @@ config = BotConfig(
 # Screenshots saved to error_screenshots/ directory
 ```
 
+### Interaction Deduplication
+
+Prevent repeating the same actions:
+
+```python
+# Deduplication is automatically enabled
+# Control via config:
+config = BotConfig(
+    execution=ExecutionConfig(
+        dedup_mode="auto",  # "auto", "on", or "off"
+        dedup_history_quantity=-1  # -1 = unlimited
+    )
+)
+
+# Manually enable/disable
+bot.act("dedup: on")
+bot.act("dedup: off")
+```
+
+## Creating Custom Conditions
+
+The conditional goal system (used in `IfGoal`, `WhileGoal`, etc.) allows you to create custom conditions for evaluating page state, computational logic, or external factors.
+
+### Condition Types
+
+1. **Environment State Conditions**: Test browser/page state (element existence, page content, form state, etc.)
+2. **Computational Conditions**: Perform calculations or logic operations (date/time checks, math expressions, etc.)
+3. **User-Defined Conditions**: Custom conditions for specific use cases (API calls, file system checks, etc.)
+
+### Creating a Condition
+
+```python
+from goals.base import ConditionType, create_environment_condition, create_computational_condition, create_user_defined_condition
+from goals.base import GoalContext
+
+def my_condition_evaluator(context: GoalContext) -> bool:
+    """
+    Evaluate whether the condition is met.
+    
+    Args:
+        context: Complete browser state and interaction history
+        
+    Returns:
+        True if condition is met, False otherwise
+    """
+    try:
+        if not context.page_reference:
+            return False
+        # Your condition logic here
+        # Access context.current_state, context.page_reference, etc.
+        return True  # or False based on your logic
+    except Exception as e:
+        # Log error and return False for safety
+        print(f"Error in condition evaluator: {e}")
+        return False
+
+# Create the condition
+condition = create_environment_condition(
+    description="My custom condition",
+    evaluator=my_condition_evaluator,
+    confidence_threshold=0.9  # Optional, defaults to 0.8
+)
+```
+
+### Common Patterns
+
+#### Check Element Properties
+
+```python
+def element_has_text_condition(selector: str, expected_text: str) -> Condition:
+    """Check if an element contains specific text"""
+    def evaluator(context: GoalContext) -> bool:
+        if not context.page_reference:
+            return False
+        try:
+            element = context.page_reference.query_selector(selector)
+            if not element:
+                return False
+            actual_text = element.text_content() or ""
+            return expected_text.lower() in actual_text.lower()
+        except Exception:
+            return False
+    
+    return create_environment_condition(
+        f"Element '{selector}' contains text '{expected_text}'",
+        evaluator
+    )
+```
+
+#### Check Page State
+
+```python
+def page_loaded_condition() -> Condition:
+    """Check if page has finished loading"""
+    def evaluator(context: GoalContext) -> bool:
+        if not context.page_reference:
+            return False
+        try:
+            return context.page_reference.evaluate("document.readyState") == "complete"
+        except Exception:
+            return False
+    
+    return create_environment_condition(
+        "Page has finished loading",
+        evaluator
+    )
+```
+
+#### Date/Time Checks
+
+```python
+def is_business_hours_condition() -> Condition:
+    """Check if current time is during business hours (9 AM - 5 PM)"""
+    def evaluator(context: GoalContext) -> bool:
+        import datetime
+        now = datetime.datetime.now()
+        return 9 <= now.hour < 17 and now.weekday() < 5
+    
+    return create_computational_condition(
+        "Current time is during business hours",
+        evaluator
+    )
+```
+
+### Using Conditions in Goals
+
+```python
+from goals.if_goal import IfGoal
+
+# Create your condition
+condition = my_condition_evaluator()
+
+# Create sub-goals
+success_goal = ClickGoal("Click submit button")
+fail_goal = TypeGoal("Type error message")
+
+# Create the conditional goal
+if_goal = IfGoal(condition, success_goal, fail_goal)
+
+# Use it via bot.act()
+bot.act("If the form is valid, click submit, otherwise type an error")
+```
+
+For more details on creating conditions, see the condition system implementation in `goals/condition_utils.py` and `goals/base.py`.
+
 ## 🏗️ Architecture
 
 ### System Overview
@@ -514,12 +698,12 @@ config = BotConfig(
 ┌─────────────────────────────────────────────────────────┐
 │                    BrowserVisionBot                      │
 │  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │   Vision   │  │    Agent     │  │      Tab       │  │
-│  │   System   │  │  Controller  │  │   Management   │  │
+│  │   Vision   │  │    Agent     │  │      Tab         │  │
+│  │   System   │  │  Controller  │  │   Management    │  │
 │  └────────────┘  └──────────────┘  └────────────────┘  │
 │  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │   Action   │  │  Extraction  │  │   Middleware   │  │
-│  │  Executor  │  │   Pipeline   │  │     System     │  │
+│  │   Action   │  │  Extraction   │  │   Middleware    │  │
+│  │  Executor  │  │   Pipeline    │  │     System      │  │
 │  └────────────┘  └──────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────┘
                          │
@@ -541,6 +725,8 @@ config = BotConfig(
 - **handlers/**: Specialized handlers for selects, uploads, datetime pickers
 - **middlewares/**: Extensible middleware for cross-cutting concerns
 - **utils/**: Utilities for logging, parsing, vision, and page operations
+- **goals/**: Goal evaluators for different action types
+- **planner/**: Plan generation for AI-based action planning
 
 ### Data Flow
 
@@ -624,22 +810,47 @@ for sub_result in result.sub_agent_results:
     print(f"Data: {sub_result.extracted_data}")
 ```
 
-### Example 4: Custom Middleware
+### Example 4: Conditional Actions
 
 ```python
-from middleware import Middleware, ActionContext
+# Use conditional goals
+bot.act("If the login form is visible, fill it with username 'user' and password 'pass', otherwise navigate to /login")
+bot.act("While there are more pages, click the 'Next' button")
+bot.act("For each item in the list, click it and extract the title")
+```
 
-class CustomLoggingMiddleware(Middleware):
-    async def before_action(self, context: ActionContext):
-        print(f"About to execute: {context.action}")
-        context.metadata["start_time"] = time.time()
-    
-    async def after_action(self, context: ActionContext):
-        duration = time.time() - context.metadata["start_time"]
-        print(f"Action took {duration:.2f}s")
+### Example 5: Complete Workflow
 
-# Use middleware
-bot.middleware_manager.use(CustomLoggingMiddleware())
+```python
+from bot_config import BotConfig
+from browser_provider import create_browser_provider
+
+# Configure bot
+config = BotConfig.production()
+browser_provider = create_browser_provider(config.browser)
+
+# Initialize
+bot = BrowserVisionBot(config=config, browser_provider=browser_provider)
+bot.start()
+
+# Navigate
+bot.page.goto("https://example.com")
+
+# Complex task with agent mode
+result = bot.agentic_mode(
+    user_prompt="Search for 'Python tutorials', open the first 3 results, and extract their titles",
+    max_iterations=20
+)
+
+if result.success:
+    print("Extracted titles:")
+    for title in result.extracted_data.values():
+        print(f"  - {title}")
+
+# Cleanup
+gif_path = bot.end()
+if gif_path:
+    print(f"Recording saved to: {gif_path}")
 ```
 
 ## 🛠️ Development
@@ -663,11 +874,11 @@ browser-vision-bot/
 ├── vision_utils.py           # Vision utilities
 ├── agent/                    # Agent system
 │   ├── agent_controller.py   # Main agent loop
-│   ├── agent_context.py      # Agent context
-│   ├── agent_result.py       # Agent results
+│   ├── agent_context.py       # Agent context
+│   ├── agent_result.py        # Agent results
 │   ├── completion_contract.py # Completion evaluation
 │   ├── reactive_goal_determiner.py # Goal determination
-│   ├── stuck_detector.py     # Stuck detection
+│   ├── stuck_detector.py      # Stuck detection
 │   └── sub_agent_controller.py # Sub-agent management
 ├── tab_management/           # Tab orchestration
 │   ├── tab_manager.py        # Tab tracking
@@ -696,12 +907,20 @@ browser-vision-bot/
 │   ├── event_logger.py       # Event logging
 │   ├── intent_parsers.py     # Intent parsing
 │   ├── page_utils.py         # Page utilities
-│   ├── selector_utils.py     # Selector utilities
+│   ├── selector_utils.py    # Selector utilities
 │   ├── vision_resolver.py    # Vision resolution
 │   └── ...
 ├── planner/                  # Planning system
 │   └── plan_generator.py     # Plan generation
 ├── goals/                    # Goal evaluators
+│   ├── base.py               # Base goal classes
+│   ├── click_goal.py         # Click actions
+│   ├── type_goal.py          # Typing actions
+│   ├── form_goal.py          # Form filling
+│   ├── if_goal.py            # Conditional goals
+│   ├── while_goal.py         # Loop goals
+│   ├── for_goal.py           # Iteration goals
+│   └── ...
 ├── tests/                    # Test suite
 │   ├── unit/                 # Unit tests
 │   └── integration/          # Integration tests

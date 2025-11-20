@@ -308,10 +308,6 @@ class GIFRecorder:
         """Get the current number of captured frames"""
         return len(self.frames)
         
-    def clear_frames(self) -> None:
-        """Clear all captured frames"""
-        self.frames.clear()
-        
     def is_recording(self) -> bool:
         """Check if currently recording"""
         return self.recording

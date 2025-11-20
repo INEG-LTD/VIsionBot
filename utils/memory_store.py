@@ -136,11 +136,3 @@ class MemoryStore:
             out[sig] = item
         return out
 
-    def clear_scope(self, scope: str = "domain", url: Optional[str] = None) -> None:
-        skey = self._scope_key(scope, url)
-        for key in [k for k in self._store.keys() if k[0] == skey]:
-            try:
-                del self._store[key]
-            except Exception:
-                pass
-
