@@ -291,7 +291,6 @@ class BrowserVisionBot:
         
         # Extract execution configuration
         self.max_attempts = config.execution.max_attempts
-        self.fast_mode = config.execution.fast_mode
         self.parallel_completion_and_action = config.execution.parallel_completion_and_action
         self.dedup_mode = config.execution.dedup_mode
         
@@ -310,7 +309,7 @@ class BrowserVisionBot:
             None if _overlay_max_samples is not None and _overlay_max_samples <= 0 else _overlay_max_samples
         )
         
-        self._fast_mode_original_evaluations: Dict[Type["BaseGoal"], Callable] = {}
+        self._goal_evaluation_overrides: Dict[Type["BaseGoal"], Callable] = {}
         
         # Extract cache configuration
         self.plan_cache_enabled = config.cache.enabled
@@ -1357,17 +1356,16 @@ class BrowserVisionBot:
             # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
 
-            if self.fast_mode:
-                fast_mode_result = self._execute_fast_mode(
-                    goal_description=goal_description,
-                    additional_context=additional_context,
-                    target_context_guard=target_context_guard,
-                    confirm_before_interaction=confirm_before_interaction,
-                    command_id=command_id,
-                    start_time=start_time,
-                )
-                if fast_mode_result is not None:
-                    return fast_mode_result
+            keyword_command_result = self._execute_keyword_command(
+                goal_description=goal_description,
+                additional_context=additional_context,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+                command_id=command_id,
+                start_time=start_time,
+            )
+            if keyword_command_result is not None:
+                return keyword_command_result
 
             self.goal_monitor.set_user_prompt(goal_description)
             # Set up smart goal monitoring if enabled
@@ -1392,8 +1390,7 @@ class BrowserVisionBot:
             if goal:
                 goal_description = transformed_goal_description
                 self.goal_monitor.add_goal(goal)
-                if self.fast_mode:
-                    self._enable_fast_mode_goal_evaluation()
+                self._enable_goal_evaluation_override()
             elif transformed_goal_description and transformed_goal_description.strip().lower().startswith('ref:'):
                 # Handle reference commands that were returned from IF evaluation
                 try:
@@ -1801,11 +1798,10 @@ class BrowserVisionBot:
             self._in_act = False
             if self._interpretation_mode_stack:
                 self._interpretation_mode_stack.pop()
-            if self.fast_mode:
-                try:
-                    self._restore_goal_evaluations()
-                except Exception as e:
-                    print(f"⚠️ Failed to restore fast mode goal overrides: {e}")
+            try:
+                self._restore_goal_evaluations()
+            except Exception as e:
+                print(f"⚠️ Failed to restore goal evaluation overrides: {e}")
             try:
                 self._flush_pending_auto_on_load()
             except Exception:
@@ -2695,7 +2691,7 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         return element_data, screenshot_with_overlays, clean_screenshot
     
-    def _execute_fast_mode(
+    def _execute_keyword_command(
         self,
         goal_description: str,
         additional_context: str,
@@ -2704,7 +2700,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         command_id: Optional[str],
         start_time: float,
     ) -> Optional[bool]:
-        """Attempt to execute the command using fast mode. Returns None to fall back."""
+        """Attempt to execute the command using keyword-based execution. Returns None to fall back."""
         parsed = parse_keyword_command(goal_description)
         if not parsed:
             return None
@@ -2712,7 +2708,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         keyword = (keyword or "").strip().lower()
 
         if keyword == "click":
-            result = self._fast_click(
+            result = self._keyword_click(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2721,7 +2717,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "type":
-            result = self._fast_type(
+            result = self._keyword_type(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2730,7 +2726,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "select":
-            result = self._fast_select(
+            result = self._keyword_select(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2739,7 +2735,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "upload":
-            result = self._fast_upload(
+            result = self._keyword_upload(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2748,7 +2744,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "datetime":
-            result = self._fast_datetime(
+            result = self._keyword_datetime(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2757,7 +2753,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "scroll":
-            result = self._fast_scroll(
+            result = self._keyword_scroll(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2765,7 +2761,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "wait":
-            result = self._fast_wait(
+            result = self._keyword_wait(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2773,7 +2769,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "press":
-            result = self._fast_press(
+            result = self._keyword_press(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2781,25 +2777,25 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "stop":
-            result = self._fast_stop(
+            result = self._keyword_stop(
                 goal_description=goal_description,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "back":
-            result = self._fast_back(
+            result = self._keyword_back(
                 goal_description=goal_description,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "forward":
-            result = self._fast_forward(
+            result = self._keyword_forward(
                 goal_description=goal_description,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "navigate":
-            result = self._fast_open(
+            result = self._keyword_open(
                 goal_description=goal_description,
                 payload=payload,
                 helper=helper,
@@ -2807,39 +2803,39 @@ Return only the extracted text that appears in the text content above. Do not ma
                 confirm_before_interaction=confirm_before_interaction,
             )
         else:
-            # Unsupported keyword in fast mode – fall back
+            # Unsupported keyword – fall back
             return None
 
         if result is None:
-            # Fast mode could not confidently execute – allow normal flow
+            # Keyword command could not confidently execute – allow normal flow
             return None
 
         duration_ms = (time.time() - start_time) * 1000
         if result:
             self.logger.log_goal_success(goal_description, duration_ms)
             try:
-                self.event_logger.fast_mode_complete(goal_description=goal_description, success=True)
+                self.event_logger.command_execution_complete(goal_description=goal_description, success=True)
             except Exception:
                 pass
             self.command_ledger.complete_command(command_id, success=True)
         else:
-            self.logger.log_goal_failure(goal_description, "Fast mode execution failed", duration_ms)
+            self.logger.log_goal_failure(goal_description, "Keyword command execution failed", duration_ms)
             self.command_ledger.complete_command(
                 command_id,
                 success=False,
-                error_message="Fast mode execution failed",
+                error_message="Keyword command execution failed",
             )
-        self._invalidate_plan_cache("fast mode execution")
+        self._invalidate_plan_cache("keyword command execution")
         return result
 
-    def _fast_normalize_hint(self, text: Optional[str]) -> str:
+    def _normalize_hint(self, text: Optional[str]) -> str:
         if not text:
             return ""
         stripped = re.sub(r"\b(click|press|tap|button|link|the|a|type|select|choose|set)\b", " ", text, flags=re.IGNORECASE)
         stripped = re.sub(r"\s+", " ", stripped).strip()
         return stripped or text.strip()
 
-    def _fast_compose_selection_instruction(
+    def _compose_selection_instruction(
         self,
         *,
         request_instruction: str,
@@ -2857,7 +2853,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             return " ".join(parts)
         return request_instruction or target_hint or detail or ""
 
-    def _fast_execute_plan(
+    def _execute_keyword_plan(
         self,
         *,
         action_steps: List[ActionStep],
@@ -2883,7 +2879,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             self.action_executor.enable_vision_tag_hint = False
 
         try:
-            print("[FastMode] Executing fast plan via action_executor")
+            print("[KeywordCommand] Executing plan via action_executor")
             success = self.action_executor.execute_plan(
                 plan,
                 page_info,
@@ -2896,12 +2892,12 @@ Return only the extracted text that appears in the text content above. Do not ma
                 self.action_executor.enable_vision_tag_hint = original_tag_hint_state
 
         try:
-            self.event_logger.system_debug(f"[FastMode] Execution result: {success}")
+            self.event_logger.system_debug(f"[KeywordCommand] Execution result: {success}")
         except Exception:
             pass
         return success
 
-    def _fast_overlay_action(
+    def _keyword_overlay_action(
         self,
         *,
         goal_description: str,
@@ -2921,7 +2917,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
-                print(f"[FastMode] Retry attempt {attempt}/{max_attempts} for element selection")
+                print(f"[KeywordCommand] Retry attempt {attempt}/{max_attempts} for element selection")
                 # Small delay before retry to allow page to stabilize
                 time.sleep(0.5)
             
@@ -2929,19 +2925,19 @@ Return only the extracted text that appears in the text content above. Do not ma
             element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
             if not element_data:
                 if attempt < max_attempts:
-                    print(f"⚠️ Fast mode: no interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
+                    print(f"⚠️ No interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
                     continue
-                print("❌ Fast mode: no interactive elements detected after all retries")
+                print("❌ No interactive elements detected after all retries")
                 return False
 
             # Use fallback model for retry attempts if configured
             selection_model = None
             if attempt > 1 and self.element_selection_fallback_model:
                 selection_model = self.element_selection_fallback_model
-                print(f"[FastMode] Using fallback model: {selection_model}")
+                print(f"[KeywordCommand] Using fallback model: {selection_model}")
 
             try:
-                self.event_logger.fast_mode_overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+                self.event_logger.overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
             except Exception:
                 pass
             selection = self.plan_generator.select_best_overlay(
@@ -2952,19 +2948,19 @@ Return only the extracted text that appears in the text content above. Do not ma
                 model=selection_model,
             )
             try:
-                self.event_logger.fast_mode_overlay_selection(f"Overlay selection response: {selection}")
+                self.event_logger.overlay_selection(f"Overlay selection response: {selection}")
             except Exception:
                 pass
 
             if selection is None:
                 if attempt < max_attempts:
-                    print(f"⚠️ Fast mode: overlay selection failed (attempt {attempt}/{max_attempts}), retrying...")
+                    print(f"⚠️ Overlay selection failed (attempt {attempt}/{max_attempts}), retrying...")
                     try:
                         self.overlay_manager.remove_overlays()
                     except Exception:
                         pass
                     continue
-                print("❌ Fast mode: overlay selection failed after all retries")
+                print("❌ Overlay selection failed after all retries")
                 try:
                     self.overlay_manager.remove_overlays()
                 except Exception:
@@ -2973,20 +2969,20 @@ Return only the extracted text that appears in the text content above. Do not ma
 
             overlay_index = selection
             try:
-                self.event_logger.fast_mode_overlay_selection(f"LLM chose overlay #{overlay_index}")
+                self.event_logger.overlay_selection(f"LLM chose overlay #{overlay_index}")
             except Exception:
                 pass
 
             matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
             if not matching_data:
                 if attempt < max_attempts:
-                    print(f"⚠️ Fast mode: Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
+                    print(f"⚠️ Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
                     try:
                         self.overlay_manager.remove_overlays()
                     except Exception:
                         pass
                     continue
-                print(f"[FastMode] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
+                print(f"[KeywordCommand] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
                 try:
                     self.overlay_manager.remove_overlays()
                 except Exception:
@@ -3006,9 +3002,9 @@ Return only the extracted text that appears in the text content above. Do not ma
         detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
 
         try:
-            return self._fast_execute_plan(
+            return self._execute_keyword_plan(
                 action_steps=[action_step],
-                reasoning=f"Fast mode selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
+                reasoning=f"Selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
                 detected_elements=detected_elements,
@@ -3021,7 +3017,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             except Exception:
                 pass
 
-    def _fast_click(
+    def _keyword_click(
         self,
         *,
         goal_description: str,
@@ -3041,19 +3037,19 @@ Return only the extracted text that appears in the text content above. Do not ma
             if extracted:
                 target_hint_raw = extracted
 
-        target_hint = self._fast_normalize_hint(target_hint_raw)
-        request_instruction = self._fast_normalize_hint(goal_description)
+        target_hint = self._normalize_hint(target_hint_raw)
+        request_instruction = self._normalize_hint(goal_description)
         try:
-            self.event_logger.fast_mode_start(instruction=goal_description, target_hint=target_hint)
+            self.event_logger.command_execution_start(instruction=goal_description, target_hint=target_hint)
         except Exception:
             pass
 
-        selection_instruction = self._fast_compose_selection_instruction(
+        selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
-        return self._fast_overlay_action(
+        return self._keyword_overlay_action(
             goal_description=goal_description,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
@@ -3063,7 +3059,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_type(
+    def _keyword_type(
         self,
         *,
         goal_description: str,
@@ -3078,18 +3074,18 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None
 
         target_hint_raw = intent.target_text or helper or intent.helper_text
-        target_hint = self._fast_normalize_hint(target_hint_raw)
+        target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ Fast mode: TYPE command missing target hint – falling back")
+            print("ℹ️ TYPE command missing target hint – falling back")
             return None
 
-        request_instruction = self._fast_normalize_hint(goal_description)
-        selection_instruction = self._fast_compose_selection_instruction(
+        request_instruction = self._normalize_hint(goal_description)
+        selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
-        return self._fast_overlay_action(
+        return self._keyword_overlay_action(
             goal_description=goal_description,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
@@ -3099,7 +3095,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_select(
+    def _keyword_select(
         self,
         *,
         goal_description: str,
@@ -3114,20 +3110,20 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None
 
         target_hint_raw = intent.target_text or helper or intent.helper_text
-        target_hint = self._fast_normalize_hint(target_hint_raw)
+        target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ Fast mode: SELECT command missing target hint – falling back")
+            print("ℹ️ SELECT command missing target hint – falling back")
             return None
 
-        request_instruction = self._fast_normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(goal_description)
         option_detail = intent.value[:40] + ("…" if len(intent.value or "") > 40 else "")
-        selection_instruction = self._fast_compose_selection_instruction(
+        selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
             detail=f"option: {option_detail}" if option_detail else None,
         )
 
-        return self._fast_overlay_action(
+        return self._keyword_overlay_action(
             goal_description=goal_description,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
@@ -3137,7 +3133,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_upload(
+    def _keyword_upload(
         self,
         *,
         goal_description: str,
@@ -3152,18 +3148,18 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None
 
         target_hint_raw = intent.target_text or helper or intent.helper_text
-        target_hint = self._fast_normalize_hint(target_hint_raw)
+        target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ Fast mode: UPLOAD command missing target hint – falling back")
+            print("ℹ️ UPLOAD command missing target hint – falling back")
             return None
 
-        request_instruction = self._fast_normalize_hint(goal_description)
-        selection_instruction = self._fast_compose_selection_instruction(
+        request_instruction = self._normalize_hint(goal_description)
+        selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
-        return self._fast_overlay_action(
+        return self._keyword_overlay_action(
             goal_description=goal_description,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
@@ -3173,7 +3169,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_datetime(
+    def _keyword_datetime(
         self,
         *,
         goal_description: str,
@@ -3188,18 +3184,18 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None
 
         target_hint_raw = intent.target_text or helper or intent.helper_text
-        target_hint = self._fast_normalize_hint(target_hint_raw)
+        target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ Fast mode: DATETIME command missing target hint – falling back")
+            print("ℹ️ DATETIME command missing target hint – falling back")
             return None
 
-        request_instruction = self._fast_normalize_hint(goal_description)
-        selection_instruction = self._fast_compose_selection_instruction(
+        request_instruction = self._normalize_hint(goal_description)
+        selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
-        return self._fast_overlay_action(
+        return self._keyword_overlay_action(
             goal_description=goal_description,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
@@ -3209,7 +3205,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_scroll(
+    def _keyword_scroll(
         self,
         *,
         goal_description: str,
@@ -3229,14 +3225,14 @@ Return only the extracted text that appears in the text content above. Do not ma
         elif "bottom" in text:
             direction = "down"
 
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.SCROLL, scroll_direction=direction)],
-            reasoning=f"Fast mode scroll {direction} command.",
+            reasoning=f"Scroll {direction} command.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_wait(
+    def _keyword_wait(
         self,
         *,
         goal_description: str,
@@ -3246,15 +3242,15 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
         text = " ".join(filter(None, [payload, helper, goal_description]))
-        duration_ms = self._fast_parse_duration_ms(text)
-        return self._fast_execute_plan(
+        duration_ms = self._parse_duration_ms(text)
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.WAIT, wait_time_ms=duration_ms)],
-            reasoning=f"Fast mode wait for {duration_ms} ms.",
+            reasoning=f"Wait for {duration_ms} ms.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_press(
+    def _keyword_press(
         self,
         *,
         goal_description: str,
@@ -3267,59 +3263,59 @@ Return only the extracted text that appears in the text content above. Do not ma
         if not key:
             key = (payload or helper or "").strip()
         if not key:
-            print("ℹ️ Fast mode: PRESS command missing key – falling back")
+            print("ℹ️ PRESS command missing key – falling back")
             return None
 
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.PRESS, keys_to_press=key)],
-            reasoning=f"Fast mode press '{key}' command.",
+            reasoning=f"Press '{key}' command.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_stop(
+    def _keyword_stop(
         self,
         *,
         goal_description: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.STOP)],
-            reasoning="Fast mode stop command.",
+            reasoning="Stop command.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_back(
+    def _keyword_back(
         self,
         *,
         goal_description: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.BACK)],
-            reasoning="Fast mode back navigation command.",
+            reasoning="Back navigation command.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_forward(
+    def _keyword_forward(
         self,
         *,
         goal_description: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.FORWARD)],
-            reasoning="Fast mode forward navigation command.",
+            reasoning="Forward navigation command.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_open(
+    def _keyword_open(
         self,
         *,
         goal_description: str,
@@ -3328,19 +3324,19 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        url = self._fast_extract_url(payload) or self._fast_extract_url(helper) or self._fast_extract_url(goal_description)
+        url = self._extract_url(payload) or self._extract_url(helper) or self._extract_url(goal_description)
         if not url:
-            print("ℹ️ Fast mode: NAVIGATE command missing URL – falling back")
+            print("ℹ️ NAVIGATE command missing URL – falling back")
             return None
 
-        return self._fast_execute_plan(
+        return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.OPEN, url=url)],
-            reasoning=f"Fast mode navigate to {url}.",
+            reasoning=f"Navigate to {url}.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
 
-    def _fast_parse_duration_ms(self, text: Optional[str]) -> int:
+    def _parse_duration_ms(self, text: Optional[str]) -> int:
         default_ms = 1000
         if not text:
             return default_ms
@@ -3359,7 +3355,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             ms = int(value * 1_000)
         return max(ms, 0)
 
-    def _fast_extract_url(self, text: Optional[str]) -> Optional[str]:
+    def _extract_url(self, text: Optional[str]) -> Optional[str]:
         if not text:
             return None
         text = text.strip()
@@ -3378,8 +3374,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             return f"{domain}{path}"
         return None
 
-    def _enable_fast_mode_goal_evaluation(self) -> List[Type[BaseGoal]]:
-        """Override goal evaluation with automatic success in fast mode."""
+    def _enable_goal_evaluation_override(self) -> List[Type[BaseGoal]]:
+        """Override goal evaluation with automatic success."""
         goal_types: List[Type[BaseGoal]] = []
         if not self.goal_monitor or not self.goal_monitor.active_goal:
             return goal_types
@@ -3390,23 +3386,23 @@ Return only the extracted text that appears in the text content above. Do not ma
         # Skip overriding defer-style goals that must run their own evaluation logic.
         defer_like = getattr(goal, "request_user_input", None) is not None or goal_cls.__name__ in {"DeferGoal", "TimedSleepGoal"}
         if defer_like:
-            print(f"[FastMode] Leaving goal evaluation intact for {goal_cls.__name__}")
+            print(f"[KeywordCommand] Leaving goal evaluation intact for {goal_cls.__name__}")
             return goal_types
 
         goal_types.append(goal_cls)
 
-        if goal_cls not in self._fast_mode_original_evaluations:
+        if goal_cls not in self._goal_evaluation_overrides:
             original_eval = getattr(goal, "evaluate", None)
 
-            def _fast_evaluate(_: GoalContext) -> GoalResult:  # type: ignore[override]
+            def _override_evaluate(_: GoalContext) -> GoalResult:  # type: ignore[override]
                 return GoalResult(
                     status=GoalStatus.ACHIEVED,
                     confidence=1.0,
-                    reasoning="Fast mode: skipping goal evaluation.",
+                    reasoning="Skipping goal evaluation.",
                 )
 
-            self._fast_mode_original_evaluations[goal_cls] = original_eval
-            goal.evaluate = _fast_evaluate.__get__(goal, goal_cls)  # type: ignore[attr-defined]
+            self._goal_evaluation_overrides[goal_cls] = original_eval
+            goal.evaluate = _override_evaluate.__get__(goal, goal_cls)  # type: ignore[attr-defined]
 
             # Ensure evaluation timing won't prevent immediate success
             try:
@@ -3417,14 +3413,14 @@ Return only the extracted text that appears in the text content above. Do not ma
         return goal_types
 
     def _restore_goal_evaluations(self) -> None:
-        """Restore original goal evaluation behavior after fast mode completes."""
+        """Restore original goal evaluation behavior after keyword command completes."""
         if not self.goal_monitor or not self.goal_monitor.active_goal:
             return
 
         goal = self.goal_monitor.active_goal
         goal_cls = goal.__class__
 
-        original_eval = self._fast_mode_original_evaluations.get(goal_cls)
+        original_eval = self._goal_evaluation_overrides.get(goal_cls)
         if original_eval is not None:
             if original_eval:
                 goal.evaluate = original_eval.__get__(goal, goal_cls)  # type: ignore[attr-defined]
@@ -3433,7 +3429,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     delattr(goal, "evaluate")
                 except Exception:
                     pass
-            del self._fast_mode_original_evaluations[goal_cls]
+            del self._goal_evaluation_overrides[goal_cls]
 
     def _generate_plan(
         self,

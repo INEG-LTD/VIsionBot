@@ -78,10 +78,10 @@ class EventType(str, Enum):
     # Performance/cost events
     LLM_COST = "llm_cost"  # Token usage and cost tracking
     
-    # Fast mode events
-    FAST_MODE_START = "fast_mode_start"
-    FAST_MODE_COMPLETE = "fast_mode_complete"
-    FAST_MODE_OVERLAY_SELECTION = "fast_mode_overlay_selection"
+    # Command execution events
+    COMMAND_EXECUTION_START = "command_execution_start"
+    COMMAND_EXECUTION_COMPLETE = "command_execution_complete"
+    OVERLAY_SELECTION = "overlay_selection"
     
     # Planning events (detailed)
     PLAN_OVERLAY_CANDIDATES = "plan_overlay_candidates"
@@ -480,26 +480,26 @@ class EventLogger:
         except Exception:
             pass
     
-    def fast_mode_start(self, instruction: str, target_hint: str = None, **details):
+    def command_execution_start(self, instruction: str, target_hint: str = None, **details):
         try:
-            msg = f"Executing fast click for instruction='{instruction}'"
+            msg = f"Executing command for instruction='{instruction}'"
             if target_hint:
                 msg += f" target_hint='{target_hint}'"
-            self.emit(EventType.FAST_MODE_START, msg, "DEBUG", instruction=instruction, target_hint=target_hint, **details)
+            self.emit(EventType.COMMAND_EXECUTION_START, msg, "DEBUG", instruction=instruction, target_hint=target_hint, **details)
         except Exception:
             pass
     
-    def fast_mode_complete(self, goal_description: str, success: bool = True, **details):
+    def command_execution_complete(self, goal_description: str, success: bool = True, **details):
         try:
-            msg = f"Fast mode completed: {goal_description}"
+            msg = f"Command execution completed: {goal_description}"
             level = "SUCCESS" if success else "ERROR"
-            self.emit(EventType.FAST_MODE_COMPLETE, msg, level, goal_description=goal_description, success=success, **details)
+            self.emit(EventType.COMMAND_EXECUTION_COMPLETE, msg, level, goal_description=goal_description, success=success, **details)
         except Exception:
             pass
     
-    def fast_mode_overlay_selection(self, message: str, **details):
+    def overlay_selection(self, message: str, **details):
         try:
-            self.emit(EventType.FAST_MODE_OVERLAY_SELECTION, message, "DEBUG", **details)
+            self.emit(EventType.OVERLAY_SELECTION, message, "DEBUG", **details)
         except Exception:
             pass
     

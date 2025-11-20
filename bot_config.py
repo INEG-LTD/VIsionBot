@@ -9,7 +9,7 @@ Example:
     >>> from bot_config import BotConfig, ModelConfig, ExecutionConfig
     >>> config = BotConfig(
     ...     model=ModelConfig(agent_model="gpt-5-mini"),
-    ...     execution=ExecutionConfig(fast_mode=True)
+    ...     execution=ExecutionConfig()
     ... )
     >>> bot = BrowserVisionBot(config=config)
 """
@@ -60,10 +60,6 @@ class ExecutionConfig(BaseModel):
         default=10,
         ge=1,
         description="Maximum number of attempts for task completion"
-    )
-    fast_mode: bool = Field(
-        default=False,
-        description="Enable fast mode (direct keyword -> action execution)"
     )
     parallel_completion_and_action: bool = Field(
         default=True,
@@ -283,7 +279,7 @@ class BotConfig(BaseModel):
     Example:
         >>> config = BotConfig(
         ...     model=ModelConfig(agent_model="gpt-5-mini"),
-        ...     execution=ExecutionConfig(fast_mode=True),
+        ...     execution=ExecutionConfig(),
         ...     recording=RecordingConfig(save_gif=True)
         ... )
         >>> bot = BrowserVisionBot(config=config)
@@ -330,26 +326,6 @@ class BotConfig(BaseModel):
         arbitrary_types_allowed = True
     
     @classmethod
-    def fast(cls) -> BotConfig:
-        """
-        Create a configuration optimized for speed.
-        
-        Returns:
-            BotConfig with fast_mode enabled and reduced overhead
-        """
-        return cls(
-            execution=ExecutionConfig(
-                fast_mode=True,
-                parallel_completion_and_action=True
-            ),
-            elements=ElementConfig(
-                overlay_only_planning=True,
-                two_pass_planning=False
-            ),
-            logging=DebugConfig(debug_mode=False)
-        )
-    
-    @classmethod
     def debug(cls) -> BotConfig:
         """
         Create a configuration optimized for debugging.
@@ -375,7 +351,6 @@ class BotConfig(BaseModel):
         """
         return cls(
             execution=ExecutionConfig(
-                fast_mode=True,
                 max_attempts=15
             ),
             stuck_detector=StuckDetectorConfig(

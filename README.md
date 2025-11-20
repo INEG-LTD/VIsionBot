@@ -95,7 +95,7 @@ from browser_provider import create_browser_provider
 # Create a configuration
 config = BotConfig(
     model=ModelConfig(agent_model="gpt-5-mini"),
-    execution=ExecutionConfig(fast_mode=True, max_attempts=15)
+    execution=ExecutionConfig(max_attempts=15)
 )
 
 # Create browser provider
@@ -193,7 +193,6 @@ config = BotConfig(
     # Execution Behavior
     execution=ExecutionConfig(
         max_attempts=10,
-        fast_mode=False,
         parallel_completion_and_action=True,
         dedup_mode="auto"
     ),
@@ -223,9 +222,6 @@ config = BotConfig(
 ### Preset Configurations
 
 ```python
-# Fast mode - optimized for speed
-config = BotConfig.fast()
-
 # Debug mode - with GIF recording and verbose logging
 config = BotConfig.debug()
 
@@ -246,7 +242,6 @@ config = BotConfig.minimal()
 
 #### ExecutionConfig
 - `max_attempts`: Maximum number of attempts for task completion (default: 10)
-- `fast_mode`: Enable fast mode with direct keyword → action execution (default: False)
 - `parallel_completion_and_action`: Run completion check and next action in parallel (default: True)
 - `dedup_mode`: Deduplication mode: "auto", "on", or "off" (default: "auto")
 - `dedup_history_quantity`: Number of interactions to track for dedup (-1 = unlimited)

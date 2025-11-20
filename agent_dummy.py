@@ -27,7 +27,6 @@ config = BotConfig(
         reasoning_level=ReasoningLevel.NONE
     ),
     execution=ExecutionConfig(
-        fast_mode=True,
         max_attempts=30
     ),
     elements=ElementConfig(
