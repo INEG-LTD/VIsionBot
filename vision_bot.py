@@ -28,10 +28,7 @@ from utils.intent_parsers import (
     extract_press_target,
     parse_action_intent,
     parse_keyword_command,
-    parse_focus_command,
-    parse_undo_command,
 )
-from focus_manager import FocusManager
 from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
@@ -617,7 +614,7 @@ class BrowserVisionBot:
         self._cached_clean_screenshot = None
         self._cached_overlay_data = None
         self._cached_dom_signature = None
-        self._cached_focus_context = None
+        # Focus system removed - no longer caching focus context
         self._pre_dedup_element_data = []
         
         # Use self.page (which may have been provided or just initialized)
@@ -657,9 +654,6 @@ class BrowserVisionBot:
         except Exception:
             pass
         
-        # Initialize focus manager with deduper
-        self.focus_manager: FocusManager = FocusManager(page, self.page_utils, self.deduper)
-        
         # Initialize command ledger for tracking command execution
         self.command_ledger: CommandLedger = CommandLedger()
         
@@ -674,9 +668,6 @@ class BrowserVisionBot:
         
         # Initialize action executor with deduper, GIF recorder, and command ledger
         self.action_executor: ActionExecutor = ActionExecutor(page, self.session_tracker, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
-        
-        # Set action_executor on focus_manager for scroll tracking
-        self.focus_manager.action_executor = self.action_executor
         
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
@@ -866,14 +857,7 @@ class BrowserVisionBot:
                     self.action_executor.set_page(new_page)
             except Exception:
                 pass
-            try:
-                if hasattr(self, "focus_manager") and self.focus_manager:
-                    if hasattr(self.focus_manager, "set_page"):
-                        self.focus_manager.set_page(new_page)
-                    else:
-                        self.focus_manager.page = new_page
-            except Exception:
-                pass
+            # Focus system removed - no longer needed
             # Always refresh overlay manager for the new page context
             try:
                 self.overlay_manager = OverlayManager(new_page)
@@ -1199,12 +1183,7 @@ class BrowserVisionBot:
             # Add command to history
             self._add_to_command_history(goal_description)
             
-            # Check for focus commands first
-            focus_result = self._handle_focus_commands(goal_description, self.overlay_manager)
-            if focus_result is not None:
-                self.command_ledger.complete_command(command_id, success=focus_result)
-                self.execution_timer.end_command()
-                return focus_result
+            # Focus system removed - no longer handling focus commands
             
             # Check for dedup commands
             dedup_result = self._handle_dedup_commands(goal_description)
@@ -2071,8 +2050,6 @@ Return only the extracted text that appears in the text content above. Do not ma
         page_info: PageInfo,
     ) -> tuple[List[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
         """Collect overlay metadata and screenshots, with caching and dedup filtering."""
-        current_focus_context = self.focus_manager.get_current_focus_context()
-        
         try:
             self.event_logger.system_debug("Numbering interactive elements...")
         except Exception:
@@ -2088,15 +2065,8 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive") or []
 
-        if current_focus_context:
-            try:
-                self.event_logger.system_debug("Filtering elements based on current focus context...")
-            except Exception:
-                pass
-            element_data = self._filter_elements_by_focus(element_data)
-
+        # Focus system removed - no longer filtering by focus context
         self._pre_dedup_element_data = element_data.copy() if element_data else []
-        self._cached_focus_context = current_focus_context
 
         try:
             self.event_logger.system_debug("Capturing screenshot with overlays...")
@@ -3132,100 +3102,9 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _handle_focus_commands(self, goal_description: str, overlay_manager: OverlayManager) -> Optional[bool]:
         """
         Handle focus, subfocus, and undo commands.
-        
-        Args:
-            goal_description: The goal description to check for focus commands
-        
-        Returns:
-            bool: True if command was handled successfully, False if failed, None if not a focus command
+        Focus system removed - returns None (not a focus command).
         """
-        try:
-            # Check for focus commands
-            focus_parsed = parse_focus_command(goal_description)
-            if focus_parsed:
-                command_type, payload = focus_parsed
-                if command_type == "focus":
-                    # Get current page info for AI-first approach
-                    page_info = self.page_utils.get_page_info()
-                    success = self.focus_manager.focus_on_elements(payload, page_info, overlay_manager)
-                    if success:
-                        self.logger.log_focus_operation("focus", payload, True)
-                        print("🎯 AI-first focus command executed successfully")
-                        return True
-                    else:
-                        self.logger.log_focus_operation("focus", payload, False)
-                        print("❌ AI-first focus command failed")
-                        return False
-            
-            # Subfocus commands not needed in AI-first approach
-            
-            # Check for undo commands
-            undo_parsed = parse_undo_command(goal_description)
-            if undo_parsed:
-                command_type, payload = undo_parsed
-                if command_type == "undo":
-                    success = self.focus_manager.undo_focus()
-                    if success:
-                        self.logger.log_focus_operation("undo", "focus", True)
-                        print("↩️ Undo command executed successfully")
-                        return True
-                    else:
-                        self.logger.log_focus_operation("undo", "focus", False)
-                        print("❌ Undo command failed")
-                        return False
-                elif command_type == "undofocus":
-                    success = self.focus_manager.undo_focus()
-                    if success:
-                        self.logger.log_focus_operation("undofocus", "focus", True)
-                        print("↩️ Undofocus command executed successfully")
-                        return True
-                    else:
-                        self.logger.log_focus_operation("undofocus", "focus", False)
-                        print("❌ Undofocus command failed")
-                        return False
-            
-            # Check for keyword commands that might be focus-related
-            kw_parsed = parse_keyword_command(goal_description)
-            if kw_parsed:
-                keyword, payload, helper = kw_parsed
-                if keyword == "focus":
-                    success = self.focus_manager.focus_on_elements(payload, page_info, overlay_manager)
-                    if success:
-                        print("🎯 Focus command executed successfully")
-                        return True
-                    else:
-                        print("❌ Focus command failed")
-                        return False
-                elif keyword == "subfocus":
-                    success = self.focus_manager.subfocus_on_elements(payload, page_info, overlay_manager)
-                    if success:
-                        print("🎯 Subfocus command executed successfully")
-                        return True
-                    else:
-                        print("❌ Subfocus command failed")
-                        return False
-                elif keyword == "undo":
-                    success = self.focus_manager.undo_focus()
-                    if success:
-                        print("↩️ Undo command executed successfully")
-                        return True
-                    else:
-                        print("❌ Undo command failed")
-                        return False
-                elif keyword == "undofocus":
-                    success = self.focus_manager.undo_focus()
-                    if success:
-                        print("↩️ Undofocus command executed successfully")
-                        return True
-                    else:
-                        print("❌ Undofocus command failed")
-                        return False
-            
-            return None  # Not a focus command
-            
-        except Exception as e:
-            print(f"⚠️ Error handling focus commands: {e}")
-            return False
+        return None
     
     def _handle_dedup_commands(self, goal_description: str) -> Optional[bool]:
         """
@@ -3368,29 +3247,8 @@ Return only the extracted text that appears in the text content above. Do not ma
         Returns:
             Filtered list of element data
         """
-        try:
-            current_focus = self.focus_manager.get_current_focus_context()
-            if not current_focus:
-                return element_data  # No focus means all elements are available
-            
-            
-            # Filter elements that are within the focus context
-            focused_elements = []
-            for elem in element_data:
-                element_id = str(elem.get('index', ''))
-                is_in_focus = self.focus_manager.is_element_in_focus(element_id, elem)
-                if is_in_focus:
-                    focused_elements.append(elem)
-                    print(f"✅ Element {element_id} is in focus: {elem.get('description', 'Unknown')}")
-                else:
-                    print(f"🚫 Filtered out element {element_id} (not in focus): {elem.get('description', 'Unknown')}")
-            
-            print(f"🎯 Focused on {len(focused_elements)} out of {len(element_data)} elements")
-            return focused_elements
-            
-        except Exception as e:
-            print(f"⚠️ Error filtering elements by focus: {e}")
-            return element_data
+        # Focus system removed - returns all elements
+        return element_data
 
     def queue_action(self, action: str, command_id: Optional[str] = None, 
                     priority: int = 0, metadata: Dict[str, Any] = None) -> None:

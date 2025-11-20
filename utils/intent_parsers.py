@@ -142,7 +142,7 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
     """Parse a simple keyword command of the form "keyword: payload[: helper]".
 
     Supported keywords (case-insensitive):
-      - click, scroll, press, navigate, open, visit, form, fill, back, forward, focus, undo, subfocus, undofocus, ref,
+      - click, scroll, press, navigate, open, visit, form, fill, back, forward, ref,
         type, select, upload, datetime
 
     Returns (keyword_lower, payload_stripped, helper_or_None) or None if not matched.
@@ -179,10 +179,6 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
         "form",
         "back",
         "forward",
-        "focus",
-        "undo",
-        "subfocus",
-        "undofocus",
         "ref",
         "type",
         "select",
@@ -196,7 +192,7 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
 
     command_text = payload
     helper_text: Optional[str] = None
-    if kw in {"click", "press", "scroll", "navigate", "back", "forward", "focus", "undo", "subfocus", "undofocus", "ref"}:
+    if kw in {"click", "press", "scroll", "navigate", "back", "forward", "ref"}:
         command_text, helper_text = _split_command_helper(payload)
 
     return kw, command_text, helper_text
@@ -322,33 +318,7 @@ def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str],
 
 
 def parse_focus_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse focus commands.
-
-    Supported forms (case-insensitive):
-    - "focus: <description>"
-    - "focus on <description>"
-    - "focus <description>"
-
-    Returns (command_type, focus_description) or None if not matched.
-    """
-    t = (text or "").strip()
-    if not t:
-        return None
-    
-    # Remove "focus:" prefix if present
-    if t.lower().startswith("focus:"):
-        return "focus", t[6:].strip()
-    
-    # Check for "focus on" pattern
-    m = re.match(r"(?i)^focus\s+on\s+(.+)$", t)
-    if m:
-        return "focus", m.group(1).strip()
-    
-    # Check for "focus" pattern
-    m = re.match(r"(?i)^focus\s+(.+)$", t)
-    if m:
-        return "focus", m.group(1).strip()
-    
+    """Parse focus commands - Focus system removed, always returns None."""
     return None
 
 
@@ -636,59 +606,12 @@ def _remove_phrase(text: str, keywords) -> str:
 
 
 def parse_undo_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse undo commands.
-
-    Supported forms (case-insensitive):
-    - "undo"
-    - "undo focus"
-    - "undo: focus"
-    - "undofocus:"
-
-    Returns (command_type, payload) or None if not matched.
-    """
-    t = (text or "").strip().lower()
-    if not t:
-        return None
-    
-    # "undofocus:" command
-    if t.startswith("undofocus:"):
-        return "undofocus", t[10:].strip()
-    
-    # Simple "undo" command
-    if t == "undo":
-        return "undo", ""
-    
-    # "undo focus" or "undo: focus"
-    m = re.match(r"^undo(?:\s*:)?\s*(.*)$", t)
-    if m:
-        payload = m.group(1).strip()
-        return "undo", payload
-    
+    """Parse undo commands - Focus system removed, always returns None."""
     return None
 
 
 def parse_subfocus_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse subfocus commands.
-
-    Supported forms (case-insensitive):
-    - "subfocus: <description>"
-    - "subfocus on <description>"
-
-    Returns (command_type, subfocus_description) or None if not matched.
-    """
-    t = (text or "").strip()
-    if not t:
-        return None
-    
-    # "subfocus:" prefix
-    if t.lower().startswith("subfocus:"):
-        return "subfocus", t[9:].strip()
-    
-    # "subfocus on" pattern
-    m = re.match(r"(?i)^subfocus\s+on\s+(.+)$", t)
-    if m:
-        return "subfocus", m.group(1).strip()
-    
+    """Parse subfocus commands - Focus system removed, always returns None."""
     return None
 
 

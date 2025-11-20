@@ -499,23 +499,6 @@ while not queue.is_empty():
     bot.act(action)
 ```
 
-### Focus Management
-
-Track and manage element focus:
-
-```python
-# Focus manager is automatically initialized
-# Access it via bot.focus_manager
-
-# Set focus context
-bot.act("focus: login_form")
-
-# Get focused elements
-elements = bot.focus_manager.get_focused_elements()
-
-# Clear focus
-bot.act("undofocus:")
-```
 
 ### Error Handling
 
@@ -744,7 +727,6 @@ browser-vision-bot/
 ├── browser_provider.py       # Browser management
 ├── command_ledger.py         # Command tracking
 ├── action_queue.py           # Action queuing
-├── focus_manager.py          # Focus management
 ├── interaction_deduper.py    # Deduplication
 ├── middleware.py             # Middleware system
 ├── error_handling.py         # Error handling

@@ -449,8 +449,7 @@ AVAILABLE COMMANDS:
 {"- datetime: <value and field>  (e.g., \"datetime: 2024-06-01 in start date picker\") - Use for date/time pickers that need structured input." if not is_exploring else ""}
 {"- back: <steps>  (e.g., \"back: 1\") and forward: <steps>  - Use when the navigation history summary shows the desired page is behind/ahead or when the user explicitly requests it. Defaults to 1 step if omitted." if not is_exploring else ""}
 {"   * Confirm the target using the history summary (previous page, next page) before issuing back/forward." if not is_exploring else ""}
-{"- focus/subfocus: <region description>  - Use to narrow the vision focus to a specific section before interacting. 'subfocus' zooms further inside the current focus." if not is_exploring else ""}
-{"- undofocus/undo:  - Use to restore the previous focus region when the narrowed view is no longer helpful." if not is_exploring else ""}
+# Focus system removed - no longer available
 
 {"EXPLORATION MODE (Full-Page Visible):" if is_exploring else "VIEWPORT-FIRST APPROACH:"}
 - Look at the screenshot carefully

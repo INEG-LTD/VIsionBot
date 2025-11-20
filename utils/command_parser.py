@@ -124,13 +124,14 @@ def parse_keyword_command(command: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 def parse_focus_command(command: str) -> Optional[str]:
-    """Parse a focus command."""
-    if command.lower().startswith("focus:"):
+    """Parse a focus command - Focus system removed, always returns None."""
+    return None
         return command[6:].strip()
     return None
 
 def parse_undo_command(command: str) -> bool:
-    """Check if command is an undo request."""
+    """Check if command is an undo request - Focus system removed, always returns False."""
+    return False
     return command.lower().strip() == "undo"
 
 def extract_press_target(description: str) -> Optional[str]:

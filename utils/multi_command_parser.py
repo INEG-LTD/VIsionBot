@@ -80,7 +80,7 @@ def _try_simple_parsing(prompt: str) -> Optional[List[str]]:
 
 def _has_command_keywords(prompt: str) -> bool:
     """Check if prompt contains command keywords."""
-    keywords = ['click', 'scroll', 'press', 'form', 'navigate', 'type', 'fill', 'select', 'wait', 'focus', 'undofocus', 'subfocus', 'undo', 'defer']
+    keywords = ['click', 'scroll', 'press', 'form', 'navigate', 'type', 'fill', 'select', 'wait', 'defer']
     prompt_lower = prompt.lower()
     return any(keyword in prompt_lower for keyword in keywords)
 

@@ -4,7 +4,6 @@ Bot Logger - Comprehensive logging system for the automation bot.
 This module provides structured logging for all bot activities including:
 - Goal execution and evaluation
 - Action execution (clicks, scrolls, etc.)
-- Focus operations
 - Error handling
 - Performance metrics
 """
@@ -30,7 +29,6 @@ class LogCategory(str, Enum):
     """Categories for different types of bot activities"""
     GOAL = "GOAL"
     ACTION = "ACTION"
-    FOCUS = "FOCUS"
     NAVIGATION = "NAVIGATION"
     CONDITION = "CONDITION"
     ERROR = "ERROR"
@@ -186,11 +184,8 @@ Log File: {self.log_file}
         self.log(LogLevel.INFO, LogCategory.ACTION, message, details, duration_ms, success)
     
     def log_focus_operation(self, operation: str, target: str, success: bool, details: Dict[str, Any] = None):
-        """Log focus operations"""
-        status = "successful" if success else "failed"
-        message = f"Focus {operation}: {target} - {status}"
-        
-        self.log(LogLevel.INFO, LogCategory.FOCUS, message, details, success=success)
+        """Log focus operations - Focus system removed, no-op."""
+        return  # No-op
     
     def log_condition_evaluation(self, condition: str, result: bool, reasoning: str = None):
         """Log condition evaluation"""
