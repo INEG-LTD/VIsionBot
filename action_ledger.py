@@ -346,7 +346,7 @@ class ActionLedger:
         # Clear existing records
         self.records.clear()
         
-        # Load records (support both old "command" and new "goal" field for backward compatibility)
+        # Load records (support both old "command" and new "goal" field for backward compatibility with old saved files)
         for record_id, record_data in data["records"].items():
             goal = record_data.get("goal") or record_data.get("command", "")
             record = ActionRecord(

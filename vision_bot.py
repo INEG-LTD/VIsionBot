@@ -34,7 +34,7 @@ from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from utils.event_logger import EventLogger, set_event_logger
 from gif_recorder import GIFRecorder
-from command_ledger import CommandLedger
+from action_ledger import ActionLedger
 from ai_utils import (
     ReasoningLevel,
     set_default_model,
@@ -60,32 +60,32 @@ from error_handling import (
 
 
 class ExecutionTimer:
-    """Tracks execution timings for tasks, iterations, and commands"""
+    """Tracks execution timings for tasks, iterations, and actions"""
     
     def __init__(self):
         self.task_start_time: Optional[float] = None
         self.task_end_time: Optional[float] = None
         self.iterations: List[Dict[str, float]] = []  # List of {start, end} dicts
-        self.commands: List[Dict[str, Any]] = []  # List of {command_id, command, start, end} dicts
+        self.actions: List[Dict[str, Any]] = []  # List of {action_id, goal, start, end} dicts
         self.current_iteration_start: Optional[float] = None
-        self.current_command_id: Optional[str] = None
-        self.current_command_start: Optional[float] = None
-        self._current_command_text: str = ""
+        self.current_action_id: Optional[str] = None
+        self.current_action_start: Optional[float] = None
+        self._current_goal_text: str = ""
     
     def start_task(self) -> None:
         """Start tracking task execution"""
         self.task_start_time = time.time()
         self.iterations = []
-        self.commands = []
+        self.actions = []
     
     def end_task(self) -> None:
         """End task tracking"""
         self.task_end_time = time.time()
-        # End any active iteration or command
+        # End any active iteration or action
         if self.current_iteration_start is not None:
             self.end_iteration()
-        if self.current_command_start is not None:
-            self.end_command()
+        if self.current_action_start is not None:
+            self.end_action()
     
     def start_iteration(self) -> None:
         """Start tracking an iteration"""
@@ -103,37 +103,34 @@ class ExecutionTimer:
             })
             self.current_iteration_start = None
     
-    def start_command(self, command_id: str, command: str) -> None:
-        """Start tracking a command"""
-        # End previous command if still active
-        if self.current_command_start is not None:
-            self.end_command()
-        self.current_command_id = command_id
-        self.current_command_start = time.time()
+    def start_action(self, action_id: str, goal: str) -> None:
+        """Start tracking an action"""
+        # End previous action if still active
+        if self.current_action_start is not None:
+            self.end_action()
+        self.current_action_id = action_id
+        self.current_action_start = time.time()
+        self._current_goal_text = goal
     
-    def end_command(self) -> None:
-        """End current command tracking"""
-        if self.current_command_start is not None and self.current_command_id is not None:
-            self.commands.append({
-                "command_id": self.current_command_id,
-                "command": getattr(self, "_current_command_text", ""),
-                "start": self.current_command_start,
+    def end_action(self) -> None:
+        """End current action tracking"""
+        if self.current_action_start is not None and self.current_action_id is not None:
+            self.actions.append({
+                "action_id": self.current_action_id,
+                "goal": getattr(self, "_current_goal_text", ""),
+                "start": self.current_action_start,
                 "end": time.time()
             })
-            self.current_command_id = None
-            self.current_command_start = None
-            self._current_command_text = ""
-    
-    def set_command_text(self, text: str) -> None:
-        """Set the command text for the current command"""
-        self._current_command_text = text
+            self.current_action_id = None
+            self.current_action_start = None
+            self._current_goal_text = ""
     
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of all timings"""
         summary = {
             "task": {},
             "iterations": [],
-            "commands": []
+            "actions": []
         }
         
         # Task timing
@@ -153,12 +150,12 @@ class ExecutionTimer:
                 "duration_formatted": self._format_duration(duration)
             })
         
-        # Command timings
-        for cmd_data in self.commands:
-            duration = cmd_data["end"] - cmd_data["start"]
-            summary["commands"].append({
-                "command_id": cmd_data["command_id"],
-                "command": cmd_data.get("command", ""),
+        # Action timings
+        for action_data in self.actions:
+            duration = action_data["end"] - action_data["start"]
+            summary["actions"].append({
+                "action_id": action_data["action_id"],
+                "goal": action_data.get("goal", ""),
                 "duration_seconds": round(duration, 2),
                 "duration_formatted": self._format_duration(duration)
             })
@@ -201,20 +198,20 @@ class ExecutionTimer:
                 self.event_logger.system_info(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
                 self.event_logger.system_info(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
             
-            # Command timings
-            if summary["commands"]:
-                total_cmd_time = sum(cmd_data["duration_seconds"] for cmd_data in summary["commands"])
-                avg_cmd_time = total_cmd_time / len(summary["commands"])
-                self.event_logger.system_info(f"\n🎯 Commands: {len(summary['commands'])}")
-                self.event_logger.system_info(f"   Total command time: {self._format_duration(total_cmd_time)}")
-                self.event_logger.system_info(f"   Average per command: {self._format_duration(avg_cmd_time)}")
+            # Action timings
+            if summary["actions"]:
+                total_action_time = sum(action_data["duration_seconds"] for action_data in summary["actions"])
+                avg_action_time = total_action_time / len(summary["actions"])
+                self.event_logger.system_info(f"\n🎯 Actions: {len(summary['actions'])}")
+                self.event_logger.system_info(f"   Total action time: {self._format_duration(total_action_time)}")
+                self.event_logger.system_info(f"   Average per action: {self._format_duration(avg_action_time)}")
                 
-                # Show top 5 slowest commands
-                sorted_commands = sorted(summary["commands"], key=lambda x: x["duration_seconds"], reverse=True)
-                self.event_logger.system_info("\n   Top 5 slowest commands:")
-                for i, cmd in enumerate(sorted_commands[:5], 1):
-                    cmd_text = cmd["command"][:50] + "..." if len(cmd.get("command", "")) > 50 else cmd.get("command", "")
-                    self.event_logger.system_info(f"   {i}. {cmd['command_id']}: {cmd['duration_formatted']} - {cmd_text}")
+                # Show top 5 slowest actions
+                sorted_actions = sorted(summary["actions"], key=lambda x: x["duration_seconds"], reverse=True)
+                self.event_logger.system_info("\n   Top 5 slowest actions:")
+                for i, action in enumerate(sorted_actions[:5], 1):
+                    goal_text = action["goal"][:50] + "..." if len(action.get("goal", "")) > 50 else action.get("goal", "")
+                    self.event_logger.system_info(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {goal_text}")
             
             self.event_logger.system_info("="*60 + "\n")
         except Exception:
@@ -334,9 +331,9 @@ class BrowserVisionBot:
         self._pending_auto_on_load: bool = False
         self._pending_auto_on_load_url: Optional[str] = None
         
-        # Command history for "do that again" functionality
+        # Action history for "do that again" functionality
         self.command_history: List[str] = []
-        self.max_command_history: int = 10  # Keep last 10 commands
+        self.max_command_history: int = 10  # Keep last 10 actions
         
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
@@ -400,7 +397,7 @@ class BrowserVisionBot:
         self.defer_input_handler: Optional[Callable[[str, Any], str]] = None
         self._pending_defer_input: Optional[Dict[str, Any]] = None
         
-        # Execution timer for tracking task, iteration, and command timings
+        # Execution timer for tracking task, iteration, and action timings
         self.execution_timer = ExecutionTimer()
     
     def _safe_event_log(self, method_name: str, *args, **kwargs):
@@ -656,8 +653,8 @@ class BrowserVisionBot:
         except Exception:
             pass
         
-        # Initialize command ledger for tracking command execution
-        self.command_ledger: CommandLedger = CommandLedger()
+        # Initialize action ledger for tracking action execution
+        self.action_ledger: ActionLedger = ActionLedger()
         
         # Initialize GIF recorder if enabled (BEFORE ActionExecutor)
         if self.save_gif:
@@ -668,8 +665,8 @@ class BrowserVisionBot:
             except Exception:
                 pass
         
-        # Initialize action executor with deduper, GIF recorder, and command ledger
-        self.action_executor: ActionExecutor = ActionExecutor(page, self.session_tracker, self.page_utils, self.deduper, self.gif_recorder, self.command_ledger)
+        # Initialize action executor with deduper, GIF recorder, and action ledger
+        self.action_executor: ActionExecutor = ActionExecutor(page, self.session_tracker, self.page_utils, self.deduper, self.gif_recorder, self.action_ledger)
         
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
@@ -925,25 +922,25 @@ class BrowserVisionBot:
             self.event_logger.system_error("Failed to switch to new page", error=e)
 
     # ---------- Auto actions on page load ----------
-    def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True, command_id: Optional[str] = None) -> None:
+    def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True, action_id: Optional[str] = None) -> None:
         """
         Register prompts to run via act() after each page load.
 
         Args:
             actions_to_take: List of commands to run on each page load
             run_once_per_url: If True, only run once per unique URL
-            command_id: Optional command ID for tracking (auto-generated if not provided)
+            action_id: Optional action ID for tracking (auto-generated if not provided)
 
         Typical usage: on_new_page_load([
             "if a cookie banner is visible click the accept button",
             "close any newsletter modal if present",
-        ], command_id="auto-page-load")
+        ], action_id="auto-page-load")
         """
         self._auto_on_load_actions = [a for a in (actions_to_take or []) if isinstance(a, str) and a.strip()]
         self._auto_on_load_run_once_per_url = bool(run_once_per_url)
         self._auto_on_load_enabled = True
         self._auto_on_load_urls_handled.clear()
-        self._auto_on_load_command_id = command_id
+        self._auto_on_load_action_id = action_id
         # Attach to current page if available
         try:
             self._attach_page_load_handler()
@@ -1055,15 +1052,15 @@ class BrowserVisionBot:
 
         self._auto_on_load_running = True
         try:
-            # Register parent command if we have a command_id
+            # Register parent action if we have an action_id
             parent_cmd_id = None
-            if hasattr(self, '_auto_on_load_command_id') and self._auto_on_load_command_id:
-                parent_cmd_id = self.command_ledger.register_command(
-                    command=f"on_new_page_load: {len(self._auto_on_load_actions)} actions",
-                    command_id=self._auto_on_load_command_id,
+            if hasattr(self, '_auto_on_load_action_id') and self._auto_on_load_action_id:
+                parent_action_id = self.action_ledger.register_action(
+                    goal=f"on_new_page_load: {len(self._auto_on_load_actions)} actions",
+                    action_id=self._auto_on_load_action_id,
                     metadata={"source": "on_new_page_load", "url": current_url}
                 )
-                self.command_ledger.start_command(parent_cmd_id)
+                self.action_ledger.start_action(parent_action_id)
             
             for i, prompt in enumerate(self._auto_on_load_actions, 1):
                 try:
@@ -1074,13 +1071,13 @@ class BrowserVisionBot:
                     # Snapshot user prompt so auto-action does not disrupt ongoing task
                     saved_user_prompt = getattr(self.session_tracker, 'user_prompt', "") if hasattr(self, 'session_tracker') else ""
                     
-                    # Generate child command ID if we have a parent
-                    child_cmd_id = f"{parent_cmd_id}_action{i}" if parent_cmd_id else None
+                    # Generate child action ID if we have a parent
+                    child_action_id = f"{parent_action_id}_action{i}" if parent_action_id else None
                     
                     try:
                         # If we're inside act(), we still call act() but our snapshot/restore prevents disruption
                         # and _auto_on_load_running avoids re-entrancy loops
-                        self.act(prompt, command_id=child_cmd_id)
+                        self.act(prompt, action_id=child_action_id)
                     finally:
                         # Restore previous user prompt if it existed prior
                         try:
@@ -1094,9 +1091,9 @@ class BrowserVisionBot:
                     except Exception:
                         pass
             
-            # Complete parent command
+            # Complete parent action
             if parent_cmd_id:
-                self.command_ledger.complete_command(parent_cmd_id, success=True)
+                self.action_ledger.complete_action(parent_action_id, success=True)
         finally:
             self._auto_on_load_running = False
 
@@ -1120,7 +1117,7 @@ class BrowserVisionBot:
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
-        command_id: Optional[str] = None,
+        action_id: Optional[str] = None,
         modifier: Optional[List[str]] = None,
         max_attempts: Optional[int] = None,
         max_retries: Optional[int] = None,
@@ -1138,7 +1135,7 @@ class BrowserVisionBot:
             target_context_guard: Guard condition for actions
             skip_post_guard_refinement: Skip refinement after guard checks
             confirm_before_interaction: Require user confirmation before each action
-            command_id: Optional command ID for tracking (auto-generated if not provided)
+            action_id: Optional action ID for tracking (auto-generated if not provided)
             modifier: Optional list of modifier strings (deprecated, no longer used)
             max_attempts: Override bot's max_attempts for this command (None = use bot default)
             max_retries: Override goal's max_retries for this command (deprecated, no longer used)
@@ -1197,13 +1194,13 @@ class BrowserVisionBot:
         
         # Helper function to create ActionResult
         def _create_result(success: bool, message: str = "", error: Optional[str] = None, 
-                          command_id: Optional[str] = None, duration: Optional[float] = None,
+                          action_id: Optional[str] = None, duration: Optional[float] = None,
                           additional_metadata: Optional[Dict[str, Any]] = None,
                           data: Optional[Any] = None) -> ActionResult:
             """Create ActionResult with metadata"""
             metadata = {
                 "goal_description": goal_description,
-                "command_id": command_id,
+                "action_id": action_id,
             }
             if duration is not None:
                 metadata["duration_ms"] = duration * 1000
@@ -1231,13 +1228,13 @@ class BrowserVisionBot:
                 self.logger.log_error("Bot not started", "act() called before bot.start()")
                 self.event_logger.system_error("Bot not started")
                 if self.execution_timer.current_command_start is not None:
-                    self.execution_timer.end_command()
+                    self.execution_timer.end_action()
                 duration = (time.time() - start_time) if 'start_time' in locals() else None
                 return _create_result(
                     False,
                     "Bot not started. Call bot.start() first.",
                     error="Bot not started",
-                    command_id=command_id,
+                    action_id=action_id,
                     duration=duration
                 )
             
@@ -1245,66 +1242,66 @@ class BrowserVisionBot:
                 self.logger.log_error("Page is on initial blank page", "act() called before navigation")
                 self.event_logger.system_error("Page is on the initial blank page")
                 if self.execution_timer.current_command_start is not None:
-                    self.execution_timer.end_command()
+                    self.execution_timer.end_action()
                 duration = (time.time() - start_time) if 'start_time' in locals() else None
                 return _create_result(
                     False,
                     "Page is on initial blank page. Navigate to a page first.",
                     error="Page not navigated",
-                    command_id=command_id,
+                    action_id=action_id,
                     duration=duration
                 )
             
-            # Register command in ledger
-            command_id = self.command_ledger.register_command(
-                command=goal_description,
-                command_id=command_id,
+            # Register action in ledger
+            action_id = self.action_ledger.register_action(
+                goal=goal_description,
+                action_id=action_id,
                 metadata={"source": "act", "mode": "keyword"}
             )
-            self.command_ledger.start_command(command_id)
+            self.action_ledger.start_action(action_id)
             
-            # Start command timer
-            self.execution_timer.start_command(command_id, goal_description)
+            # Start action timer
+            self.execution_timer.start_action(action_id, goal_description)
             self.execution_timer.set_command_text(goal_description)
             
             # Log goal start
             self.logger.log_goal_start(goal_description)
-            self.event_logger.goal_start(goal_description, command_id=command_id)
+            self.event_logger.goal_start(goal_description, action_id=action_id)
             
-            # Add command to history
+            # Add action to history
             self._add_to_command_history(goal_description)
             
             # Focus system removed - no longer handling focus commands
             
-            # Check for dedup commands
+            # Check for dedup actions
             dedup_result = self._handle_dedup_commands(goal_description)
             if dedup_result is not None:
-                self.command_ledger.complete_command(command_id, success=dedup_result)
+                self.action_ledger.complete_action(action_id, success=dedup_result)
                 self.execution_timer.end_command()
                 duration = time.time() - start_time
                 return _create_result(
                     dedup_result,
                     "Deduplication command executed successfully" if dedup_result else "Deduplication command failed",
-                    command_id=command_id,
+                    action_id=action_id,
                     duration=duration,
                     additional_metadata={"command_type": "dedup"}
                 )
             
-            # Check for ref commands
+            # Check for ref actions
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
-                self.command_ledger.complete_command(command_id, success=ref_result)
+                self.action_ledger.complete_action(action_id, success=ref_result)
                 self.execution_timer.end_command()
                 duration = time.time() - start_time
                 return _create_result(
                     ref_result,
                     "Reference command executed successfully" if ref_result else "Reference command failed",
-                    command_id=command_id,
+                    action_id=action_id,
                     duration=duration,
                     additional_metadata={"command_type": "ref"}
                 )
             
-            # Check for extract commands
+            # Check for extract actions
             if goal_description.strip().lower().startswith("extract:"):
                 extraction_prompt = goal_description.replace("extract:", "").strip()
                 self.event_logger.extraction_start(extraction_prompt)
@@ -1320,46 +1317,46 @@ class BrowserVisionBot:
                     # Extract the actual data from ActionResult for logging
                     extracted_data = extract_result.data
                     self.event_logger.extraction_success(extraction_prompt, result=extracted_data)
-                    self.command_ledger.complete_command(command_id, success=True)
-                    self.execution_timer.end_command()
+                    self.action_ledger.complete_action(action_id, success=True)
+                    self.execution_timer.end_action()
                     duration = time.time() - start_time
                     return _create_result(
                         True,
                         "Extraction completed successfully",
-                        command_id=command_id,
+                        action_id=action_id,
                         duration=duration,
                         additional_metadata={"command_type": "extract", "extraction_prompt": extraction_prompt},
                         data=extracted_data  # Store extracted data in ActionResult
                     )
                 else:
                     self.event_logger.extraction_failure(extraction_prompt, error=extract_result.error or extract_result.message)
-                    self.command_ledger.complete_command(command_id, success=False)
-                    self.execution_timer.end_command()
+                    self.action_ledger.complete_action(action_id, success=False)
+                    self.execution_timer.end_action()
                     duration = time.time() - start_time
                     return _create_result(
                         False,
                         f"Extraction failed: {extract_result.message}",
                         error=extract_result.error or extract_result.message,
-                        command_id=command_id,
+                        action_id=action_id,
                         duration=duration,
                         additional_metadata={"command_type": "extract", "extraction_prompt": extraction_prompt}
                     )
 
-            # Reset DOM signature for new command - don't check against previous command's signature
+            # Reset DOM signature for new action - don't check against previous action's signature
             # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
 
-            # Only keyword commands are supported (click:, type:, etc.)
+            # Only keyword goals are supported (click:, type:, etc.)
             keyword_command_result = self._execute_keyword_command(
                 goal_description=goal_description,
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
-                command_id=command_id,
+                action_id=action_id,
                 start_time=start_time,
             )
             if keyword_command_result is not None:
-                # keyword_command_result is now an ActionResult or bool (temporary compatibility)
+                # keyword_action_result is now an ActionResult or bool (temporary compatibility)
                 if isinstance(keyword_command_result, ActionResult):
                     return keyword_command_result
                 else:
@@ -1368,7 +1365,7 @@ class BrowserVisionBot:
                     return _create_result(
                         keyword_command_result,
                         "Action executed successfully" if keyword_command_result else "Action failed",
-                        command_id=command_id,
+                        action_id=action_id,
                         duration=duration,
                         additional_metadata={"command_type": "keyword"}
                     )
@@ -1379,19 +1376,19 @@ class BrowserVisionBot:
             self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
             print(f"❌ Could not parse command: {goal_description}")
             print("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
-            self.command_ledger.complete_command(command_id, success=False, error_message="Could not parse command as keyword action. Must use keyword format (click:, type:, etc.)")
-            self.execution_timer.end_command()
+            self.action_ledger.complete_action(action_id, success=False, error_message="Could not parse goal as keyword action. Must use keyword format (click:, type:, etc.)")
+            self.execution_timer.end_action()
             return _create_result(
                 False,
                 "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.",
                 error="Could not parse command as keyword action. Must use keyword format (click:, type:, etc.)",
-                command_id=command_id,
+                action_id=action_id,
                 duration=duration
             )
         finally:
-            # End command timer if still active (safety net for any unhandled returns)
-            if self.execution_timer.current_command_start is not None:
-                self.execution_timer.end_command()
+            # End action timer if still active (safety net for any unhandled returns)
+            if self.execution_timer.current_action_start is not None:
+                self.execution_timer.end_action()
             
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
             self._in_act = False
@@ -2205,7 +2202,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
-        command_id: Optional[str] = None,
+        action_id: Optional[str] = None,
         max_attempts: Optional[int] = None,
         max_retries: Optional[int] = None,
     ) -> bool:
@@ -2228,10 +2225,10 @@ Return only the extracted text that appears in the text content above. Do not ma
         """
         self._check_termination()
         
-        # Register the ref in command ledger
-        command_id = self.command_ledger.register_command(
-            command=f"register_prompts: {ref_id}",
-            command_id=command_id,
+        # Register the ref in action ledger
+        action_id = self.action_ledger.register_action(
+            goal=f"register_prompts: {ref_id}",
+            action_id=action_id,
             metadata={"source": "register_prompts", "ref_id": ref_id, "prompt_count": len(prompts)}
         )
         
@@ -2241,11 +2238,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                 print("❌ No prompts provided for register_prompts")
                 return False
             
-            # Store the commands for later reference
+            # Store the goals for later reference
             self.command_refs[ref_id] = {
                 "prompts": prompts.copy(),
                 "all_must_be_true": bool(all_must_be_true),
-                "command_id": command_id,  # Store the original command ID
+                "action_id": action_id,  # Store the original action ID
                 "additional_context": additional_context or "",
                 "target_context_guard": target_context_guard,
                 "skip_post_guard_refinement": bool(skip_post_guard_refinement),
@@ -2496,10 +2493,10 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
-        command_id: Optional[str],
+        action_id: Optional[str],
         start_time: float,
     ) -> Optional[bool]:
-        """Attempt to execute the command using keyword-based execution. Returns None to fall back."""
+        """Attempt to execute the action using keyword-based execution. Returns None to fall back."""
         parsed = parse_keyword_command(goal_description)
         if not parsed:
             return None
@@ -2606,7 +2603,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             return None
 
         if result is None:
-            # Keyword command could not confidently execute – allow normal flow
+            # Keyword action could not confidently execute – allow normal flow
             return None
 
         duration_ms = (time.time() - start_time) * 1000
@@ -2616,13 +2613,13 @@ Return only the extracted text that appears in the text content above. Do not ma
                 self.event_logger.command_execution_complete(goal_description=goal_description, success=True)
             except Exception:
                 pass
-            self.command_ledger.complete_command(command_id, success=True)
+            self.action_ledger.complete_action(action_id, success=True)
         else:
             self.logger.log_goal_failure(goal_description, "Keyword command execution failed", duration_ms)
-            self.command_ledger.complete_command(
-                command_id,
+            self.action_ledger.complete_action(
+                action_id,
                 success=False,
-                error_message="Keyword command execution failed",
+                error_message="Keyword action execution failed",
             )
         self._invalidate_plan_cache("keyword command execution")
         return result
@@ -3537,7 +3534,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 ref_confirm_before_interaction = ref_entry.get("confirm_before_interaction", False)
                 ref_max_attempts = ref_entry.get("max_attempts")
                 ref_max_retries = ref_entry.get("max_retries")
-                stored_command_id = ref_entry.get("command_id")  # Get the original command ID
+                stored_action_id = ref_entry.get("action_id")  # Get the original action ID
 
                 if not stored_prompts:
                     print(f"⚠️ Ref ID '{ref_id}' has no stored commands")
@@ -3548,13 +3545,13 @@ Return only the extracted text that appears in the text content above. Do not ma
                 results: List[bool] = []
 
                 # Use the stored command ID as the parent, fallback to current if not available
-                ref_command_id = stored_command_id or self.command_ledger.get_current_command_id()
+                ref_action_id = stored_action_id or self.action_ledger.get_current_action_id()
                 
                 for i, prompt in enumerate(stored_prompts, 1):
                     print(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
                     
-                    # Generate a child command ID
-                    child_cmd_id = f"{ref_command_id}_cmd{i}" if ref_command_id else None
+                    # Generate a child action ID
+                    child_action_id = f"{ref_action_id}_action{i}" if ref_action_id else None
                     
                     success = bool(
                         self.act(
@@ -3563,7 +3560,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                             target_context_guard=ref_target_context_guard,
                             skip_post_guard_refinement=ref_skip_post_guard_refinement,
                             confirm_before_interaction=ref_confirm_before_interaction,
-                            command_id=child_cmd_id,  # Pass child ID
+                            action_id=child_action_id,  # Pass child ID
                             max_attempts=ref_max_attempts,  # Pass custom max_attempts
                             max_retries=ref_max_retries,    # Pass custom max_retries
                         )
@@ -3607,18 +3604,18 @@ Return only the extracted text that appears in the text content above. Do not ma
         # Focus system removed - returns all elements
         return element_data
 
-    def queue_action(self, action: str, command_id: Optional[str] = None, 
+    def queue_action(self, action: str, action_id: Optional[str] = None, 
                     priority: int = 0, metadata: Dict[str, Any] = None) -> None:
         """
         Queue an action for later execution.
         
         Args:
             action: The action to execute (e.g., "click: button")
-            command_id: Optional command ID for tracking
+            action_id: Optional action ID for tracking
             priority: Priority level (higher = executed first)
             metadata: Optional metadata dict
         """
-        self.action_queue.enqueue(action, command_id, priority, metadata)
+        self.action_queue.enqueue(action, action_id, priority, metadata)
         print(f"📋 Queued action: {action} [Priority: {priority}]")
     
     def process_queue(self) -> int:
@@ -3638,7 +3635,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 try:
                     action_result = self.act(
                         queued_action.action,
-                        command_id=queued_action.command_id
+                        action_id=queued_action.action_id
                     )
                     success = action_result.success
                     if success:

@@ -18,7 +18,7 @@ from utils.context_guard import ContextGuard, GuardDecision
 from vision_utils import get_gemini_box_2d_center_pixels
 from session_tracker import SessionTracker, InteractionType
 from interaction_deduper import InteractionDeduper
-from command_ledger import CommandLedger
+from action_ledger import ActionLedger
 
 
 class ScrollReason(Enum):
@@ -39,8 +39,8 @@ class PreActionContext:
     elements: PageElements
     coordinates: Optional[Tuple[int, int]] = None
     page: Optional[Page] = None  # Access to the page for custom actions
-    command_id: Optional[str] = None  # ID of the command that triggered this action
-    command_lineage: Optional[List[str]] = None  # Full lineage of command IDs
+    action_id: Optional[str] = None  # ID of the action that triggered this action
+    action_lineage: Optional[List[str]] = None  # Full lineage of action IDs
 
 
 @dataclass
@@ -54,8 +54,8 @@ class PostActionContext:
     coordinates: Optional[Tuple[int, int]] = None
     error_message: Optional[str] = None
     page: Optional[Page] = None  # Access to the page for custom actions
-    command_id: Optional[str] = None  # ID of the command that triggered this action
-    command_lineage: Optional[List[str]] = None  # Full lineage of command IDs
+    action_id: Optional[str] = None  # ID of the action that triggered this action
+    action_lineage: Optional[List[str]] = None  # Full lineage of action IDs
     scroll_occurred: bool = False  # Whether a scroll happened
     scroll_reason: Optional[ScrollReason] = None  # Reason for scroll (see ScrollReason enum)
 
@@ -69,7 +69,7 @@ class ActionExecutor:
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
         self.gif_recorder = gif_recorder
-        self.command_ledger = command_ledger or CommandLedger()
+        self.action_ledger = action_ledger or ActionLedger()
         self.last_failure_reason: Optional[str] = None
         
         # Click method configuration
@@ -282,9 +282,9 @@ class ActionExecutor:
         if not self.pre_action_callbacks:
             return
         
-        # Get current command context
-        command_id = self.command_ledger.get_current_command_id()
-        command_lineage = self.command_ledger.get_lineage(command_id) if command_id else None
+        # Get current action context
+        action_id = self.action_ledger.get_current_action_id()
+        action_lineage = self.action_ledger.get_lineage(action_id) if action_id else None
         
         context = PreActionContext(
             action_type=action_type,
@@ -293,8 +293,8 @@ class ActionExecutor:
             elements=elements,
             coordinates=coordinates,
             page=self.page,
-            command_id=command_id,
-            command_lineage=command_lineage,
+            action_id=action_id,
+            action_lineage=action_lineage,
         )
         
         for callback in self.pre_action_callbacks:
@@ -315,17 +315,17 @@ class ActionExecutor:
         elements: PageElements,
         coordinates: Optional[Tuple[int, int]] = None,
         error_message: Optional[str] = None,
-        command_id: Optional[str] = None,
+        action_id: Optional[str] = None,
     ) -> None:
         """Execute all registered post-action callbacks with full context"""
         if not self.post_action_callbacks:
             return
         
-        # Get current command context
-        # Use provided command_id or fall back to execution stack
-        if command_id is None:
-            command_id = self.command_ledger.get_current_command_id()
-        command_lineage = self.command_ledger.get_lineage(command_id) if command_id else None
+        # Get current action context
+        # Use provided action_id or fall back to execution stack
+        if action_id is None:
+            action_id = self.action_ledger.get_current_action_id()
+        action_lineage = self.action_ledger.get_lineage(action_id) if action_id else None
         
         # Determine scroll information
         # For scroll actions, always mark as occurred with USER_ACTION reason
@@ -346,8 +346,8 @@ class ActionExecutor:
             coordinates=coordinates,
             error_message=error_message,
             page=self.page,
-            command_id=command_id,
-            command_lineage=command_lineage,
+            action_id=action_id,
+            action_lineage=action_lineage,
             scroll_occurred=scroll_occurred,
             scroll_reason=scroll_reason,
         )
@@ -372,7 +372,7 @@ class ActionExecutor:
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
-        command_id: Optional[str] = None,
+        action_id: Optional[str] = None,
     ) -> bool:
         """
         Execute the generated plan
@@ -383,7 +383,7 @@ class ActionExecutor:
             target_context_guard: Guard condition for actions
             skip_post_guard_refinement: Skip refinement after guard checks
             confirm_before_interaction: Require user confirmation before actions
-            command_id: Optional command ID for tracking (will use execution stack if not provided)
+            action_id: Optional action ID for tracking (will use execution stack if not provided)
         
         Returns:
             True if plan executed successfully, False otherwise
@@ -398,8 +398,8 @@ class ActionExecutor:
 
         self.last_failure_reason = None
         
-        # Store command_id for use in action hooks
-        self._current_plan_command_id = command_id
+        # Store action_id for use in action hooks
+        self._current_plan_action_id = action_id
 
         for i, step in enumerate(plan.action_steps):
             try:
@@ -598,7 +598,7 @@ class ActionExecutor:
                     print(f"❌ Step {i+1} failed - aborting plan execution")
                     return False
                 
-                # Goal checking removed - keyword commands handle completion directly
+                # Goal checking removed - keyword goals handle completion directly
 
                 # Small delay between actions
                 time.sleep(0.5)
@@ -1071,7 +1071,7 @@ class ActionExecutor:
             elements=elements,
             coordinates=(x, y),
             error_message=error_msg,
-            command_id=getattr(self, '_current_plan_command_id', None),
+            action_id=getattr(self, '_current_plan_action_id', None),
         )
         
         return success
@@ -1283,7 +1283,7 @@ class ActionExecutor:
             elements=elements,
             coordinates=(x, y) if x is not None and y is not None else None,
             error_message=error_msg,
-            command_id=getattr(self, '_current_plan_command_id', None),
+            action_id=getattr(self, '_current_plan_action_id', None),
         )
         
         return success
@@ -1468,7 +1468,7 @@ class ActionExecutor:
             elements=PE(elements=[]),
             coordinates=(target_x, target_y),
             error_message=error_msg,
-            command_id=getattr(self, '_current_plan_command_id', None),
+            action_id=getattr(self, '_current_plan_action_id', None),
         )
         
         return success
@@ -1571,7 +1571,7 @@ class ActionExecutor:
             elements=PE(elements=[]),
             coordinates=None,
             error_message=error_msg,
-            command_id=getattr(self, '_current_plan_command_id', None),
+            action_id=getattr(self, '_current_plan_action_id', None),
         )
         
         return success

@@ -16,7 +16,7 @@ from collections import deque
 class QueuedAction:
     """Represents an action queued for later execution"""
     action: str
-    command_id: Optional[str] = None
+    action_id: Optional[str] = None
     priority: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
     queued_at: float = field(default_factory=time.time)
@@ -29,16 +29,16 @@ class ActionQueue:
         self._queue = deque()
         self._lock = threading.Lock()
         self._max_size = max_size
-        self._queued_ids = set()  # Track queued command IDs to prevent circular dependencies
+        self._queued_ids = set()  # Track queued action IDs to prevent circular dependencies
     
-    def enqueue(self, action: str, command_id: Optional[str] = None, 
+    def enqueue(self, action: str, action_id: Optional[str] = None, 
                 priority: int = 0, metadata: Dict[str, Any] = None) -> None:
         """
         Add action to queue with optional priority and metadata.
         
         Args:
             action: The action to execute (e.g., "click: button")
-            command_id: Optional command ID for tracking
+            action_id: Optional action ID for tracking
             priority: Priority level (higher = executed first)
             metadata: Optional metadata dict
         """
@@ -47,16 +47,16 @@ class ActionQueue:
                 raise RuntimeError(f"Action queue is full (max {self._max_size} actions)")
             
             # Check for circular dependencies (only for user-provided IDs)
-            if command_id and command_id in self._queued_ids:
-                raise ValueError(f"Circular dependency detected: {command_id}")
+            if action_id and action_id in self._queued_ids:
+                raise ValueError(f"Circular dependency detected: {action_id}")
             
-            # Generate command ID if not provided
-            if command_id is None:
-                command_id = f"queued_{int(time.time() * 1000)}"
+            # Generate action ID if not provided
+            if action_id is None:
+                action_id = f"queued_{int(time.time() * 1000)}"
             
             queued_action = QueuedAction(
                 action=action,
-                command_id=command_id,
+                action_id=action_id,
                 priority=priority,
                 metadata=metadata or {}
             )
@@ -73,15 +73,15 @@ class ActionQueue:
                 self._queue.append(queued_action)
             
             # Only track user-provided IDs to prevent circular dependencies
-            if command_id and not command_id.startswith("queued_"):
-                self._queued_ids.add(command_id)
+            if action_id and not action_id.startswith("queued_"):
+                self._queued_ids.add(action_id)
     
     def dequeue(self) -> Optional[QueuedAction]:
         """Get next action from queue (FIFO by default, priority-based if needed)"""
         with self._lock:
             if self._queue:
                 action = self._queue.popleft()
-                self._queued_ids.discard(action.command_id)
+                self._queued_ids.discard(action.action_id)
                 return action
             return None
     

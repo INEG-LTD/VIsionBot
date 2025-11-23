@@ -271,7 +271,7 @@ config = BotConfig.minimal()
 #### ModelConfig
 - `model_name`: Default model for all operations (default: "gpt-5-mini")
 - `agent_model`: Model used for high-level agent decisions
-- `command_model`: Model used for command generation
+- `command_model`: Model used for action generation
 - `reasoning_level`: Default reasoning level (LOW, MEDIUM, HIGH)
 
 #### ExecutionConfig
@@ -357,27 +357,27 @@ result = bot.act("click: login button")
 if result.success:
     print(f"Success: {result.message}")
     print(f"Confidence: {result.confidence}")
-    print(f"Command ID: {result.metadata.get('command_id')}")
+    print(f"Action ID: {result.metadata.get('action_id')}")
 else:
     print(f"Failed: {result.message}")
     print(f"Error: {result.error}")
 
-# Other keyword commands:
+# Other keyword goals:
 # bot.act("type: username in username field")
 # bot.act("scroll: down")
 # bot.act("press: Enter")
 ```
 
 **Parameters:**
-- `goal_description` (str): Command description in keyword format (required, cannot be empty). Must use keyword format: "click: button name", "type: text in field", "scroll: down", etc.
+- `goal_description` (str): Goal description in keyword format (required, cannot be empty). Must use keyword format: "click: button name", "type: text in field", "scroll: down", etc.
 - `additional_context` (str, optional): Extra context for the action
 - `target_context_guard` (str, optional): Guard condition for actions
 - `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
 - `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
-- `command_id` (str, optional): Optional command ID for tracking (auto-generated if not provided)
+- `action_id` (str, optional): Optional action ID for tracking (auto-generated if not provided)
 - `modifier` (List[str], optional): Optional list of modifier strings (deprecated, no longer used)
-- `max_attempts` (int, optional): Override bot's max_attempts for this command (must be >= 1)
-- `max_retries` (int, optional): Maximum retries for this command (deprecated, no longer used)
+- `max_attempts` (int, optional): Override bot's max_attempts for this action (must be >= 1)
+- `max_retries` (int, optional): Maximum retries for this action (deprecated, no longer used)
 
 **Returns:** `ActionResult` - Structured result with success, message, confidence, and metadata
 
@@ -652,24 +652,25 @@ bot.middleware = middleware
 
 ## 🔥 Advanced Features
 
-### Command Ledger
+### Action Ledger
 
-Track and audit all actions with the command ledger:
+Track and audit all actions with the action ledger:
 
 ```python
-from command_ledger import CommandLedger
+from action_ledger import ActionLedger
 
-# Command ledger is automatically initialized
-# Access it via bot.command_ledger
+# Action ledger is automatically initialized
+# Access it via bot.action_ledger
 
 # After actions, query the ledger
-commands = bot.command_ledger.get_all_commands()
-for cmd in commands:
-    print(f"{cmd.command_id}: {cmd.command_text} - {cmd.status}")
+actions = bot.action_ledger.filter_records()
+for action in actions:
+    print(f"{action.id}: {action.goal} - {action.status}")
 
-# Get commands by status
-failed = bot.command_ledger.get_commands_by_status("failed")
-successful = bot.command_ledger.get_commands_by_status("completed")
+# Get actions by status
+from action_ledger import ActionStatus
+failed = bot.action_ledger.filter_records(status=ActionStatus.FAILED)
+successful = bot.action_ledger.filter_records(status=ActionStatus.COMPLETED)
 ```
 
 ### Action Queue
@@ -736,7 +737,7 @@ bot.act("dedup: off")
 
 ## Creating Custom Conditions
 
-> **Note**: The conditional goal system has been removed. The bot now uses keyword-based command execution only. Use direct keyword commands like `click:`, `type:`, `press:`, etc. For complex workflows, use agentic mode which handles conditionals automatically.
+> **Note**: The conditional goal system has been removed. The bot now uses keyword-based goal execution only. Use direct keyword goals like `click:`, `type:`, `press:`, etc. For complex workflows, use agentic mode which handles conditionals automatically.
 
 ## 🏗️ Architecture
 
@@ -918,7 +919,7 @@ browser-vision-bot/
 ├── ai_utils.py               # LLM/vision API utilities
 ├── bot_config.py             # Configuration models
 ├── browser_provider.py       # Browser management
-├── command_ledger.py         # Command tracking
+├── action_ledger.py         # Action tracking
 ├── action_queue.py           # Action queuing
 ├── interaction_deduper.py    # Deduplication
 ├── middleware.py             # Middleware system
