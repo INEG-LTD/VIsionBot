@@ -189,7 +189,7 @@ class SubAgentController:
             # Execute sub-agent's task
             print(f"▶️ Executing sub-agent {sub_agent_id}: {sub_agent_context.instruction}")
             start_time = time.time()
-            goal_result = sub_controller.run_agentic_mode(
+            goal_result = sub_controller.run_execute_task(
                 sub_agent_context.instruction,
                 agent_context=sub_agent_context
             )

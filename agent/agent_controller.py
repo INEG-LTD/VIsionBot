@@ -234,9 +234,9 @@ class AgentController:
         self.agent_context: Optional[AgentContext] = None
         self.sub_agent_controller: Optional[SubAgentController] = None
     
-    def run_agentic_mode(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> TaskResult:
+    def run_execute_task(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> TaskResult:
         """
-        Run basic agentic mode.
+        Execute a task autonomously.
         
         Args:
             user_prompt: User's high-level request

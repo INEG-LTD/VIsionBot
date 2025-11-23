@@ -1113,38 +1113,6 @@ class BrowserVisionBot:
             self._pending_auto_on_load = False
             self._pending_auto_on_load_url = None
 
-
-    def _try_simple_goal_bypass(self, command_id: Optional[str] = None) -> Optional[bool]:
-        """Fast path: if all active goals are simple (Press/Scroll), execute directly without LLM.
-
-        Args:
-            command_id: Optional command ID to track this execution
-        
-        Returns True/False if executed, or None to fall back to normal planning.
-        """
-        # Goal system removed - simple goal bypass no longer supported
-        return None
-
-    def _try_direct_click_bypass(self, prompt_text: str) -> Optional[bool]:
-        """Direct DOM bypass removed; rely on vision planning."""
-        return None
-
-    def _try_direct_type_bypass(self, prompt_text: str) -> Optional[bool]:
-        """Direct DOM bypass removed; rely on vision planning."""
-        return None
-
-    def _try_direct_select_bypass(self, prompt_text: str) -> Optional[bool]:
-        """Direct DOM bypass removed; rely on vision planning."""
-        return None
-
-    def _try_direct_datetime_bypass(self, prompt_text: str) -> Optional[bool]:
-        """Direct DOM bypass removed; rely on vision planning."""
-        return None
-
-    def _try_direct_upload_bypass(self, prompt_text: str) -> Optional[bool]:
-        """Direct DOM bypass removed; rely on vision planning."""
-        return None
-
     def act(
         self,
         goal_description: str,
@@ -1441,7 +1409,7 @@ class BrowserVisionBot:
                 except Exception as e:
                     print(f"⚠️ Error processing action queue: {e}")
 
-    def agentic_mode(
+    def execute_task(
         self,
         user_prompt: str,
         max_iterations: int = 50,
@@ -1455,7 +1423,7 @@ class BrowserVisionBot:
         max_clarification_rounds: int = 3
     ) -> AgentResult:
         """
-        Run agentic mode (Step 1: Basic Reactive Agent).
+        Execute a task autonomously (Step 1: Basic Reactive Agent).
         
         This is a basic implementation that:
         - Observes browser state
@@ -1495,12 +1463,12 @@ class BrowserVisionBot:
             # Basic usage
             bot.start()
             bot.page.goto("https://example.com")
-            result = bot.agentic_mode("search for python tutorials")
+            result = bot.execute_task("search for python tutorials")
             if result.success:
                 print("Task completed!")
             
             # With extraction
-            result = bot.agentic_mode(
+            result = bot.execute_task(
                 "navigate to amazon.com, search for 'laptop', extract the first product name and price"
             )
             if result.success:
@@ -1581,7 +1549,7 @@ class BrowserVisionBot:
         
         # Create middleware context
         context = ActionContext(
-            action_type='agentic_mode',
+            action_type='execute_task',
             action_data={
                 'user_prompt': user_prompt,
                 'max_iterations': max_iterations,
@@ -1624,7 +1592,7 @@ class BrowserVisionBot:
             )
             controller.max_iterations = max_iterations
             
-            task_result = controller.run_agentic_mode(user_prompt)
+            task_result = controller.run_execute_task(user_prompt)
             
             # Create result
             result = AgentResult(task_result, controller.extracted_data)

@@ -150,7 +150,7 @@ bot.act("Search for 'AI automation' on Google")
 
 ```python
 # Let the agent autonomously complete a task
-result = bot.agentic_mode(
+result = bot.execute_task(
     user_prompt="Find the top 3 Python web frameworks and extract their names and descriptions",
     max_iterations=20
 )
@@ -430,12 +430,12 @@ if result.success:
 - `BotNotStartedError`: If bot is not started
 - `ValidationError`: If `prompt` is empty, invalid `output_format`/`scope`, or missing `element_description`
 
-##### `agentic_mode(user_prompt, **kwargs) -> AgentResult`
+##### `execute_task(user_prompt, **kwargs) -> AgentResult`
 
-Run autonomous agent to complete a complex task.
+Execute a task autonomously using the agent.
 
 ```python
-result = bot.agentic_mode(
+result = bot.execute_task(
     user_prompt="Research the top 3 AI companies and extract their names",
     max_iterations=20,
     base_knowledge=["Focus on companies founded after 2015"],
@@ -764,7 +764,7 @@ bot.act("dedup: off")
 
 ### Component Relationships
 
-- **vision_bot.py**: Main orchestrator, handles `act()`, `extract()`, and `agentic_mode()`
+- **vision_bot.py**: Main orchestrator, handles `act()`, `extract()`, and `execute_task()`
 - **agent/agent_controller.py**: Implements reactive agent loop with completion evaluation
 - **action_executor.py**: Low-level action execution with retries and fallbacks
 - **session_tracker.py**: Tracks browser state, interactions, and navigation history
@@ -778,7 +778,7 @@ bot.act("dedup: off")
 
 ### Data Flow
 
-1. **User Request** → `bot.act()` or `bot.agentic_mode()`
+1. **User Request** → `bot.act()` or `bot.execute_task()`
 2. **Vision Analysis** → Screenshot + overlay generation
 3. **LLM Planning** → Determine action plan
 4. **Action Execution** → Execute via ActionExecutor
@@ -841,7 +841,7 @@ for article in articles:
 
 ```python
 # Agent automatically manages tabs
-result = bot.agentic_mode(
+result = bot.execute_task(
     user_prompt="""
     Research the following topics in parallel:
     1. Latest AI developments
@@ -862,13 +862,13 @@ for sub_result in result.sub_agent_results:
 ### Example 4: Agentic Mode for Complex Tasks
 
 ```python
-# Use agentic mode for complex workflows that require conditional logic
-result = bot.agentic_mode(
+# Use execute_task for complex workflows that require conditional logic
+result = bot.execute_task(
     "Navigate to the login page, fill in username 'user' and password 'pass', then click login"
 )
 
-# Agentic mode handles conditionals automatically
-result = bot.agentic_mode(
+# execute_task handles conditionals automatically
+result = bot.execute_task(
     "Go through all pages of search results and extract each product name and price"
 )
 ```
@@ -890,8 +890,8 @@ bot.start()
 # Navigate
 bot.page.goto("https://example.com")
 
-# Complex task with agent mode
-result = bot.agentic_mode(
+# Complex task with execute_task
+result = bot.execute_task(
     user_prompt="Search for 'Python tutorials', open the first 3 results, and extract their titles",
     max_iterations=20
 )

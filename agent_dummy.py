@@ -58,7 +58,7 @@ bot.start()
 bot.page.goto("https://google.com")
 
 # Run agentic mode - now returns AgentResult with extracted data
-result = bot.agentic_mode(
+result = bot.execute_task(
     "go to reed job website and search for it jobs in london",
     base_knowledge=[
         "just press enter after you've typed a search term into a search field",
