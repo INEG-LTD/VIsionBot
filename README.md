@@ -60,6 +60,39 @@ OPENAI_API_KEY=your_openai_api_key_here
 
 ### Basic Usage
 
+#### Using Context Manager (Recommended)
+
+```python
+from bot_config import BotConfig
+from browser_provider import create_browser_provider
+
+# Configure bot
+config = BotConfig()
+browser_provider = create_browser_provider(config.browser)
+
+# Use context manager for automatic cleanup
+with BrowserVisionBot(config=config, browser_provider=browser_provider) as bot:
+    # Navigate to a website
+    bot.page.goto("https://example.com")
+    
+    # Perform actions using natural language
+    bot.act("Click the 'Get Started' button")
+    bot.act("Type 'hello@example.com' into the email field")
+    bot.act("Click the submit button")
+    
+    # Access convenience methods
+    print(f"Current URL: {bot.current_url}")
+    print(f"Page title: {bot.get_title()}")
+    
+    # Get session statistics
+    stats = bot.session_stats
+    print(f"Commands executed: {stats['commands_executed']}")
+    
+# Bot is automatically cleaned up (end() called) when exiting context
+```
+
+#### Manual Management
+
 ```python
 from playwright.sync_api import sync_playwright
 from vision_bot import BrowserVisionBot
@@ -82,6 +115,8 @@ with sync_playwright() as p:
     bot.act("Type 'hello@example.com' into the email field")
     bot.act("Click the submit button")
     
+    # Cleanup
+    bot.end()
     browser.close()
 ```
 
@@ -279,50 +314,88 @@ bot = BrowserVisionBot(
 )
 ```
 
+#### Context Manager Support
+
+The bot can be used as a context manager for automatic resource cleanup:
+
+```python
+# Automatically calls start() and end()
+with BrowserVisionBot(config=config) as bot:
+    bot.page.goto("https://example.com")
+    bot.act("Click the button")
+    # end() is automatically called when exiting the context
+```
+
+This ensures proper cleanup even if an exception occurs.
+
 #### Core Methods
 
-##### `start()`
+##### `start() -> None`
 
-Initialize the bot and register the initial page. Must be called before using other methods.
+Initialize the bot and register the initial page. Must be called before using other methods (unless using context manager).
 
 ```python
 bot.start()
 ```
 
-##### `act(goal_description, **kwargs) -> bool`
+##### `end() -> Optional[str]`
+
+Terminate the bot, stop GIF recording, and prevent any subsequent operations.
+
+```python
+gif_path = bot.end()  # Returns path to GIF if recording was enabled
+```
+
+**Returns:** `Optional[str]` - Path to generated GIF if recording was enabled, `None` otherwise
+
+##### `act(goal_description, **kwargs) -> ActionResult`
 
 Execute a single action based on natural language description.
 
 ```python
-result = bot.act("Click the login button")
-result = bot.act("Type 'username' into the username field")
-result = bot.act("Press Enter")
+result = bot.act("click: login button")
+if result.success:
+    print(f"Success: {result.message}")
+    print(f"Confidence: {result.confidence}")
+    print(f"Command ID: {result.metadata.get('command_id')}")
+else:
+    print(f"Failed: {result.message}")
+    print(f"Error: {result.error}")
+
+# Other keyword commands:
+# bot.act("type: username in username field")
+# bot.act("scroll: down")
+# bot.act("press: Enter")
 ```
 
 **Parameters:**
-- `goal_description` (str): Natural language description of the action
+- `goal_description` (str): Command description in keyword format (required, cannot be empty). Must use keyword format: "click: button name", "type: text in field", "scroll: down", etc.
 - `additional_context` (str, optional): Extra context for the action
-- `interpretation_mode` (str, optional): "keyword" or "vision"
 - `target_context_guard` (str, optional): Guard condition for actions
 - `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
 - `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
 - `command_id` (str, optional): Optional command ID for tracking (auto-generated if not provided)
 - `modifier` (List[str], optional): Optional list of modifier strings (deprecated, no longer used)
-- `max_attempts` (int, optional): Override bot's max_attempts for this command
+- `max_attempts` (int, optional): Override bot's max_attempts for this command (must be >= 1)
 - `max_retries` (int, optional): Maximum retries for this command (deprecated, no longer used)
 
-**Returns:** `bool` - True if command executed successfully, False otherwise
+**Returns:** `ActionResult` - Structured result with success, message, confidence, and metadata
 
-##### `extract(prompt, **kwargs) -> Union[str, Dict[str, Any], BaseModel]`
+**Raises:**
+- `BotTerminatedError`: If bot has been terminated
+- `BotNotStartedError`: If bot is not started
+- `ValidationError`: If `goal_description` is empty or `max_attempts` < 1
+
+##### `extract(prompt, **kwargs) -> ActionResult`
 
 Extract data from the current page based on natural language description.
 
 ```python
-# Extract text
-title = bot.extract("What is the page title?", output_format="text")
-
-# Extract JSON
-data = bot.extract("Extract product information", output_format="json")
+result = bot.extract("Get page title", output_format="text")
+if result.success:
+    title = result.data  # The extracted text
+    print(f"Confidence: {result.confidence}")
+    print(f"Message: {result.message}")
 
 # Extract structured data with Pydantic model
 from pydantic import BaseModel
@@ -332,23 +405,30 @@ class Product(BaseModel):
     price: float
     description: str
 
-product = bot.extract(
+result = bot.extract(
     "Extract product information",
     output_format="structured",
     model_schema=Product
 )
+if result.success:
+    product = result.data  # The extracted Product instance
 ```
 
 **Parameters:**
-- `prompt` (str): Natural language description of what to extract
-- `output_format` (str): "json" (default), "text", or "structured"
-- `model_schema` (Type[BaseModel], optional): Pydantic model for structured output
-- `scope` (str): "viewport" (default), "full_page", or "element"
+- `prompt` (str): Natural language description of what to extract (required, cannot be empty)
+- `output_format` (str, optional): Format of output - "text", "json", or "structured" (default: "json")
+- `model_schema` (Type[BaseModel], optional): Pydantic model for structured output (required if output_format="structured")
+- `scope` (str, optional): Extraction scope - "viewport", "full_page", or "element" (default: "viewport")
 - `element_description` (str, optional): Required if scope="element"
-- `max_retries` (int): Maximum retry attempts if extraction fails (default: 2)
-- `confidence_threshold` (float): Minimum confidence to return result 0.0-1.0 (default: 0.6)
+- `max_retries` (int, optional): Maximum retry attempts if extraction fails (default: 2, must be >= 0)
+- `confidence_threshold` (float, optional): Minimum confidence to return result (default: 0.6, must be 0.0-1.0)
 
-**Returns:** Extracted data in requested format
+**Returns:** `ActionResult` - Structured result with extracted data in `.data` field, plus success, message, confidence, and metadata
+
+**Raises:**
+- `BotTerminatedError`: If bot has been terminated
+- `BotNotStartedError`: If bot is not started
+- `ValidationError`: If `prompt` is empty, invalid `output_format`/`scope`, or missing `element_description`
 
 ##### `agentic_mode(user_prompt, **kwargs) -> AgentResult`
 
@@ -368,8 +448,8 @@ if result.success:
 ```
 
 **Parameters:**
-- `user_prompt` (str): High-level task description
-- `max_iterations` (int): Maximum agent iterations (default: 50)
+- `user_prompt` (str): High-level task description (required, cannot be empty)
+- `max_iterations` (int): Maximum agent iterations (default: 50, must be >= 1)
 - `track_ineffective_actions` (bool): Track and avoid repeating ineffective actions (default: True)
 - `base_knowledge` (List[str], optional): Domain knowledge or constraints that guide agent behavior
 - `allow_partial_completion` (bool): Allow completion when major deliverables are satisfied (default: False)
@@ -377,7 +457,7 @@ if result.success:
 - `show_completion_reasoning_every_iteration` (bool): Show completion reasoning on every iteration (default: False)
 - `strict_mode` (bool): Follow instructions exactly without inferring extra requirements (default: False)
 - `clarification_callback` (Callable[[str], str], optional): Callback for asking user clarification questions
-- `max_clarification_rounds` (int): Maximum number of clarification rounds (default: 3)
+- `max_clarification_rounds` (int): Maximum number of clarification rounds (default: 3, must be >= 0)
 
 **Returns:** `AgentResult` object with:
 - `success`: Whether the task completed successfully
@@ -385,6 +465,119 @@ if result.success:
 - `reasoning`: Explanation of the result
 - `confidence`: Confidence score (0.0-1.0)
 - `sub_agent_results`: Results from sub-agents if any
+
+**Raises:**
+- `RuntimeError`: If bot is not started or has been terminated
+- `ValueError`: If `user_prompt` is empty, `max_iterations` < 1, or `max_clarification_rounds` < 0
+- `TypeError`: If `clarification_callback` is provided but not callable, or `base_knowledge` is not a list
+
+#### Convenience Methods
+
+##### `get_url() -> str`
+
+Get the current page URL.
+
+```python
+current_url = bot.get_url()
+```
+
+**Returns:** `str` - Current page URL
+
+**Raises:** `RuntimeError` if bot is not started
+
+##### `get_title() -> str`
+
+Get the current page title.
+
+```python
+title = bot.get_title()
+```
+
+**Returns:** `str` - Current page title
+
+**Raises:** `RuntimeError` if bot is not started
+
+##### `wait_for_load(timeout: int = 30000, state: str = "networkidle") -> None`
+
+Wait for the page to finish loading.
+
+```python
+bot.wait_for_load(timeout=5000, state="domcontentloaded")
+```
+
+**Parameters:**
+- `timeout` (int): Maximum time to wait in milliseconds (default: 30000)
+- `state` (str): Load state to wait for: "load", "domcontentloaded", or "networkidle" (default: "networkidle")
+
+**Raises:**
+- `RuntimeError`: If bot is not started
+- `ValueError`: If invalid state is provided
+
+##### `screenshot(path: Optional[str] = None, full_page: bool = False) -> bytes`
+
+Take a screenshot of the current page.
+
+```python
+# Save to file
+bot.screenshot(path="screenshot.png", full_page=True)
+
+# Get as bytes
+image_bytes = bot.screenshot(full_page=False)
+```
+
+**Parameters:**
+- `path` (str, optional): File path to save screenshot. If None, returns bytes
+- `full_page` (bool): If True, capture full page. If False, capture viewport only (default: False)
+
+**Returns:** `bytes` - Screenshot image data (if path is None)
+
+**Raises:** `RuntimeError` if bot is not started or screenshot fails
+
+#### Property Accessors
+
+##### `is_started: bool` (read-only)
+
+Check if the bot has been started.
+
+```python
+if bot.is_started:
+    bot.act("Click button")
+```
+
+##### `is_terminated: bool` (read-only)
+
+Check if the bot has been terminated.
+
+```python
+if not bot.is_terminated:
+    bot.act("Click button")
+```
+
+##### `current_url: str` (read-only)
+
+Get the current page URL (same as `get_url()`).
+
+```python
+url = bot.current_url
+```
+
+**Raises:** `RuntimeError` if bot is not started
+
+##### `session_stats: Dict[str, Any]` (read-only)
+
+Get session statistics.
+
+```python
+stats = bot.session_stats
+# Returns: {
+#     "interaction_count": 10,
+#     "url_history": 5,
+#     "commands_executed": 8,
+#     "current_url": "https://example.com"
+# }
+```
+
+**Raises:** `RuntimeError` if bot is not started
 
 ##### `switch_to_page(page) -> None`
 

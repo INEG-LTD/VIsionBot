@@ -184,6 +184,24 @@ class ConfigurationError(BotError):
     recovery_strategy = RecoveryStrategy.ABORT
 
 
+class BotNotStartedError(BotError):
+    """Bot has not been started."""
+    severity = ErrorSeverity.CRITICAL
+    recovery_strategy = RecoveryStrategy.ABORT
+
+
+class BotTerminatedError(BotError):
+    """Bot has been terminated."""
+    severity = ErrorSeverity.CRITICAL
+    recovery_strategy = RecoveryStrategy.ABORT
+
+
+class ActionFailedError(BotError):
+    """Action execution failed."""
+    severity = ErrorSeverity.MEDIUM
+    recovery_strategy = RecoveryStrategy.RETRY
+
+
 @dataclass
 class ErrorHandler:
     """

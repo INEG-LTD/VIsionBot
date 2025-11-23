@@ -44,10 +44,19 @@ from ai_utils import (
 )
 from agent import AgentController
 from agent.agent_result import AgentResult
+from action_result import ActionResult
 from pydantic import BaseModel, Field
 from bot_config import BotConfig
 from browser_provider import BrowserProvider, create_browser_provider
 from middleware import MiddlewareManager, ActionContext
+from error_handling import (
+    BotNotStartedError,
+    BotTerminatedError,
+    ActionFailedError,
+    ExtractionError,
+    ValidationError,
+    ErrorContext,
+)
 
 
 class ExecutionTimer:
@@ -384,9 +393,7 @@ class BrowserVisionBot:
         # Deduplication history settings (-1 = unlimited)
         self.dedup_history_quantity: int = config.execution.dedup_history_quantity
 
-        # Interpretation / semantic resolution helpers
-        self.default_interpretation_mode: str = "literal"
-        self._interpretation_mode_stack: List[str] = []
+        # Semantic resolution helpers (used internally for element matching)
         self._semantic_target_cache: Dict[str, Optional[SemanticTarget]] = {}
         
         # Deferred input handling
@@ -458,7 +465,6 @@ class BrowserVisionBot:
         page_info: PageInfo,
         plan: VisionPlan,
         additional_context: str,
-        interpretation_mode: str,
         agent_mode: bool,
         target_context_guard: Optional[str],
     ) -> None:
@@ -479,7 +485,6 @@ class BrowserVisionBot:
             "plan": plan.copy(deep=True),
             "reuse_count": 0,
             "additional_context": context_key,
-            "interpretation_mode": interpretation_mode,
             "agent_mode": agent_mode,
             "target_context_guard": guard_key,
         }
@@ -495,7 +500,6 @@ class BrowserVisionBot:
         dom_signature: str,
         page_info: PageInfo,
         additional_context: str,
-        interpretation_mode: str,
         agent_mode: bool,
         target_context_guard: Optional[str],
     ) -> Optional[VisionPlan]:
@@ -518,8 +522,6 @@ class BrowserVisionBot:
         if entry["page_url"] != page_info.url:
             return None
         if entry["additional_context"] != context_key:
-            return None
-        if entry["interpretation_mode"] != interpretation_mode:
             return None
         if entry["agent_mode"] != agent_mode:
             return None
@@ -770,10 +772,46 @@ class BrowserVisionBot:
         
         return gif_path
 
+    def __enter__(self) -> 'BrowserVisionBot':
+        """
+        Context manager entry point. Automatically calls start().
+        
+        Example:
+            >>> with BrowserVisionBot(config=config) as bot:
+            ...     bot.page.goto("https://example.com")
+            ...     bot.act("Click the button")
+            # Automatically calls end() on exit
+        """
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """
+        Context manager exit point. Automatically calls end() to cleanup resources.
+        
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        self.end()
+
     def _check_termination(self) -> None:
-        """Check if bot is terminated and raise error if so"""
+        """
+        Check if bot is terminated and raise error if so.
+        
+        Raises:
+            BotTerminatedError: If bot has been terminated
+        """
         if self.terminated:
-            raise RuntimeError("Bot has been terminated. No further operations are allowed.")
+            raise BotTerminatedError(
+                "Bot has been terminated. No further operations are allowed.",
+                context=ErrorContext(
+                    error_type="BotTerminatedError",
+                    message="Bot has been terminated. No further operations are allowed.",
+                    metadata={"terminated": True}
+                )
+            )
 
     def _attach_new_page_listener(self) -> None:
         """Attach a browser-context listener to detect new pages/tabs and switch context automatically."""
@@ -1111,7 +1149,6 @@ class BrowserVisionBot:
         self,
         goal_description: str,
         additional_context: str = "",
-        interpretation_mode: Optional[str] = None,
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
@@ -1120,32 +1157,104 @@ class BrowserVisionBot:
         max_attempts: Optional[int] = None,
         max_retries: Optional[int] = None,
         **kwargs
-    ) -> bool:
+    ) -> ActionResult:
         """
         Main method to achieve a goal using vision-based automation
         
+        This method executes a single action based on natural language description.
+        Validates inputs and bot state before execution.
+        
         Args:
-            goal_description: The goal to achieve
+            goal_description: The goal to achieve (must use keyword format: "click: button", "type: text", etc.)
             additional_context: Extra context to help with planning
-            interpretation_mode: Vision interpretation mode
             target_context_guard: Guard condition for actions
             skip_post_guard_refinement: Skip refinement after guard checks
             confirm_before_interaction: Require user confirmation before each action
             command_id: Optional command ID for tracking (auto-generated if not provided)
-            modifier: Optional list of modifier strings to pass to goals
+            modifier: Optional list of modifier strings (deprecated, no longer used)
             max_attempts: Override bot's max_attempts for this command (None = use bot default)
-            max_retries: Override goal's max_retries for this command (None = use goal default)
+            max_retries: Override goal's max_retries for this command (deprecated, no longer used)
         
         Returns:
-            True if goal was achieved, False otherwise
+            ActionResult - Structured result with success, message, confidence, and metadata
+            
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+            ValidationError: If goal_description is empty or invalid
+            
+        Example:
+            >>> bot.start()
+            >>> bot.page.goto("https://example.com")
+            >>> result = bot.act("click: login button")
+            >>> if result.success:
+            ...     print(f"Success: {result.message}")
+            ...     print(f"Confidence: {result.confidence}")
+            ...     print(f"Attempts: {result.metadata.get('attempts')}")
         """
+        # Parameter validation
+        if not goal_description or not goal_description.strip():
+            raise ValidationError(
+                "goal_description cannot be empty or whitespace",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="goal_description cannot be empty or whitespace",
+                    action_data={"goal_description": goal_description}
+                )
+            )
+        
+        if max_attempts is not None and max_attempts < 1:
+            raise ValidationError(
+                "max_attempts must be >= 1",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="max_attempts must be >= 1",
+                    action_data={"max_attempts": max_attempts}
+                )
+            )
+        
         self._check_termination()
         
-        if interpretation_mode is None:
-            resolved_mode = self._get_current_interpretation_mode()
-        else:
-            resolved_mode = self._normalize_interpretation_mode(interpretation_mode)
-        self._interpretation_mode_stack.append(resolved_mode)
+        if not self.started or not self.page:
+            page_url = self.page.url if self.page else None
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first.",
+                    page_url=page_url,
+                    action_data={"goal_description": goal_description}
+                )
+            )
+        
+        # Helper function to create ActionResult
+        def _create_result(success: bool, message: str = "", error: Optional[str] = None, 
+                          command_id: Optional[str] = None, duration: Optional[float] = None,
+                          additional_metadata: Optional[Dict[str, Any]] = None,
+                          data: Optional[Any] = None) -> ActionResult:
+            """Create ActionResult with metadata"""
+            metadata = {
+                "goal_description": goal_description,
+                "command_id": command_id,
+            }
+            if duration is not None:
+                metadata["duration_ms"] = duration * 1000
+            if additional_metadata:
+                metadata.update(additional_metadata)
+            
+            # Calculate confidence based on success
+            confidence = 0.9 if success else 0.1
+            
+            return ActionResult(
+                success=success,
+                message=message or ("Action completed successfully" if success else "Action failed"),
+                confidence=confidence,
+                metadata=metadata,
+                error=error,
+                data=data
+            )
+        
+        # Track act() execution state
         self._in_act = True
         start_time = time.time()
         
@@ -1155,20 +1264,34 @@ class BrowserVisionBot:
                 self.event_logger.system_error("Bot not started")
                 if self.execution_timer.current_command_start is not None:
                     self.execution_timer.end_command()
-                return False
+                duration = (time.time() - start_time) if 'start_time' in locals() else None
+                return _create_result(
+                    False,
+                    "Bot not started. Call bot.start() first.",
+                    error="Bot not started",
+                    command_id=command_id,
+                    duration=duration
+                )
             
             if self.page.url.startswith("about:blank"):
                 self.logger.log_error("Page is on initial blank page", "act() called before navigation")
                 self.event_logger.system_error("Page is on the initial blank page")
                 if self.execution_timer.current_command_start is not None:
                     self.execution_timer.end_command()
-                return False
+                duration = (time.time() - start_time) if 'start_time' in locals() else None
+                return _create_result(
+                    False,
+                    "Page is on initial blank page. Navigate to a page first.",
+                    error="Page not navigated",
+                    command_id=command_id,
+                    duration=duration
+                )
             
             # Register command in ledger
             command_id = self.command_ledger.register_command(
                 command=goal_description,
                 command_id=command_id,
-                metadata={"source": "act", "mode": resolved_mode}
+                metadata={"source": "act", "mode": "keyword"}
             )
             self.command_ledger.start_command(command_id)
             
@@ -1190,41 +1313,75 @@ class BrowserVisionBot:
             if dedup_result is not None:
                 self.command_ledger.complete_command(command_id, success=dedup_result)
                 self.execution_timer.end_command()
-                return dedup_result
+                duration = time.time() - start_time
+                return _create_result(
+                    dedup_result,
+                    "Deduplication command executed successfully" if dedup_result else "Deduplication command failed",
+                    command_id=command_id,
+                    duration=duration,
+                    additional_metadata={"command_type": "dedup"}
+                )
             
             # Check for ref commands
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
                 self.command_ledger.complete_command(command_id, success=ref_result)
                 self.execution_timer.end_command()
-                return ref_result
+                duration = time.time() - start_time
+                return _create_result(
+                    ref_result,
+                    "Reference command executed successfully" if ref_result else "Reference command failed",
+                    command_id=command_id,
+                    duration=duration,
+                    additional_metadata={"command_type": "ref"}
+                )
             
             # Check for extract commands
             if goal_description.strip().lower().startswith("extract:"):
                 extraction_prompt = goal_description.replace("extract:", "").strip()
                 self.event_logger.extraction_start(extraction_prompt)
                 
-                try:
-                    # Perform extraction
-                    result = self.extract(
-                        prompt=extraction_prompt,
-                        output_format="json",
-                        scope="viewport"
-                    )
-                    self.event_logger.extraction_success(extraction_prompt, result=result)
+                # Perform extraction (now always returns ActionResult)
+                extract_result = self.extract(
+                    prompt=extraction_prompt,
+                    output_format="json",
+                    scope="viewport"
+                )
+                
+                if extract_result.success:
+                    # Extract the actual data from ActionResult for logging
+                    extracted_data = extract_result.data
+                    self.event_logger.extraction_success(extraction_prompt, result=extracted_data)
                     self.command_ledger.complete_command(command_id, success=True)
                     self.execution_timer.end_command()
-                    return True
-                except Exception as e:
-                    self.event_logger.extraction_failure(extraction_prompt, error=str(e))
+                    duration = time.time() - start_time
+                    return _create_result(
+                        True,
+                        "Extraction completed successfully",
+                        command_id=command_id,
+                        duration=duration,
+                        additional_metadata={"command_type": "extract", "extraction_prompt": extraction_prompt},
+                        data=extracted_data  # Store extracted data in ActionResult
+                    )
+                else:
+                    self.event_logger.extraction_failure(extraction_prompt, error=extract_result.error or extract_result.message)
                     self.command_ledger.complete_command(command_id, success=False)
                     self.execution_timer.end_command()
-                    return False
+                    duration = time.time() - start_time
+                    return _create_result(
+                        False,
+                        f"Extraction failed: {extract_result.message}",
+                        error=extract_result.error or extract_result.message,
+                        command_id=command_id,
+                        duration=duration,
+                        additional_metadata={"command_type": "extract", "extraction_prompt": extraction_prompt}
+                    )
 
             # Reset DOM signature for new command - don't check against previous command's signature
             # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
 
+            # Only keyword commands are supported (click:, type:, etc.)
             keyword_command_result = self._execute_keyword_command(
                 goal_description=goal_description,
                 additional_context=additional_context,
@@ -1234,15 +1391,35 @@ class BrowserVisionBot:
                 start_time=start_time,
             )
             if keyword_command_result is not None:
-                return keyword_command_result
+                # keyword_command_result is now an ActionResult or bool (temporary compatibility)
+                if isinstance(keyword_command_result, ActionResult):
+                    return keyword_command_result
+                else:
+                    # Convert bool to ActionResult (for temporary compatibility)
+                    duration = time.time() - start_time
+                    return _create_result(
+                        keyword_command_result,
+                        "Action executed successfully" if keyword_command_result else "Action failed",
+                        command_id=command_id,
+                        duration=duration,
+                        additional_metadata={"command_type": "keyword"}
+                    )
 
-            # If keyword execution can't handle it, fail immediately
+            # If keyword execution can't handle it, fail with clear error message
             duration_ms = (time.time() - start_time) * 1000
-            self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action", duration_ms)
+            duration = time.time() - start_time
+            self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
             print(f"❌ Could not parse command: {goal_description}")
-            self.command_ledger.complete_command(command_id, success=False, error_message="Could not parse command as keyword action")
+            print("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
+            self.command_ledger.complete_command(command_id, success=False, error_message="Could not parse command as keyword action. Must use keyword format (click:, type:, etc.)")
             self.execution_timer.end_command()
-            return False
+            return _create_result(
+                False,
+                "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.",
+                error="Could not parse command as keyword action. Must use keyword format (click:, type:, etc.)",
+                command_id=command_id,
+                duration=duration
+            )
         finally:
             # End command timer if still active (safety net for any unhandled returns)
             if self.execution_timer.current_command_start is not None:
@@ -1250,8 +1427,6 @@ class BrowserVisionBot:
             
             # Mark act() as finished and flush any auto-on-load actions that arrived mid-act
             self._in_act = False
-            if self._interpretation_mode_stack:
-                self._interpretation_mode_stack.pop()
             try:
                 self._flush_pending_auto_on_load()
             except Exception:
@@ -1336,6 +1511,71 @@ class BrowserVisionBot:
             for prompt, data in result.extracted_data.items():
                 print(f"{prompt}: {data}")
         """
+        # Parameter validation
+        if not user_prompt or not user_prompt.strip():
+            raise ValidationError(
+                "user_prompt cannot be empty or whitespace",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="user_prompt cannot be empty or whitespace",
+                    action_data={"user_prompt": user_prompt}
+                )
+            )
+        
+        if max_iterations < 1:
+            raise ValidationError(
+                "max_iterations must be >= 1",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="max_iterations must be >= 1",
+                    action_data={"max_iterations": max_iterations}
+                )
+            )
+        
+        if max_clarification_rounds < 0:
+            raise ValidationError(
+                "max_clarification_rounds must be >= 0",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="max_clarification_rounds must be >= 0",
+                    action_data={"max_clarification_rounds": max_clarification_rounds}
+                )
+            )
+        
+        if clarification_callback is not None and not callable(clarification_callback):
+            raise ValidationError(
+                "clarification_callback must be callable",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="clarification_callback must be callable",
+                    action_data={"clarification_callback_type": type(clarification_callback).__name__}
+                )
+            )
+        
+        if base_knowledge is not None and not isinstance(base_knowledge, list):
+            raise ValidationError(
+                "base_knowledge must be a list",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="base_knowledge must be a list",
+                    action_data={"base_knowledge_type": type(base_knowledge).__name__}
+                )
+            )
+        
+        self._check_termination()
+        
+        if not self.started or not self.page:
+            page_url = self.page.url if self.page else None
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first.",
+                    page_url=page_url,
+                    action_data={"user_prompt": user_prompt}
+                )
+            )
+        
         # Set agent mode flag
         self._agent_mode = True
         
@@ -1411,7 +1651,7 @@ class BrowserVisionBot:
         element_description: Optional[str] = None,
         max_retries: int = 2,
         confidence_threshold: float = 0.6,
-    ) -> Union[str, Dict[str, Any], BaseModel]:
+    ) -> ActionResult:
         """
         Extract data from the current page based on natural language description.
         
@@ -1429,7 +1669,103 @@ class BrowserVisionBot:
             - If output_format="text": str
             - If output_format="json": Dict[str, Any]
             - If output_format="structured" and model_schema provided: model instance
+            
+        Returns:
+            - If return_result=False (default): Raw extracted data (str, Dict, or BaseModel depending on output_format)
+            - If return_result=True: ActionResult with extracted data in .data field
+        
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+            ValidationError: If prompt is empty, invalid output_format/scope, or missing element_description
+            ExtractionError: If extraction fails after retries
+            
+        Example:
+            # Old way (still works)
+            >>> bot.start()
+            >>> bot.page.goto("https://example.com")
+            >>> title = bot.extract("What is the page title?", output_format="text")
+            >>> data = bot.extract("Extract product information", output_format="json")
+            
+            # New way (with structured result)
+            >>> result = bot.extract("Get page title", output_format="text", return_result=True)
+            >>> if result.success:
+            ...     title = result.data  # The extracted text
+            ...     print(f"Confidence: {result.confidence}")
         """
+        # Parameter validation
+        if not prompt or not prompt.strip():
+            raise ValidationError(
+                "prompt cannot be empty or whitespace",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="prompt cannot be empty or whitespace",
+                    action_data={"prompt": prompt}
+                )
+            )
+        
+        valid_output_formats = ["json", "text", "structured"]
+        if output_format not in valid_output_formats:
+            raise ValidationError(
+                f"Invalid output_format: {output_format}. Must be one of {valid_output_formats}",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message=f"Invalid output_format: {output_format}",
+                    action_data={"output_format": output_format, "valid_formats": valid_output_formats}
+                )
+            )
+        
+        valid_scopes = ["viewport", "full_page", "element"]
+        if scope not in valid_scopes:
+            raise ValidationError(
+                f"Invalid scope: {scope}. Must be one of {valid_scopes}",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message=f"Invalid scope: {scope}",
+                    action_data={"scope": scope, "valid_scopes": valid_scopes}
+                )
+            )
+        
+        if scope == "element" and not element_description:
+            raise ValidationError(
+                "element_description is required when scope='element'",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="element_description is required when scope='element'",
+                    action_data={"scope": scope, "element_description": element_description}
+                )
+            )
+        
+        if output_format == "structured" and model_schema is None:
+            raise ValidationError(
+                "model_schema is required when output_format='structured'",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="model_schema is required when output_format='structured'",
+                    action_data={"output_format": output_format, "model_schema": model_schema}
+                )
+            )
+        
+        if max_retries < 0:
+            raise ValidationError(
+                "max_retries must be >= 0",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="max_retries must be >= 0",
+                    action_data={"max_retries": max_retries}
+                )
+            )
+        
+        if not (0.0 <= confidence_threshold <= 1.0):
+            raise ValidationError(
+                "confidence_threshold must be between 0.0 and 1.0",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message="confidence_threshold must be between 0.0 and 1.0",
+                    action_data={"confidence_threshold": confidence_threshold}
+                )
+            )
+        
         from ai_utils import generate_text, generate_model
         # Import InteractionType locally to avoid linter false positive
         from session_tracker import InteractionType as IT
@@ -1437,11 +1773,41 @@ class BrowserVisionBot:
         self._check_termination()
         
         if not self.started or not self.page:
-            raise RuntimeError("Bot not started. Call bot.start() first.")
+            page_url = self.page.url if self.page else None
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first.",
+                    page_url=page_url,
+                    action_data={"extraction_prompt": prompt}
+                )
+            )
         
-        # Validate scope
-        if scope == "element" and not element_description:
-            raise ValueError("element_description is required when scope='element'")
+        # Helper function to create ActionResult for extraction
+        def _create_extraction_result(data: Any, confidence: float = 0.9, 
+                                     message: str = "Extraction completed successfully",
+                                     error: Optional[str] = None,
+                                     extraction_result: Optional[Any] = None) -> ActionResult:
+            """Create ActionResult for extraction result"""
+            metadata = {
+                "prompt": prompt,
+                "output_format": output_format,
+                "scope": scope,
+            }
+            if extraction_result and hasattr(extraction_result, 'confidence'):
+                metadata["extraction_confidence"] = extraction_result.confidence
+            if extraction_result and hasattr(extraction_result, 'reasoning'):
+                metadata["extraction_reasoning"] = extraction_result.reasoning
+            
+            return ActionResult(
+                success=True,
+                message=message,
+                data=data,  # The actual extracted data
+                confidence=confidence,
+                metadata=metadata,
+                error=error
+            )
         
         # Capture screenshot based on scope
         try:
@@ -1457,7 +1823,19 @@ class BrowserVisionBot:
                 screenshot = self.page.screenshot(full_page=False)
                 visible_text = self.page.evaluate("document.body.innerText") or ""
         except Exception as e:
-            raise RuntimeError(f"Failed to capture screenshot: {e}")
+            raise ExtractionError(
+                f"Failed to capture screenshot: {e}",
+                context=ErrorContext(
+                    error_type="ExtractionError",
+                    message="Failed to capture screenshot for extraction",
+                    page_url=self.page.url if self.page else None,
+                    action_data={
+                        "extraction_prompt": prompt,
+                        "scope": scope,
+                        "original_error": str(e)
+                    }
+                )
+            ) from e
         
         # Clean and prepare the text (remove excessive whitespace but keep structure)
         if visible_text:
@@ -1513,7 +1891,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                         success=True
                     )
                     
-                    return extracted_text
+                    return _create_extraction_result(
+                        data=extracted_text,
+                        confidence=0.9,
+                        message="Text extraction completed successfully"
+                    )
                 
                 elif output_format == "json":
                     # JSON extraction using structured output
@@ -1617,7 +1999,12 @@ Return only the extracted text that appears in the text content above. Do not ma
                         success=True
                     )
                     
-                    return extracted_dict
+                    return _create_extraction_result(
+                        data=extracted_dict,
+                        confidence=result.confidence,
+                        message="JSON extraction completed successfully",
+                        extraction_result=result
+                    )
                 
                 elif output_format == "structured":
                     if not model_schema:
@@ -1640,7 +2027,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                         success=True
                     )
                     
-                    return result
+                    return _create_extraction_result(
+                        data=result,
+                        confidence=0.95,  # Structured models are generally reliable
+                        message="Structured extraction completed successfully"
+                    )
                 
                 else:
                     raise ValueError(f"Invalid output_format: {output_format}")
@@ -1656,7 +2047,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 
                 if attempt < max_retries:
                     print(f"[Extract] Attempt {attempt + 1} failed: {error_msg}, retrying...")
-                    import time
                     time.sleep(0.5)
                 else:
                     # Record failed extraction in interaction history
@@ -1667,9 +2057,24 @@ Return only the extracted text that appears in the text content above. Do not ma
                         success=False,
                         error_message=error_msg
                     )
-                    raise RuntimeError(f"Extraction failed after {max_retries + 1} attempts: {error_msg}")
+                    
+                    # Always return ActionResult on failure
+                    return ActionResult(
+                        success=False,
+                        message=f"Extraction failed after {max_retries + 1} attempts: {error_msg}",
+                        data=None,
+                        confidence=0.0,
+                        metadata={
+                            "prompt": prompt,
+                            "output_format": output_format,
+                            "scope": scope,
+                            "attempts": max_retries + 1,
+                            "confidence_threshold": confidence_threshold
+                        },
+                        error=error_msg
+                    )
         
-            # Record failed extraction if we exhausted all retries
+        # This should not be reached, but handle it just in case
         if last_error:
             self.session_tracker.record_interaction(
                 IT.EXTRACT,
@@ -1678,7 +2083,20 @@ Return only the extracted text that appears in the text content above. Do not ma
                 success=False,
                 error_message=str(last_error)
             )
-        raise RuntimeError(f"Extraction failed: {last_error}")
+            
+            # Always return ActionResult on failure
+            return ActionResult(
+                success=False,
+                message=f"Extraction failed: {last_error}",
+                data=None,
+                confidence=0.0,
+                metadata={
+                    "prompt": prompt,
+                    "output_format": output_format,
+                    "scope": scope
+                },
+                error=str(last_error)
+            )
     
     def extract_batch(
         self,
@@ -1815,7 +2233,6 @@ Return only the extracted text that appears in the text content above. Do not ma
         prompts: List[str],
         ref_id: str,
         all_must_be_true: bool = False,
-        interpretation_mode: Optional[str] = None,
         additional_context: str = "",
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
@@ -1828,10 +2245,9 @@ Return only the extracted text that appears in the text content above. Do not ma
         Register multiple commands for later reference and execution.
         
         Args:
-            prompts: List of command prompts to register
+            prompts: List of command prompts to register (must use keyword format: "click:", "type:", etc.)
             ref_id: Unique identifier for referencing these commands
             all_must_be_true: Require every command to succeed when evaluating this ref
-            interpretation_mode: Optional interpretation mode to apply when executing this ref
             additional_context: Extra context to include when executing each stored prompt
             target_context_guard: Guard condition description applied to each stored prompt
             skip_post_guard_refinement: Whether to skip post-plan guard refinement when executing stored prompts
@@ -1858,12 +2274,9 @@ Return only the extracted text that appears in the text content above. Do not ma
                 return False
             
             # Store the commands for later reference
-            normalized_mode = self._normalize_interpretation_mode(interpretation_mode) if interpretation_mode else None
-
             self.command_refs[ref_id] = {
                 "prompts": prompts.copy(),
                 "all_must_be_true": bool(all_must_be_true),
-                "interpretation_mode": normalized_mode,
                 "command_id": command_id,  # Store the original command ID
                 "additional_context": additional_context or "",
                 "target_context_guard": target_context_guard,
@@ -1874,8 +2287,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             }
             mode = "ALL" if all_must_be_true else "ANY"
             extra_parts = []
-            if normalized_mode:
-                extra_parts.append(f"interpretation={normalized_mode}")
             if additional_context:
                 extra_parts.append("additional_context")
             if target_context_guard:
@@ -1903,25 +2314,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             print(f"❌ Error in register_prompts: {e}")
             return False
 
-    def _normalize_interpretation_mode(self, mode: Optional[str]) -> str:
-        if not mode:
-            return self.default_interpretation_mode
-        normalized = str(mode).lower().strip()
-        if normalized not in {"literal", "semantic", "auto"}:
-            return self.default_interpretation_mode
-        if normalized == "auto":
-            return "semantic"
-        return normalized
-
-    def _get_current_interpretation_mode(self) -> str:
-        if self._interpretation_mode_stack:
-            return self._interpretation_mode_stack[-1]
-        return self.default_interpretation_mode
-
     def _get_semantic_target(self, description: str) -> Optional[SemanticTarget]:
-        mode = self._get_current_interpretation_mode()
-        if mode == "literal":
-            return None
+        """Build semantic target for better element matching."""
         key = (description or "").strip().lower()
         if not key:
             return None
@@ -2838,9 +3232,8 @@ Return only the extracted text that appears in the text content above. Do not ma
         # Goal system removed - always do detection
         needs_detection = True
 
-        current_mode = self._get_current_interpretation_mode()
         semantic_hint = self._get_semantic_target(goal_description)
-        print(f"[PlanGen] interpretation_mode={current_mode} semantic_hint={'yes' if semantic_hint else 'no'} for '{goal_description}'")
+        print(f"[PlanGen] semantic_hint={'yes' if semantic_hint else 'no'} for '{goal_description}'")
 
         dedup_context = self._build_dedup_prompt_context(goal_description)
 
@@ -2886,7 +3279,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             retry_goal=None,
             page=self.page,
             command_history=self.command_history,
-            interpretation_mode=current_mode,
             semantic_hint=semantic_hint,
             dedup_context=dedup_context,
             target_context_guard=target_context_guard,
@@ -3171,7 +3563,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 ref_entry = self.command_refs[ref_id]
                 stored_prompts = ref_entry.get("prompts", [])
                 all_must_be_true = bool(ref_entry.get("all_must_be_true", False))
-                ref_mode = ref_entry.get("interpretation_mode")
                 ref_additional_context = ref_entry.get("additional_context", "")
                 ref_target_context_guard = ref_entry.get("target_context_guard")
                 ref_skip_post_guard_refinement = ref_entry.get("skip_post_guard_refinement", True)
@@ -3185,8 +3576,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     return True
 
                 summary_mode = 'ALL' if all_must_be_true else 'ANY'
-                mode_suffix = f", interpretation={ref_mode}" if ref_mode else ""
-                print(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode}{mode_suffix})")
+                print(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode})")
                 results: List[bool] = []
 
                 # Use the stored command ID as the parent, fallback to current if not available
@@ -3202,7 +3592,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                         self.act(
                             prompt,
                             additional_context=ref_additional_context,
-                            interpretation_mode=ref_mode,
                             target_context_guard=ref_target_context_guard,
                             skip_post_guard_refinement=ref_skip_post_guard_refinement,
                             confirm_before_interaction=ref_confirm_before_interaction,
@@ -3279,10 +3668,11 @@ Return only the extracted text that appears in the text content above. Do not ma
             if queued_action:
                 print(f"🔄 Processing queued action: {queued_action.action}")
                 try:
-                    success = self.act(
+                    action_result = self.act(
                         queued_action.action,
                         command_id=queued_action.command_id
                     )
+                    success = action_result.success
                     if success:
                         executed += 1
                         print(f"   ✅ Queued action succeeded: {queued_action.action}")
@@ -3297,4 +3687,208 @@ Return only the extracted text that appears in the text content above. Do not ma
             print(f"⚠️ {failed} queued actions failed")
         
         return executed
+
+    # ==================== Convenience Methods ====================
+
+    def get_url(self) -> str:
+        """
+        Get the current page URL.
+        
+        Returns:
+            str: Current page URL, or empty string if page not available
+            
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+        """
+        self._check_termination()
+        if not self.started or not self.page:
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first."
+                )
+            )
+        return self.page.url
+
+    def get_title(self) -> str:
+        """
+        Get the current page title.
+        
+        Returns:
+            str: Current page title, or empty string if page not available
+            
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+        """
+        self._check_termination()
+        if not self.started or not self.page:
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first."
+                )
+            )
+        try:
+            return self.page.title()
+        except Exception:
+            return ""
+
+    def wait_for_load(self, timeout: int = 30000, state: str = "networkidle") -> None:
+        """
+        Wait for the page to finish loading.
+        
+        Args:
+            timeout: Maximum time to wait in milliseconds (default: 30000)
+            state: Load state to wait for: "load", "domcontentloaded", "networkidle" (default: "networkidle")
+            
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+            ValidationError: If invalid state is provided
+        """
+        self._check_termination()
+        if not self.started or not self.page:
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first."
+                )
+            )
+        
+        valid_states = ["load", "domcontentloaded", "networkidle"]
+        if state not in valid_states:
+            raise ValidationError(
+                f"Invalid state: {state}. Must be one of {valid_states}",
+                context=ErrorContext(
+                    error_type="ValidationError",
+                    message=f"Invalid load state: {state}",
+                    action_data={"state": state, "valid_states": valid_states, "timeout": timeout}
+                )
+            )
+        
+        try:
+            self.page.wait_for_load_state(state, timeout=timeout)
+        except Exception as e:
+            # Don't raise, just log - sometimes pages don't fully load
+            try:
+                self.event_logger.system_warning(f"Page load wait timeout or error: {e}")
+            except Exception:
+                pass
+
+    def screenshot(self, path: Optional[str] = None, full_page: bool = False) -> bytes:
+        """
+        Take a screenshot of the current page.
+        
+        Args:
+            path: Optional file path to save the screenshot. If None, returns bytes.
+            full_page: If True, capture full page. If False, capture viewport only (default: False)
+            
+        Returns:
+            bytes: Screenshot image data (if path is None)
+            
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+            ActionFailedError: If screenshot capture fails
+        """
+        self._check_termination()
+        if not self.started or not self.page:
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first."
+                )
+            )
+        
+        try:
+            return self.page.screenshot(path=path, full_page=full_page, type="png")
+        except Exception as e:
+            raise ActionFailedError(
+                f"Failed to capture screenshot: {e}",
+                context=ErrorContext(
+                    error_type="ActionFailedError",
+                    message="Failed to capture screenshot",
+                    page_url=self.page.url if self.page else None,
+                    action_data={
+                        "path": path,
+                        "full_page": full_page,
+                        "original_error": str(e)
+                    }
+                )
+            ) from e
+
+    # ==================== Property Accessors ====================
+
+    @property
+    def is_started(self) -> bool:
+        """
+        Check if the bot has been started.
+        
+        Returns:
+            bool: True if bot is started, False otherwise
+        """
+        return self.started
+
+    @property
+    def is_terminated(self) -> bool:
+        """
+        Check if the bot has been terminated.
+        
+        Returns:
+            bool: True if bot is terminated, False otherwise
+        """
+        return self.terminated
+
+    @property
+    def current_url(self) -> str:
+        """
+        Get the current page URL.
+        
+        Returns:
+            str: Current page URL, or empty string if not available
+            
+        Raises:
+            RuntimeError: If bot is not started
+        """
+        return self.get_url()
+
+    @property
+    def session_stats(self) -> Dict[str, Any]:
+        """
+        Get session statistics.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing:
+                - interaction_count: Number of interactions recorded
+                - url_history: Number of URLs visited
+                - commands_executed: Number of commands in history
+                - current_url: Current page URL
+                
+        Raises:
+            BotTerminatedError: If bot has been terminated
+            BotNotStartedError: If bot is not started
+        """
+        self._check_termination()
+        if not self.started:
+            raise BotNotStartedError(
+                "Bot not started. Call bot.start() first.",
+                context=ErrorContext(
+                    error_type="BotNotStartedError",
+                    message="Bot not started. Call bot.start() first."
+                )
+            )
+        
+        stats = {
+            "interaction_count": len(self.session_tracker.interaction_history) if hasattr(self, 'session_tracker') and self.session_tracker else 0,
+            "url_history": len(self.session_tracker.url_history) if hasattr(self, 'session_tracker') and self.session_tracker else 0,
+            "commands_executed": len(self.command_history) if hasattr(self, 'command_history') else 0,
+            "current_url": self.page.url if self.page else "",
+        }
+        return stats
     

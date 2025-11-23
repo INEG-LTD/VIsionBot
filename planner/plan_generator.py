@@ -150,7 +150,6 @@ class PlanGenerator:
         active_goal: Optional[Any] = None,
         retry_goal: Optional[Any] = None,
         page: Any = None,
-        interpretation_mode: str = "literal",
         semantic_hint: Optional[SemanticTarget] = None,
         dedup_context: Optional[Dict[str, Any]] = None,
         target_context_guard: Optional[str] = None,
@@ -171,12 +170,10 @@ class PlanGenerator:
         
         selected_overlay = None
         overlay_selection = None
+        # Always use semantic targets for better element matching
         should_run_selection = (
-            interpretation_mode.lower() != "literal"
-            and (
-                not self.merge_overlay_selection
-                or overlay_only_candidate
-            )
+            not self.merge_overlay_selection
+            or overlay_only_candidate
         )
         if should_run_selection:
             try:
@@ -250,7 +247,7 @@ class PlanGenerator:
             instructions.append(
                 "If a VISION PRESELECTED TARGET is supplied, choose it unless it clearly conflicts with the goal."
             )
-        elif self.merge_overlay_selection and interpretation_mode.lower() != "literal":
+        elif self.merge_overlay_selection:
             instructions.append(
                 "Select the best overlay directly within your action plan; reference its number explicitly in the returned step."
             )
@@ -300,7 +297,7 @@ class PlanGenerator:
         if self.return_overlay_only and overlay_only_candidate:
             # Use overlay selection result when available; otherwise request selection now.
             selection = overlay_selection
-            if selection is None and interpretation_mode.lower() != "literal":
+            if selection is None:
                 try:
                     selection = self._select_overlay_with_language(
                         goal_description,

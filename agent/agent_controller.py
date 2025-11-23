@@ -1005,7 +1005,6 @@ class AgentController:
                 params = {
                     'goal_description': act_params['goal_description'],
                     'additional_context': act_params['additional_context'],
-                    'interpretation_mode': act_params['interpretation_mode'],
                     'target_context_guard': str(act_params['target_context_guard']) if act_params['target_context_guard'] else None,
                     'modifier': act_params['modifier'],
                     'max_attempts': 5,
@@ -1022,16 +1021,18 @@ class AgentController:
             # 6. Use existing act() function - it handles goal creation, planning, execution
             # This leverages all the existing infrastructure (goal creation, plan generation, etc.)
             try:
-                success = self.bot.act(
+                action_result = self.bot.act(
                     goal_description=act_params["goal_description"],
                     additional_context=act_params["additional_context"],
-                    interpretation_mode=act_params["interpretation_mode"],
                     target_context_guard=act_params["target_context_guard"],
                     modifier=act_params["modifier"],
                     max_attempts=5,  # Allow 5 attempts per action for better reliability
                     max_retries=1,
                     allow_non_clickable_clicks=self.allow_non_clickable_clicks  # Pass configurable setting
                 )
+                
+                # Extract success from ActionResult
+                success = action_result.success
                 
                 # Capture page state AFTER action
                 state_after = self._get_page_state()
@@ -2024,7 +2025,6 @@ class AgentController:
         Extracts:
         - Ordinal information (first, second, third, etc.) → modifier
         - Collection hints (article, button, link, etc.) → additional_context
-        - Interpretation mode (semantic for complex targets, literal for simple)
         - Target context guard (for filtering elements)
         
         Args:
@@ -2040,7 +2040,6 @@ class AgentController:
         params = {
             "goal_description": action_command,
             "additional_context": "",
-            "interpretation_mode": None,  # Let bot decide
             "target_context_guard": None,
             "modifier": None,
         }
@@ -2091,8 +2090,7 @@ class AgentController:
             collection_context = f"Looking for a {', '.join(found_collections)}. "
             params["additional_context"] += collection_context
         
-        # Always use semantic mode for better understanding
-        params["interpretation_mode"] = "semantic"
+        # Keyword mode is the default (click:, type:, etc.) - no need to specify
         
         # Add target context guard for ordinal selection
         # This helps the plan generator filter to the correct ordinal position

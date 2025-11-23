@@ -37,7 +37,6 @@ class _InstructionProfile:
     hint_terms: List[str]
     semantic_target: Optional[SemanticTarget]
     mode: str
-    interpretation_mode: str
 
 
 # ---------------------------------------------------------------------------
@@ -110,20 +109,19 @@ def _build_instruction_profile(
     instruction: str,
     *,
     mode: str,
-    interpretation_mode: str,
     semantic_hint: Optional[SemanticTarget],
 ) -> _InstructionProfile:
     tokens = _tokenize(instruction)
     hint = _extract_hint_terms(semantic_hint)
     sem_target = semantic_hint
-    if interpretation_mode.lower() != "literal" and sem_target is None:
+    # Always build semantic targets for better element matching
+    if sem_target is None:
         sem_target = build_semantic_target(instruction)
     return _InstructionProfile(
         tokens=tokens,
         hint_terms=hint,
         semantic_target=sem_target,
         mode=mode,
-        interpretation_mode=interpretation_mode.lower(),
     )
 
 
@@ -455,7 +453,6 @@ def resolve_overlays(
     element_data: List[Dict[str, Any]],
     *,
     mode: str,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     if not element_data:
@@ -464,7 +461,6 @@ def resolve_overlays(
     profile = _build_instruction_profile(
         instruction,
         mode=mode,
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -479,7 +475,8 @@ def resolve_overlays(
         scored[idx] = base_score
         element_map[idx] = element
 
-    if profile.interpretation_mode != "literal" and profile.semantic_target:
+    # Always apply semantic targets for better element matching
+    if profile.semantic_target:
         _apply_semantic_target(scored, element_map, profile, profile.semantic_target)
 
     resolution = _sort_and_select(scored)
@@ -499,14 +496,12 @@ def resolve_click_from_overlays(
     description: str,
     element_data: List[Dict[str, Any]],
     *,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     return resolve_overlays(
         description,
         element_data,
         mode="click",
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -515,14 +510,12 @@ def resolve_field_from_overlays(
     description: str,
     element_data: List[Dict[str, Any]],
     *,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     return resolve_overlays(
         description,
         element_data,
         mode="field",
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -531,14 +524,12 @@ def resolve_select_from_overlays(
     description: str,
     element_data: List[Dict[str, Any]],
     *,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     return resolve_overlays(
         description,
         element_data,
         mode="select",
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -547,14 +538,12 @@ def resolve_datetime_from_overlays(
     description: str,
     element_data: List[Dict[str, Any]],
     *,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     return resolve_overlays(
         description,
         element_data,
         mode="datetime",
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -563,14 +552,12 @@ def resolve_upload_from_overlays(
     description: str,
     element_data: List[Dict[str, Any]],
     *,
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> VisionResolution:
     return resolve_overlays(
         description,
         element_data,
         mode="upload",
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
 
@@ -582,7 +569,6 @@ def score_element_against_instruction(
     page_w: Optional[int] = None,
     page_h: Optional[int] = None,
     mode: str = "click",
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     page_w = int(page_w or element.get("pageWidth") or element.get("viewportWidth") or 1000)
@@ -591,21 +577,20 @@ def score_element_against_instruction(
     profile = _build_instruction_profile(
         instruction,
         mode=mode,
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
     base_score, token_hits, hint_hits = _score_element(overlay, profile)
     score = base_score
     diagnostics: Dict[str, Any] = {
         "mode": mode,
-        "interpretation": interpretation_mode,
         "tokens": token_hits,
         "hint_terms": hint_hits,
         "element_snapshot": _detail_snapshot(overlay),
         "normalized_area": _normalized_area_ratio(overlay),
     }
 
-    if profile.interpretation_mode != "literal" and profile.semantic_target:
+    # Always apply semantic targets for better element matching
+    if profile.semantic_target:
         semantic_component = semantic_score_element(overlay, profile.semantic_target)
         if semantic_component is None:
             score = -1000.0
@@ -625,7 +610,6 @@ def rank_elements_against_instruction(
     page_w: Optional[int] = None,
     page_h: Optional[int] = None,
     mode: str = "click",
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
 ) -> List[Tuple[int, float, Dict[str, Any]]]:
     ranked: List[Tuple[int, float, Dict[str, Any]]] = []
@@ -638,7 +622,6 @@ def rank_elements_against_instruction(
             page_w=page_w,
             page_h=page_h,
             mode=mode,
-            interpretation_mode=interpretation_mode,
             semantic_hint=semantic_hint,
         )
         diag["element_index"] = idx
@@ -652,7 +635,6 @@ def visible_from_overlays(
     element_data: List[Dict[str, Any]],
     *,
     mode: str = "click",
-    interpretation_mode: str = "literal",
     semantic_hint: Optional[SemanticTarget] = None,
     min_score: float = 6.0,
 ) -> bool:
@@ -660,7 +642,6 @@ def visible_from_overlays(
         instruction,
         element_data,
         mode=mode,
-        interpretation_mode=interpretation_mode,
         semantic_hint=semantic_hint,
     )
     if not resolution.scored:
