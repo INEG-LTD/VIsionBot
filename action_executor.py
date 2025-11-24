@@ -63,7 +63,7 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, command_ledger: CommandLedger=None, preferred_click_method: str = "programmatic"):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic"):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils

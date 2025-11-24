@@ -1262,7 +1262,6 @@ class BrowserVisionBot:
             
             # Start action timer
             self.execution_timer.start_action(action_id, goal_description)
-            self.execution_timer.set_command_text(goal_description)
             
             # Log goal start
             self.logger.log_goal_start(goal_description)
