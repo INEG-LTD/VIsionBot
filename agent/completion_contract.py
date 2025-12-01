@@ -251,6 +251,10 @@ Your task is to determine if the user's request has been fulfilled based on:
 Evaluation Guidelines:
 - Be conservative: only mark complete when you have high confidence the task is done
 - Consider the intent: a "navigate" task completes when the target page loads
+- **CRITICAL: For tasks involving clicking links/buttons that navigate to new pages, the task is complete when the click action has been performed AND navigation to the new page has occurred. Do NOT require being back on the original page - clicking a link and being on the destination page IS completion. Examples:**
+  * "go to X and click Y" → Complete when you've navigated to X, clicked Y, and are now on the page that Y links to
+  * "click the first article" → Complete when you've clicked the article and are now viewing the article page
+  * "navigate to homepage and click login" → Complete when you're on the homepage, clicked login, and are now on the login page
 - **CRITICAL for extraction tasks: If the user prompt involves extracting, getting, finding, or collecting data, the task is ONLY complete if an EXTRACT interaction has been successfully performed AND the extracted data matches what was requested. Do NOT mark complete if data is just visible on the page - extraction must have actually occurred.**
 - Consider data collection: a "collect info" task completes when required data is visible/collected AND extraction has been performed
 - Consider form submission: a "submit" or "login" task completes when:
@@ -335,8 +339,12 @@ CURRENT BROWSER STATE (VIEWPORT):
 NAVIGATION HISTORY:
 {nav_summary}
 
-INTERACTIONS PERFORMED:
+INTERACTIONS PERFORMED (in chronological order, most recent last):
 {interaction_summary}
+
+**IMPORTANT: These interactions happened in sequence. The current browser state is the RESULT of these actions.**
+- If a click interaction shows it happened on a specific page, and the URL changed to a new page, that means the click successfully navigated to the new page.
+- Review the timeline: earlier interactions led to later ones, and the final state reflects all successful actions.
 {f"""
 USER-PROVIDED INPUTS (from defer_input commands):
 {chr(10).join([f"- {entry.get('prompt', 'Input')}: \"{entry.get('response', '')}\"" for entry in reversed(user_inputs[-3:])])}
@@ -357,9 +365,18 @@ IMPORTANT: Your job is ONLY to evaluate if the task is complete. Do NOT plan ahe
 The agent will determine what to do next reactively based on the current viewport state.
 
 Consider:
+- **CRITICAL: Review the INTERACTIONS PERFORMED section as a TIMELINE. Actions happened in sequence, and the current browser state is the RESULT of those actions.**
+- **CRITICAL: If INTERACTIONS PERFORMED shows:**
+  * A click interaction that happened on page X (shown in "on page: X")
+  * With reasoning indicating it was the requested action (e.g., "click the first article")
+  * AND the URL changed from X to Y (shown in the interaction summary)
+  * AND the current URL is Y
+  * THEN the task IS COMPLETE - the click successfully navigated to the destination page.
+- **For link-clicking tasks: The interaction timeline shows WHERE each action happened. If you see a click on the requested link/article that happened on the source page, and the URL changed to the destination page, and you're now on that destination page, the task IS COMPLETE.**
+- **For DEFER actions: If INTERACTIONS PERFORMED shows a "defer" interaction with "resumed", this means control was given to the user and returned to the agent. This counts as completing the "give control" step. After a defer is resumed, the agent should proceed with the next step in the task.**
 - Whether the current page/state matches what would be expected after task completion
-- Whether all required interactions have been performed (review the INTERACTIONS PERFORMED section)
-- Whether the user's explicitly stated final action (if any) has been executed
+- Whether all required interactions have been performed (review the INTERACTIONS PERFORMED section chronologically - check both the action type AND the reasoning/why AND where it happened)
+- Whether the user's explicitly stated final action (if any) has been executed (check interaction timeline for matching action with appropriate reasoning)
 - Whether success indicators are present
 - Whether error messages indicate a problem or are transient/disappearing
 - Whether the task reached a natural completion point vs. being in progress
@@ -392,6 +409,52 @@ The rewritten prompt explicitly states what constitutes completion - follow it e
         for i, interaction in enumerate(interactions[-10:], 1):  # Last 10 interactions
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
+            
+            # Always show where the action originated from (the page URL when action was performed)
+            if interaction.before_state and interaction.before_state.url:
+                summary += f" (on page: {interaction.before_state.url[:60]}...)"
+            
+            # Add reasoning if available (why the action was taken) - this is critical for understanding intent
+            if interaction.reasoning:
+                summary += f"\n   Why: {interaction.reasoning}"  # Show full reasoning - it's important for completion checks
+            
+            # Special handling for navigation interactions - show explicit from/to
+            if interaction.interaction_type == InteractionType.NAVIGATION:
+                if interaction.target_element_info:
+                    direction = interaction.target_element_info.get('direction', '')
+                    from_url = interaction.target_element_info.get('from', '')
+                    to_url = interaction.target_element_info.get('to', '')
+                    if direction and from_url and to_url:
+                        summary += f"\n   Navigation: {direction} from {from_url[:50]}... to {to_url[:50]}..."
+                    elif interaction.navigation_url:
+                        summary += f"\n   Navigated to: {interaction.navigation_url[:60]}..."
+                # Check URL change from before/after state
+                if interaction.before_state and interaction.after_state:
+                    if interaction.before_state.url != interaction.after_state.url:
+                        summary += f"\n   ✅ URL changed: {interaction.before_state.url[:50]}... → {interaction.after_state.url[:50]}..."
+                    else:
+                        summary += f"\n   ⚠️ No URL change (still on {interaction.before_state.url[:50]}...)"
+                if not interaction.success:
+                    summary += f"\n   ❌ FAILED: {interaction.error_message or 'Unknown error'}"
+                summary_parts.append(summary)
+                continue  # Skip standard handling for navigation
+            
+            # Special handling for defer interactions
+            if interaction.interaction_type == InteractionType.DEFER:
+                if interaction.text_input:
+                    if interaction.text_input == "resumed":
+                        summary += f" - resumed (control returned to agent)"
+                        if interaction.reasoning:
+                            summary += f"\n   {interaction.reasoning}"
+                    else:
+                        summary += f" - {interaction.text_input}"
+                        if interaction.reasoning:
+                            summary += f"\n   Why: {interaction.reasoning}"
+                else:
+                    if interaction.reasoning:
+                        summary += f"\n   Why: {interaction.reasoning}"
+                summary_parts.append(summary)
+                continue  # Skip standard handling for defer
             
             # Special handling for extraction interactions
             if interaction.interaction_type == InteractionType.EXTRACT:
@@ -435,10 +498,13 @@ The rewritten prompt explicitly states what constitutes completion - follow it e
                     elif url_changed:
                         # If URL changed, DOM likely changed too
                         dom_changed = True
-                    if not url_changed and not dom_changed:
-                        summary += f" ⚠️ (no page change)"
+                    if url_changed:
+                        # Explicitly show URL change - this is critical for link-clicking tasks
+                        summary += f" ✅ (navigated from {interaction.before_state.url[:50]}... to {interaction.after_state.url[:50]}...)"
+                    elif dom_changed:
+                        summary += f" ✅ (page changed)"
                     else:
-                        summary += f" ✅ (effective)"
+                        summary += f" ⚠️ (no page change)"
             
             summary_parts.append(summary)
         

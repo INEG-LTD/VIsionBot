@@ -529,7 +529,10 @@ class EventLogger:
     
     def interaction_recorded(self, interaction_type: str, **details):
         try:
-            self.emit(EventType.INTERACTION_RECORDED, f"Recorded {interaction_type} interaction", "DEBUG", interaction_type=interaction_type, **details)
+            message = f"Recorded {interaction_type} interaction"
+            if details.get('reasoning'):
+                message += f"\n   Why: {details['reasoning']}"
+            self.emit(EventType.INTERACTION_RECORDED, message, "DEBUG", interaction_type=interaction_type, **details)
         except Exception:
             pass
     

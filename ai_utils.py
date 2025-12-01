@@ -81,6 +81,7 @@ class ProviderConfig:
     env_vars: Sequence[str]
     supports_reasoning_flag: bool = False
     requires_string_content: bool = False
+    supports_image_understanding: bool = True
 
 
 _PROVIDERS: dict[str, ProviderConfig] = {
@@ -104,6 +105,11 @@ _PROVIDERS: dict[str, ProviderConfig] = {
     "deepseek": ProviderConfig(
         env_vars=("DEEPSEEK_API_KEY",),
         supports_reasoning_flag=True,
+    ),
+    "cerebras": ProviderConfig(
+        env_vars=("CEREBRAS_API_KEY",),
+        supports_reasoning_flag=False,
+        supports_image_understanding=False,
     ),
 }
 
@@ -289,6 +295,7 @@ def _build_user_content(
     image_detail: str,
     *,
     requires_string_content: bool,
+    supports_image_understanding: bool = True,
 ) -> Union[str, list[dict[str, Any]]]:
     """Produce the user message content, honouring provider content rules."""
     if requires_string_content:
@@ -303,11 +310,13 @@ def _build_user_content(
     content_parts: list[dict[str, Any]] = []
     if prompt:
         content_parts.append({"type": "text", "text": prompt})
-    if multi_image:
-        for extra_image in multi_image:
-            content_parts.append(_prepare_image_part(extra_image, image_detail))
-    if image is not None:
-        content_parts.append(_prepare_image_part(image, image_detail))
+    # Only add images if the provider supports image understanding
+    if supports_image_understanding:
+        if multi_image:
+            for extra_image in multi_image:
+                content_parts.append(_prepare_image_part(extra_image, image_detail))
+        if image is not None:
+            content_parts.append(_prepare_image_part(image, image_detail))
     return content_parts or [{"type": "text", "text": prompt}]
 
 
@@ -335,6 +344,7 @@ def _build_messages_for_provider(
         multi_image=multi_image,
         image_detail=image_detail,
         requires_string_content=config.requires_string_content,
+        supports_image_understanding=config.supports_image_understanding,
     )
     messages.append({"role": "user", "content": user_content})
     return messages

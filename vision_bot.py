@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 import traceback
 import uuid
@@ -20,7 +21,7 @@ from element_detection.overlay_manager import OverlayManager
 from action_executor import ActionExecutor
 from utils import PageUtils
 from action_queue import ActionQueue
-from session_tracker import SessionTracker
+from session_tracker import SessionTracker, InteractionType
 # Removed goal imports - goals system no longer used
 from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
@@ -607,6 +608,7 @@ class BrowserVisionBot:
         self.last_screenshot_hash = None
         self.last_dom_signature = None
         self._agent_mode = False  # Flag to track if we're in agent mode (disables DOM unchanged scroll check)
+        self.agent_controller = None  # Current agent controller instance (set during execute_task)
         
         # Screenshot and overlay caching for performance optimization
         self._cached_screenshot_with_overlays = None
@@ -1588,6 +1590,21 @@ class BrowserVisionBot:
             )
             controller.max_iterations = max_iterations
             
+            # Store controller for pause/resume access
+            # Why: Allows external code to pause/resume the agent during execution
+            self.agent_controller = controller
+            
+            # Connect ActionExecutor pause callback to AgentController
+            # Why: Enables pausing between individual action steps within plans,
+            # providing granular control beyond just pausing between agent-determined actions
+            if hasattr(self, 'action_executor') and self.action_executor:
+                def pause_check():
+                    """Callback to check pause state between action steps."""
+                    if controller.is_paused():
+                        controller._check_pause("action step")
+                
+                self.action_executor.set_pause_callback(pause_check)
+            
             task_result = controller.run_execute_task(user_prompt)
             
             # Create result
@@ -1605,6 +1622,99 @@ class BrowserVisionBot:
         finally:
             # Reset agent mode flag when done
             self._agent_mode = False
+            # Clear controller reference when task completes
+            self.agent_controller = None
+    
+    def pause_agent(self, message: str = "Paused") -> None:
+        """
+        Pause the currently running agent between actions.
+        
+        When paused, the agent will wait before executing the next action, allowing for:
+        - Manual inspection of page state after each action
+        - Debugging specific action sequences
+        - User intervention when needed
+        - Verification of intermediate results
+        
+        The pause occurs between actions (not between iterations), providing fine-grained control.
+        This means you can pause after a specific action completes and inspect the result before
+        the agent decides what to do next.
+        
+        **Why pause between actions?**
+        - Granular control: Inspect state after each individual action, not just at iteration boundaries
+        - Better debugging: See immediate results of each action before the agent continues
+        - User intervention: Handle edge cases that require human judgment
+        - State inspection: Verify page state after each action completes
+        
+        **Thread-safe**: Can be called from any thread while the agent is running.
+        
+        Args:
+            message: Optional message to display when paused (default: "Paused")
+        
+        Raises:
+            RuntimeError: If no agent is currently running
+        
+        Example:
+            >>> import threading
+            >>> import time
+            >>> 
+            >>> bot.start()
+            >>> bot.page.goto("https://example.com")
+            >>> 
+            >>> # Pause after 3 seconds in a background thread
+            >>> def pause_after_delay():
+            ...     time.sleep(3)
+            ...     bot.pause_agent("Manual inspection needed")
+            ...     time.sleep(10)  # Keep paused for 10 seconds
+            ...     bot.resume_agent()
+            >>> 
+            >>> thread = threading.Thread(target=pause_after_delay)
+            >>> thread.start()
+            >>> 
+            >>> result = bot.execute_task("search for jobs")
+        """
+        if not self.agent_controller:
+            raise RuntimeError("No agent is currently running. Call execute_task() first.")
+        self.agent_controller.pause(message)
+    
+    def resume_agent(self) -> None:
+        """
+        Resume the paused agent execution.
+        
+        Unblocks the agent to continue executing actions. If the agent is not paused,
+        this method has no effect.
+        
+        **Thread-safe**: Can be called from any thread.
+        
+        Raises:
+            RuntimeError: If no agent is currently running
+        
+        Example:
+            >>> bot.pause_agent("Checking results")
+            >>> # ... inspect page state ...
+            >>> bot.resume_agent()  # Continue execution
+        """
+        if not self.agent_controller:
+            raise RuntimeError("No agent is currently running. Call execute_task() first.")
+        self.agent_controller.resume()
+    
+    def is_agent_paused(self) -> bool:
+        """
+        Check if the agent is currently paused.
+        
+        Returns:
+            True if the agent is paused, False otherwise
+        
+        Raises:
+            RuntimeError: If no agent is currently running
+        
+        Example:
+            >>> if bot.is_agent_paused():
+            ...     print("Agent is paused, waiting for resume...")
+            ...     bot.resume_agent()
+        """
+        if not self.agent_controller:
+            raise RuntimeError("No agent is currently running. Call execute_task() first.")
+        return self.agent_controller.is_paused()
 
     def extract(
         self,
@@ -2597,6 +2707,13 @@ Return only the extracted text that appears in the text content above. Do not ma
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
+        elif keyword == "defer":
+            result = self._keyword_defer(
+                goal_description=goal_description,
+                payload=payload,
+                target_context_guard=target_context_guard,
+                confirm_before_interaction=confirm_before_interaction,
+            )
         else:
             # Unsupported keyword – fall back
             return None
@@ -3081,6 +3198,137 @@ Return only the extracted text that appears in the text content above. Do not ma
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
+
+    def _keyword_defer(
+        self,
+        *,
+        goal_description: str,
+        payload: str,
+        target_context_guard: Optional[str],
+        confirm_before_interaction: bool,
+    ) -> Optional[bool]:
+        """
+        Handle defer command to pause agent execution.
+        
+        Supports:
+        - "defer" → pause indefinitely until user resumes
+        - "defer: 10" → pause for 10 seconds, then auto-resume
+        - "defer: message" → pause indefinitely with custom message
+        
+        This method blocks execution until resume is called or auto-resume timer expires.
+        """
+        # Determine message and whether to auto-resume
+        message = payload.strip() if payload else "Paused - waiting for user"
+        auto_resume_seconds = None
+        
+        # Check if payload is a number (seconds to wait)
+        try:
+            auto_resume_seconds = float(payload.strip())
+            if auto_resume_seconds > 0:
+                message = f"Paused for {auto_resume_seconds} seconds"
+            else:
+                auto_resume_seconds = None
+        except (ValueError, AttributeError):
+            # Not a number, treat as message
+            pass
+        
+        # If no agent is running, just log and return success
+        if not self.agent_controller:
+            print(f"ℹ️  Defer command received: {message}")
+            print("   (No agent is currently running, so nothing to pause)")
+            return True
+        
+        # Record defer action in interaction history (before pausing)
+        # Extract reasoning from goal_description if available
+        reasoning = goal_description if goal_description != f"defer: {payload}" else message
+        
+        # Record the defer action start
+        if hasattr(self, 'session_tracker') and self.session_tracker:
+            self.session_tracker.record_interaction(
+                interaction_type=InteractionType.DEFER,
+                reasoning=reasoning,
+                text_input=message,  # Store the defer message
+                success=True
+            )
+        
+        # Pause the agent and block execution
+        try:
+            self.pause_agent(message)
+            
+            # Track how the defer was resumed (for recording in main thread)
+            resume_reason = None
+            
+            # If auto-resume is requested, set up a timer
+            if auto_resume_seconds is not None:
+                def auto_resume():
+                    nonlocal resume_reason
+                    try:
+                        if self.agent_controller and self.agent_controller.is_paused():
+                            self.resume_agent()
+                            print(f"▶️  Auto-resumed after {auto_resume_seconds} seconds")
+                            # Set resume reason - will be recorded in main thread
+                            resume_reason = f"Defer auto-resumed after {auto_resume_seconds} seconds"
+                    except Exception as e:
+                        print(f"⚠️  Error during auto-resume: {e}")
+                
+                timer = threading.Timer(auto_resume_seconds, auto_resume)
+                timer.daemon = True
+                timer.start()
+                print(f"⏸️  Paused: {message} (will auto-resume in {auto_resume_seconds} seconds)")
+                
+                # For timed pauses, wait on the pause event (timer will resume)
+                if self.agent_controller:
+                    self.agent_controller._pause_event.wait()
+            else:
+                # For indefinite pauses, wait for user to press Enter
+                print(f"⏸️  Paused: {message}")
+                print("   (Press Enter or call bot.resume_agent() to continue)")
+                
+                # Start a thread to listen for Enter key press
+                def wait_for_enter():
+                    nonlocal resume_reason
+                    try:
+                        input()  # Wait for Enter key
+                        # Resume the agent when Enter is pressed
+                        if self.agent_controller and self.agent_controller.is_paused():
+                            self.resume_agent()
+                            print("▶️  Resumed by user")
+                            # Set resume reason - will be recorded in main thread
+                            resume_reason = "Defer resumed by user - control returned to agent"
+                    except (EOFError, KeyboardInterrupt):
+                        # If input stream is unavailable, just resume
+                        if self.agent_controller and self.agent_controller.is_paused():
+                            self.resume_agent()
+                            print("▶️  Resumed (input unavailable)")
+                            # Set resume reason - will be recorded in main thread
+                            resume_reason = "Defer resumed (input unavailable)"
+                
+                input_thread = threading.Thread(target=wait_for_enter, daemon=True)
+                input_thread.start()
+                
+                # Block execution by waiting on the pause event
+                # This will be released when user presses Enter (via input_thread) or resume_agent() is called
+                if self.agent_controller:
+                    self.agent_controller._pause_event.wait()
+            
+            # Record resume in main thread (after pause event is released)
+            # This avoids greenlet errors from calling Playwright APIs from background threads
+            if resume_reason and hasattr(self, 'session_tracker') and self.session_tracker:
+                try:
+                    self.session_tracker.record_interaction(
+                        interaction_type=InteractionType.DEFER,
+                        reasoning=resume_reason,
+                        text_input="resumed",
+                        success=True
+                    )
+                except Exception as e:
+                    # If recording fails, log but don't break the defer flow
+                    print(f"⚠️  Could not record defer resume: {e}")
+            
+            return True
+        except Exception as e:
+            print(f"⚠️  Error pausing agent: {e}")
+            return False
 
     def _keyword_back(
         self,

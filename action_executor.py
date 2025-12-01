@@ -118,6 +118,37 @@ class ActionExecutor:
         self.pre_action_callbacks: List[Callable[[PreActionContext], None]] = []
         # Post-action callback system
         self.post_action_callbacks: List[Callable[[PostActionContext], None]] = []
+        
+        # Pause callback: Called between action steps within a plan
+        # Why: Allows pausing between individual steps (e.g., click, type, scroll) within
+        # a single plan execution. This provides even more granular control than pausing
+        # between agent-determined actions. Useful for debugging complex multi-step plans.
+        # The callback should handle pause checking and blocking internally.
+        self._pause_callback: Optional[Callable[[], None]] = None
+    
+    def set_pause_callback(self, callback: Optional[Callable[[], None]]) -> None:
+        """
+        Set a callback function to check for pause state between action steps.
+        
+        This callback is invoked between each step in a plan execution (e.g., between
+        a click and a type action within the same plan). The callback should handle
+        pause checking and blocking internally.
+        
+        Why between steps: Some plans contain multiple steps (e.g., "click field, then type").
+        Pausing between steps allows inspection after each individual step completes,
+        providing the most granular control possible.
+        
+        Args:
+            callback: Function to call between action steps. Should handle pause checking
+                    and blocking. Pass None to disable pause checking between steps.
+        
+        Example:
+            >>> def check_pause():
+            ...     if agent_controller.is_paused():
+            ...         agent_controller._check_pause("action step")
+            >>> action_executor.set_pause_callback(check_pause)
+        """
+        self._pause_callback = callback
 
     def _human_mouse_move(self, target_x: int, target_y: int, steps: int = 25):
         """
@@ -402,6 +433,16 @@ class ActionExecutor:
         self._current_plan_action_id = action_id
 
         for i, step in enumerate(plan.action_steps):
+            # Check for pause between action steps
+            # Why: Allows pausing between individual steps within a plan (e.g., between
+            # click and type actions). This provides fine-grained control for debugging
+            # complex multi-step plans.
+            if self._pause_callback:
+                try:
+                    self._pause_callback()
+                except Exception:
+                    pass  # Don't let pause callback errors break execution
+            
             try:
                 self.event_logger.action_step(step_number=i+1, action_type=str(step.action))
             except Exception:
@@ -793,10 +834,15 @@ class ActionExecutor:
 
     def _execute_back(self) -> bool:
         """Navigate back in browser history and record interaction."""
+        # Capture state BEFORE navigation for accurate before_state
+        before_url = ""
+        before_state = None
         try:
-            prev_url = self.page.url
+            before_url = self.page.url
+            before_state = self.session_tracker._capture_current_state()
         except Exception:
-            prev_url = ""
+            pass
+        
         try:
             self.page.go_back()
             success = True
@@ -805,11 +851,21 @@ class ActionExecutor:
             success = False
             error_msg = str(e)
             print(f"  ❌ Back navigation failed: {e}")
-        # Record navigation interaction
+        
+        # Get URL after navigation
+        after_url = before_url  # Default to before_url if navigation failed
+        if success:
+            try:
+                after_url = self.page.url
+            except Exception:
+                pass
+        
+        # Record navigation interaction with explicit before_state
         try:
             self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
-                target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
+                before_state=before_state,  # Pass explicit before_state since navigation already happened
+                target_element_info={"direction": "back", "from": before_url, "to": after_url},
                 success=success,
                 error_message=error_msg,
             )
@@ -819,10 +875,15 @@ class ActionExecutor:
 
     def _execute_forward(self) -> bool:
         """Navigate forward in browser history and record interaction."""
+        # Capture state BEFORE navigation for accurate before_state
+        before_url = ""
+        before_state = None
         try:
-            prev_url = self.page.url
+            before_url = self.page.url
+            before_state = self.session_tracker._capture_current_state()
         except Exception:
-            prev_url = ""
+            pass
+        
         try:
             self.page.go_forward()
             success = True
@@ -831,11 +892,21 @@ class ActionExecutor:
             success = False
             error_msg = str(e)
             print(f"  ❌ Forward navigation failed: {e}")
-        # Record navigation interaction
+        
+        # Get URL after navigation
+        after_url = before_url  # Default to before_url if navigation failed
+        if success:
+            try:
+                after_url = self.page.url
+            except Exception:
+                pass
+        
+        # Record navigation interaction with explicit before_state
         try:
             self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
-                target_element_info={"direction": "forward", "from": prev_url, "to": self.page.url if success else prev_url},
+                before_state=before_state,  # Pass explicit before_state since navigation already happened
+                target_element_info={"direction": "forward", "from": before_url, "to": after_url},
                 success=success,
                 error_message=error_msg,
             )
@@ -982,6 +1053,9 @@ class ActionExecutor:
                 action_description=f"Click on element at ({x}, {y})"
             )
         
+        # Capture state BEFORE performing the click (critical for accurate before_state)
+        before_state = self.session_tracker._capture_current_state()
+        
         # Perform the click with fallback
         success = False
         error_msg = None
@@ -1050,9 +1124,10 @@ class ActionExecutor:
             self.last_click_dom_signature = new_dom_sig
             self.last_click_method = click_method_used
         
-        # Record actual interaction with goal monitor
+        # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
         self.session_tracker.record_interaction(
             InteractionType.CLICK,
+            before_state=before_state,  # Pass explicit before_state captured before the click
             coordinates=(x, y),
             success=success,
             error_message=error_msg
@@ -1146,6 +1221,9 @@ class ActionExecutor:
             self._human_mouse_move(x, y)
             self.page.mouse.click(x, y)
             time.sleep(random.uniform(0.1, 0.3))
+        
+        # Capture state BEFORE performing the type action (critical for accurate before_state)
+        before_state = self.session_tracker._capture_current_state()
         
         try:
             self.event_logger.system_debug(f"Typing: {step.text_to_type}")
@@ -1253,9 +1331,10 @@ class ActionExecutor:
             error_msg = str(e)
             print(f"  ❌ Typing failed: {e}")
         
-        # Record type interaction with goal monitor
+        # Record type interaction with goal monitor (pass explicit before_state since typing already happened)
         self.session_tracker.record_interaction(
             InteractionType.TYPE,
+            before_state=before_state,  # Pass explicit before_state captured before the typing
             coordinates=(x, y) if x is not None and y is not None else None,
             text_input=step.text_to_type,
             success=success,
@@ -1417,6 +1496,9 @@ class ActionExecutor:
         
         print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
         
+        # Capture state BEFORE performing the scroll (critical for accurate before_state)
+        before_state = self.session_tracker._capture_current_state()
+        
         # Record interaction for GIF if recorder is available
         if self.gif_recorder:
             self.gif_recorder.record_interaction(
@@ -1441,9 +1523,10 @@ class ActionExecutor:
             error_msg = str(e)
             print(f"  ❌ Scroll failed: {e}")
         
-        # Record actual interaction with goal monitor
+        # Record actual interaction with goal monitor (pass explicit before_state since scroll already happened)
         self.session_tracker.record_interaction(
             InteractionType.SCROLL,
+            before_state=before_state,  # Pass explicit before_state captured before the scroll
             target_x=target_x,
             target_y=target_y,
             scroll_direction=direction,
@@ -1507,6 +1590,9 @@ class ActionExecutor:
             coordinates=None,
         )
         
+        # Capture state BEFORE performing the press action (critical for accurate before_state)
+        before_state = self.session_tracker._capture_current_state()
+        
         # Record interaction for GIF if recorder is available
         if self.gif_recorder:
             self.gif_recorder.record_interaction(
@@ -1546,9 +1632,10 @@ class ActionExecutor:
             error_msg = str(e)
             print(f"  ❌ Key press failed: {e}")
         
-        # Record actual interaction with goal monitor
+        # Record actual interaction with goal monitor (pass explicit before_state since press already happened)
         self.session_tracker.record_interaction(
             InteractionType.PRESS,
+            before_state=before_state,  # Pass explicit before_state captured before the press
             keys_pressed=step.keys_to_press,
             success=success,
             error_message=error_msg
@@ -2266,10 +2353,15 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
 
     def _execute_back(self) -> bool:
         """Navigate back in browser history and record interaction."""
+        # Capture state BEFORE navigation for accurate before_state
+        before_url = ""
+        before_state = None
         try:
-            prev_url = self.page.url
+            before_url = self.page.url
+            before_state = self.session_tracker._capture_current_state()
         except Exception:
-            prev_url = ""
+            pass
+        
         try:
             self.page.go_back()
             success = True
@@ -2278,11 +2370,21 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
             success = False
             error_msg = str(e)
             print(f"  ❌ Back navigation failed: {e}")
-        # Record navigation interaction
+        
+        # Get URL after navigation
+        after_url = before_url  # Default to before_url if navigation failed
+        if success:
+            try:
+                after_url = self.page.url
+            except Exception:
+                pass
+        
+        # Record navigation interaction with explicit before_state
         try:
             self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
-                target_element_info={"direction": "back", "from": prev_url, "to": self.page.url if success else prev_url},
+                before_state=before_state,  # Pass explicit before_state since navigation already happened
+                target_element_info={"direction": "back", "from": before_url, "to": after_url},
                 success=success,
                 error_message=error_msg,
             )

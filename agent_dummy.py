@@ -22,7 +22,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-nano",
+        agent_model="gpt-5-mini",
         command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.NONE
     ),
@@ -30,7 +30,7 @@ config = BotConfig(
         max_attempts=30
     ),
     elements=ElementConfig(
-        element_selection_fallback_model="gemini/gemini-2.5-flash-lite",
+        selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
         overlay_only_planning=True
     ),
@@ -55,18 +55,19 @@ bot = BrowserVisionBot(config=config)
 bot.event_logger.register_callback(custom_event_callback)
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://google.com")
+bot.page.goto("https://www.google.com")
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "go to reed job website and search for it jobs in london",
+    "go to indeed.com, give me control, then search for 'software engineer jobs'",
     base_knowledge=[
         "just press enter after you've typed a search term into a search field",
         "if asked to search use the best search box contextually available",
         "if you encounter a captcha, give control to the user",
         "if there is a cookie banner, accept all cookies",
     ],
-    strict_mode=True
+    show_completion_reasoning_every_iteration=True,
+    # strict_mode=True
 )
 
 # Check if task succeeded

@@ -30,6 +30,7 @@ class InteractionType(str, Enum):
     ELEMENT_DISAPPEAR = "element_disappear"
     CONTEXT_GUARD = "context_guard"
     EXTRACT = "extract"
+    DEFER = "defer"
 
 
 @dataclass
@@ -72,6 +73,7 @@ class Interaction:
     error_message: Optional[str] = None
     extracted_data: Optional[Dict[str, Any]] = None
     extraction_prompt: Optional[str] = None
+    reasoning: Optional[str] = None  # Why this action was taken
     
     def __post_init__(self):
         if self.timestamp == 0:
@@ -96,6 +98,7 @@ class SessionTracker:
         self.session_start_time = time.time()
         self.base_knowledge: List[str] = []
         self.user_prompt: str = ""
+        self._current_action_reasoning: Optional[str] = None  # Store reasoning for next interaction
         
         # Capture initial state
         self._capture_initial_state()
@@ -112,6 +115,10 @@ class SessionTracker:
     def set_user_prompt(self, prompt: str) -> None:
         """Set the user prompt"""
         self.user_prompt = prompt
+    
+    def set_current_action_reasoning(self, reasoning: Optional[str]) -> None:
+        """Set the reasoning for the next action to be executed"""
+        self._current_action_reasoning = reasoning
     
     def _capture_current_state(self, include_screenshot: bool = False) -> BrowserState:
         """Capture current browser state"""
@@ -197,7 +204,9 @@ class SessionTracker:
         Record an interaction that has occurred.
         Simple tracking without goal evaluation.
         """
-        before_state = self._capture_current_state()
+        # For navigation interactions, use provided before_state if available (since navigation already happened)
+        # Otherwise capture current state as before_state
+        before_state = kwargs.get('before_state') or self._capture_current_state()
         
         interaction = Interaction(
             timestamp=time.time(),
@@ -215,8 +224,12 @@ class SessionTracker:
             success=kwargs.get('success', True),
             error_message=kwargs.get('error_message'),
             extracted_data=kwargs.get('extracted_data'),
-            extraction_prompt=kwargs.get('extraction_prompt')
+            extraction_prompt=kwargs.get('extraction_prompt'),
+            reasoning=kwargs.get('reasoning') or self._current_action_reasoning  # Why this action was taken
         )
+        
+        # Clear reasoning after using it (it's only for the next interaction)
+        self._current_action_reasoning = None
         
         # Capture state after interaction (small delay for page updates)
         time.sleep(0.1)
@@ -235,8 +248,12 @@ class SessionTracker:
         # Emit event
         try:
             from utils.event_logger import get_event_logger
+            event_details = {}
+            if interaction.reasoning:
+                event_details['reasoning'] = interaction.reasoning
             get_event_logger().interaction_recorded(
-                interaction_type=interaction_type.value if hasattr(interaction_type, 'value') else str(interaction_type)
+                interaction_type=interaction_type.value if hasattr(interaction_type, 'value') else str(interaction_type),
+                **event_details
             )
         except Exception:
             pass

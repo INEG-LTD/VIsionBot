@@ -1,5 +1,6 @@
 import json
 import time
+import threading
 from typing import Optional, List, Dict, Any, Tuple, Set
 from enum import Enum
 import re
@@ -233,6 +234,122 @@ class AgentController:
         # Phase 3: Sub-agent support
         self.agent_context: Optional[AgentContext] = None
         self.sub_agent_controller: Optional[SubAgentController] = None
+        
+        # Pause functionality: Allows pausing agent execution between actions
+        # Why: Enables manual inspection, debugging, and user intervention at granular action-level
+        # rather than only at iteration boundaries. This is critical for:
+        # 1. Debugging specific action sequences
+        # 2. Manual verification of intermediate states
+        # 3. Handling edge cases that require human judgment
+        # 4. Inspecting page state after each action completes
+        self._paused = False
+        self._pause_lock = threading.Lock()  # Thread-safe access to pause state
+        self._pause_event = threading.Event()  # Event to block execution when paused
+        self._pause_event.set()  # Initially not paused (event is set = not blocking)
+        self._pause_message = "Paused"
+    
+    def pause(self, message: str = "Paused") -> None:
+        """
+        Pause the agent execution between actions.
+        
+        When paused, the agent will wait before executing the next action, allowing for:
+        - Manual inspection of page state
+        - Debugging action sequences
+        - User intervention when needed
+        - Verification of intermediate results
+        
+        The pause occurs between actions (not between iterations), providing fine-grained control.
+        This means you can pause after a specific action completes and inspect the result.
+        
+        Args:
+            message: Optional message to display when paused (default: "Paused")
+        
+        Example:
+            >>> controller.pause("Manual verification needed")
+            >>> # Agent will pause before next action
+            >>> controller.resume()  # Continue execution
+        """
+        with self._pause_lock:
+            self._paused = True
+            self._pause_message = message
+            self._pause_event.clear()  # Clear event to block execution
+        try:
+            self.event_logger.system_info(f"⏸️  Agent paused: {message}")
+        except Exception:
+            pass
+    
+    def resume(self) -> None:
+        """
+        Resume the agent execution after a pause.
+        
+        Unblocks the agent to continue executing actions. If the agent is not paused,
+        this method has no effect.
+        
+        Example:
+            >>> controller.pause()
+            >>> # ... do something ...
+            >>> controller.resume()  # Agent continues
+        """
+        with self._pause_lock:
+            was_paused = self._paused
+            self._paused = False
+            self._pause_event.set()  # Set event to unblock execution
+        if was_paused:
+            try:
+                self.event_logger.system_info("▶️  Agent resumed")
+            except Exception:
+                pass
+    
+    def is_paused(self) -> bool:
+        """
+        Check if the agent is currently paused.
+        
+        Returns:
+            True if the agent is paused, False otherwise
+        """
+        with self._pause_lock:
+            return self._paused
+    
+    def _check_pause(self, action_description: str = None) -> None:
+        """
+        Internal method to check pause state and wait if paused.
+        
+        This is called before each action execution to respect pause state.
+        The method blocks execution until resume() is called if the agent is paused.
+        
+        Args:
+            action_description: Optional description of the action about to be executed
+                               (used for display purposes)
+        
+        Why this approach:
+        - Thread-safe: Uses locks and events for safe concurrent access
+        - Non-blocking when not paused: Event is set by default, so no overhead when running
+        - Granular control: Pauses between actions, not just iterations
+        - User-friendly: Provides clear feedback about what action is being paused
+        """
+        # Check pause state (quick check without lock first for performance)
+        if not self._paused:
+            return
+        
+        # Get pause message with lock
+        with self._pause_lock:
+            if not self._paused:
+                return  # Double-check after acquiring lock
+            message = self._pause_message
+            action_desc = action_description or "next action"
+        
+        # Display pause information
+        print(f"\n⏸️  {message}")
+        if action_desc:
+            print(f"   Waiting before: {action_desc}")
+        try:
+            current_url = self.bot.page.url if self.bot.page else 'N/A'
+            print(f"   URL: {current_url}")
+        except Exception:
+            pass
+        
+        # Wait until resume() is called (this blocks the execution thread)
+        self._pause_event.wait()
     
     def run_execute_task(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> TaskResult:
         """
@@ -498,13 +615,17 @@ class AgentController:
                                     self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
                             except Exception:
                                 pass
-                        return goal_determiner.determine_next_action(
+                        action, needs_exploration, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             is_exploring=False,  # Start with viewport mode
                             failed_actions=self.failed_actions if self.track_ineffective_actions else [],
                             ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
                         )
+                        # Store reasoning for next interaction
+                        if reasoning:
+                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
+                        return action, needs_exploration
                     
                     def run_subagent_policy_check(completion_reasoning_ref):
                         """Run subagent policy check (will use completion_reasoning after completion check finishes)"""
@@ -656,13 +777,16 @@ class AgentController:
                                 self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
                             if self.ineffective_actions:
                                 self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
-                        current_action, needs_exploration = goal_determiner.determine_next_action(
+                        current_action, needs_exploration, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             is_exploring=False,  # Start with viewport mode
                             failed_actions=self.failed_actions if self.track_ineffective_actions else [],
                             ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
                         )
+                        # Store reasoning for next interaction
+                        if reasoning:
+                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
             else:
                 # We have a queued action, so we still need to check completion
                 self.event_logger.system_debug("Running completion check (next action already queued)...")
@@ -804,7 +928,7 @@ class AgentController:
                         print("🔍 Re-determining scroll direction with full-page screenshot...")
                     
                     print(f"   Current scroll position: Y={snapshot.scroll_y}, Viewport height: {snapshot.page_height}")
-                    current_action, needs_exploration = goal_determiner.determine_next_action(
+                    current_action, needs_exploration, reasoning = goal_determiner.determine_next_action(
                         environment_state,
                         screenshot=snapshot.screenshot,
                         is_exploring=True,  # Now in exploration mode
@@ -812,6 +936,9 @@ class AgentController:
                         failed_actions=self.failed_actions if self.track_ineffective_actions else [],  # Pass failed actions only if tracking enabled
                         ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []  # Pass ineffective actions only if tracking enabled
                     )
+                    # Store reasoning for next interaction
+                    if reasoning:
+                        self.bot.session_tracker.set_current_action_reasoning(reasoning)
                     
                     # Safeguard: Filter out actions that exactly match failed/ineffective actions (except scroll commands in exploration mode, only if tracking enabled)
                     if (
@@ -1017,6 +1144,13 @@ class AgentController:
             
             # Capture page state BEFORE action
             state_before = self._get_page_state()
+            
+            # Check for pause before executing action
+            # Why pause between actions: This allows inspection after each action completes,
+            # providing fine-grained control over execution flow. Unlike pausing between
+            # iterations, this lets you see the immediate result of each action before
+            # the agent decides what to do next.
+            self._check_pause(current_action)
             
             # 6. Use existing act() function - it handles goal creation, planning, execution
             # This leverages all the existing infrastructure (goal creation, plan generation, etc.)

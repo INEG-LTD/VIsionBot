@@ -210,7 +210,7 @@ class ReactiveGoalDeterminer:
         viewport_snapshot: Optional[BrowserState] = None,
         failed_actions: Optional[List[str]] = None,
         ineffective_actions: Optional[List[str]] = None
-    ) -> tuple[Optional[str], bool]:
+    ) -> tuple[Optional[str], bool, Optional[str]]:
         """
         Determine the single next action to take based on current state.
         
@@ -221,10 +221,11 @@ class ReactiveGoalDeterminer:
             viewport_snapshot: Optional viewport snapshot for comparison when exploring
             
         Returns:
-            Tuple of (action_command, needs_exploration):
+            Tuple of (action_command, needs_exploration, reasoning):
             - action_command: Action to take (e.g., "type: John Doe in name field") or None
               NOTE: In exploration mode, this MUST be "scroll: up" or "scroll: down"
             - needs_exploration: True if next iteration should use full-page screenshot
+            - reasoning: Why this action was chosen (for inclusion in interaction history)
         """
         try:
             # Identify what element we're looking for if in exploration mode
@@ -247,9 +248,10 @@ class ReactiveGoalDeterminer:
             
             if not response:
                 print("⚠️ No action generated")
-                return None, True  # Return None and indicate exploration is needed
+                return None, True, None  # Return None and indicate exploration is needed
             
             action = response.action
+            reasoning = response.reasoning
             
             # In exploration mode, validate that only scroll commands are returned
             if is_exploring:
@@ -279,13 +281,13 @@ class ReactiveGoalDeterminer:
             if response.needs_exploration and not is_exploring:
                 print("   🔍 Needs exploration: element not visible in viewport")
             
-            return action, response.needs_exploration
+            return action, response.needs_exploration, reasoning
             
         except Exception as e:
             print(f"⚠️ ReactiveGoalDeterminer error: {e}")
             import traceback
             traceback.print_exc()
-            return None, False
+            return None, False, None
     
     def _generate_single_action(
         self,
@@ -368,7 +370,11 @@ Your job is to look at the screenshot ({screenshot_note}) and decide:
 {exploration_rules}
 {base_knowledge_section}
 CRITICAL RULES:
-1. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
+1. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
+   - "go to X and click Y" → If you've clicked Y and are on Y's page, task is complete (don't go back to X)
+   - "click the first article" → If you've clicked it and are viewing the article, task is complete
+   - "navigate to homepage and click login" → If you're on the login page, task is complete (don't go back)
+2. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
    - Examples: "extract the price" → "extract: price"
    - Examples: "get the stock price" → "extract: stock price"  
    - Examples: "find the current price" → "extract: current price"
@@ -384,6 +390,7 @@ CRITICAL RULES:
 5. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
 6. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
 7. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
+   **CRITICAL: If the INTERACTIONS PERFORMED section shows a "defer" interaction that was "resumed", this means control was already given to the user and returned to the agent. DO NOT defer again - proceed with the next step in the task. Only defer if no defer action has been executed yet, or if the user explicitly requests another handoff.**
 8. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
 9. Format actions as executable commands:
    - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch, list, show, display, return, output, print, read, scan, capture, obtain, acquire, present, report, summarize, detail, enumerate, itemize, catalog, record, document, save, export, download, copy, quote, cite) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price", "extract: top 5 stocks with prices and percentage change"
@@ -409,6 +416,7 @@ AVAILABLE COMMANDS:
   - "defer: 10" → pause for 10 seconds, then resume automatically
   - "defer: take over" → pause and show the provided message to the user
   Only defer when the user explicitly requests manual control or human input is required (captcha, multi-factor auth, etc.).
+  **IMPORTANT: Check the INTERACTIONS PERFORMED section before deferring. If you see a "defer" interaction that shows "resumed", this means control was already given to the user and returned. In that case, DO NOT defer again - proceed with the next step in the task.**
 - subagents: <mode>  (e.g., "subagents: single", "subagents: parallel", "subagents: reset")
   Override the adaptive sub-agent utilization policy when it is clearly misaligned with the task or the user explicitly requests a change.
   - "single"/"single-threaded"/"off"/"conservative" → minimize or block spawning.
@@ -589,6 +597,18 @@ Look at the screenshot and determine the single next action to progress toward t
         for i, interaction in enumerate(interactions[-3:], 1):  # Last 3 (reduced for speed)
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
+            
+            # Special handling for defer interactions
+            if interaction.interaction_type.value == "defer":
+                if interaction.text_input:
+                    if interaction.text_input == "resumed":
+                        summary += " - resumed (control returned to agent)"
+                    else:
+                        summary += f" - {interaction.text_input}"
+                if interaction.reasoning:
+                    summary += f" ({interaction.reasoning[:50]})"
+                summary_parts.append(summary)
+                continue
             
             if interaction.text_input:
                 summary += f" - entered: '{interaction.text_input[:30]}'"

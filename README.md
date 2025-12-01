@@ -183,6 +183,7 @@ The agent system enables autonomous task completion:
 - **Completion Evaluation**: LLM-based assessment of whether the task is completed
 - **Adaptive Planning**: Dynamically adjusts strategy based on page state and history
 - **Stuck Detection**: Identifies when the agent is stuck in a loop and takes corrective action
+- **Pause/Resume Control**: Fine-grained pause functionality between actions for debugging and inspection
 
 ### Tab Management
 
@@ -192,6 +193,44 @@ Sophisticated multi-tab orchestration:
 - **Tab Decisions**: LLM-based decisions on when to switch, close, or create tabs
 - **Sub-Agents**: Spawn independent agents in separate tabs for parallel workflows
 - **Tab Synchronization**: Keeps all components synchronized when switching tabs
+
+### Pause Functionality
+
+The bot supports pausing agent execution between actions (not just between iterations), providing fine-grained control:
+
+**Why pause between actions?**
+- **Granular debugging**: Inspect page state after each individual action completes
+- **Immediate feedback**: See results of each action before the agent continues
+- **User intervention**: Handle edge cases requiring human judgment
+- **State verification**: Verify page state after each action
+
+**How it works:**
+1. Pause occurs **between actions**, not mid-action or only at iteration boundaries
+2. Thread-safe: Can pause/resume from any thread
+3. Two levels of pause:
+   - Between agent-determined actions (e.g., between "click: button" and "type: text")
+   - Between action steps within a plan (e.g., between click and type within a single plan)
+
+**Example:**
+```python
+import threading
+import time
+
+bot.start()
+bot.page.goto("https://example.com")
+
+# Pause after 3 seconds
+def pause_after_delay():
+    time.sleep(3)
+    bot.pause_agent("Manual inspection needed")
+    time.sleep(10)  # Keep paused
+    bot.resume_agent()
+
+thread = threading.Thread(target=pause_after_delay)
+thread.start()
+
+result = bot.execute_task("search for jobs")
+```
 
 ### Action Execution
 
@@ -429,6 +468,78 @@ if result.success:
 - `BotTerminatedError`: If bot has been terminated
 - `BotNotStartedError`: If bot is not started
 - `ValidationError`: If `prompt` is empty, invalid `output_format`/`scope`, or missing `element_description`
+
+##### `pause_agent(message: str = "Paused") -> None`
+
+Pause the currently running agent between actions.
+
+When paused, the agent will wait before executing the next action, allowing for manual inspection, debugging, and user intervention. The pause occurs **between actions** (not between iterations), providing fine-grained control.
+
+**Why pause between actions?**
+- **Granular control**: Inspect page state after each individual action completes
+- **Better debugging**: See immediate results of each action before the agent continues
+- **User intervention**: Handle edge cases that require human judgment
+- **State verification**: Verify page state after each action completes
+
+**Thread-safe**: Can be called from any thread while the agent is running.
+
+```python
+import threading
+import time
+
+bot.start()
+bot.page.goto("https://example.com")
+
+# Pause after 3 seconds in a background thread
+def pause_after_delay():
+    time.sleep(3)
+    bot.pause_agent("Manual inspection needed")
+    time.sleep(10)  # Keep paused for 10 seconds
+    bot.resume_agent()
+
+thread = threading.Thread(target=pause_after_delay)
+thread.start()
+
+result = bot.execute_task("search for jobs")
+```
+
+**Parameters:**
+- `message` (str): Optional message to display when paused (default: "Paused")
+
+**Raises:**
+- `RuntimeError`: If no agent is currently running
+
+##### `resume_agent() -> None`
+
+Resume the paused agent execution.
+
+Unblocks the agent to continue executing actions. If the agent is not paused, this method has no effect.
+
+**Thread-safe**: Can be called from any thread.
+
+```python
+bot.pause_agent("Checking results")
+# ... inspect page state ...
+bot.resume_agent()  # Continue execution
+```
+
+**Raises:**
+- `RuntimeError`: If no agent is currently running
+
+##### `is_agent_paused() -> bool`
+
+Check if the agent is currently paused.
+
+```python
+if bot.is_agent_paused():
+    print("Agent is paused, waiting for resume...")
+    bot.resume_agent()
+```
+
+**Returns:** `True` if the agent is paused, `False` otherwise
+
+**Raises:**
+- `RuntimeError`: If no agent is currently running
 
 ##### `execute_task(user_prompt, **kwargs) -> AgentResult`
 
