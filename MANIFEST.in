@@ -1,0 +1,26 @@
+# Include README and documentation
+include README.md
+include TERMINOLOGY.md
+include LICENSE
+include requirements.txt
+
+# Include all Python files
+recursive-include *.py
+
+# Include package data
+recursive-include agent *.py
+recursive-include utils *.py
+recursive-include models *.py
+recursive-include element_detection *.py
+recursive-include handlers *.py
+recursive-include middlewares *.py
+recursive-include planner *.py
+recursive-include tab_management *.py
+recursive-include window_mgmt *.py
+recursive-include tests *.py
+
+# Exclude unnecessary files
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude *.so
+global-exclude .DS_Store
