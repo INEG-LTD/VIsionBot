@@ -1,26 +1,20 @@
-# Include README and documentation
+# Include docs and metadata
 include README.md
 include TERMINOLOGY.md
-include LICENSE
 include requirements.txt
+include LICENSE
 
-# Include all Python files
-recursive-include *.py
-
-# Include package data
+# Include all python modules and packages
+recursive-include browser_vision_bot *.py
 recursive-include agent *.py
-recursive-include utils *.py
-recursive-include models *.py
 recursive-include element_detection *.py
 recursive-include handlers *.py
 recursive-include middlewares *.py
+recursive-include models *.py
 recursive-include planner *.py
 recursive-include tab_management *.py
+recursive-include utils *.py
 recursive-include window_mgmt *.py
-recursive-include tests *.py
 
-# Exclude unnecessary files
-global-exclude __pycache__
-global-exclude *.py[co]
-global-exclude *.so
-global-exclude .DS_Store
+# Exclude caches and compiled artifacts
+global-exclude __pycache__ *.py[co] *.so .DS_Store

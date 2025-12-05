@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "browser-vision-bot"
 version = "0.1.0"
-description = "A powerful, vision-based web automation framework that uses AI to interact with web pages like a human would"
+description = "Vision-based web automation framework using Playwright and AI."
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = { text = "MIT" }
 authors = [
-    {name = "BrowserVisionBot Contributors"}
+    { name = "BrowserVisionBot Contributors" }
 ]
 keywords = ["automation", "browser", "ai", "vision", "playwright", "web-scraping", "bot"]
 classifiers = [
@@ -48,6 +48,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "build>=1.0.0",
 ]
 
 [project.urls]
@@ -57,17 +58,34 @@ Repository = "https://github.com/INEG-LTD/VIsionBot"
 Issues = "https://github.com/INEG-LTD/VIsionBot/issues"
 
 [tool.setuptools]
-# Automatically discover all packages (subdirectories with __init__.py)
-# Root-level modules will be included when installed in editable mode
+# Discover subpackages (directories with __init__.py)
 packages = { find = {} }
+# Install root-level modules as top-level imports (e.g., vision_bot)
+py-modules = [
+    "vision_bot",
+    "bot_config",
+    "browser_provider",
+    "action_executor",
+    "action_ledger",
+    "action_queue",
+    "action_result",
+    "agent_dummy",
+    "ai_utils",
+    "command_ledger",
+    "error_handling",
+    "gif_recorder",
+    "interaction_deduper",
+    "middleware",
+    "session_tracker",
+    "vision_utils",
+    "command_parser",
+]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
 
-# For editable installs, the root directory becomes the package root
-# This allows imports like "from vision_bot import BrowserVisionBot" to work
-[tool.setuptools.package-dir]
-"" = "."
+[tool.setuptools.packages.find]
+exclude = ["tests*"]
 
 [tool.black]
 line-length = 100

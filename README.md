@@ -34,35 +34,27 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - Playwright
 - Google Gemini API key or OpenAI API key
 
-### Install as a Package
-
-#### From Source (Development)
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/browser-vision-bot.git
-cd browser-vision-bot
-
-# Install in editable mode
-pip install -e .
-
-# Install Playwright browsers
-playwright install chromium
-```
-
-#### Install from PyPI (when published)
-
-```bash
-pip install browser-vision-bot
-playwright install chromium
-```
-
-### Install Dependencies (Legacy Method)
-
-If you prefer to install dependencies manually:
+### Install Dependencies
 
 ```bash
 pip install -r requirements.txt
+```
+
+### Install as a Package
+
+Use editable install during development or install directly from Git:
+
+```bash
+# Editable (recommended for development)
+pip install -e .
+
+# Or install from Git
+pip install git+https://github.com/INEG-LTD/VIsionBot.git
+```
+
+### Install Playwright Browsers
+
+```bash
 playwright install chromium
 ```
 
@@ -76,24 +68,6 @@ GEMINI_API_KEY=your_gemini_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-### Using as a Package
-
-Once installed, you can import BrowserVisionBot in your projects:
-
-```python
-# Import from the package
-from browser_vision_bot import BrowserVisionBot, BotConfig, create_browser_provider
-
-# Or import specific components
-from browser_vision_bot import (
-    BrowserVisionBot,
-    BotConfig,
-    ActionResult,
-    AgentResult,
-    ErrorHandlingConfig,
-)
-```
-
 ## 🎯 Quick Start
 
 ### Basic Usage
@@ -101,7 +75,6 @@ from browser_vision_bot import (
 #### Using Context Manager (Recommended)
 
 ```python
-# When installed as a package
 from browser_vision_bot import BrowserVisionBot, BotConfig, create_browser_provider
 
 # Configure bot
@@ -1056,41 +1029,6 @@ if gif_path:
 ```
 
 ## 🛠️ Development
-
-### Installing for Development
-
-To contribute to BrowserVisionBot or use it in development mode:
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/browser-vision-bot.git
-cd browser-vision-bot
-
-# Install in editable mode (recommended for development)
-pip install -e .
-
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Install Playwright browsers
-playwright install chromium
-```
-
-### Building the Package
-
-To build distribution packages:
-
-```bash
-# Install build tools
-pip install build
-
-# Build source and wheel distributions
-python -m build
-
-# The distributions will be in the dist/ directory
-```
-
-### Project Structure
 
 ```
 browser-vision-bot/
