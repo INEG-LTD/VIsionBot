@@ -12,7 +12,11 @@ import uuid
 from typing import Any, Optional, List, Dict, Tuple, Union, Type, Callable
 
 from playwright.sync_api import Browser, Page, Playwright
-from playwright_stealth import stealth_sync
+# Compatible import for playwright_stealth across versions
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    from playwright_stealth.stealth import stealth_sync
 
 from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType, PageInfo
