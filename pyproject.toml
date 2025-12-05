@@ -52,10 +52,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/INEG-LTD/VIsionBotbot"
-Documentation = "https://github.com/INEG-LTD/VIsionBot#readme"
-Repository = "https://github.com/INEG-LTD/VIsionBot"
-Issues = "https://github.com/INEG-LTD/VIsionBot/issues"
+Homepage = "https://github.com/INEG-LTD/job-application-bot"
+Documentation = "https://github.com/INEG-LTD/job-application-bot#readme"
+Repository = "https://github.com/INEG-LTD/job-application-bot"
+Issues = "https://github.com/INEG-LTD/VIsionBot/job-application-bot"
 
 [tool.setuptools]
 # Discover subpackages (directories with __init__.py)
@@ -83,9 +83,6 @@ py-modules = [
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
-
-[tool.setuptools.packages.find]
-exclude = ["tests*"]
 
 [tool.black]
 line-length = 100
