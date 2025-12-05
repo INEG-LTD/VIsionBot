@@ -17,7 +17,6 @@ from bot_config import (
     CacheConfig,
     RecordingConfig,
     ErrorHandlingConfig,
-    BrowserConfig as BotBrowserConfig,
 )
 
 # Browser provider
@@ -64,7 +63,7 @@ from action_ledger import ActionLedger, ActionStatus, ActionRecord
 from action_queue import ActionQueue
 from utils.event_logger import EventLogger, set_event_logger
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # Main bot
@@ -76,7 +75,6 @@ __all__ = [
     "CacheConfig",
     "RecordingConfig",
     "ErrorHandlingConfig",
-    "BotBrowserConfig",
     # Browser provider
     "BrowserProvider",
     "LocalPlaywrightProvider",
