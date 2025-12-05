@@ -832,47 +832,6 @@ class ActionExecutor:
         except Exception:
             pass
 
-    def _execute_back(self) -> bool:
-        """Navigate back in browser history and record interaction."""
-        # Capture state BEFORE navigation for accurate before_state
-        before_url = ""
-        before_state = None
-        try:
-            before_url = self.page.url
-            before_state = self.session_tracker._capture_current_state()
-        except Exception:
-            pass
-        
-        try:
-            self.page.go_back()
-            success = True
-            error_msg = None
-        except Exception as e:
-            success = False
-            error_msg = str(e)
-            print(f"  ❌ Back navigation failed: {e}")
-        
-        # Get URL after navigation
-        after_url = before_url  # Default to before_url if navigation failed
-        if success:
-            try:
-                after_url = self.page.url
-            except Exception:
-                pass
-        
-        # Record navigation interaction with explicit before_state
-        try:
-            self.session_tracker.record_interaction(
-                InteractionType.NAVIGATION,
-                before_state=before_state,  # Pass explicit before_state since navigation already happened
-                target_element_info={"direction": "back", "from": before_url, "to": after_url},
-                success=success,
-                error_message=error_msg,
-            )
-        except Exception:
-            pass
-        return success
-
     def _execute_forward(self) -> bool:
         """Navigate forward in browser history and record interaction."""
         # Capture state BEFORE navigation for accurate before_state
