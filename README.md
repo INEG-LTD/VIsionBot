@@ -7,7 +7,9 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection
 - **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
-- **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions
+- **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text.
+- **Smart Select Handling**: Automatic detection and handling of native `<select>` elements, custom dropdowns, listboxes, and combobox patterns. Agent can see available options in overlays and make intelligent selections. Select elements are prominently marked with `SELECT_FIELD` in element descriptions, and available options are displayed in the `options=` field to help the agent understand when to use `select:` actions instead of `click:`. Conservative detection prevents false positives for regular inputs with lists. When select handler detects a non-select element, it automatically converts the action to a click action using the full bot infrastructure (overlay detection, element finding, etc.), ensuring seamless interaction with suggestion lists and other clickable option elements.
+- **Form Field Context Detection**: Automatically detects and includes associated labels/questions for form elements (inputs, radios, checkboxes). This allows the agent to distinguish between similar options (like "Yes" buttons) that belong to different questions, significantly improving accuracy when filling out complex forms.
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
 - **Middleware System**: Extensible middleware for logging, caching, error handling, and custom behaviors
@@ -262,7 +264,7 @@ BrowserVisionBot uses Pydantic models for type-safe configuration:
 ### Configuration Groups
 
 ```python
-from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig, RecordingConfig, ErrorHandlingConfig
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig, RecordingConfig, ErrorHandlingConfig, ActFunctionConfig
 from ai_utils import ReasoningLevel
 
 config = BotConfig(
@@ -272,32 +274,39 @@ config = BotConfig(
         command_model="gpt-5-mini",
         reasoning_level=ReasoningLevel.MEDIUM
     ),
-    
+
     # Execution Behavior
     execution=ExecutionConfig(
         max_attempts=10,
         parallel_completion_and_action=True,
         dedup_mode="auto"
     ),
-    
+
     # Plan Caching
     cache=CacheConfig(
         enabled=True,
         ttl=6.0,
         max_reuse=1
     ),
-    
+
     # Recording
     recording=RecordingConfig(
         save_gif=True,
         output_dir="gif_recordings"
     ),
-    
+
     # Error Handling
     error_handling=ErrorHandlingConfig(
         screenshot_on_error=True,
         max_retries=3,
         retry_delay=2.0
+    ),
+
+    # Act Function Parameters
+    act_function=ActFunctionConfig(
+        enable_target_context_guard=True,
+        enable_modifier=True,
+        enable_additional_context=True
     )
 )
 ```
@@ -329,6 +338,13 @@ config = BotConfig.minimal()
 - `dedup_mode`: Deduplication mode: "auto", "on", or "off" (default: "auto")
 - `dedup_history_quantity`: Number of interactions to track for dedup (-1 = unlimited)
 
+#### ElementConfig
+- `overlay_mode`: Overlay drawing mode (`"interactive"` default, `"all"` includes every visible element)
+- `include_textless_overlays`: Keep overlays with no text/aria/placeholder in LLM selection lists (default: False)
+- `max_detailed_elements`: Maximum number of detailed elements to include (default: 400)
+- `max_coordinate_overlays`: Maximum number of coordinate overlays (default: 600)
+- `overlay_selection_max_samples`: Limit overlays considered during LLM selection (None for unlimited)
+
 #### CacheConfig
 - `enabled`: Enable plan caching (default: True)
 - `ttl`: Time-to-live for cached plans in seconds (default: 6.0)
@@ -345,6 +361,44 @@ config = BotConfig.minimal()
 - `retry_delay`: Delay between retries in seconds (default: 2.0)
 - `retry_backoff`: Backoff multiplier for exponential retry (default: 2.0)
 - `abort_on_critical`: Abort automation on critical errors (default: True)
+
+#### ActFunctionConfig
+Control which parameters the agent uses when calling the `act()` function during autonomous execution.
+
+- `enable_target_context_guard`: Enable contextual element filtering (default: True)
+- `enable_modifier`: Enable ordinal selection (e.g., "first", "second") (default: True)
+- `enable_additional_context`: Enable supplementary information for planning (default: True)
+
+**Example - Disable target_context_guard:**
+```python
+from bot_config import BotConfig, ActFunctionConfig
+
+config = BotConfig(
+    act_function=ActFunctionConfig(
+        enable_target_context_guard=False,  # Disable contextual filtering
+        enable_modifier=True,
+        enable_additional_context=True
+    )
+)
+```
+
+**Use Case:** When the agent is too restrictive in element selection or when you want simpler, more straightforward element targeting without contextual constraints.
+
+**See Also:** Check out `examples/act_function_config_example.py` for more detailed examples and use cases.
+
+### Overlay Customization Example
+
+```python
+from bot_config import BotConfig, ElementConfig
+
+config = BotConfig(
+    elements=ElementConfig(
+        overlay_mode="all",                 # draw overlays on every visible element
+        include_textless_overlays=True,     # allow unlabeled overlays in LLM selection
+        overlay_selection_max_samples=800,  # widen the candidate list
+    )
+)
+```
 
 ## 📚 API Reference
 
@@ -908,6 +962,11 @@ bot.act("dedup: off")
 6. **Completion Check** → Evaluate if task completed (agent mode only)
 7. **Result** → Return success/failure with evidence
 
+### Interaction summarization controls
+
+- Completion evaluation (`CompletionContract`) and next-action generation (`ReactiveGoalDeterminer`) now accept configurable interaction history limits.
+- Defaults include all recorded interactions; pass `interaction_summary_limit_completion` or `interaction_summary_limit_action` into `AgentController` to cap how many recent interactions are summarized in prompts.
+
 ## 📖 Examples
 
 ### Example 1: Simple Form Filling
@@ -993,6 +1052,13 @@ result = bot.execute_task(
 result = bot.execute_task(
     "Go through all pages of search results and extract each product name and price"
 )
+
+# Limit how much interaction history is summarized in LLM prompts
+result = bot.execute_task(
+    "Submit the contact form",
+    interaction_summary_limit_completion=50,
+    interaction_summary_limit_action=30,
+)
 ```
 
 ### Example 5: Complete Workflow
@@ -1060,7 +1126,7 @@ browser-vision-bot/
 │   ├── element_detector.py   # Element detection
 │   └── overlay_manager.py    # Overlay management
 ├── handlers/                 # Specialized handlers
-│   ├── select_handler.py     # Dropdown handling
+│   ├── select_handler.py     # Dropdown/select handling (native & custom)
 │   ├── upload_handler.py     # File upload handling
 │   └── datetime_handler.py   # Date/time handling
 ├── middlewares/              # Built-in middleware
@@ -1106,8 +1172,26 @@ pytest tests/integration/
 # Run with coverage
 pytest tests/ --cov=. --cov-report=html
 
+# Notes
+- Scroll actions now normalize scroll positions to integers to avoid validation errors during PageInfo checks.
+- Upload handling: when no file path is provided, the upload control is clicked and execution waits for the user to pick a file (press Enter to resume).
+- If an upload path is provided but doesn’t exist, the upload handler now falls back to the manual picker flow (click + wait for user to select).
+
 # Run specific test file
 pytest tests/unit/test_tab_manager.py -v
+
+# Test select field handling (native and custom patterns)
+pytest tests/integration/test_select_handler_fixture.py -v
+pytest tests/integration/test_selector_coordinates.py -v  # Test selector coordinate resolution
+```
+
+### Select fixture for manual testing
+
+Open `tests/integration/select_fixtures.html` in a browser to exercise native and custom dropdown scenarios. One simple way is to serve the integration folder locally:
+
+```bash
+python -m http.server 8000 -d tests/integration
+# visit http://localhost:8000/select_fixtures.html
 ```
 
 ### Environment Variables

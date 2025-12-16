@@ -16,7 +16,12 @@ class SelectorUtils:
             self.page = page
     
     def get_element_selector_from_coordinates(self, x: int, y: int) -> str:
-        """Get a CSS selector for the element at the given coordinates"""
+        """Get a CSS selector for the element at the given coordinates
+        
+        Args:
+            x, y: Pixel coordinates - should be viewport/client coordinates (relative to visible viewport)
+                 If document coordinates are passed, they will be converted to viewport coordinates
+        """
         try:
             # First, remove any overlays that might interfere
             self._remove_overlays()
@@ -30,47 +35,89 @@ class SelectorUtils:
             
             js_code = f"""
             (function() {{
-                console.log('Looking for element at coordinates: {x}, {y}');
-                let element = document.elementFromPoint({x}, {y});
+                // Convert to viewport/client coordinates if needed
+                // elementFromPoint expects viewport coordinates, not document coordinates
+                let cx = {x};
+                let cy = {y};
+                
+                // Check if coordinates are outside viewport bounds (might be document coordinates)
+                // If so, convert by subtracting scroll offset
+                if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) {{
+                    cx = {x} - window.scrollX;
+                    cy = {y} - window.scrollY;
+                }}
+                
+                // Validate coordinates are within viewport
+                if (!Number.isFinite(cx) || !Number.isFinite(cy)) {{
+                    console.log('Invalid coordinates (non-finite):', {x}, {y});
+                    return null;
+                }}
+                
+                if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) {{
+                    console.log('Coordinates outside viewport bounds:', cx, cy, 'viewport:', window.innerWidth, window.innerHeight);
+                    // Still try elementFromPoint - sometimes it works slightly outside bounds
+                }}
+                
+                console.log('Looking for element at viewport coordinates: (' + cx + ', ' + cy + ')');
+                let element = document.elementFromPoint(cx, cy);
                 
                 if (!element) {{
-                    console.log('No element found at coordinates');
+                    console.log('No element found at coordinates - element might be hidden or coordinates invalid');
                     return null;
                 }}
                 
                 console.log('Found element:', element.tagName, element.id, element.className, element.type);
                 
-                // Skip non-interactive elements early
+                // Walk up the DOM tree to find interactive ancestors (similar to element_analyzer)
+                // This handles cases where we hit a non-interactive wrapper element
+                const clickableSelector = 'a,button,input,select,textarea,[role="button"],[role="link"],[role="combobox"],[role="listbox"],[role="option"]';
+                const clickableAncestor = element.closest ? element.closest(clickableSelector) : null;
+                if (clickableAncestor) {{
+                    console.log('Found interactive ancestor:', clickableAncestor.tagName, clickableAncestor.id);
+                    element = clickableAncestor;
+                }}
+                
+                // If still non-interactive and no ancestor found, look for nearby inputs
                 const nonInteractiveTags = ['html', 'body', 'header', 'footer', 'nav', 'section', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
-                if (nonInteractiveTags.includes(element.tagName.toLowerCase()) && 
+                const style = window.getComputedStyle(element);
+                const isNonInteractive = nonInteractiveTags.includes(element.tagName.toLowerCase()) && 
                     !element.onclick && 
                     !element.getAttribute('onclick') &&
                     !element.hasAttribute('tabindex') &&
-                    element.tagName.toLowerCase() !== 'div') {{
-                    
+                    style.pointerEvents !== 'none' &&
+                    element.tagName.toLowerCase() !== 'div';
+                
+                if (isNonInteractive && !clickableAncestor) {{
                     // Look for an input element nearby (within the same area)
-                    const inputs = document.querySelectorAll('input, select, textarea');
+                    const inputs = document.querySelectorAll('input, select, textarea, button, a');
                     let closestInput = null;
                     let closestDistance = Infinity;
                     
                     inputs.forEach(input => {{
                         const rect = input.getBoundingClientRect();
+                        // Skip hidden elements
+                        const inputStyle = window.getComputedStyle(input);
+                        if (inputStyle.display === 'none' || inputStyle.visibility === 'hidden') {{
+                            return;
+                        }}
+                        
                         const centerX = rect.left + rect.width / 2;
                         const centerY = rect.top + rect.height / 2;
-                        const distance = Math.sqrt(Math.pow(centerX - {x}, 2) + Math.pow(centerY - {y}, 2));
+                        const distance = Math.sqrt(Math.pow(centerX - cx, 2) + Math.pow(centerY - cy, 2));
                         
-                        if (distance < closestDistance && distance < 50) {{ // Within 50 pixels
+                        // Increased search radius to 100 pixels for better reliability
+                        if (distance < closestDistance && distance < 100) {{
                             closestDistance = distance;
                             closestInput = input;
                         }}
                     }});
                     
                     if (closestInput) {{
-                        console.log('Found nearby input element:', closestInput.tagName, closestInput.id, closestInput.type);
+                        console.log('Found nearby interactive element:', closestInput.tagName, closestInput.id, closestInput.type, 'distance:', closestDistance.toFixed(1));
                         element = closestInput; // Use the nearby input instead
                     }} else {{
-                        console.log('No nearby input found, element might not be interactive');
-                        return null;
+                        console.log('No nearby interactive element found within 100px');
+                        // Don't return null yet - still try to generate a selector for the element we found
                     }}
                 }}
                 
@@ -166,28 +213,46 @@ class SelectorUtils:
         try:
             js_code = f"""
             (function() {{
-                const element = document.elementFromPoint({x}, {y});
-                if (!element) return null;
+                // Convert to viewport coordinates (same logic as main method)
+                let cx = {x};
+                let cy = {y};
                 
-                console.log('Simple selector - Found element:', element.tagName, element.id, element.className);
-                
-                // Just try the most basic selectors without validation
-                if (element.id) {{
-                    return '#' + element.id;
+                if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) {{
+                    cx = {x} - window.scrollX;
+                    cy = {y} - window.scrollY;
                 }}
                 
-                if (element.name) {{
-                    return '[name="' + element.name + '"]';
+                if (!Number.isFinite(cx) || !Number.isFinite(cy)) {{
+                    return null;
+                }}
+                
+                const element = document.elementFromPoint(cx, cy);
+                if (!element) return null;
+                
+                // Try to find interactive ancestor
+                const clickableSelector = 'a,button,input,select,textarea,[role="button"],[role="link"]';
+                const clickableAncestor = element.closest ? element.closest(clickableSelector) : null;
+                const targetElement = clickableAncestor || element;
+                
+                console.log('Simple selector - Found element:', targetElement.tagName, targetElement.id, targetElement.className);
+                
+                // Just try the most basic selectors without validation
+                if (targetElement.id) {{
+                    return '#' + targetElement.id;
+                }}
+                
+                if (targetElement.name) {{
+                    return '[name="' + targetElement.name + '"]';
                 }}
                 
                 // For inputs, just use the type
-                if (element.tagName.toLowerCase() === 'input' && element.type) {{
-                    return 'input[type="' + element.type + '"]';
+                if (targetElement.tagName.toLowerCase() === 'input' && targetElement.type) {{
+                    return 'input[type="' + targetElement.type + '"]';
                 }}
                 
                 // Try first class if available
-                if (element.className) {{
-                    const classes = element.className.split(' ').filter(c => c.length > 0);
+                if (targetElement.className) {{
+                    const classes = targetElement.className.split(' ').filter(c => c.length > 0);
                     if (classes.length > 0) {{
                         return '.' + classes[0];
                     }}

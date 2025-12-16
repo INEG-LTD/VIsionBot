@@ -63,13 +63,14 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic"):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
         self.gif_recorder = gif_recorder
         self.action_ledger = action_ledger or ActionLedger()
+        self.execute_action_callback = execute_action_callback  # Callback to execute actions through bot infrastructure
         self.last_failure_reason: Optional[str] = None
         
         # Click method configuration
@@ -489,6 +490,18 @@ class ActionExecutor:
                     # Get coordinates for the select element first
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
                     
+                    # If we have a detected element for this overlay, pass its selector to the handler
+                    if step.overlay_index is not None and plan.detected_elements and getattr(plan.detected_elements, "elements", None):
+                        for el in plan.detected_elements.elements:
+                            if getattr(el, "overlay_number", None) == step.overlay_index:
+                                element_label = getattr(el, "element_label", None)
+                                if element_label and (element_label.startswith("#") or element_label.startswith("[") or element_label.startswith(".")):
+                                    try:
+                                        setattr(self.select_handler, "selector_override", element_label)
+                                    except Exception:
+                                        pass
+                                break
+                    
                     # Use the goal's target_description for field matching (not the option value)
                     # The option value is separate and used for the actual selection
                     target_description = step.select_option_text
@@ -523,17 +536,41 @@ class ActionExecutor:
                             box=None,
                             page_info=page_info,
                         )
+                    # Trust the agent's decision to use select - try to handle it as a select
+                    # If it fails, let it fail naturally so the agent can decide what to do next
                     self.select_handler.handle_select_field(step, plan.detected_elements, page_info)
                     step_success = True  # Assume success for handlers that don't return values yet
+                    
+                    # Check if handler extracted available options (when no option was specified)
+                    available_options = getattr(self.select_handler, "available_options", None)
+                    pending_select_field = getattr(self.select_handler, "pending_select_field", None)
+                    pending_select_selector = getattr(self.select_handler, "pending_select_selector", None)
+                    
+                    # Build target element info with available options if present
+                    target_element_info = {
+                        "overlay_index": step.overlay_index,
+                        "select_option_text": step.select_option_text,
+                    }
+                    
+                    # If available options were extracted, include them so the agent can use them
+                    if available_options is not None:
+                        target_element_info["available_options"] = available_options
+                        target_element_info["pending_select"] = True
+                        target_element_info["select_field_description"] = pending_select_field
+                        target_element_info["select_selector"] = pending_select_selector
+                        # Clear the handler attributes after storing
+                        if hasattr(self.select_handler, "available_options"):
+                            delattr(self.select_handler, "available_options")
+                        if hasattr(self.select_handler, "pending_select_field"):
+                            delattr(self.select_handler, "pending_select_field")
+                        if hasattr(self.select_handler, "pending_select_selector"):
+                            delattr(self.select_handler, "pending_select_selector")
                     
                     # Record the select interaction
                     self.session_tracker.record_interaction(
                         InteractionType.SELECT,
                         coordinates=(step.x, step.y) if step.x and step.y else None,
-                        target_element_info={
-                            "overlay_index": step.overlay_index,
-                            "select_option_text": step.select_option_text,
-                        },
+                        target_element_info=target_element_info,
                         text_input=step.select_option_text,
                         success=step_success,
                     )
@@ -1110,6 +1147,53 @@ class ActionExecutor:
         
         return success
 
+    def _clear_input_field(self, x: Optional[int], y: Optional[int]) -> None:
+        """
+        Clear an input field before typing to ensure previous text is removed.
+        Tries multiple methods: JavaScript first, then keyboard select-all+delete.
+        
+        Args:
+            x: X coordinate of the input field
+            y: Y coordinate of the input field
+        """
+        if x is None or y is None:
+            return
+        
+        try:
+            # Try to clear using JavaScript first (most reliable)
+            element_js = f"""
+            (function() {{
+                const element = document.elementFromPoint({x}, {y});
+                if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
+                    element.focus();
+                    element.value = '';
+                    element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return true;
+                }}
+                return false;
+            }})();
+            """
+            cleared = self.page.evaluate(element_js)
+            if cleared:
+                print(f"  ✅ Cleared field using JavaScript")
+                time.sleep(0.1)
+                return
+        except Exception as e:
+            print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+        
+        # Fallback: click, select all, delete
+        try:
+            self.page.mouse.click(x, y)
+            time.sleep(0.2)
+            self.page.keyboard.press('Control+a')
+            time.sleep(0.1)
+            self.page.keyboard.press('Delete')
+            time.sleep(0.1)
+            print(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+        except Exception as e:
+            print(f"  ⚠️ Keyboard clear failed: {e}")
+
     def _execute_type(
         self,
         step: ActionStep,
@@ -1214,7 +1298,10 @@ class ActionExecutor:
             )
         
         try:
-            # Try to get element selector and use fill() which automatically clears the field
+            # Always clear the field before typing to ensure previous text is removed
+            self._clear_input_field(x, y)
+            
+            # Try to get element selector and use fill() or press_sequentially
             element_selector = None
             if x is not None and y is not None:
                 try:
@@ -1227,6 +1314,7 @@ class ActionExecutor:
                         # Use locator for more reliable filling
                         locator = self.page.locator(element_selector).first
                         # Type with random delay between keystrokes if text is short, otherwise fill
+                        # Note: fill() automatically clears, but we already cleared above for consistency
                         if len(step.text_to_type) < 50:
                             locator.press_sequentially(step.text_to_type, delay=random.randint(50, 150))
                         else:
@@ -1241,47 +1329,7 @@ class ActionExecutor:
             
             # Fallback to keyboard method if fill() didn't work
             if not element_selector:
-                # Try to clear using JavaScript first (most reliable)
-                if x is not None and y is not None:
-                    try:
-                        # Get element at coordinates and clear it via JavaScript
-                        element_js = f"""
-                        (function() {{
-                            const element = document.elementFromPoint({x}, {y});
-                            if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
-                                element.focus();
-                                element.value = '';
-                                element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                return true;
-                            }}
-                            return false;
-                        }})();
-                        """
-                        cleared = self.page.evaluate(element_js)
-                        if cleared:
-                            print(f"  ✅ Cleared field using JavaScript")
-                            time.sleep(0.1)
-                        else:
-                            # If JS clear didn't work, try clicking and keyboard method
-                            self.page.mouse.click(x, y)
-                            time.sleep(0.2)
-                            # Select all and delete
-                            self.page.keyboard.press('Control+a')
-                            time.sleep(0.1)
-                            self.page.keyboard.press('Delete')
-                            time.sleep(0.1)
-                    except Exception as e:
-                        print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
-                        # Fallback: click, select all, delete
-                        self.page.mouse.click(x, y)
-                        time.sleep(0.2)
-                        self.page.keyboard.press('Control+a')
-                        time.sleep(0.1)
-                        self.page.keyboard.press('Delete')
-                        time.sleep(0.1)
-                
-                # Type the new text
+                # Field was already cleared above, so just type the new text
                 self.page.keyboard.type(step.text_to_type, delay=50)
                 success = True
                 error_msg = None
@@ -1386,8 +1434,9 @@ class ActionExecutor:
         axis = "vertical"  # Default to vertical
         
         # Get current scroll position
-        current_scroll_x = self.page.evaluate("window.pageXOffset || window.scrollX") or 0
-        current_scroll_y = self.page.evaluate("window.pageYOffset || window.scrollY") or 0
+        # Normalize scroll positions to integers to satisfy PageInfo validation
+        current_scroll_x = int(self.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+        current_scroll_y = int(self.page.evaluate("window.pageYOffset || window.scrollY") or 0)
         
         # Try to get the interpreted scroll position from ScrollGoal
         interpreted_scroll = self._get_interpreted_scroll_position(direction)
@@ -1414,6 +1463,9 @@ class ActionExecutor:
                 target_y = current_scroll_y
                 axis = "horizontal"
             print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+        # Ensure targets are integers before validation
+        target_x = int(target_x)
+        target_y = int(target_y)
         
         # Trigger pre-action hooks early, before goal evaluations
         page_info = PageInfo(

@@ -20,6 +20,9 @@ from pydantic import BaseModel, Field
 from ai_utils import ReasoningLevel
 from browser_provider import BrowserConfig as BrowserProviderConfig
 
+# Backwards-compat: alias for older imports
+BrowserConfig = BrowserProviderConfig
+
 
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
@@ -204,6 +207,14 @@ class ElementConfig(BaseModel):
         default=False,
         description="Return only overlay index from planning"
     )
+    overlay_mode: str = Field(
+        default="interactive",
+        description="Overlay drawing mode: 'interactive' (default) or 'all'"
+    )
+    include_textless_overlays: bool = Field(
+        default=False,
+        description="Keep overlays with no text/aria/placeholder in LLM selection lists"
+    )
     overlay_selection_max_samples: Optional[int] = Field(
         default=None,
         description="Maximum samples for overlay selection"
@@ -269,6 +280,31 @@ class ErrorHandlingConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class ActFunctionConfig(BaseModel):
+    """
+    Configuration for act() function parameters used by the agent.
+    
+    This allows you to selectively disable certain parameters when the agent
+    calls the act() function during execution.
+    """
+    
+    enable_target_context_guard: bool = Field(
+        default=True,
+        description="Enable target_context_guard parameter (contextual element filtering)"
+    )
+    enable_modifier: bool = Field(
+        default=True,
+        description="Enable modifier parameter (ordinal selection, etc.)"
+    )
+    enable_additional_context: bool = Field(
+        default=True,
+        description="Enable additional_context parameter (supplementary information)"
+    )
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class BotConfig(BaseModel):
     """
     Main configuration object for BrowserVisionBot.
@@ -320,6 +356,10 @@ class BotConfig(BaseModel):
     error_handling: ErrorHandlingConfig = Field(
         default_factory=ErrorHandlingConfig,
         description="Error handling and recovery configuration"
+    )
+    act_function: ActFunctionConfig = Field(
+        default_factory=ActFunctionConfig,
+        description="Act function parameter configuration"
     )
     
     class Config:

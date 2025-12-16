@@ -17,6 +17,7 @@ from bot_config import (
     CacheConfig,
     RecordingConfig,
     ErrorHandlingConfig,
+    ActFunctionConfig,
 )
 
 # Browser provider
@@ -75,6 +76,7 @@ __all__ = [
     "CacheConfig",
     "RecordingConfig",
     "ErrorHandlingConfig",
+    "ActFunctionConfig",
     # Browser provider
     "BrowserProvider",
     "LocalPlaywrightProvider",
@@ -117,3 +119,4 @@ __all__ = [
     "EventLogger",
     "set_event_logger",
 ]
+

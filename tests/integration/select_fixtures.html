@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Select Fixture Playground</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.5; }
+    section { margin-bottom: 28px; padding: 16px; border: 1px solid #ddd; border-radius: 8px; }
+    h2 { margin-top: 0; }
+    label { display: block; margin-bottom: 6px; font-weight: 600; }
+    select, button, input { padding: 6px 10px; min-width: 220px; }
+    .hint { color: #555; font-size: 13px; margin-top: 6px; }
+    .custom-dropdown, .listbox-shell, .combo-shell { position: relative; max-width: 320px; }
+    .dropdown-options, .listbox-options, .combo-options {
+      position: absolute; top: 38px; left: 0; right: 0;
+      border: 1px solid #ccc; border-radius: 6px; background: #fff;
+      list-style: none; padding: 6px 0; margin: 0; box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+      z-index: 10;
+    }
+    .dropdown-options[hidden], .listbox-options[hidden], .combo-options[hidden] { display: none; }
+    .dropdown-options li, .listbox-options li, .combo-options li {
+      padding: 6px 10px; cursor: pointer;
+    }
+    .dropdown-options li:hover, .listbox-options li:hover, .combo-options li:hover { background: #f2f6ff; }
+  </style>
+</head>
+<body>
+  <h1>Select Field Playground</h1>
+  <p>Native and custom select patterns used to evaluate the select handler.</p>
+
+  <section>
+    <h2>1. Basic native select</h2>
+    <label for="basic-select">Favorite fruit</label>
+    <select id="basic-select" name="fruit">
+      <option value="apple">Apple</option>
+      <option value="banana">Banana</option>
+      <option value="cherry">Cherry</option>
+      <option value="dragonfruit">Dragonfruit</option>
+    </select>
+    <div class="hint">Straightforward &lt;select&gt; with simple options.</div>
+  </section>
+
+  <section>
+    <h2>2. Native select with placeholder and disabled option</h2>
+    <label for="placeholder-select">Choose a beverage</label>
+    <select id="placeholder-select" name="beverage">
+      <option value="" disabled selected>Select one...</option>
+      <option value="coffee">Coffee</option>
+      <option value="tea">Tea</option>
+      <option value="water" disabled>Water (disabled)</option>
+      <option value="juice">Juice</option>
+    </select>
+    <div class="hint">Includes disabled first option and a disabled choice.</div>
+  </section>
+
+  <section>
+    <h2>3. Native select with optgroups</h2>
+    <label for="optgroup-select">Pick a meal</label>
+    <select id="optgroup-select" name="meal">
+      <optgroup label="Breakfast">
+        <option value="pancakes">Pancakes</option>
+        <option value="omelette">Omelette</option>
+      </optgroup>
+      <optgroup label="Lunch">
+        <option value="salad">Salad</option>
+        <option value="sandwich">Sandwich</option>
+      </optgroup>
+      <optgroup label="Dinner">
+        <option value="pasta">Pasta</option>
+        <option value="steak">Steak</option>
+      </optgroup>
+    </select>
+    <div class="hint">Grouped options for label/value matching.</div>
+  </section>
+
+  <section>
+    <h2>4. Native multi-select</h2>
+    <label for="multi-select">Select multiple toppings</label>
+    <select id="multi-select" name="toppings" multiple size="5">
+      <option value="pepperoni">Pepperoni</option>
+      <option value="mushrooms">Mushrooms</option>
+      <option value="onions">Onions</option>
+      <option value="olives">Olives</option>
+      <option value="jalapenos">Jalapeños</option>
+    </select>
+    <div class="hint">Multiple selection enabled; size set to show all options.</div>
+  </section>
+
+  <section>
+    <h2>5. Native select with empty and long labels</h2>
+    <label for="long-label-select">Select environment</label>
+    <select id="long-label-select" name="environment">
+      <option value="">-- none set --</option>
+      <option value="dev">Development - local docker compose env</option>
+      <option value="staging">Staging - preprod shared cluster</option>
+      <option value="prod">Production - customer facing</option>
+    </select>
+    <div class="hint">Tests label vs value resolution and blank value handling.</div>
+  </section>
+
+  <section>
+    <h2>6. Custom dropdown (button + list)</h2>
+    <div class="custom-dropdown" data-dropdown>
+      <label for="custom-dropdown-trigger">Pick a color (custom)</label>
+      <button id="custom-dropdown-trigger" type="button" class="dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">
+        Choose a color
+      </button>
+      <ul class="dropdown-options" role="listbox" hidden>
+        <li role="option" data-value="red">Red</li>
+        <li role="option" data-value="green">Green</li>
+        <li role="option" data-value="blue">Blue</li>
+        <li role="option" data-value="purple">Purple</li>
+      </ul>
+    </div>
+    <div class="hint">Non-native dropdown using button + listbox.</div>
+  </section>
+
+  <section>
+    <h2>7. Custom listbox with div/role="option"</h2>
+    <div class="listbox-shell" data-listbox>
+      <label>Priority (custom listbox)</label>
+      <div class="listbox-display" tabindex="0" role="listbox" aria-expanded="false">
+        Select priority
+      </div>
+      <ul class="listbox-options" role="listbox" hidden>
+        <li role="option" data-value="low">Low</li>
+        <li role="option" data-value="medium">Medium</li>
+        <li role="option" data-value="high">High</li>
+      </ul>
+    </div>
+    <div class="hint">Div-based trigger with separate list container.</div>
+  </section>
+
+  <section>
+    <h2>8. Searchable combobox pattern</h2>
+    <div class="combo-shell" data-combobox>
+      <label for="combo-input">Search for an animal</label>
+      <input id="combo-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-owns="combo-list" placeholder="Type to filter..." />
+      <ul id="combo-list" class="combo-options" role="listbox" hidden>
+        <li role="option" data-value="cat">Cat</li>
+        <li role="option" data-value="dog">Dog</li>
+        <li role="option" data-value="rabbit">Rabbit</li>
+        <li role="option" data-value="parrot">Parrot</li>
+      </ul>
+    </div>
+    <div class="hint">ARIA combobox style: input with a filtered listbox.</div>
+  </section>
+
+  <script>
+    function closeAll() {
+      document.querySelectorAll('.dropdown-options, .listbox-options, .combo-options').forEach(el => el.hidden = true);
+      document.querySelectorAll('[aria-expanded]').forEach(el => el.setAttribute('aria-expanded', 'false'));
+    }
+
+    // Custom dropdown (button + listbox)
+    document.querySelectorAll('[data-dropdown]').forEach(drop => {
+      const trigger = drop.querySelector('.dropdown-trigger');
+      const list = drop.querySelector('.dropdown-options');
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = list.hidden === false;
+        closeAll();
+        list.hidden = open;
+        trigger.setAttribute('aria-expanded', String(!open));
+        if (!open) list.focus();
+      });
+      list.querySelectorAll('li').forEach(li => {
+        li.addEventListener('click', (e) => {
+          e.stopPropagation();
+          trigger.textContent = li.textContent;
+          trigger.dataset.value = li.dataset.value;
+          closeAll();
+        });
+      });
+    });
+
+    // Custom listbox (div trigger + ul)
+    document.querySelectorAll('[data-listbox]').forEach(shell => {
+      const display = shell.querySelector('.listbox-display');
+      const list = shell.querySelector('.listbox-options');
+      const toggle = () => {
+        const open = list.hidden === false;
+        closeAll();
+        list.hidden = open;
+        display.setAttribute('aria-expanded', String(!open));
+      };
+      display.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+      list.querySelectorAll('li').forEach(li => {
+        li.addEventListener('click', (e) => {
+          e.stopPropagation();
+          display.textContent = li.textContent;
+          display.dataset.value = li.dataset.value;
+          closeAll();
+        });
+      });
+    });
+
+    // Combobox with filtering
+    document.querySelectorAll('[data-combobox]').forEach(shell => {
+      const input = shell.querySelector('input[role="combobox"]');
+      const list = shell.querySelector('.combo-options');
+      const items = Array.from(list.querySelectorAll('li'));
+
+      const openList = () => {
+        list.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+      };
+      const closeList = () => {
+        list.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+      };
+
+      input.addEventListener('focus', () => { openList(); });
+      input.addEventListener('input', () => {
+        const value = input.value.toLowerCase();
+        let visibleCount = 0;
+        items.forEach(li => {
+          const show = li.textContent.toLowerCase().includes(value);
+          li.style.display = show ? 'block' : 'none';
+          if (show) visibleCount += 1;
+        });
+        if (visibleCount === 0) {
+          closeList();
+        } else {
+          openList();
+        }
+      });
+
+      items.forEach(li => {
+        li.addEventListener('click', (e) => {
+          e.stopPropagation();
+          input.value = li.textContent;
+          input.dataset.value = li.dataset.value;
+          closeList();
+        });
+      });
+    });
+
+    document.addEventListener('click', () => closeAll());
+  </script>
+</body>
+</html>
+
+
+
+

@@ -247,7 +247,18 @@ def _parse_value_target(command: str, keyword: str) -> Optional[tuple[str, Optio
 
 
 def parse_select_command(text: str) -> Optional[tuple[str, Optional[str]]]:
-    return _parse_value_target(text, "select")
+    result = _parse_value_target(text, "select")
+    if not result:
+        return None
+    
+    value, target = result
+    
+    # Strip common suffixes that aren't part of the actual option value
+    if value:
+        # Remove trailing "option", "choice", "item" etc.
+        value = re.sub(r'\s+(option|choice|item|selection)$', '', value, flags=re.IGNORECASE).strip()
+    
+    return value, target
 
 
 def parse_upload_command(text: str) -> Optional[tuple[str, Optional[str]]]:
@@ -493,6 +504,9 @@ def _build_value_target_intent(text: str, action: str) -> ActionIntent:
     }[action]
     parsed = parser(text)
     value, target = parsed if parsed else (None, None)
+    # Normalize empty strings to None so downstream handlers can detect missing values
+    value = value or None
+    target = target or None
 
     kw_cmd = parse_keyword_command(text)
     helper_text = kw_cmd[2] if kw_cmd and kw_cmd[0] == action else None

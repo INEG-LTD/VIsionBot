@@ -5,7 +5,7 @@ Step 2: LLM-based reactive goal determination that decides what to do RIGHT NOW
 based on what's visible in the viewport, not pre-planning.
 """
 
-from typing import Optional, List, ClassVar, Set, Union
+from typing import Optional, List, ClassVar, Set, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 import re
 
@@ -46,7 +46,6 @@ class NextAction(BaseModel):
         "stop",
         "open",
         "handle_select",
-        "handle_upload",
         "handle_datetime",
     }
 
@@ -99,7 +98,7 @@ class NextAction(BaseModel):
             if not body:
                 raise ValueError("subagents command requires a mode")
             action = f"subagents: {body}"
-        elif command in {"form", "select", "upload", "datetime", "stop", "open", "handle_select", "handle_upload", "handle_datetime"}:
+        elif command in {"form", "select", "upload", "datetime", "stop", "open", "handle_select", "handle_datetime"}:
             if not body:
                 raise ValueError(f"{command} command requires additional detail")
             action = f"{command}: {body}"
@@ -180,6 +179,7 @@ class ReactiveGoalDeterminer:
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
         image_detail: str = "low",
+        interaction_summary_limit: Optional[int] = None,
     ):
         """
         Initialize the reactive goal determiner.
@@ -190,6 +190,8 @@ class ReactiveGoalDeterminer:
                            Example: ["just press enter after you've typed a search term into a search field"]
             image_detail: Image detail level for vision API ("low" for faster, "high" for more accurate).
                          Default: "low" for better performance.
+            interaction_summary_limit: Max interactions to include in the prompt.
+                                       None means include all interactions. Default: None.
         """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -201,6 +203,7 @@ class ReactiveGoalDeterminer:
         self.reasoning_level: ReasoningLevel = reasoning
         self.image_detail = image_detail
         self._system_prompt_cache: dict[bool, str] = {}  # Cache system prompts by is_exploring
+        self.interaction_summary_limit = interaction_summary_limit
     
     def determine_next_action(
         self,
@@ -209,7 +212,8 @@ class ReactiveGoalDeterminer:
         is_exploring: bool = False,
         viewport_snapshot: Optional[BrowserState] = None,
         failed_actions: Optional[List[str]] = None,
-        ineffective_actions: Optional[List[str]] = None
+        ineffective_actions: Optional[List[str]] = None,
+        overlay_data: Optional[List[Dict[str, Any]]] = None
     ) -> tuple[Optional[str], bool, Optional[str]]:
         """
         Determine the single next action to take based on current state.
@@ -219,6 +223,7 @@ class ReactiveGoalDeterminer:
             screenshot: Current screenshot (viewport or full-page depending on is_exploring)
             is_exploring: If True, we're in exploration mode and screenshot is full-page
             viewport_snapshot: Optional viewport snapshot for comparison when exploring
+            overlay_data: Optional list of overlay element data with descriptions, SELECT_FIELD markers, options, etc.
             
         Returns:
             Tuple of (action_command, needs_exploration, reasoning):
@@ -243,7 +248,8 @@ class ReactiveGoalDeterminer:
                 missing_element,
                 viewport_snapshot,
                 failed_actions or [],
-                ineffective_actions or []
+                ineffective_actions or [],
+                overlay_data
             )
             
             if not response:
@@ -297,7 +303,8 @@ class ReactiveGoalDeterminer:
         missing_element: Optional[str],
         viewport_snapshot: Optional[BrowserState],
         failed_actions: List[str] = None,
-        ineffective_actions: List[str] = None
+        ineffective_actions: List[str] = None,
+        overlay_data: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[NextAction]:
         """
         Generate a single action.
@@ -313,7 +320,8 @@ class ReactiveGoalDeterminer:
                 missing_element,
                 viewport_snapshot,
                 failed_actions or [],
-                ineffective_actions or []
+                ineffective_actions or [],
+                overlay_data
             )
             action = generate_model(
                 prompt=user_prompt_text,
@@ -370,11 +378,83 @@ Your job is to look at the screenshot ({screenshot_note}) and decide:
 {exploration_rules}
 {base_knowledge_section}
 CRITICAL RULES:
-1. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
+1. **DROPDOWN/SELECT HANDLING - HIGHEST PRIORITY: When you see ANY dropdown, select field, combobox, or listbox WITH ACTUAL OPTIONS, you MUST use "select:" action, NEVER "click:". This is a CRITICAL rule that cannot be violated.**
+   - **HOW TO IDENTIFY: Look for elements with "SELECT_FIELD" marker OR elements showing "options=" in their description. ONLY use "select:" if the element has "options=" showing available choices.**
+   - **MANDATORY: If an element description contains "SELECT_FIELD" OR "options=" with actual options listed, it is a dropdown/select field and REQUIRES "select:" action**
+   - **IMPORTANT: If an element is a "tag=select" but does NOT have "options=" in its description, it may not have options available yet. In that case, use "click:" instead of "select:"**
+   - **⚠️ CRITICAL: WHEN SELECTING AN OPTION, YOU MUST USE ONE OF THE EXACT OPTIONS LISTED IN THE "options=" FIELD. DO NOT MAKE UP OR INVENT OPTION VALUES.**
+     * If an element shows: "options=[options: LinkedIn, METR's Website, METR Employee, Twitter, ...]" → You MUST select one of: "LinkedIn", "METR's Website", "METR Employee", "Twitter", etc.
+     * If an element shows: "options=[options: Please select one, LinkedIn, METR's Website, ...]" → You can select "LinkedIn" or "METR's Website", but NOT "Please select one" (that's a placeholder)
+     * **NEVER invent option values like "Online Search" if it's not in the options list**
+     * **ALWAYS check the options= field and use an exact match from that list**
+   - **EXAMPLES OF DROPDOWN INDICATORS (ONLY USE SELECT: IF OPTIONS ARE SHOWN):**
+     * Element shows: "SELECT_FIELD" → MUST use "select:" (SELECT_FIELD only appears when options are available)
+     * Element shows: "options=[options: LinkedIn, METR Website, ...]" → MUST use "select:" with one of the listed options
+     * Element shows: "tag=select" WITH "options=" → MUST use "select:"
+     * Element shows: "tag=select" WITHOUT "options=" → Use "click:" instead (no options available)
+     * Element shows: "role=combobox" or "role=listbox" WITH "options=" → MUST use "select:"
+     * Element shows: "role=combobox" or "role=listbox" WITHOUT "options=" → Use "click:" instead (no options available)
+   - **CORRECT USAGE:**
+     * ✅ "select: LinkedIn in referral source dropdown" (when element shows SELECT_FIELD or options=[options: LinkedIn, METR Website, ...] and LinkedIn is in the list)
+     * ✅ "select: METR's Website in referral source dropdown" (when element shows SELECT_FIELD or options=[options: LinkedIn, METR's Website, ...] and METR's Website is in the list)
+     * ✅ "select: Canada in country dropdown" (when element shows SELECT_FIELD or options=[options: Canada, USA, ...] and Canada is in the list)
+     * ✅ "click: location suggestion div" (when element is tag=div or tag=span without options= - it's a clickable suggestion, not a select field)
+   - **WRONG USAGE (DO NOT DO THIS):**
+     * ❌ "select: Online Search in referral dropdown" → WRONG! If "Online Search" is NOT in the options=[options: ...] list, you cannot use it
+     * ❌ "select: location suggestion" → WRONG! If element doesn't have SELECT_FIELD or options=, use "click:" instead
+     * ❌ "click: LinkedIn in referral dropdown" → WRONG! If element shows SELECT_FIELD or options=, must be "select: LinkedIn in referral dropdown"
+     * ❌ "select: option in dropdown" → WRONG! If element doesn't have SELECT_FIELD or options=, it's not a select field - use "click:" instead
+     * ❌ Making up option values that don't exist in the options= list → WRONG! Only use options that are explicitly shown
+   - **REMEMBER: Only use "select:" if the element has SELECT_FIELD marker OR "options=" in its description. If an element is a select/dropdown but doesn't have options=, use "click:" instead.**
+   - **REMEMBER: When you see "options=[options: ...]" or "SELECT_FIELD" in an element description, you MUST use "select:" with one of those exact options. Never invent or make up option values.**
+   - **REMEMBER: If an element is tag=select, role=combobox, or role=listbox but does NOT have "options=" or "SELECT_FIELD", it means options are not available - use "click:" instead.**
+2. **FILE UPLOAD HANDLING - HIGHEST PRIORITY: When you see ANY file input, upload control, or element for attaching files, you MUST use "upload:" action, NEVER "click:". This is a CRITICAL rule that cannot be violated.**
+   - **HOW TO IDENTIFY: Look for elements with "type=file", "tag=input" with "type=file", or elements showing file upload indicators in their description**
+   - **MANDATORY: If an element description contains "type=file", "tag=input" with "(type=file)", or shows file upload/attachment indicators, it is a file upload field and REQUIRES "upload:" action**
+   - **⚠️ CRITICAL: DO NOT MAKE UP OR INVENT FILENAMES. Only use a filename if:**
+     * The user explicitly provided a file path or filename in their request
+     * The user's goal explicitly mentions uploading a specific file
+     * You have a real, existing file path to use
+   - **WHEN NO FILE IS PROVIDED:**
+     * If the file upload field is OPTIONAL (not required for form submission), you may SKIP it and proceed with other form fields
+     * If the file upload field is REQUIRED and blocking form submission, use `upload: <target>` (e.g., "upload: file input" or "upload: ATTACH RESUME/CV button") - this will open the file picker for the user
+     * DO NOT create placeholder filenames like "resume.pdf" or "document.pdf" when the user hasn't provided a file
+   - **EXAMPLES OF FILE UPLOAD INDICATORS:**
+     * Element shows: "tag=input" with "(type=file)" → MUST use "upload:"
+     * Element shows: "type=file" → MUST use "upload:"
+     * Element text/aria-label contains: "upload", "attach", "browse", "choose file", "select file", "file" → MUST use "upload:"
+     * Element description mentions file upload, document upload, attachment, etc. → MUST use "upload:"
+   - **CORRECT USAGE:**
+     * ✅ "upload: /path/to/resume.pdf in file input" (when user provided a file path - use "in" to separate file from target)
+     * ✅ "upload: resume.pdf in ATTACH RESUME/CV button" (when user explicitly mentioned resume.pdf - use "in" to separate file from target)
+     * ✅ "upload: file input" (when no file provided but field is required - opens file picker)
+     * ✅ "upload: ATTACH RESUME/CV button" (when no file provided - opens file picker)
+     * ✅ "upload: document.pdf in upload field" (ONLY if user explicitly mentioned this file - use "in" to separate file from target)
+   - **WRONG USAGE (DO NOT DO THIS):**
+     * ❌ "upload: resume.pdf" → WRONG! Missing target element. Must be "upload: resume.pdf in <target>" when file is provided
+     * ❌ "click: file input" → WRONG! Must be "upload: file input" or "upload: <filename> in file input"
+     * ❌ "click: upload button" → WRONG! If it's a file upload control, use "upload: upload button"
+     * ❌ Making up placeholder filenames like "resume.pdf" when user didn't provide a file → WRONG!
+   - **REMEMBER: If you see a file input/upload control and use "click:" instead of "upload:", your answer is INVALID. Always check element descriptions for type=file, tag=input (type=file), or upload/attach/browse indicators.**
+   - **REMEMBER: Never invent or make up filenames. Only use filenames that the user explicitly provided or that exist in the user's request.**
+   - **REMEMBER: When a file IS provided, use "in" to separate it from the target: "upload: <filepath> in <target>". When NO file is provided, just use: "upload: <target>".**
+3. **TEXT INPUT HANDLING - CRITICAL: When typing into input fields, the previous text is automatically cleared before typing. You MUST type the complete, full desired text in a single type command. Do NOT assume you can append to existing text or modify it incrementally.**
+   - **HOW IT WORKS: The system automatically clears any existing text in the input field before typing your specified text. This means the field will contain ONLY the text you specify in your type command.**
+   - **CRITICAL: Always type the FULL desired text value, not just what needs to be added or changed.**
+   - **EXAMPLES:**
+     * ✅ If a field currently shows "City, State" and you want "New York, NY", use: "type: New York, NY in location input field" (NOT "type: New York, NY" or trying to modify incrementally)
+     * ✅ If a field shows "old@example.com" and you want "new@example.com", use: "type: new@example.com in email input field" (NOT just "new@example.com" or trying to edit the existing text)
+     * ✅ If a field is empty and you want "John Doe", use: "type: John Doe in name input field" (works the same whether field is empty or has existing text)
+   - **WRONG USAGE (DO NOT DO THIS):**
+     * ❌ Trying to type only the part that needs to change (e.g., typing "NY" when field has "City, State" and you want "New York, NY")
+     * ❌ Assuming you can append text to existing content
+     * ❌ Trying to modify text incrementally in multiple steps
+   - **REMEMBER: The field is automatically cleared before typing, so always provide the complete, final desired text value in your type command.**
+4. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
    - "go to X and click Y" → If you've clicked Y and are on Y's page, task is complete (don't go back to X)
    - "click the first article" → If you've clicked it and are viewing the article, task is complete
    - "navigate to homepage and click login" → If you're on the login page, task is complete (don't go back)
-2. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
+5. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
    - Examples: "extract the price" → "extract: price"
    - Examples: "get the stock price" → "extract: stock price"  
    - Examples: "find the current price" → "extract: current price"
@@ -384,20 +464,20 @@ CRITICAL RULES:
    - Examples: "display the results" → "extract: results"
    - Examples: "what are the top stocks?" → "extract: top stocks with prices and percentage change"
    - **CRITICAL: If data is already visible on the page and the user wants it extracted, use "extract:" immediately. Do not click/type/scroll unless needed to make the data visible first.**
-2. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
-3. Determine ONE action at a time - be reactive, not pre-planned
-4. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
-5. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
-6. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
-7. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
+6. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
+7. Determine ONE action at a time - be reactive, not pre-planned
+8. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
+9. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
+10. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
+11. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
    **CRITICAL: If the INTERACTIONS PERFORMED section shows a "defer" interaction that was "resumed", this means control was already given to the user and returned to the agent. DO NOT defer again - proceed with the next step in the task. Only defer if no defer action has been executed yet, or if the user explicitly requests another handoff.**
-8. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
-9. Format actions as executable commands:
+12. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
+13. Format actions as executable commands:
    - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch, list, show, display, return, output, print, read, scan, capture, obtain, acquire, present, report, summarize, detail, enumerate, itemize, catalog, record, document, save, export, download, copy, quote, cite) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price", "extract: top 5 stocks with prices and percentage change"
    - **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be specific** - e.g., "click: Google Search button", "click: first article link titled 'Introduction'", "click: search suggestion 'yahoo finance' link", "click: Accept all cookies button". NEVER use vague terms like 'first element', 'that button', or ambiguous text without element type like "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.).
    - **For TYPE commands: MUST include element type** - e.g., "type: John Doe in name input field", "type: john@example.com in email input field". NEVER use vague terms like 'the field' or 'it'.
    - **For PRESS commands: MUST be brief** - just the key name (e.g., "press: Enter", "press: Escape", "press: Tab"). Do NOT add descriptions or context.
-10. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
+14. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
 
 AVAILABLE COMMANDS:
 - extract: <description>  (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
@@ -425,37 +505,56 @@ AVAILABLE COMMANDS:
   Only issue this command when the current policy is blocking progress or after the user asks for a different parallelism mode.
 - scroll: <direction>  (e.g., "scroll: down", "scroll: up") - {"Use this ONLY in exploration mode" if is_exploring else "Use if needed elements aren't visible"}
 {"- DO NOT use type/click commands in exploration mode - element is not in viewport yet" if is_exploring else ""}
-{"- type: <value> in <specific field description>  (e.g., \"type: John Doe in name field\", \"type: john@example.com in email input field\") - Only use when NOT in exploration mode" if not is_exploring else ""}
-{"   * GOOD: \"type: John Doe in name field\"" if not is_exploring else ""}
-{"   * GOOD: \"type: john@example.com in email input field\"" if not is_exploring else ""}
-{"   * BAD: \"type: John Doe in field\" (too vague)" if not is_exploring else ""}
-{"   * BAD: \"type: John Doe in it\" (unclear)" if not is_exploring else ""}
-{"- click: <specific element description WITH element type>  (e.g., \"click: Google Search button\", \"click: first article link titled 'Introduction to Python'\", \"click: Accept all cookies button\", \"click: search suggestion 'yahoo finance' link\") - Only use when NOT in exploration mode" if not is_exploring else ""}
+{'- type: <value> in <specific field description>  (e.g., "type: John Doe in name field", "type: john@example.com in email input field") - Only use when NOT in exploration mode' if not is_exploring else ''}
+{'   * ⚠️ CRITICAL: The input field is automatically cleared before typing. Always type the COMPLETE, FULL desired text value, not just what needs to be added or changed. The field will contain ONLY the text you specify.' if not is_exploring else ''}
+{'   * GOOD: "type: John Doe in name field"' if not is_exploring else ''}
+{'   * GOOD: "type: john@example.com in email input field"' if not is_exploring else ''}
+{'   * GOOD: "type: New York, NY in location input field" (even if field currently shows "City, State" - the full desired value is typed)' if not is_exploring else ''}
+{'   * BAD: "type: John Doe in field" (too vague)' if not is_exploring else ''}
+{'   * BAD: "type: John Doe in it" (unclear)' if not is_exploring else ''}
+{'   * BAD: Trying to type only part of the text or modify incrementally (the field is cleared, so type the complete value)' if not is_exploring else ''}
+{'- click: <specific element description WITH element type>  (e.g., "click: Google Search button", "click: first article link titled "Introduction to Python"", "click: Accept all cookies button", "click: search suggestion "yahoo finance" link") - Only use when NOT in exploration mode' if not is_exploring else ''}
 {"   * CRITICAL: Always include element TYPE (button, link, div, input, etc.) in click commands" if not is_exploring else ""}
-{"   * GOOD: \"click: Google Search button\" (includes type: button)" if not is_exploring else ""}
-{"   * GOOD: \"click: first article link titled 'Introduction to Python'\" (includes type: link)" if not is_exploring else ""}
-{"   * GOOD: \"click: search suggestion 'yahoo finance' link\" (includes type: link)" if not is_exploring else ""}
-{"   * GOOD: \"click: Accept all cookies button\" (includes type: button)" if not is_exploring else ""}
-{"   * BAD: \"click: search suggestion 'yahoo finance'\" (missing element type - is it a link? button? div?)" if not is_exploring else ""}
-{"   * BAD: \"click: first element\" (too vague - what element? what type?)" if not is_exploring else ""}
-{"   * BAD: \"click: button\" (too vague - which button?)" if not is_exploring else ""}
-{"   * BAD: \"click: that button\" (unclear reference)" if not is_exploring else ""}
+{"   * ⚠️ CRITICAL DROPDOWN CHECK: Before using click:, ALWAYS check the element description for dropdown/select indicators. If you see SELECT_FIELD or options=, you MUST use select: instead of click:. However, if an element is tag=select, role=combobox, or role=listbox but does NOT have options= or SELECT_FIELD, use click: instead (options not available)." if not is_exploring else ""}
+{"   * ⚠️ CRITICAL FILE UPLOAD CHECK: Before using click:, ALWAYS check the element description for file upload indicators. If you see type=file, tag=input (type=file), or upload/attach/browse in the element description, you MUST use upload: instead of click:. Using click: on a file upload control is WRONG and will cause your answer to be invalid." if not is_exploring else ""}
+{"   * CRITICAL: Never use click to operate dropdowns/select/combobox/listbox; use select: ... instead" if not is_exploring else ""}
+{"   * CRITICAL: Never use click to operate file inputs/upload controls; use upload: ... instead" if not is_exploring else ""}
+{'   * Use select: for ANY option picking (native <select>, custom dropdowns, listboxes, comboboxes); only use click for non-option interactions' if not is_exploring else ''}
+{'   * HOW TO IDENTIFY SELECT FIELDS: Look for elements marked with SELECT_FIELD or elements showing options= in their description. ONLY use select: if options are shown.' if not is_exploring else ''}
+{'   * When you see "SELECT_FIELD" or "options=" in element descriptions, this is a dropdown that requires "select:" action' if not is_exploring else ''}
+{'   * REMEMBER: If an element shows "options=[options: ...]" or has SELECT_FIELD marker, it is a dropdown and requires "select:" action, NOT "click:"' if not is_exploring else ''}
+{'   * REMEMBER: If an element is tag=select, role=combobox, or role=listbox but does NOT have "options=" or "SELECT_FIELD", use "click:" instead (options not available)' if not is_exploring else ''}
+{'   * GOOD select: "select: Canada in country dropdown" (native select with SELECT_FIELD marker)' if not is_exploring else ''}
+{'   * GOOD select: "select: LinkedIn in referral source dropdown" (when element shows options=[options: LinkedIn, METR Website, ...])' if not is_exploring else ''}
+{'   * GOOD select: "select: Winter jacket size L in size dropdown" (placeholder native select)' if not is_exploring else ''}
+{'   * GOOD select: "select: Blue option in theme picker" (custom listbox/button)' if not is_exploring else ''}
+{'   * BAD click: "click: Canada in country dropdown" (should be select: ...)' if not is_exploring else ''}
+{'   * BAD click: "click: LinkedIn in referral dropdown" (should be select: LinkedIn in referral dropdown)' if not is_exploring else ''}
+{'   * BAD click: "click: Blue option in theme picker" (should be select: ...)' if not is_exploring else ''}
+{'   * GOOD: "click: Google Search button" (includes type: button)' if not is_exploring else ''}
+{'   * GOOD: "click: first article link titled "Introduction to Python"" (includes type: link)' if not is_exploring else ''}
+{'   * GOOD: "click: search suggestion "yahoo finance" link" (includes type: link)' if not is_exploring else ''}
+{'   * GOOD: "click: Accept all cookies button" (includes type: button)' if not is_exploring else ''}
+{'   * BAD: "click: search suggestion "yahoo finance"" (missing element type - is it a link? button? div?)' if not is_exploring else ''}
+{'   * BAD: "click: first element" (too vague - what element? what type?)' if not is_exploring else ''}
+{'   * BAD: "click: button" (too vague - which button?)' if not is_exploring else ''}
+{'   * BAD: "click: that button" (unclear reference)' if not is_exploring else ''}
 {"   IMPORTANT: If the user's goal contains ordinal information (first, second, third, etc.), PRESERVE IT and make it specific WITH element type:" if not is_exploring else ""}
-{"   - \"click: first article\" → \"click: first article link titled '<title>'\" or \"click: first article link in the list\" (NOT \"click: first article\" - must include type)" if not is_exploring else ""}
-{"   - \"click: second button\" → \"click: second submit button\" or \"click: second button labeled '<text>'\" (already includes type: button)" if not is_exploring else ""}
-{"   - \"click: third link\" → \"click: third link titled '<text>'\" or \"click: third navigation link\" (already includes type: link)" if not is_exploring else ""}
-{"   - \"click: search suggestion 'yahoo finance'\" → \"click: search suggestion 'yahoo finance' link\" or \"click: search suggestion 'yahoo finance' button\" (must specify type)" if not is_exploring else ""}
-{"- navigate: <url or site>  (e.g., \"navigate: https://news.ycombinator.com\") - Only use when the navigation history summary shows no way back/forward and no other tab already has the required page. Prefer taking advantage of history or existing tabs first." if not is_exploring else ""}
-{"- press: <key>  (e.g., \"press: Enter\", \"press: Escape\", \"press: Tab\") - MUST be brief, just the key name. Do NOT add descriptions or context." if not is_exploring else ""}
-{"   * GOOD: \"press: Enter\"" if not is_exploring else ""}
-{"   * GOOD: \"press: Escape\"" if not is_exploring else ""}
-{"   * BAD: \"press: Enter in the search input field\" (too descriptive - press commands should be brief)" if not is_exploring else ""}
-{"   * BAD: \"press: Enter to search\" (too descriptive - press commands should be brief)" if not is_exploring else ""}
-{"- form: <description>  (e.g., \"form: complete checkout form\") - Use when the task explicitly refers to filling an entire form or multiple related fields. Keep description precise." if not is_exploring else ""}
-{"- select: <option description>  (e.g., \"select: United States option in country dropdown\") - Use for dropdowns or select menus when a specific option must be chosen." if not is_exploring else ""}
-{"- upload: <file description>  (e.g., \"upload: resume.pdf using file input\") - Use when the workflow requires attaching a local file and the upload control is visible." if not is_exploring else ""}
-{"- datetime: <value and field>  (e.g., \"datetime: 2024-06-01 in start date picker\") - Use for date/time pickers that need structured input." if not is_exploring else ""}
-{"- back: <steps>  (e.g., \"back: 1\") and forward: <steps>  - Use when the navigation history summary shows the desired page is behind/ahead or when the user explicitly requests it. Defaults to 1 step if omitted." if not is_exploring else ""}
+{'   - "click: first article" → "click: first article link titled "<title>"" or "click: first article link in the list" (NOT "click: first article" - must include type)' if not is_exploring else ''}
+{'   - "click: second button" → "click: second submit button" or "click: second button labeled "<text>"" (already includes type: button)' if not is_exploring else ''}
+{'   - "click: third link" → "click: third link titled "<text>"" or "click: third navigation link" (already includes type: link)' if not is_exploring else ''}
+{'   - "click: search suggestion "yahoo finance"" → "click: search suggestion "yahoo finance" link" or "click: search suggestion "yahoo finance" button" (must specify type)' if not is_exploring else ''}
+{'- navigate: <url or site>  (e.g., "navigate: https://news.ycombinator.com") - Only use when the navigation history summary shows no way back/forward and no other tab already has the required page. Prefer taking advantage of history or existing tabs first.' if not is_exploring else ''}
+{'- press: <key>  (e.g., "press: Enter", "press: Escape", "press: Tab") - MUST be brief, just the key name. Do NOT add descriptions or context.' if not is_exploring else ''}
+{'   * GOOD: "press: Enter"' if not is_exploring else ''}
+{'   * GOOD: "press: Escape"' if not is_exploring else ''}
+{'   * BAD: "press: Enter in the search input field" (too descriptive - press commands should be brief)' if not is_exploring else ''}
+{'   * BAD: "press: Enter to search" (too descriptive - press commands should be brief)' if not is_exploring else ''}
+{'- form: <description>  (e.g., "form: complete checkout form") - Use when the task explicitly refers to filling an entire form or multiple related fields. Keep description precise.' if not is_exploring else ''}
+{'- select: <option description>  (e.g., "select: United States option in country dropdown", "select: LinkedIn in referral source dropdown") - **MANDATORY FOR DROPDOWNS/SELECTS WITH OPTIONS**. This is REQUIRED for picking options from dropdowns/select fields that have "SELECT_FIELD" marker or "options=" in their description. **CRITICAL: Only use select: if the element has SELECT_FIELD or options= in its description. If an element is tag=select, role=combobox, or role=listbox but does NOT have options= or SELECT_FIELD, use click: instead.** **⚠️ CRITICAL: When an element shows "options=[options: Option1, Option2, ...]" in its description, you MUST use one of those exact options. Never invent or make up option values that are not in the list. Check the options= field and use an exact match.**' if not is_exploring else ''}
+{'- upload: <target> or upload: <filepath> in <target>  (e.g., "upload: file input", "upload: resume.pdf in file input", "upload: ATTACH RESUME/CV button") - **MANDATORY FOR ALL FILE UPLOADS**. This is REQUIRED for attaching files to ANY file input, upload control, or file attachment element. Do NOT use click for these; if you use click on a file upload control, your answer is invalid. **CRITICAL: Before using click: on any element, check if it has type=file, tag=input (type=file), or upload/attach/browse indicators - if it does, you MUST use upload: instead.** When no file is provided, use "upload: <target>". When a file is provided, use "upload: <filepath> in <target>".' if not is_exploring else ''}
+{'- datetime: <value and field>  (e.g., "datetime: 2024-06-01 in start date picker") - Use for date/time pickers that need structured input.' if not is_exploring else ''}
+{'- back: <steps>  (e.g., "back: 1") and forward: <steps>  - Use when the navigation history summary shows the desired page is behind/ahead or when the user explicitly requests it. Defaults to 1 step if omitted.' if not is_exploring else ''}
 {"   * Confirm the target using the history summary (previous page, next page) before issuing back/forward." if not is_exploring else ""}
 # Focus system removed - no longer available
 
@@ -463,8 +562,8 @@ AVAILABLE COMMANDS:
 - Look at the screenshot carefully
 - {"Identify where the target element is in the full-page screenshot" if is_exploring else "Identify what's visible and what's needed"}
 {"- Compare target element position with current viewport position (scroll_y tells you current position)" if is_exploring else ""}
-{"- If target is ABOVE viewport → return \"scroll: up\"" if is_exploring else "- If target element is visible → interact with it"}
-{"- If target is BELOW viewport → return \"scroll: down\"" if is_exploring else "- If target element is NOT visible → scroll to reveal it"}
+{'- If target is ABOVE viewport → return "scroll: up"' if is_exploring else "- If target element is visible → interact with it"}
+{'- If target is BELOW viewport → return "scroll: down"' if is_exploring else "- If target element is NOT visible → scroll to reveal it"}
 - Don't plan ahead - just decide the immediate next action
 """
         # Cache the prompt
@@ -478,7 +577,8 @@ AVAILABLE COMMANDS:
         missing_element: Optional[str] = None,
         viewport_snapshot: Optional[BrowserState] = None,
         failed_actions: List[str] = None,
-        ineffective_actions: List[str] = None
+        ineffective_actions: List[str] = None,
+        overlay_data: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """Build prompt for determining next action"""
         
@@ -487,6 +587,9 @@ AVAILABLE COMMANDS:
         
         # Extract what still needs to be done from user prompt and interactions
         remaining_tasks = self._identify_remaining_tasks(state.interaction_history)
+        
+        # Check for pending select fields that need an option to be selected
+        pending_select_info = self._check_pending_select_fields(state.interaction_history)
         
         # Add failed and ineffective actions context
         ineffective_actions_context = ""
@@ -517,6 +620,102 @@ AVAILABLE COMMANDS:
             getattr(state, "url_pointer", None)
         )
         
+        # Format overlay information if available
+        overlay_context = ""
+        if overlay_data:
+            # Filter to only interactive/actionable elements (similar to what plan_generator does)
+            # Focus on elements that are likely to be interacted with
+            relevant_elements = []
+            for elem in overlay_data:
+                idx = elem.get("index")
+                tag = (elem.get("tagName") or "").lower()
+                role = (elem.get("role") or "").lower()
+                text = (elem.get("textContent") or "").strip()
+                aria = (elem.get("ariaLabel") or "").strip()
+                placeholder = (elem.get("placeholder") or "").strip()
+                select_options = elem.get("selectOptions") or ""
+                
+                # Include elements that are interactive or have useful text
+                is_select = tag == "select" or role in ("combobox", "listbox")
+                is_native_select = tag == "select"  # Native <select> elements
+                has_content = text or aria or placeholder or is_select
+                
+                if has_content:
+                    # Build description similar to plan_generator format
+                    parts = []
+                    parts.append(f"#{idx} tag={tag}")
+                    
+                    # Highlight SELECT_FIELD for native selects (always) or custom selects with options
+                    # Native <select> elements should always use select: action, even if options aren't shown
+                    # because the select handler can extract options from the DOM
+                    if is_native_select or (is_select and select_options):
+                        parts.append("SELECT_FIELD")
+                    
+                    if role and role != tag:
+                        parts.append(f"role={role}")
+                    
+                    if placeholder:
+                        parts.append(f'placeholder="{placeholder[:40]}"')
+                    
+                    # Include select options prominently
+                    if select_options:
+                        parts.append(f'options={select_options.strip()}')
+                    
+                    if text:
+                        parts.append(f'txt="{text[:60]}"')
+                    elif aria:
+                        parts.append(f'aria="{aria[:60]}"')
+                    
+                    description = " ".join(parts)
+                    
+                    # Add relationship/grouping information
+                    related_elements = elem.get("relatedElements", [])
+                    group_size = elem.get("groupSize", 0)
+                    if related_elements and group_size > 1:
+                        # Show which other elements are in the same group
+                        related_indices = [str(r) for r in related_elements[:5]]  # Limit to 5 for brevity
+                        if len(related_elements) > 5:
+                            related_indices.append(f"... ({group_size} total in group)")
+                        group_info = f"[GROUP: elements #{', '.join(related_indices)} belong to same question/group]"
+                        parts.append(group_info)
+                        description = " ".join(parts)
+                    
+                    # Add recommended action hint for elements with options
+                    action_hint = ""
+                    if is_native_select or (is_select and select_options):
+                        # Extract first real option (skip placeholder like "Please select one")
+                        options_text = select_options.strip()
+                        if options_text.startswith("[options:"):
+                            # Parse options from format: [options: Option1, Option2, ...]
+                            options_list = options_text[9:].rstrip("]").split(",")
+                            # Find first non-placeholder option
+                            for opt in options_list:
+                                opt_clean = opt.strip()
+                                if opt_clean and opt_clean.lower() not in ["please select one", "select one", "--", ""]:
+                                    action_hint = f" → Recommended: select: {opt_clean} in {tag} field"
+                                    break
+                        if not action_hint:
+                            action_hint = f" → Recommended: select: <option> in {tag} field"
+                    
+                    if action_hint:
+                        description += action_hint
+                    
+                    relevant_elements.append(description)
+            
+            if relevant_elements:
+                # Limit to most relevant elements (prioritize select fields, inputs, buttons)
+                # Show up to 30 elements to give good context without overwhelming
+                overlay_context = "\n\nAVAILABLE INTERACTIVE ELEMENTS (numbered overlays visible in screenshot):\n"
+                overlay_context += "These elements are marked with numbered red overlays in the screenshot.\n"
+                overlay_context += "Pay special attention to elements marked with SELECT_FIELD - these are dropdown/select fields that require 'select:' action.\n"
+                overlay_context += "Elements showing 'options=' have available options listed - use one of those exact options when selecting.\n"
+                overlay_context += "Elements with '→ Recommended: select:' show a suggested action format - follow this format when interacting with that element.\n"
+                overlay_context += "Elements with '[GROUP: elements #X, #Y, ...]' belong to the same question/group - clicking one when another in the group is already selected may be ineffective.\n\n"
+                for elem_desc in relevant_elements[:30]:  # Limit to 30 most relevant
+                    overlay_context += f"  • {elem_desc}\n"
+                if len(relevant_elements) > 30:
+                    overlay_context += f"  ... and {len(relevant_elements) - 30} more elements\n"
+        
         # Simplified user prompt - only essential context (rules/examples are in system prompt)
         prompt = f"""
 Determine the NEXT SINGLE ACTION to take based on:
@@ -541,6 +740,8 @@ WHAT'S BEEN DONE:
 
 {ineffective_actions_context if ineffective_actions_context else ""}
 {exploration_context if exploration_context else ""}
+{pending_select_info if pending_select_info else ""}
+{overlay_context if overlay_context else ""}
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
 
@@ -594,7 +795,9 @@ Look at the screenshot and determine the single next action to progress toward t
             return "No interactions yet."
         
         summary_parts = []
-        for i, interaction in enumerate(interactions[-3:], 1):  # Last 3 (reduced for speed)
+        limit = self.interaction_summary_limit
+        interactions_to_summarize = interactions if not limit or limit <= 0 else interactions[-limit:]
+        for i, interaction in enumerate(interactions_to_summarize, 1):
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
             
@@ -621,6 +824,42 @@ Look at the screenshot and determine the single next action to progress toward t
         
         return "\n".join(summary_parts) if summary_parts else "No interactions."
 
+    def _check_pending_select_fields(self, interactions: List[Interaction]) -> Optional[str]:
+        """
+        Check if there's a pending select field that needs an option to be selected.
+        Returns a formatted string with information about the pending select field and available options.
+        """
+        if not interactions:
+            return None
+        
+        # Check the most recent interactions for pending select fields
+        # Look at the last few interactions (in case the select was opened recently)
+        for interaction in reversed(interactions[-5:]):  # Check last 5 interactions
+            if interaction.interaction_type.value == "select":
+                target_info = interaction.target_element_info or {}
+                if target_info.get("pending_select") and target_info.get("available_options"):
+                    available_options = target_info.get("available_options", [])
+                    select_field = target_info.get("select_field_description", "select field")
+                    
+                    # Format available options for display
+                    option_texts = [opt.get('text', '') or opt.get('label', '') or opt.get('value', '') 
+                                   for opt in available_options if opt.get('text') or opt.get('label') or opt.get('value')]
+                    
+                    if option_texts:
+                        options_display = ', '.join(option_texts[:15])
+                        if len(option_texts) > 15:
+                            options_display += f" (and {len(option_texts) - 15} more)"
+                        
+                        return (
+                            f"\n🎯 PENDING SELECT FIELD:\n"
+                            f"A select field '{select_field}' was recently opened but no option was selected.\n"
+                            f"Available options: {options_display}\n"
+                            f"Your next action should be to select an appropriate option using: 'select: <option text>'\n"
+                            f"Choose the option that best matches the user's goal.\n"
+                        )
+        
+        return None
+    
     def _summarize_navigation_history(self, url_history: List[str], url_pointer: Optional[int]) -> str:
         """Provide a concise navigation summary for the prompt."""
         if not url_history:

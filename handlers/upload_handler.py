@@ -52,8 +52,6 @@ class UploadHandler:
             print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
             raise ValueError(f"No element found with overlay number {step.overlay_index} for upload field")
         target_description = element.description or element.element_label or element.element_type
-        if not step.upload_file_path:
-            raise ValueError("Upload action is missing a file path to upload")
 
         x, y = self._get_click_coordinates(step, elements, page_info)
         if x is not None and y is not None:
@@ -66,6 +64,29 @@ class UploadHandler:
             print(f"    Vision selector resolved for '{target_description}': {selector}")
         else:
             raise ValueError("Could not resolve upload field selector")
+
+        # If no file path is provided or the provided path does not exist, just click to open the picker and pause for user input.
+        from pathlib import Path
+        missing_or_manual = not step.upload_file_path or not Path(step.upload_file_path).expanduser().exists()
+        if missing_or_manual:
+            if step.upload_file_path:
+                print(f"    Provided upload path not found '{step.upload_file_path}'. Falling back to manual picker.")
+            else:
+                print("    No file path provided. Clicking upload control and waiting for user to select a file...")
+            try:
+                # Click the control to open the file picker
+                self.page.mouse.click(x, y)
+            except Exception as click_err:
+                print(f"    ❌ Could not click upload control: {click_err}")
+                raise
+
+            # Pause until the user confirms they've selected a file.
+            print("    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue...")
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                print("    ⚠️ Input unavailable or interrupted; continuing without confirmation.")
+            return
 
         try:
             self.page.set_input_files(selector, step.upload_file_path)

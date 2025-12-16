@@ -564,7 +564,7 @@ def _manual_parse_next_action(text: str, model_object_type: Type[BaseModel]) -> 
     if not action:
         # Fallback: grab the first command-like phrase (click:, type:, scroll:, press:, wait:, open:, back:, forward:, stop:)
         cmd_match = re.search(
-            r"\b(click|type|scroll|press|wait|open|back|forward|stop|handle_select|handle_upload|handle_datetime)\s*:?\s*[^\n\.]+",
+            r"\b(click|type|scroll|press|wait|open|back|forward|stop|handle_select|upload|handle_datetime)\s*:?\s*[^\n\.]+",
             cleaned,
             flags=re.IGNORECASE,
         )

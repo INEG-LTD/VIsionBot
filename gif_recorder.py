@@ -182,24 +182,45 @@ class GIFRecorder:
                 else:
                     highlighted_img = screenshot_img
                 
+                # Ensure image is in RGB mode (required for GIF format)
+                if highlighted_img.mode != 'RGB':
+                    highlighted_img = highlighted_img.convert('RGB')
+                
                 pil_frames.append(highlighted_img)
                 durations.append(frame.duration_ms)
+            
+            # Validate that we have frames and durations
+            if not pil_frames:
+                print("⚠️ No frames to save in GIF")
+                return None
+            
+            if len(pil_frames) != len(durations):
+                print(f"⚠️ Frame count ({len(pil_frames)}) doesn't match duration count ({len(durations)})")
+                return None
             
             # Generate GIF filename
             timestamp = int(time.time())
             gif_filename = f"bot_interaction_{self.session_id}_{timestamp}.gif"
             gif_path = os.path.join(self.output_dir, gif_filename)
             
-            # Save as GIF with high quality
+            # Ensure output directory exists
+            os.makedirs(self.output_dir, exist_ok=True)
+            
+            # Save as GIF (quality parameter is not supported for GIF format)
+            # Duration can be a single value or a list (one per frame)
             pil_frames[0].save(
                 gif_path,
                 save_all=True,
                 append_images=pil_frames[1:],
                 duration=durations,
                 loop=0,  # Infinite loop
-                optimize=True,
-                quality=95
+                optimize=True
             )
+            
+            # Verify file was created
+            if not os.path.exists(gif_path):
+                print(f"⚠️ GIF file was not created at {gif_path}")
+                return None
             
             return gif_path
             

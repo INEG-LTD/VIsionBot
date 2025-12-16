@@ -210,6 +210,12 @@ def _detail_snapshot(element: Dict[str, Any]) -> str:
     tag = _get_text_field(element, "tagName").lower()
     role = _get_text_field(element, "role").lower()
     text = re.sub(r"\s+", " ", _combined_text(element))[:80]
+    
+    # Include select options if available
+    select_opts = _get_text_field(element, "selectOptions")
+    if select_opts:
+        return f"tag={tag} role={role} text='{text}' {select_opts}"
+    
     return f"tag={tag} role={role} text='{text}'"
 
 

@@ -18,3 +18,4 @@ recursive-include window_mgmt *.py
 
 # Exclude caches and compiled artifacts
 global-exclude __pycache__ *.py[co] *.so .DS_Store
+

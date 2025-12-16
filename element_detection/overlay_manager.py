@@ -2,7 +2,6 @@
 Manages numbered overlays for element detection.
 """
 from typing import List, Dict, Any
-import time
 
 from playwright.sync_api import Page
 
@@ -63,6 +62,150 @@ class OverlayManager:
                 return attrs;
             }}
 
+            // Find the associated label/question text for form elements (inputs, radios, checkboxes, selects)
+            // This helps distinguish between similar options like "Yes" for different questions
+            function findAssociatedLabel(element) {{
+                const tagName = element.tagName.toLowerCase();
+                const inputTypes = ['input', 'select', 'textarea'];
+                
+                // Check if element is a form element or contains one (like label containing input)
+                let inputElement = element;
+                if (!inputTypes.includes(tagName)) {{
+                    // Check if element contains an input
+                    const nestedInput = element.querySelector('input, select, textarea');
+                    if (nestedInput) {{
+                        inputElement = nestedInput;
+                    }} else {{
+                        // Not a form element and doesn't contain one, skip
+                        return '';
+                    }}
+                }}
+                
+                // 1. Check aria-labelledby attribute (on the input element)
+                const labelledBy = inputElement.getAttribute('aria-labelledby');
+                if (labelledBy) {{
+                    const labelEl = document.getElementById(labelledBy);
+                    if (labelEl) {{
+                        const labelText = (labelEl.textContent || labelEl.innerText || '').trim();
+                        if (labelText) {{
+                            return labelText.substring(0, 150);
+                        }}
+                    }}
+                }}
+                
+                // 2. Check aria-label attribute (on the input element)
+                const ariaLabel = inputElement.getAttribute('aria-label');
+                if (ariaLabel && ariaLabel.trim()) {{
+                    return ariaLabel.trim().substring(0, 150);
+                }}
+                
+                // 3. Check for wrapping label element
+                let parent = inputElement.parentElement;
+                while (parent && parent !== document.body && parent.tagName.toLowerCase() !== 'form') {{
+                    if (parent.tagName.toLowerCase() === 'label') {{
+                        const labelText = (parent.textContent || parent.innerText || '').trim();
+                        const elemText = (inputElement.textContent || inputElement.value || '').trim();
+                        let questionText = labelText;
+                        if (elemText && labelText.includes(elemText)) {{
+                            questionText = labelText.replace(elemText, '').trim();
+                        }}
+                        if (questionText) {{
+                            return questionText.substring(0, 150);
+                        }}
+                        break;
+                    }}
+                    parent = parent.parentElement;
+                }}
+                
+                // 4. Check for label element with 'for' attribute pointing to the input element's id
+                if (inputElement.id) {{
+                    const labelFor = document.querySelector('label[for="' + inputElement.id + '"]');
+                    if (labelFor) {{
+                        const labelText = (labelFor.textContent || labelFor.innerText || '').trim();
+                        if (labelText) {{
+                            return labelText.substring(0, 150);
+                        }}
+                    }}
+                }}
+                
+                // 5. Check for fieldset legend
+                parent = inputElement.parentElement;
+                while (parent && parent !== document.body) {{
+                    if (parent.tagName.toLowerCase() === 'fieldset') {{
+                        const legend = parent.querySelector('legend');
+                        if (legend) {{
+                            const legendText = (legend.textContent || legend.innerText || '').trim();
+                            if (legendText) {{
+                                return legendText.substring(0, 150);
+                            }}
+                        }}
+                        break;
+                    }}
+                    parent = parent.parentElement;
+                }}
+                
+                // 6. For radio/checkbox in lists, find question text from parent container
+                // Start from the original element (which might be a label/li) to find the question
+                const inputType = inputElement.type || '';
+                if (inputType === 'radio' || inputType === 'checkbox') {{
+                    // Look up the DOM tree starting from the original element to find the question
+                    parent = element.parentElement;
+                    let depth = 0;
+                    while (parent && parent !== document.body && depth < 4) {{
+                        // Look for siblings before the parent that contain the question
+                        let sibling = parent.previousElementSibling;
+                        let siblingDepth = 0;
+                        while (sibling && siblingDepth < 3) {{
+                            const siblingText = (sibling.textContent || sibling.innerText || '').trim();
+                            // Skip if sibling contains common option text like "Yes", "No", "Other"
+                            const commonOptions = ['yes', 'no', 'other', 'ok', 'cancel'];
+                            const lowerText = siblingText.toLowerCase();
+                            const isOption = commonOptions.some(opt => lowerText === opt || lowerText.startsWith(opt + ' ') || lowerText === opt);
+                            
+                            // If sibling has question-like text (long, contains question words, or has ?)
+                            if (siblingText && !isOption && (siblingText.length > 10 || siblingText.includes('?'))) {{
+                                // Check if it looks like a question
+                                const questionWords = ['are', 'is', 'do', 'does', 'will', 'can', 'would', 'when', 'what', 'where', 'who', 'how', 'which'];
+                                const hasQuestionWord = questionWords.some(word => siblingText.toLowerCase().includes(word));
+                                if (hasQuestionWord || siblingText.includes('?') || siblingText.length > 20) {{
+                                    // Clean up the text (remove special characters at the end)
+                                    const cleaned = siblingText.replace(/[✱*]+/g, '').trim();
+                                    return cleaned.substring(0, 150);
+                                }}
+                            }}
+                            sibling = sibling.previousElementSibling;
+                            siblingDepth++;
+                        }}
+                        
+                        // Check parent's text content - look for question text before the options
+                        const parentText = (parent.textContent || parent.innerText || '').trim();
+                        const elemText = (element.textContent || element.value || '').trim();
+                        if (parentText && elemText && parentText !== elemText) {{
+                            // Try to extract just the question part (before common options)
+                            const parentWithoutOptions = parentText.replace(/(Yes|No|Other|YesNoOther)/gi, '').replace(/[✱*]+/g, '').trim();
+                            if (parentWithoutOptions.length > 10) {{
+                                const questionWords = ['are', 'is', 'do', 'does', 'will', 'can', 'would', 'when', 'what', 'where', 'who', 'how', 'which'];
+                                const hasQuestionWord = questionWords.some(word => parentWithoutOptions.toLowerCase().includes(' ' + word + ' '));
+                                if (hasQuestionWord || parentWithoutOptions.includes('?') || parentWithoutOptions.length > 20) {{
+                                    // Split by newlines or take first sentence
+                                    const parts = parentWithoutOptions.split(/[\\n\\r]/);
+                                    const firstPart = parts[0].trim();
+                                    if (firstPart.length > 10) {{
+                                        return firstPart.substring(0, 150);
+                                    }}
+                                    return parentWithoutOptions.substring(0, 150);
+                                }}
+                            }}
+                        }}
+                        
+                        parent = parent.parentElement;
+                        depth++;
+                    }}
+                }}
+                
+                return '';
+            }}
+
             // Function to create a numbered overlay
             function createNumberedOverlay(element, index, coords) {{
                 const rect = element.getBoundingClientRect();
@@ -107,6 +250,47 @@ class OverlayManager:
                 document.body.appendChild(border);
                 document.body.appendChild(label);
                 
+                // Find associated label for form elements
+                const fieldLabel = findAssociatedLabel(element);
+                
+                // For select elements, include available options in description
+                // Also detect custom select elements (combobox, listbox) even if they don't have options visible yet
+                let selectOptions = '';
+                const role = element.getAttribute('role') || '';
+                const isNativeSelect = element.tagName.toLowerCase() === 'select';
+                const isCustomSelect = role === 'combobox' || role === 'listbox';
+                
+                if (isNativeSelect && element.options) {{
+                    // For select fields, show more options (up to 15) to help the agent choose from available options
+                    // Filter out placeholder options like "Please select one", "Select one", etc.
+                    const opts = Array.from(element.options)
+                        .filter(opt => !opt.disabled)
+                        .map(opt => (opt.textContent || opt.value || '').trim())
+                        .filter(t => t && t !== 'Select one' && t !== 'Please select' && t !== '--' && t !== '')
+                        .slice(0, 15);  // Show up to 15 options (increased from 6) to give agent more choices
+                    if (opts.length > 0) {{
+                        selectOptions = ' [options: ' + opts.join(', ') + (element.options.length > opts.length + 1 ? '...' : '') + ']';
+                    }}
+                }} else if (isCustomSelect) {{
+                    // For custom selects, try to find options in the DOM if available
+                    // Some custom selects have options visible in the DOM even when closed
+                    try {{
+                        const optionElements = element.querySelectorAll('[role="option"], option, li[data-value], div[data-value]');
+                        if (optionElements.length > 0) {{
+                            const opts = Array.from(optionElements)
+                                .slice(0, 15)  // Show up to 15 options (increased from 6)
+                                .map(opt => (opt.textContent || opt.getAttribute('data-value') || '').trim())
+                                .filter(t => t && t !== 'Select one' && t !== 'Please select' && t !== '--' && t !== '');
+                            if (opts.length > 0) {{
+                                selectOptions = ' [options: ' + opts.join(', ') + (optionElements.length > opts.length ? '...' : '') + ']';
+                            }}
+                        }}
+                    }} catch (e) {{
+                        // If we can't extract options, still mark it as a select field
+                        selectOptions = ' [custom select/dropdown]';
+                    }}
+                }}
+                
                 // Return element info with pre-calculated normalized coordinates
                 return {{
                     index: index,
@@ -114,7 +298,8 @@ class OverlayManager:
                     description: element.tagName.toLowerCase() + 
                                 (element.textContent ? ': ' + element.textContent.trim().substring(0, 50) : '') +
                                 (element.placeholder ? ' [' + element.placeholder + ']' : '') +
-                                (element.type ? ' (type=' + element.type + ')' : ''),
+                                (element.type ? ' (type=' + element.type + ')' : '') +
+                                selectOptions,
                     tagName: element.tagName.toLowerCase(),
                     type: element.type || '',
                     textContent: element.textContent?.trim().substring(0, 100) || '',
@@ -125,8 +310,13 @@ class OverlayManager:
                     name: element.getAttribute('name') || '',
                     ariaLabel: element.getAttribute('aria-label') || '',
                     href: element.getAttribute('href') || '',
+                    fieldLabel: fieldLabel,  // Associated label/question text for form elements
                     contextText: collectContextText(element),
-                    dataAttributes: collectDataAttributes(element)
+                    dataAttributes: collectDataAttributes(element),
+                    selectOptions: selectOptions,  // Store select options
+                    cssSelector: element.id ? '#' + element.id : 
+                                element.getAttribute('name') ? '[name="' + element.getAttribute('name') + '"]' :
+                                element.getAttribute('data-testid') ? '[data-testid="' + element.getAttribute('data-testid') + '"]' : null
                 }};
             }}
             
@@ -246,6 +436,52 @@ class OverlayManager:
             }});
             
             console.log(`Created ${{elementData.length}} numbered overlays`);
+            
+            // Post-process: Find element relationships and group information
+            // This helps the agent understand which elements belong together
+            elementData.forEach((elem, idx) => {{
+                const relationships = [];
+                const elemName = elem.name || '';
+                const elemFieldLabel = elem.fieldLabel || '';
+                const elemType = elem.type || '';
+                const elemTag = elem.tagName || '';
+                
+                // Find elements in the same group
+                elementData.forEach((otherElem, otherIdx) => {{
+                    if (idx === otherIdx) return;
+                    
+                    const otherName = otherElem.name || '';
+                    const otherFieldLabel = otherElem.fieldLabel || '';
+                    const otherType = otherElem.type || '';
+                    const otherTag = otherElem.tagName || '';
+                    
+                    // Same radio group (same name attribute)
+                    if (elemType === 'radio' && otherType === 'radio' && elemName && elemName === otherName) {{
+                        relationships.push(otherIdx);
+                    }}
+                    // Same checkbox group (same name, though checkboxes can have multiple)
+                    else if (elemType === 'checkbox' && otherType === 'checkbox' && elemName && elemName === otherName) {{
+                        relationships.push(otherIdx);
+                    }}
+                    // Same question/field label (belong to same question)
+                    else if (elemFieldLabel && elemFieldLabel === otherFieldLabel && elemFieldLabel.length > 10) {{
+                        // Only group if they're form elements (inputs, radios, checkboxes, selects)
+                        const isFormElement = ['input', 'select', 'textarea'].includes(elemTag) || 
+                                            elemType === 'radio' || elemType === 'checkbox';
+                        const isOtherFormElement = ['input', 'select', 'textarea'].includes(otherTag) || 
+                                                   otherType === 'radio' || otherType === 'checkbox';
+                        if (isFormElement && isOtherFormElement) {{
+                            relationships.push(otherIdx);
+                        }}
+                    }}
+                }});
+                
+                if (relationships.length > 0) {{
+                    elem.relatedElements = relationships;
+                    elem.groupSize = relationships.length + 1; // Include self
+                }}
+            }});
+            
             return elementData;
         }})();
         """

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Selector Coordinate Test Fixtures</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+        }
+        
+        .test-section {
+            margin: 40px 0;
+            padding: 20px;
+            border: 1px solid #ccc;
+            min-height: 200px;
+        }
+        
+        .wrapper {
+            padding: 10px;
+            background-color: #f0f0f0;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .invisible {
+            visibility: hidden;
+        }
+        
+        /* Spacer to force scrolling */
+        .spacer {
+            height: 1500px;
+            background: linear-gradient(to bottom, #fff, #f0f0f0);
+        }
+        
+        /* Non-interactive wrapper scenarios */
+        .section-wrapper {
+            padding: 20px;
+            border: 2px solid #blue;
+        }
+        
+        .div-wrapper {
+            padding: 15px;
+            background: #e8e8e8;
+        }
+    </style>
+</head>
+<body>
+    <h1>Selector Coordinate Test Fixtures</h1>
+    
+    <!-- Test 1: Input inside non-interactive section wrapper -->
+    <div class="test-section">
+        <h2>1. Input inside section wrapper</h2>
+        <section class="section-wrapper">
+            <input type="text" id="wrapped-input" name="wrapped-input" value="test value">
+        </section>
+    </div>
+    
+    <!-- Test 2: Select inside multiple div wrappers -->
+    <div class="test-section">
+        <h2>2. Select inside nested div wrappers</h2>
+        <div class="div-wrapper">
+            <div class="div-wrapper">
+                <select id="nested-select" name="nested-select">
+                    <option value="">Choose one</option>
+                    <option value="option1">Option 1</option>
+                    <option value="option2">Option 2</option>
+                </select>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Test 3: Button inside paragraph (non-interactive wrapper) -->
+    <div class="test-section">
+        <h2>3. Button inside paragraph wrapper</h2>
+        <p class="wrapper">
+            <button id="wrapped-button" name="wrapped-btn">Click Me</button>
+        </p>
+    </div>
+    
+    <!-- Test 4: Input with nearby hidden element -->
+    <div class="test-section">
+        <h2>4. Input with nearby hidden element (should not interfere)</h2>
+        <div style="position: relative;">
+            <input type="text" class="hidden" id="hidden-input" value="hidden">
+            <input type="text" id="visible-input" name="visible-input" value="visible" style="margin-left: 10px;">
+        </div>
+    </div>
+    
+    <!-- Test 5: Elements requiring coordinate conversion (scroll scenario) -->
+    <div class="spacer"></div>
+    
+    <div class="test-section">
+        <h2>5. Scrolled element (tests viewport coordinate conversion)</h2>
+        <input type="email" id="scrolled-input" name="scrolled-email" placeholder="email@example.com">
+        <textarea id="scrolled-textarea" name="scrolled-text">Scroll me</textarea>
+    </div>
+    
+    <!-- Test 6: Select with role attribute (ARIA) -->
+    <div class="test-section">
+        <h2>6. Custom select with role attribute</h2>
+        <div class="wrapper">
+            <div role="combobox" id="custom-combobox" aria-expanded="false">
+                <input type="text" id="combobox-input" name="combobox-input" placeholder="Type to search">
+            </div>
+        </div>
+    </div>
+    
+    <!-- Test 7: Element with data-testid (should be prioritized) -->
+    <div class="test-section">
+        <h2>7. Input with data-testid attribute</h2>
+        <section>
+            <input type="text" id="testid-input" name="testid-input" data-testid="unique-test-field" value="testid">
+        </section>
+    </div>
+    
+    <!-- Test 8: Multiple inputs close together (nearby search test) -->
+    <div class="test-section">
+        <h2>8. Multiple inputs - nearby search (80px apart)</h2>
+        <div style="position: relative; height: 100px;">
+            <input type="text" id="input-left" name="left-input" value="left" style="position: absolute; left: 0; top: 0;">
+            <div style="position: absolute; left: 80px; top: 40px; padding: 10px; background: #ccc;">
+                Non-interactive div (click here should find input-left)
+            </div>
+            <input type="text" id="input-right" name="right-input" value="right" style="position: absolute; right: 0; top: 0;">
+        </div>
+    </div>
+    
+    <!-- Test 9: Link inside non-interactive wrapper -->
+    <div class="test-section">
+        <h2>9. Link inside section wrapper</h2>
+        <section class="section-wrapper">
+            <a href="#" id="wrapped-link" class="test-link">Click this link</a>
+        </section>
+    </div>
+    
+    <!-- Test 10: Textarea with complex wrapper structure -->
+    <div class="test-section">
+        <h2>10. Textarea in complex wrapper</h2>
+        <div class="div-wrapper">
+            <p>
+                <span>
+                    <textarea id="wrapped-textarea" name="wrapped-textarea" rows="3">Complex wrapper test</textarea>
+                </span>
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        // Log coordinates for debugging
+        document.addEventListener('click', (e) => {
+            console.log('Click at:', e.clientX, e.clientY, 'Element:', e.target.tagName, e.target.id);
+        });
+    </script>
+</body>
+</html>
+
+
+
+

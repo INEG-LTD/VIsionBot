@@ -287,6 +287,8 @@ class BrowserVisionBot:
         self.max_coordinate_overlays = config.elements.max_coordinate_overlays
         self.merge_overlay_selection = config.elements.merge_overlay_selection
         self.overlay_only_planning = config.elements.overlay_only_planning
+        self.overlay_mode = getattr(config.elements, "overlay_mode", "interactive")
+        self.include_textless_overlays = getattr(config.elements, "include_textless_overlays", False)
         
         _overlay_max_samples = config.elements.overlay_selection_max_samples
         self.overlay_selection_max_samples = (
@@ -321,6 +323,11 @@ class BrowserVisionBot:
         self.stuck_detector_weight_no_progress = config.stuck_detector.weight_no_progress
         self.stuck_detector_weight_error_spiral = config.stuck_detector.weight_error_spiral
         self.stuck_detector_weight_high_confidence_no_progress = config.stuck_detector.weight_high_confidence_no_progress
+        
+        # Extract act function configuration
+        self.act_enable_target_context_guard = config.act_function.enable_target_context_guard
+        self.act_enable_modifier = config.act_function.enable_modifier
+        self.act_enable_additional_context = config.act_function.enable_additional_context
         
         # Auto-run actions on page load (opt-in)
         self._auto_on_load_enabled: bool = False
@@ -672,7 +679,16 @@ class BrowserVisionBot:
                 pass
         
         # Initialize action executor with deduper, GIF recorder, and action ledger
-        self.action_executor: ActionExecutor = ActionExecutor(page, self.session_tracker, self.page_utils, self.deduper, self.gif_recorder, self.action_ledger)
+        # Pass a callback so action executor can execute actions through bot infrastructure
+        self.action_executor: ActionExecutor = ActionExecutor(
+            page, 
+            self.session_tracker, 
+            self.page_utils, 
+            self.deduper, 
+            self.gif_recorder, 
+            self.action_ledger,
+            execute_action_callback=self._execute_action_via_bot
+        )
         
         # Plan generator for AI planning prompts
         self.plan_generator: PlanGenerator = PlanGenerator(
@@ -681,6 +697,7 @@ class BrowserVisionBot:
             merge_overlay_selection=self.merge_overlay_selection,
             return_overlay_only=self.overlay_only_planning,
             overlay_selection_max_samples=self.overlay_selection_max_samples,
+            include_textless_overlays=self.include_textless_overlays,
         )
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
@@ -700,6 +717,33 @@ class BrowserVisionBot:
                 self._attach_page_load_handler()
         except Exception:
             pass
+    
+    def _execute_action_via_bot(self, action_command: str) -> bool:
+        """
+        Execute an action command through the bot's infrastructure.
+        This allows the action executor to execute actions (like click) using
+        the full bot infrastructure (overlay detection, element finding, etc.)
+        
+        Args:
+            action_command: The action command to execute (e.g., "click: Basle-Country, CHE")
+            
+        Returns:
+            bool: True if action succeeded, False otherwise
+        """
+        try:
+            result = self.act(
+                goal_description=action_command,
+                additional_context="",
+                target_context_guard=None,
+                modifier=None,
+                max_attempts=3,  # Fewer attempts for auto-converted actions
+                max_retries=0,  # No retries for auto-converted actions
+                allow_non_clickable_clicks=True,
+            )
+            return result.success if result else False
+        except Exception as e:
+            print(f"    ⚠️ Error executing auto-converted action '{action_command}': {e}")
+            return False
 
     def stop_gif_recording(self) -> Optional[str]:
         """Stop GIF recording and return the path to the generated GIF"""
@@ -1276,22 +1320,6 @@ class BrowserVisionBot:
             # Add action to history
             self._add_to_command_history(goal_description)
             
-            # Focus system removed - no longer handling focus commands
-            
-            # Check for dedup actions
-            dedup_result = self._handle_dedup_commands(goal_description)
-            if dedup_result is not None:
-                self.action_ledger.complete_action(action_id, success=dedup_result)
-                self.execution_timer.end_command()
-                duration = time.time() - start_time
-                return _create_result(
-                    dedup_result,
-                    "Deduplication command executed successfully" if dedup_result else "Deduplication command failed",
-                    action_id=action_id,
-                    duration=duration,
-                    additional_metadata={"command_type": "dedup"}
-                )
-            
             # Check for ref actions
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
@@ -1422,7 +1450,9 @@ class BrowserVisionBot:
         show_completion_reasoning_every_iteration: bool = False,
         strict_mode: bool = False,
         clarification_callback: Optional[Callable[[str], str]] = None,
-        max_clarification_rounds: int = 3
+        max_clarification_rounds: int = 3,
+        interaction_summary_limit_completion: Optional[int] = None,
+        interaction_summary_limit_action: Optional[int] = None,
     ) -> AgentResult:
         """
         Execute a task autonomously (Step 1: Basic Reactive Agent).
@@ -1453,6 +1483,10 @@ class BrowserVisionBot:
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            These rules influence what actions the agent takes.
                            Example: ["just press enter after you've typed a search term into a search field"]
+            interaction_summary_limit_completion: Max interactions to feed into completion evaluation prompts.
+                                                  None means include all interactions. Default: None.
+            interaction_summary_limit_action: Max interactions to feed into next-action prompts.
+                                              None means include all interactions. Default: None.
             
         Returns:
             AgentResult object containing:
@@ -1591,6 +1625,11 @@ class BrowserVisionBot:
                 stuck_detector_weight_no_progress=self.stuck_detector_weight_no_progress,
                 stuck_detector_weight_error_spiral=self.stuck_detector_weight_error_spiral,
                 stuck_detector_weight_high_confidence_no_progress=self.stuck_detector_weight_high_confidence_no_progress,
+                act_enable_target_context_guard=self.act_enable_target_context_guard,
+                act_enable_modifier=self.act_enable_modifier,
+                act_enable_additional_context=self.act_enable_additional_context,
+                interaction_summary_limit_completion=interaction_summary_limit_completion,
+                interaction_summary_limit_action=interaction_summary_limit_action,
             )
             controller.max_iterations = max_iterations
             
@@ -2472,50 +2511,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             confidence=1.0,
         )
 
-    def _build_click_selection_plan(
-        self,
-        *,
-        goal_description: str,
-        element_data: List[Dict[str, Any]],
-        screenshot_with_overlays: Optional[bytes],
-        page_info: PageInfo,
-        semantic_hint: Optional[SemanticTarget],
-    ) -> Optional[VisionPlan]:
-        """Use lightweight overlay selection to build a single-click plan."""
-        if not element_data:
-            return None
-
-        overlay_idx = self.plan_generator.select_best_overlay(
-            goal_description,
-            element_data,
-            semantic_hint=semantic_hint,
-            screenshot=screenshot_with_overlays,
-        )
-
-        if overlay_idx is None:
-            print("[PlanGen] ❌ Overlay selection failed to identify a target")
-            return None
-
-        matching_data = next((elem for elem in element_data if elem.get("index") == overlay_idx), None)
-        if not matching_data:
-            print(f"[PlanGen] ❌ Selected overlay #{overlay_idx} missing in element data")
-            return None
-
-        action_step = ActionStep(action=ActionType.CLICK, overlay_index=overlay_idx)
-        detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
-
-        confidence = 0.0
-        reasoning = f"Selected overlay #{overlay_idx} that best matches the goal."
-
-        print(f"[PlanGen] 🎯 Click selection chose overlay #{overlay_idx}")
-
-        return VisionPlan(
-            detected_elements=detected_elements,
-            action_steps=[action_step],
-            reasoning=reasoning,
-            confidence=confidence,
-        )
-
     def _collect_overlay_data(
         self,
         goal_description: str,
@@ -2535,7 +2530,10 @@ Return only the extracted text that appears in the text content above. Do not ma
             except Exception:
                 pass
 
-        element_data = self.overlay_manager.create_numbered_overlays(page_info, mode="interactive") or []
+        element_data = self.overlay_manager.create_numbered_overlays(
+            page_info,
+            mode=self.overlay_mode,
+        ) or []
 
         # Focus system removed - no longer filtering by focus context
         self._pre_dedup_element_data = element_data.copy() if element_data else []
@@ -3060,10 +3058,12 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
         intent = parse_action_intent(goal_description)
-        if not intent or intent.action != "upload" or not intent.value:
+        if not intent or intent.action != "upload":
             return None
 
-        target_hint_raw = intent.target_text or helper or intent.helper_text
+        # Use target_text, helper, helper_text, or value (in that order) as target hint
+        # When format is "upload: <target>" (no file), value contains the target
+        target_hint_raw = intent.target_text or helper or intent.helper_text or intent.value
         target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
             print("ℹ️ UPLOAD command missing target hint – falling back")
@@ -3080,7 +3080,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.HANDLE_UPLOAD,
-            action_kwargs={"upload_file_path": intent.value},
+            action_kwargs={"upload_file_path": intent.value or None},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
         )
@@ -3431,90 +3431,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         # Goal system removed - no-op
         return
 
-    def _generate_plan(
-        self,
-        goal_description: str,
-        additional_context: str,
-        screenshot: bytes,
-        page_info: PageInfo,
-        target_context_guard: Optional[str] = None,
-    ) -> Optional[VisionPlan]:
-        """Generate an action plan using numbered element detection"""
-
-        # Disable context guards while running in agent mode to avoid repeated guard blocks
-        if self._agent_mode:
-            target_context_guard = None
-
-        # Goal system removed - always do detection
-        needs_detection = True
-
-        semantic_hint = self._get_semantic_target(goal_description)
-        print(f"[PlanGen] semantic_hint={'yes' if semantic_hint else 'no'} for '{goal_description}'")
-
-        dedup_context = self._build_dedup_prompt_context(goal_description)
-
-        if not needs_detection:
-            print("🚫 Skipping element detection - goal doesn't require it")
-            # Create action plan without element detection
-            # In agent mode, limit to 1 step for strict action execution
-            max_steps = 1 if self._agent_mode else None
-            
-            plan = self.plan_generator.create_plan(
-                goal_description=goal_description,
-                additional_context=additional_context,
-                detected_elements=PageElements(elements=[]),
-                page_info=page_info,
-                screenshot=screenshot,
-                active_goal=None,
-                retry_goal=None,
-                page=self.page,
-                command_history=self.command_history,
-                dedup_context=dedup_context,
-                target_context_guard=target_context_guard,
-                max_steps=max_steps,
-            )
-            return plan
-
-        element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
-
-        if not element_data:
-            print("❌ No interactive elements found for overlays")
-            return None
-
-        # Step 3: Generate plan with element indices (and optional filtered overlay list)
-        # In agent mode, limit to 1 step for strict action execution
-        max_steps = 1 if self._agent_mode else None
-        
-        plan = self.plan_generator.create_plan_with_element_indices(
-            goal_description=goal_description,
-            additional_context=additional_context,
-            element_data=element_data,
-            screenshot_with_overlays=screenshot_with_overlays,
-            page_info=page_info,
-            active_goal=None,
-            retry_goal=None,
-            page=self.page,
-            command_history=self.command_history,
-            semantic_hint=semantic_hint,
-            dedup_context=dedup_context,
-            target_context_guard=target_context_guard,
-            max_steps=max_steps,
-        )
-
-        if plan:
-            try:
-                plan_payload = plan.model_dump()
-            except AttributeError:
-                plan_payload = plan.dict()
-            except Exception as e:
-                plan_payload = f"<unable to serialize plan: {e}>"
-            print(f"[PlanGen] Plan response: {plan_payload}")
-
-        # Step 4: Clean up overlays after plan generation
-        self.overlay_manager.remove_overlays()
-
-        return plan
-
+ 
     # -------------------- Public memory helpers (general) --------------------
     # Memory store methods removed - deduplication now handled by focus manager
 

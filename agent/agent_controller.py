@@ -119,6 +119,13 @@ class AgentController:
         stuck_detector_weight_no_progress: float = 0.2,
         stuck_detector_weight_error_spiral: float = 0.2,
         stuck_detector_weight_high_confidence_no_progress: float = 0.1,
+        # Act function parameter configuration
+        act_enable_target_context_guard: bool = True,
+        act_enable_modifier: bool = True,
+        act_enable_additional_context: bool = True,
+        # Interaction summarization
+        interaction_summary_limit_completion: Optional[int] = None,
+        interaction_summary_limit_action: Optional[int] = None,
     ):
         """
         Initialize agent controller.
@@ -135,6 +142,16 @@ class AgentController:
                                             Note: Set to False primarily for debugging purposes, as sequential execution
                                             makes it easier to trace the execution flow and understand which LLM call
                                             is running at any given time.
+            act_enable_target_context_guard: If True, allow the agent to use target_context_guard parameter in act() calls.
+                                            This parameter enables contextual element filtering. Default: True.
+            act_enable_modifier: If True, allow the agent to use modifier parameter in act() calls.
+                                This parameter enables ordinal selection (e.g., "first", "second"). Default: True.
+            act_enable_additional_context: If True, allow the agent to use additional_context parameter in act() calls.
+                                          This parameter provides supplementary information for planning. Default: True.
+            interaction_summary_limit_completion: Max interactions to feed into completion evaluation.
+                                                  None means include all interactions. Default: None.
+            interaction_summary_limit_action: Max interactions to feed into action determination.
+                                              None means include all interactions. Default: None.
         """
         self.bot = bot
         # Access event logger from bot
@@ -187,6 +204,8 @@ class AgentController:
         self.strict_mode = strict_mode
         self.clarification_callback = clarification_callback
         self.max_clarification_rounds = max_clarification_rounds
+        self.interaction_summary_limit_completion = interaction_summary_limit_completion
+        self.interaction_summary_limit_action = interaction_summary_limit_action
         self._user_inputs: List[Dict[str, Any]] = []
         self._requirement_flags: Dict[str, bool] = {}
         self._original_user_prompt: str = ""
@@ -209,6 +228,12 @@ class AgentController:
             weight_error_spiral=stuck_detector_weight_error_spiral,
             weight_high_confidence_no_progress=stuck_detector_weight_high_confidence_no_progress,
         )
+        
+        # Store act function parameter configuration
+        # These flags control which parameters are passed to bot.act() during execution
+        self.act_enable_target_context_guard = act_enable_target_context_guard
+        self.act_enable_modifier = act_enable_modifier
+        self.act_enable_additional_context = act_enable_additional_context
 
         self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
         agent_reasoning = getattr(bot, "agent_reasoning_level", None)
@@ -457,6 +482,7 @@ class AgentController:
             strict_mode=self.strict_mode,
             model_name=self.agent_model_name,
             reasoning_level=self.agent_reasoning_level,
+            interaction_summary_limit=self.interaction_summary_limit_completion,
         )
         
         if not self.bot.started:
@@ -566,6 +592,7 @@ class AgentController:
                 base_knowledge=self.base_knowledge,
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
+                interaction_summary_limit=self.interaction_summary_limit_action,
             )
             
             # 2.3. Check for queued action first (doesn't need LLM)
@@ -609,18 +636,21 @@ class AgentController:
                         """Run next action determination"""
                         if self.track_ineffective_actions:
                             try:
-                                if self.failed_actions:
-                                    self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
-                                if self.ineffective_actions:
-                                    self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                                # Filter out scroll actions from noise
+                                failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
+                                ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
+                                if failed_non_scroll:
+                                    self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(failed_non_scroll)}")
+                                if ineffective_non_scroll:
+                                    self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
                             except Exception:
                                 pass
                         action, needs_exploration, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             is_exploring=False,  # Start with viewport mode
-                            failed_actions=self.failed_actions if self.track_ineffective_actions else [],
-                            ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
+                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
                         # Store reasoning for next interaction
                         if reasoning:
@@ -1180,7 +1210,9 @@ class AgentController:
                 page_changed = True
                 if self.detect_ineffective_actions:
                     page_changed = self._page_state_changed(state_before, state_after)
-                is_click_action = current_action.lower().startswith("click:")
+                lower_action = current_action.lower()
+                is_click_action = lower_action.startswith("click:")
+                is_scroll_action = lower_action.startswith("scroll:")
                 
                 
                 # Only track ineffective actions if the feature is enabled
@@ -1237,7 +1269,7 @@ class AgentController:
                             except Exception:
                                 pass
                             # Add to failed actions list (avoid trying this again)
-                            if current_action not in self.failed_actions:
+                            if not is_scroll_action and current_action not in self.failed_actions:
                                 self.failed_actions.append(current_action)
                                 try:
                                     self.event_logger.system_info("Added to failed actions list (will avoid in future iterations)")
@@ -2197,40 +2229,50 @@ class AgentController:
                 ordinal_index = max(int(match.group(1)) - 1, 0)
                 ordinal_word = f"{ordinal_index + 1}"
         
-        # If ordinal found, add to modifier
-        if ordinal_index is not None:
+        # If ordinal found, add to modifier (only if modifier is enabled)
+        if ordinal_index is not None and self.act_enable_modifier:
             # Format: "first" -> ["ordinal:0"], "second" -> ["ordinal:1"]
             params["modifier"] = [f"ordinal:{ordinal_index}"]
             
-            # Add to additional_context for better planning
-            params["additional_context"] = f"Target is the {ordinal_word} element in the list/collection. "
+            # Add to additional_context for better planning (only if additional_context is enabled)
+            if self.act_enable_additional_context:
+                params["additional_context"] = f"Target is the {ordinal_word} element in the list/collection. "
         
-        # Extract collection hints (article, button, link, etc.)
-        collection_patterns = {
-            "article": r"\barticle\b",
-            "button": r"\bbutton\b",
-            "link": r"\blink\b",
-            "item": r"\bitem\b",
-            "entry": r"\bentry\b",
-            "row": r"\brow\b",
-        }
-        
-        found_collections = []
-        for collection, pattern in collection_patterns.items():
-            if re.search(pattern, action_lower):
-                found_collections.append(collection)
-        
-        if found_collections:
-            collection_context = f"Looking for a {', '.join(found_collections)}. "
-            params["additional_context"] += collection_context
+        # Extract collection hints (article, button, link, etc.) - only if additional_context is enabled
+        if self.act_enable_additional_context:
+            collection_patterns = {
+                "article": r"\barticle\b",
+                "button": r"\bbutton\b",
+                "link": r"\blink\b",
+                "item": r"\bitem\b",
+                "entry": r"\bentry\b",
+                "row": r"\brow\b",
+            }
+            
+            found_collections = []
+            for collection, pattern in collection_patterns.items():
+                if re.search(pattern, action_lower):
+                    found_collections.append(collection)
+            
+            if found_collections:
+                collection_context = f"Looking for a {', '.join(found_collections)}. "
+                params["additional_context"] += collection_context
         
         # Keyword mode is the default (click:, type:, etc.) - no need to specify
         
-        # Add target context guard for ordinal selection
+        # Add target context guard for ordinal selection (only if target_context_guard is enabled)
         # This helps the plan generator filter to the correct ordinal position
-        if ordinal_index is not None:
+        if ordinal_index is not None and self.act_enable_target_context_guard:
             # Guard: element must be at the specified position in a list/collection
             params["target_context_guard"] = f"Element must be the {ordinal_word} in the list/collection"
+        
+        # If any parameter is disabled, ensure it's set to None/empty
+        if not self.act_enable_target_context_guard:
+            params["target_context_guard"] = None
+        if not self.act_enable_modifier:
+            params["modifier"] = None
+        if not self.act_enable_additional_context:
+            params["additional_context"] = ""
         
         # NOTE: We do NOT add the original user prompt to additional_context
         # The plan generator should focus ONLY on the immediate goal at hand,

@@ -48,7 +48,13 @@ def validate_and_clamp_coordinates(x: int, y: int, page_width: int, page_height:
     
     return x, y
 
-def get_gemini_box_2d_center_pixels(box_2d: List[int], page_width: int, page_height: int) -> Tuple[int, int]:
+def get_gemini_box_2d_center_pixels(
+    box_2d: List[int],
+    page_width: int,
+    page_height: int,
+    doc_width: int | None = None,
+    doc_height: int | None = None,
+) -> Tuple[int, int]:
     """
     Get the center point of a Gemini box_2d in pixel coordinates.
 
@@ -70,21 +76,21 @@ def get_gemini_box_2d_center_pixels(box_2d: List[int], page_width: int, page_hei
                for coord in [y_min, x_min, y_max, x_max]):
         return 0, 0
 
-    # Check if coordinates are already pixel coordinates (unlikely to be > 1000 for normalized)
+    # Decide interpretation: normalized (0-1000) vs pixel.
+    # IMPORTANT: Overlays are normalized using VIEWPORT dimensions, not document dimensions.
+    # So we must denormalize using the same viewport dimensions for consistency.
     max_coord = max(abs(y_min), abs(x_min), abs(y_max), abs(x_max))
-    if max_coord > 1000:
-        # These are already pixel coordinates
+    normalized_mode = max_coord <= 2000  # allow some slack for oversized normalized values
+
+    if normalized_mode:
+        center_x_norm = (x_min + x_max) / 2
+        center_y_norm = (y_min + y_max) / 2
+        # Use viewport dimensions (page_width/page_height) not document dimensions
+        center_x = int(center_x_norm / 1000.0 * page_width)
+        center_y = int(center_y_norm / 1000.0 * page_height)
+    else:
         center_x = int((x_min + x_max) / 2)
         center_y = int((y_min + y_max) / 2)
-        return center_x, center_y
-
-    # Convert normalized coordinates (0-1000) to pixels
-    center_x_norm = (x_min + x_max) / 2
-    center_y_norm = (y_min + y_max) / 2
-
-    # Scale to actual pixel coordinates
-    center_x = int(center_x_norm / 1000.0 * page_width)
-    center_y = int(center_y_norm / 1000.0 * page_height)
 
     # Clamp to page bounds
     # center_x = clamp_coordinate(center_x, 0, page_width - 1)

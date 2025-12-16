@@ -81,6 +81,7 @@ class CompletionContract:
         *,
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
+        interaction_summary_limit: Optional[int] = None,
     ):
         self.user_prompt = user_prompt
         self.allow_partial_completion = allow_partial_completion
@@ -92,6 +93,7 @@ class CompletionContract:
         else:
             reasoning = ReasoningLevel.coerce(reasoning_level)
         self.reasoning_level: ReasoningLevel = reasoning
+        self.interaction_summary_limit = interaction_summary_limit
     
     def evaluate(
         self,
@@ -406,7 +408,9 @@ The rewritten prompt explicitly states what constitutes completion - follow it e
         extraction_count = 0
         successful_extractions = []
         
-        for i, interaction in enumerate(interactions[-10:], 1):  # Last 10 interactions
+        limit = self.interaction_summary_limit
+        interactions_to_summarize = interactions if not limit or limit <= 0 else interactions[-limit:]
+        for i, interaction in enumerate(interactions_to_summarize, 1):
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
             
