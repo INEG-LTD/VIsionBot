@@ -305,6 +305,22 @@ class ActFunctionConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class UserMessagesConfig(BaseModel):
+    """Configuration for user-facing messages."""
+    
+    file_upload_prompt: str = Field(
+        default="    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue...",
+        description="Message shown when waiting for user to select a file for upload"
+    )
+    file_upload_interrupted: str = Field(
+        default="    ⚠️ Input unavailable or interrupted; continuing without confirmation.",
+        description="Message shown when file upload input is interrupted or unavailable"
+    )
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class BotConfig(BaseModel):
     """
     Main configuration object for BrowserVisionBot.
@@ -360,6 +376,10 @@ class BotConfig(BaseModel):
     act_function: ActFunctionConfig = Field(
         default_factory=ActFunctionConfig,
         description="Act function parameter configuration"
+    )
+    user_messages: UserMessagesConfig = Field(
+        default_factory=UserMessagesConfig,
+        description="User-facing messages configuration"
     )
     
     class Config:

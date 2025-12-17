@@ -1297,7 +1297,9 @@ class AgentController:
                 )
                 
                 if success:
-                    print(f"✅ Action completed: {current_action}")
+                    # Only show in debug mode
+                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                        print(f"✅ Action completed: {current_action}")
                     self._log_event(
                         "action_completed",
                         action=current_action,

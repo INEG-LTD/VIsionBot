@@ -63,7 +63,7 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils
@@ -72,6 +72,7 @@ class ActionExecutor:
         self.action_ledger = action_ledger or ActionLedger()
         self.execute_action_callback = execute_action_callback  # Callback to execute actions through bot infrastructure
         self.last_failure_reason: Optional[str] = None
+        self.user_messages_config = user_messages_config  # Store user messages config
         
         # Click method configuration
         if preferred_click_method not in ["programmatic", "mouse"]:
@@ -98,7 +99,7 @@ class ActionExecutor:
             # Fallback if DateTimeHandler hasn't been updated yet
             self.datetime_handler = None
         self.select_handler = SelectHandler(page)
-        self.upload_handler = UploadHandler(page)
+        self.upload_handler = UploadHandler(page, user_messages_config=user_messages_config)
         self.selector_utils = SelectorUtils(page)
         # ContextGuard doesn't need element_analyzer anymore
         self.context_guard = ContextGuard(page, None)
@@ -1014,7 +1015,9 @@ class ActionExecutor:
                 self.last_click_dom_signature == current_dom_sig):
                 # Switch to alternative method for retry
                 preferred_method = "programmatic" if self.preferred_click_method == "mouse" else "mouse"
-                print(f"  🔄 Retry detected: same element, page unchanged. Switching to {preferred_method} click method")
+                # Only show in debug mode
+                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                    print(f"  🔄 Retry detected: same element, page unchanged. Switching to {preferred_method} click method")
         
         # print(f"Elements: {elements.model_dump_json()}")
         # print(f"Step: {step.model_dump_json()}")
@@ -1071,13 +1074,16 @@ class ActionExecutor:
                     success = True
                     click_method_used = "programmatic"
                 except Exception as selector_error:
-                    print(f"  ⚠️ Programmatic click failed ({selector_error}), trying mouse click fallback")
+                    # Only show in debug mode
+                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                        print(f"  ⚠️ Programmatic click failed ({selector_error}), trying mouse click fallback")
                     # Fallback to mouse click
                     try:
                         self.page.mouse.click(x, y)
                         success = True
                         click_method_used = "mouse"
-                        print("  ✅ Fallback mouse click succeeded")
+                        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                            print("  ✅ Fallback mouse click succeeded")
                     except Exception as mouse_error:
                         error_msg = f"Both programmatic ({selector_error}) and mouse ({mouse_error}) clicks failed"
             else:
@@ -1088,7 +1094,9 @@ class ActionExecutor:
                     success = True
                     click_method_used = "mouse"
                 except Exception as mouse_error:
-                    print(f"  ⚠️ Mouse click failed ({mouse_error}), trying programmatic click fallback")
+                    # Only show in debug mode
+                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                        print(f"  ⚠️ Mouse click failed ({mouse_error}), trying programmatic click fallback")
                     # Fallback to programmatic click if selector available
                     if target_selector:
                         try:
@@ -1096,7 +1104,8 @@ class ActionExecutor:
                             element.click(timeout=5000)
                             success = True
                             click_method_used = "programmatic"
-                            print("  ✅ Fallback programmatic click succeeded")
+                            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                                print("  ✅ Fallback programmatic click succeeded")
                         except Exception as selector_error:
                             error_msg = f"Both mouse ({mouse_error}) and programmatic ({selector_error}) clicks failed"
                     else:
@@ -1176,11 +1185,15 @@ class ActionExecutor:
             """
             cleared = self.page.evaluate(element_js)
             if cleared:
-                print(f"  ✅ Cleared field using JavaScript")
+                # Only show in debug mode
+                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                    print(f"  ✅ Cleared field using JavaScript")
                 time.sleep(0.1)
                 return
         except Exception as e:
-            print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
         
         # Fallback: click, select all, delete
         try:
@@ -1190,9 +1203,13 @@ class ActionExecutor:
             time.sleep(0.1)
             self.page.keyboard.press('Delete')
             time.sleep(0.1)
-            print(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
         except Exception as e:
-            print(f"  ⚠️ Keyboard clear failed: {e}")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"  ⚠️ Keyboard clear failed: {e}")
 
     def _execute_type(
         self,
@@ -1324,7 +1341,9 @@ class ActionExecutor:
                     else:
                         raise ValueError("Could not get element selector")
                 except Exception as e:
-                    print(f"  ⚠️ fill() method failed, falling back to keyboard: {e}")
+                    # Only show in debug mode
+                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                        print(f"  ⚠️ fill() method failed, falling back to keyboard: {e}")
                     element_selector = None
             
             # Fallback to keyboard method if fill() didn't work
@@ -1413,19 +1432,25 @@ class ActionExecutor:
                 scroll_y=current_scroll_y
             )
             
-            print(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
             
             # Goal system removed - ScrollGoal interpretation removed
             # Scroll interpretation no longer available
             interpretation = None
             if interpretation:
-                print(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
+                # Only show in debug mode
+                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                    print(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
                 return interpretation
             
             return None
             
         except Exception as e:
-            print(f"[ActionExecutor] Error getting interpreted scroll position: {e}")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"[ActionExecutor] Error getting interpreted scroll position: {e}")
             return None
 
     def _execute_scroll(self, step: ActionStep) -> bool:
@@ -1445,7 +1470,9 @@ class ActionExecutor:
             target_y = interpreted_scroll.target_y
             axis = interpreted_scroll.axis
             direction = interpreted_scroll.direction
-            print(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         else:
             # Fallback to default scroll behavior
             if direction == "down":
@@ -1462,7 +1489,9 @@ class ActionExecutor:
                 target_x = max(current_scroll_x - 300, 0)  # Default 300px left
                 target_y = current_scroll_y
                 axis = "horizontal"
-            print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         # Ensure targets are integers before validation
         target_x = int(target_x)
         target_y = int(target_y)
@@ -1505,7 +1534,9 @@ class ActionExecutor:
         
         # Goal system removed - pre-evaluation checks removed
         
-        print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
+        # Only show in debug mode
+        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
         
         # Capture state BEFORE performing the scroll (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
@@ -1570,7 +1601,9 @@ class ActionExecutor:
     def _execute_wait(self, step: ActionStep) -> bool:
         """Execute a wait action"""
         wait_time = step.wait_time_ms or 500
-        print(f"  Waiting {wait_time}ms")
+        # Only show in debug mode
+        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            print(f"  Waiting {wait_time}ms")
         time.sleep(wait_time / 1000)
         return True
 
@@ -2153,7 +2186,9 @@ class ActionExecutor:
                 try:
                     if tag:
                         vision_note = f" (vision suggested: {vision_tag_hint})" if vision_tag_hint and tag == vision_tag_hint else ""
-                        print(f"  Refinement found clickable <{tag}> at ({rx}, {ry}){vision_note}")
+                        # Only show in debug mode
+                        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                            print(f"  Refinement found clickable <{tag}> at ({rx}, {ry}){vision_note}")
                 except Exception:
                     pass
                 return rx, ry, selector

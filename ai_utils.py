@@ -24,6 +24,10 @@ try:
 except ImportError:
     # Fallback if the exception isn't available
     UnsupportedParamsError = None
+
+import litellm
+litellm.suppress_debug_info = True
+
 from pydantic import BaseModel, ValidationError
 
 
@@ -884,6 +888,7 @@ def _perform_completion(
             # Remove reasoning_effort and retry
             kwargs.pop("reasoning_effort", None)
             print(f"⚠️ Model {model} doesn't support reasoning_effort, retrying without it...")
+            # Retry
             response = completion(**kwargs)
             # Cache this model as not supporting reasoning for future calls
             _MODELS_WITHOUT_REASONING.add(model.lower())

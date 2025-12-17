@@ -13,9 +13,10 @@ from vision_utils import validate_and_clamp_coordinates, get_gemini_box_2d_cente
 class UploadHandler:
     """Handles file upload interactions"""
     
-    def __init__(self, page: Page):
+    def __init__(self, page: Page, user_messages_config=None):
         self.page = page
         self.selector_utils = SelectorUtils(page)
+        self.user_messages_config = user_messages_config
     
     def set_page(self, page: Page) -> None:
         if not page or page is self.page:
@@ -28,15 +29,20 @@ class UploadHandler:
 
     def handle_upload_field(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> None:
         """Execute a specialized upload field interaction"""
-        print("  Handling upload field")
+        # Get debug mode status
+        from utils.event_logger import get_event_logger
+        event_logger = get_event_logger()
+        debug_mode = event_logger and event_logger.debug_mode
         
-        # Debug information
-        print(f"    Debug: overlay_index = {step.overlay_index}")
-        print(f"    Debug: elements count = {len(elements.elements)}")
-        print(f"    Debug: step coordinates = ({step.x}, {step.y})")
+        if debug_mode:
+            print("  Handling upload field")
+            print(f"    Debug: overlay_index = {step.overlay_index}")
+            print(f"    Debug: elements count = {len(elements.elements)}")
+            print(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
         if step.overlay_index is None:
-            print("    ❌ No overlay index provided")
+            if debug_mode:
+                print("    ❌ No overlay index provided")
             raise ValueError("No overlay index provided for upload field")
         
         # Find element by overlay_number instead of array index
@@ -48,8 +54,9 @@ class UploadHandler:
         
         if element is None:
             available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
-            print(f"    ❌ No element found with overlay number {step.overlay_index}")
-            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+            if debug_mode:
+                print(f"    ❌ No element found with overlay number {step.overlay_index}")
+                print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
             raise ValueError(f"No element found with overlay number {step.overlay_index} for upload field")
         target_description = element.description or element.element_label or element.element_type
 
@@ -61,7 +68,8 @@ class UploadHandler:
 
         selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
         if selector:
-            print(f"    Vision selector resolved for '{target_description}': {selector}")
+            if debug_mode:
+                print(f"    Vision selector resolved for '{target_description}': {selector}")
         else:
             raise ValueError("Could not resolve upload field selector")
 
@@ -69,10 +77,11 @@ class UploadHandler:
         from pathlib import Path
         missing_or_manual = not step.upload_file_path or not Path(step.upload_file_path).expanduser().exists()
         if missing_or_manual:
-            if step.upload_file_path:
-                print(f"    Provided upload path not found '{step.upload_file_path}'. Falling back to manual picker.")
-            else:
-                print("    No file path provided. Clicking upload control and waiting for user to select a file...")
+            if debug_mode:
+                if step.upload_file_path:
+                    print(f"    Provided upload path not found '{step.upload_file_path}'. Falling back to manual picker.")
+                else:
+                    print("    No file path provided. Clicking upload control and waiting for user to select a file...")
             try:
                 # Click the control to open the file picker
                 self.page.mouse.click(x, y)
@@ -81,24 +90,35 @@ class UploadHandler:
                 raise
 
             # Pause until the user confirms they've selected a file.
-            print("    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue...")
+            # Use configurable message if available, otherwise use default
+            message = "    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue..."
+            if self.user_messages_config and hasattr(self.user_messages_config, 'file_upload_prompt'):
+                message = self.user_messages_config.file_upload_prompt
+            print(message)
             try:
                 input()
             except (EOFError, KeyboardInterrupt):
-                print("    ⚠️ Input unavailable or interrupted; continuing without confirmation.")
+                # Use configurable message if available, otherwise use default
+                interrupted_message = "    ⚠️ Input unavailable or interrupted; continuing without confirmation."
+                if self.user_messages_config and hasattr(self.user_messages_config, 'file_upload_interrupted'):
+                    interrupted_message = self.user_messages_config.file_upload_interrupted
+                print(interrupted_message)
             return
 
         try:
             self.page.set_input_files(selector, step.upload_file_path)
-            print(f"    ✅ Set file '{step.upload_file_path}' on upload field")
+            if debug_mode:
+                print(f"    ✅ Set file '{step.upload_file_path}' on upload field")
             return
         except Exception as err:
-            print(f"    ⚠️ Upload via selector failed ({err}), searching for hidden file input")
+            if debug_mode:
+                print(f"    ⚠️ Upload via selector failed ({err}), searching for hidden file input")
             fallback_selector = self._locate_hidden_file_input(selector, x, y)
             if fallback_selector:
                 try:
                     self.page.set_input_files(fallback_selector, step.upload_file_path)
-                    print(f"    ✅ Set file '{step.upload_file_path}' using fallback selector {fallback_selector}")
+                    if debug_mode:
+                        print(f"    ✅ Set file '{step.upload_file_path}' using fallback selector {fallback_selector}")
                     return
                 except Exception as inner_err:
                     print(f"    ❌ Fallback upload also failed: {inner_err}")
@@ -157,7 +177,10 @@ class UploadHandler:
                 {"x": x, "y": y},
             ) or {}
         except Exception as err:
-            print(f"    ⚠️ Error inspecting upload element at ({x}, {y}): {err}")
+            from utils.event_logger import get_event_logger
+            event_logger = get_event_logger()
+            if event_logger and event_logger.debug_mode:
+                print(f"    ⚠️ Error inspecting upload element at ({x}, {y}): {err}")
             return {}
 
     def _locate_hidden_file_input(self, selector: Optional[str], x: Optional[int], y: Optional[int]) -> Optional[str]:
@@ -231,5 +254,8 @@ class UploadHandler:
             )
             return fallback_selector
         except Exception as err:
-            print(f"    ⚠️ Failed to locate hidden file input: {err}")
+            from utils.event_logger import get_event_logger
+            event_logger = get_event_logger()
+            if event_logger and event_logger.debug_mode:
+                print(f"    ⚠️ Failed to locate hidden file input: {err}")
             return None

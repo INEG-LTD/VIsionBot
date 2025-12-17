@@ -247,6 +247,9 @@ class BrowserVisionBot:
         if config is None:
             config = BotConfig()
         
+        # Store config for later use
+        self.config = config
+        
         # Handle browser provider
         if browser_provider is None:
             # Create provider from config
@@ -687,7 +690,8 @@ class BrowserVisionBot:
             self.deduper, 
             self.gif_recorder, 
             self.action_ledger,
-            execute_action_callback=self._execute_action_via_bot
+            execute_action_callback=self._execute_action_via_bot,
+            user_messages_config=self.config.user_messages if self.config else None
         )
         
         # Plan generator for AI planning prompts
@@ -2793,7 +2797,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             self.action_executor.enable_vision_tag_hint = False
 
         try:
-            print("[KeywordCommand] Executing plan via action_executor")
+            # Only show in debug mode
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print("[KeywordCommand] Executing plan via action_executor")
             success = self.action_executor.execute_plan(
                 plan,
                 page_info,
