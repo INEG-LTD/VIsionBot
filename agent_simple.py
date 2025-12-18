@@ -23,13 +23,16 @@ from utils.event_logger import EventType
 _spinner_active = False
 _spinner_thread = None
 
+# Global state to track if completion message has been shown
+_completion_shown = False
+
 def _show_spinner():
     """Show a loading spinner animation"""
     global _spinner_active
     spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
     i = 0
     while _spinner_active:
-        sys.stdout.write(f'\r   {spinner_chars[i % len(spinner_chars)]} Thinking...')
+        sys.stdout.write(f'\r{spinner_chars[i % len(spinner_chars)]} Thinking...')
         sys.stdout.flush()
         sleep(0.1)
         i += 1
@@ -84,7 +87,7 @@ def _convert_to_first_person(text: str) -> str:
     return text
 
 def _format_action_first_person(action: str) -> str:
-    """Format action string in first person format: 'I will now [ACTION] the >target<'"""
+    """Format action string in first person format: 'I will now [ACTION] >target<'"""
     if not action:
         return action
     
@@ -98,8 +101,8 @@ def _format_action_first_person(action: str) -> str:
     action_type = parts[0].strip().upper()
     target = parts[1].strip()
     
-    # Format: "I will now [ACTION_TYPE] the >target<"
-    return f"I will now [{action_type}] the >{target}<"
+    # Format: "I will now [ACTION_TYPE] >target<"
+    return f"I will now [{action_type}] >{target}<"
 
 # Custom callback to show only essential information
 def simple_event_callback(event):
@@ -129,28 +132,32 @@ def simple_event_callback(event):
         if reasoning:
             # Convert to first person
             first_person_reasoning = _convert_to_first_person(reasoning)
-            print(f"💭 Here's what the agent is thinking: {first_person_reasoning}")
+            print(f"> Here's what the agent is thinking: {first_person_reasoning}")
         # Format action in first person
         first_person_action = _format_action_first_person(action)
-        print(f"⚡ {first_person_action}")
+        print(f"    ⚡ {first_person_action}")
     
     # Show task completion reasoning only when task is actually complete
-    elif event.event_type == EventType.COMPLETION_SUCCESS:
-        reasoning = event.details.get('reasoning', '')
-        confidence = event.details.get('confidence')
-        if reasoning:
-            print("\n✅ Task Complete!")
-            print(f"📝 Reasoning: {reasoning}")
-            if confidence is not None:
-                print(f"🎯 Confidence: {confidence:.2f}")
+    # elif event.event_type == EventType.COMPLETION_SUCCESS:
+    #     reasoning = event.details.get('reasoning', '')
+    #     confidence = event.details.get('confidence')
+    #     if reasoning:
+    #         print("\n✅ Task Complete!")
+    #         print(f"📝 Reasoning: {reasoning}")
+    #         if confidence is not None:
+    #             print(f"🎯 Confidence: {confidence:.2f}")
     
-    # Also show completion from agent_complete event (backup)
+    # Also show completion from agent_complete event (backup - only if COMPLETION_SUCCESS didn't fire)
     elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):
+        # Only show if we haven't already shown a completion message
+        # This is a fallback in case COMPLETION_SUCCESS event doesn't fire
         reasoning = event.details.get('reasoning', '')
         confidence = event.details.get('confidence')
         if reasoning:
-            print("\n✅ Task Complete!")
-            print(f"📝 Reasoning: {reasoning}")
+            # Convert reasoning to first person
+            first_person_reasoning = _convert_to_first_person(reasoning)
+            print("\n✅ The task has been completed!")
+            print(f"📝 Reasoning: {first_person_reasoning}")
             if confidence is not None:
                 print(f"🎯 Confidence: {confidence:.2f}")
 
@@ -161,7 +168,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-mini",
+        agent_model="gemini/gemini-3-flash-preview",
         command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.HIGH
     ),
@@ -173,13 +180,15 @@ config = BotConfig(
         include_textless_overlays=True,
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
-        overlay_only_planning=True
+        overlay_only_planning=True,
+        include_overlays_in_agent_context=False,
+        max_coordinate_overlays=100  # Limit overlays for better performance
     ),
     recording=RecordingConfig(
         save_gif=True
     ),
     logging=DebugConfig(
-        debug_mode=False  # Set to False to use callbacks only (no debug prints)
+        debug_mode=True  # Set to False to use callbacks only (no debug prints)
     ),
     browser=BrowserConfig(
         provider_type="persistent",
@@ -205,7 +214,7 @@ bot = BrowserVisionBot(config=config)
 bot.event_logger.register_callback(simple_event_callback)
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://careers.justeattakeaway.com/global/en/job/R_048650/Senior-Procurement-Specialist-IT-Corporate-Services")
+bot.page.goto("https://careers.capgemini.com/job/London-IOS-Developer/1264832101/?feedId=388933")
 sleep(3)
 
 # Run agentic mode - now returns AgentResult with extracted data
@@ -228,22 +237,26 @@ result = bot.execute_task(
         "you must always use the upload resume button if it is available to upload the resume",
         "only press Enter after typing in a search field if there are NO visible suggestions or dropdown options to click",
         "if asked to search use the best search box contextually available",
-        "if there is a cookie banner, accept all cookies",
+        "if there is a cookie banner, accept all cookies", 
+        "if there is a resume upload area and you havent interacted with it yet, look for a button/link to upload the resume",
+        f"use this file for resume upload: {str(Path.cwd() / 'resume.txt')}",
+        "DO NOT use Dropbox, Google Drive, or any cloud storage options. ALWAYS choose 'Upload from Device', 'Local File', or similar.",
+        "If a file picker dialog opens, the system will handle it. Do not try to interact with the dialog itself.",
     ],
     show_completion_reasoning_every_iteration=False  # Only show when actually complete
 )
 
 # Check if task succeeded
-if result.success:
-    print(f"\n✅ Task completed! Confidence: {result.confidence:.2f}")
-    print(f"Reasoning: {result.reasoning}")
+# if result.success:
+#     print(f"\n✅ Task completed! Confidence: {result.confidence:.2f}")
+#     print(f"Reasoning: {result.reasoning}")
     
-    # Access extracted data if any
-    if result.extracted_data:
-        print("\n📊 Extracted Data:")
-        for prompt, data in result.extracted_data.items():
-            print(f"  {prompt}: {data}")
-else:
-    print(f"\n❌ Task failed: {result.reasoning}")
+#     # Access extracted data if any
+#     if result.extracted_data:
+#         print("\n📊 Extracted Data:")
+#         for prompt, data in result.extracted_data.items():
+#             print(f"  {prompt}: {data}")
+# else:
+#     print(f"\n❌ Task failed: {result.reasoning}")
 
 input("Press Enter to continue...")

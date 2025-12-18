@@ -180,6 +180,7 @@ class ReactiveGoalDeterminer:
         reasoning_level: Union[ReasoningLevel, str, None] = None,
         image_detail: str = "low",
         interaction_summary_limit: Optional[int] = None,
+        include_overlays_in_agent_context: bool = True,
     ):
         """
         Initialize the reactive goal determiner.
@@ -204,6 +205,7 @@ class ReactiveGoalDeterminer:
         self.image_detail = image_detail
         self._system_prompt_cache: dict[bool, str] = {}  # Cache system prompts by is_exploring
         self.interaction_summary_limit = interaction_summary_limit
+        self.include_overlays_in_agent_context = include_overlays_in_agent_context
     
     def determine_next_action(
         self,
@@ -621,8 +623,9 @@ AVAILABLE COMMANDS:
         )
         
         # Format overlay information if available
+        # Only include overlay context if configured to do so
         overlay_context = ""
-        if overlay_data:
+        if overlay_data and self.include_overlays_in_agent_context:
             # Filter to only interactive/actionable elements (similar to what plan_generator does)
             # Focus on elements that are likely to be interacted with
             relevant_elements = []

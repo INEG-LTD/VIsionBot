@@ -123,6 +123,8 @@ class AgentController:
         act_enable_target_context_guard: bool = True,
         act_enable_modifier: bool = True,
         act_enable_additional_context: bool = True,
+        # Overlay inclusion in agent context
+        include_overlays_in_agent_context: bool = True,
         # Interaction summarization
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
@@ -234,6 +236,10 @@ class AgentController:
         self.act_enable_target_context_guard = act_enable_target_context_guard
         self.act_enable_modifier = act_enable_modifier
         self.act_enable_additional_context = act_enable_additional_context
+        
+        # Store overlay inclusion configuration
+        # Controls whether overlay element data is included in agent's context for action determination
+        self.include_overlays_in_agent_context = include_overlays_in_agent_context
 
         self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
         agent_reasoning = getattr(bot, "agent_reasoning_level", None)
@@ -593,6 +599,7 @@ class AgentController:
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
                 interaction_summary_limit=self.interaction_summary_limit_action,
+                include_overlays_in_agent_context=self.include_overlays_in_agent_context,
             )
             
             # 2.3. Check for queued action first (doesn't need LLM)

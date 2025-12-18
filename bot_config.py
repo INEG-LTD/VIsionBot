@@ -228,6 +228,10 @@ class ElementConfig(BaseModel):
         default=None,
         description="Fallback model for element selection retries"
     )
+    include_overlays_in_agent_context: bool = Field(
+        default=True,
+        description="Include overlay element data in agent's context for action determination. When enabled, the agent receives detailed element information (tag, placeholder, text, aria-label, etc.) to create more descriptive actions. NOTE: This only affects the agent's action determination phase. Overlays are still generated for element selection during action execution, as they are required for the system to identify and interact with elements on the page."
+    )
     
     class Config:
         arbitrary_types_allowed = True
