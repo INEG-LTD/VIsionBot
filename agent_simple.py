@@ -169,7 +169,8 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 config = BotConfig(
     model=ModelConfig(
         agent_model="gemini/gemini-3-flash-preview",
-        command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+        command_model="gemini/gemini-3-flash-preview",
+        # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.HIGH
     ),
     execution=ExecutionConfig(
@@ -220,7 +221,6 @@ sleep(3)
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
     "your job is to apply to the job in this url and you'll be done when the form has been submitted",
-    max_iterations=100,
     base_knowledge=[
         """"use this details: 
         first name: John, 

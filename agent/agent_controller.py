@@ -1087,27 +1087,44 @@ class AgentController:
                     result = self.bot.extract(
                         prompt=canonical_prompt,
                         output_format="json",
-                        scope="page"
+                        scope="viewport"
                     )
-                    self._record_extraction_success(normalized_key)
-                    self._completed_extractions.add(normalized_key)
-                    
-                    self._extraction_prompt_map[normalized_key] = canonical_prompt
-                    
-                    # Store extracted data with the canonical prompt as key
-                    self.extracted_data[canonical_prompt] = result
-                    self._mark_task_completed(
-                        normalized_key,
-                        {
-                            "type": "extraction",
-                            "fields": list(result.keys()),
-                        }
-                    )
-                    self._activate_primary_output_task("Extraction completed successfully.")
-                    try:
-                        self.event_logger.extraction_success(canonical_prompt, result=result)
-                    except Exception:
-                        pass
+                    if result.success:
+                        self._record_extraction_success(normalized_key)
+                        self._completed_extractions.add(normalized_key)
+                        
+                        self._extraction_prompt_map[normalized_key] = canonical_prompt
+                        
+                        # Store extracted data (the actual dict/text)
+                        data = result.data
+                        self.extracted_data[canonical_prompt] = data
+                        
+                        fields = []
+                        if isinstance(data, dict):
+                            fields = list(data.keys())
+                        elif isinstance(data, str):
+                            fields = ["text"]
+                            
+                        self._mark_task_completed(
+                            normalized_key,
+                            {
+                                "type": "extraction",
+                                "fields": fields,
+                            }
+                        )
+                        self._activate_primary_output_task("Extraction completed successfully.")
+                        try:
+                            self.event_logger.extraction_success(canonical_prompt, result=result)
+                        except Exception:
+                            pass
+                    else:
+                        # Handle extraction failure
+                        error_msg = result.error or result.message
+                        try:
+                            self.event_logger.system_warning(f"Extraction failed: {canonical_prompt} - {error_msg}")
+                        except Exception:
+                            pass
+                        # We don't raise here, just let it continue to next iteration
                     
                     # Continue to next iteration (extraction is complete)
                     time.sleep(self.iteration_delay)
