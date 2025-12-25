@@ -45,8 +45,8 @@ class NextAction(BaseModel):
         "datetime",
         "stop",
         "open",
-        "handle_select",
         "handle_datetime",
+        "mini_goal",
     }
 
     @field_validator("action", mode="before")
@@ -98,6 +98,10 @@ class NextAction(BaseModel):
             if not body:
                 raise ValueError("subagents command requires a mode")
             action = f"subagents: {body}"
+        elif command == "mini_goal":
+            if not body:
+                raise ValueError("mini_goal command requires an instruction")
+            action = f"mini_goal: {body}"
         elif command in {"form", "select", "upload", "datetime", "stop", "open", "handle_select", "handle_datetime"}:
             if not body:
                 raise ValueError(f"{command} command requires additional detail")
@@ -452,7 +456,13 @@ CRITICAL RULES:
      * ❌ Assuming you can append text to existing content
      * ❌ Trying to modify text incrementally in multiple steps
    - **REMEMBER: The field is automatically cleared before typing, so always provide the complete, final desired text value in your type command.**
-4. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
+4. **MINI GOALS - PROACTIVE HANDLING: When you see a complex UI interaction (like an un-expanded dropdown, a multi-step component, or a specialized widget) that requires multiple steps, you CAN suggest a "mini_goal:" command to focus on it.**
+   - **HOW TO USE: Use "mini_goal: <specific sub-instruction>" to temporarily shift your focus.**
+   - **EXAMPLES:**
+     * ✅ "mini_goal: select 'United Kingdom' from the country dropdown"
+     * ✅ "mini_goal: fill the address section of the form"
+   - **BENEFIT: This ensures you prioritize completing this specific sub-task before returning to the main goal.**
+5. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
    - "go to X and click Y" → If you've clicked Y and are on Y's page, task is complete (don't go back to X)
    - "click the first article" → If you've clicked it and are viewing the article, task is complete
    - "navigate to homepage and click login" → If you're on the login page, task is complete (don't go back)

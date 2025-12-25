@@ -16,7 +16,18 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
 from playwright.sync_api import Page, Browser, Playwright, sync_playwright
-from playwright_stealth import stealth_sync
+# Compatible import for playwright_stealth across versions
+try:
+    from playwright_stealth import Stealth
+    _stealth_instance = Stealth()
+
+    def stealth_sync(page):
+        return _stealth_instance.apply_stealth_sync(page)
+
+except ImportError:
+    # Fallback: disable stealth if not available
+    def stealth_sync(page):
+        pass  # No-op function
 from pydantic import BaseModel, Field
 
 

@@ -6,6 +6,7 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection
 - **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
+- **Mini Goals System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
 - **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text.
 - **Smart Select Handling**: Automatic detection and handling of native `<select>` elements, custom dropdowns, listboxes, and combobox patterns. Agent can see available options in overlays and make intelligent selections. Select elements are prominently marked with `SELECT_FIELD` in element descriptions, and available options are displayed in the `options=` field to help the agent understand when to use `select:` actions instead of `click:`. Conservative detection prevents false positives for regular inputs with lists. When select handler detects a non-select element, it automatically converts the action to a click action using the full bot infrastructure (overlay detection, element finding, etc.), ensuring seamless interaction with suggestion lists and other clickable option elements.
@@ -340,7 +341,7 @@ config = BotConfig.minimal()
 
 #### ElementConfig
 - `overlay_mode`: Overlay drawing mode (`"interactive"` default, `"all"` includes every visible element)
-- `include_textless_overlays`: Keep overlays with no text/aria/placeholder in LLM selection lists (default: False)
+- `include_textless_overlays`: Keep overlays with no text/aria/placeholder in LLM selection lists, using surrounding DOM context to identify them (default: False)
 - `max_detailed_elements`: Maximum number of detailed elements to include (default: 400)
 - `max_coordinate_overlays`: Maximum number of coordinate overlays (default: 600)
 - `overlay_selection_max_samples`: Limit overlays considered during LLM selection (None for unlimited)
@@ -394,7 +395,7 @@ from bot_config import BotConfig, ElementConfig
 config = BotConfig(
     elements=ElementConfig(
         overlay_mode="all",                 # draw overlays on every visible element
-        include_textless_overlays=True,     # allow unlabeled overlays in LLM selection
+        include_textless_overlays=True,     # allow unlabeled overlays in LLM selection (uses surrounding context)
         overlay_selection_max_samples=800,  # widen the candidate list
     )
 )
@@ -868,6 +869,69 @@ while not queue.is_empty():
     bot.act(action)
 ```
 
+
+### Mini Goals System
+
+Mini goals allow you to create trigger-based sub-objectives that activate automatically when specific conditions are met. This is perfect for handling complex UI interactions that require specialized logic, like dropdown menus, multi-step forms, or custom widgets.
+
+#### Two Execution Modes
+
+**Autonomy Mode**: The agent handles the mini goal as a complete sub-task, with full planning and completion evaluation.
+
+**Scripted Mode**: Execute custom Python functions that can interact with the page and ask the agent questions using its current context.
+
+#### Registering Mini Goals
+
+```python
+from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode
+
+# Example: Handle dropdown selections autonomously
+trigger = MiniGoalTrigger(
+    action_type="click",
+    target_regex="dropdown|select.*field"
+)
+
+bot.register_mini_goal(
+    trigger=trigger,
+    mode=MiniGoalMode.AUTONOMY,
+    instruction_override="Select the most appropriate option from this dropdown based on the context"
+)
+
+# Example: Handle form validation with a script
+def validate_form_handler(context):
+    # Ask the agent for validation info
+    validation_rules = context.ask_question("What validation rules should be applied to this form?")
+
+    # Interact with the page
+    context.bot.page.evaluate("""
+        // Custom validation logic
+        const inputs = document.querySelectorAll('input');
+        inputs.forEach(input => {
+            if (!input.checkValidity()) {
+                input.style.border = '2px solid red';
+            }
+        });
+    """)
+
+bot.register_mini_goal(
+    trigger=MiniGoalTrigger(action_type="click", target_regex="submit.*form"),
+    mode=MiniGoalMode.SCRIPTED,
+    handler=validate_form_handler
+)
+```
+
+#### Trigger Types
+
+- **Action Triggers**: Activate when the agent performs specific actions (e.g., clicking a dropdown)
+- **Observation Triggers**: Activate when specific content appears on the page
+- **Selector Triggers**: Activate when interacting with specific DOM elements
+
+#### Features
+
+- **Recursion Control**: Configurable recursion limit (default: 3) prevents infinite mini goal loops
+- **State Isolation**: Mini goals maintain their own completion context separate from the main task
+- **Navigation Blocking**: In autonomy mode, navigation actions are blocked to keep focus on the mini goal
+- **Question Asking**: Scripted handlers can ask the agent contextual questions using current page state
 
 ### Error Handling
 

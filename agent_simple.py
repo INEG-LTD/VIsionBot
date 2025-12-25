@@ -18,6 +18,36 @@ from bot_config import ActFunctionConfig
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
 from utils.event_logger import EventType
+from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
+from utils.select_option_utils import SelectOptionError
+from pydantic import BaseModel
+from typing import Optional
+import random
+
+def type_text_sequentially(page, text: str, delay: int = None):
+    """
+    Type text sequentially into the currently focused element using playwright's keyboard.type.
+
+    Args:
+        page: The playwright page object
+        text: The text to type
+        delay: Delay between keystrokes in milliseconds (default: random 50-150ms)
+    """
+    if delay is None:
+        delay = random.randint(50, 150)
+
+    # Type text sequentially using keyboard.type with delay
+    page.keyboard.type(text, delay=delay)
+    print(f"Typed text: {text}")
+
+class DropdownSelection(BaseModel):
+    """Structured response for dropdown selection analysis"""
+    recommended_option: str
+    confidence: float = 1.0  # How confident the agent is in this recommendation
+    reasoning: Optional[str] = None  # Why this option was chosen
+
+class IsDropdownVisible(BaseModel):
+    is_visible: bool
 
 # Global state for spinner
 _spinner_active = False
@@ -104,6 +134,185 @@ def _format_action_first_person(action: str) -> str:
     # Format: "I will now [ACTION_TYPE] >target<"
     return f"I will now [{action_type}] >{target}<"
 
+def setup_mini_goals(bot: BrowserVisionBot):
+    """Register various mini goal examples"""
+
+    # Example 1: Autonomous dropdown handling
+    # When the agent clicks on any dropdown, it automatically focuses on selecting the right option
+    dropdown_trigger_select = MiniGoalTrigger(
+        action_type="select",
+        target_regex=r"(?i)dropdown|select|combobox"
+    )
+    dropdown_trigger_click = MiniGoalTrigger(
+        action_type="click",
+        target_regex=r"(?i)dropdown|select|combobox"
+    )
+    
+    def select_dropdown_handler(context: MiniGoalScriptContext):
+        """Handle dropdown selection with intelligent option analysis"""
+        print("🎯 Running dropdown selection mini-goal...")
+
+        try:
+            # Get the current action that triggered this mini-goal
+            current_action = context.action
+
+            if not current_action:
+                print("❌ No current action available for dropdown selection")
+                return
+
+            print(f"📍 Action to execute: {current_action}")
+
+            # Parse the action to understand what we need to do
+            action_part = ""
+
+            if current_action.startswith('select:'):
+                # Handle select actions: "select: Python in programming language dropdown"
+                action_part = current_action[7:].strip()  # Remove "select:" prefix
+                print(f"🎯 Need to select: '{action_part}'")
+
+                # remove any dropdown/combobox/select text from the action_parts
+                action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
+            elif current_action.startswith('click:'):
+                # Handle click actions on dropdown elements: "click: 'Select theme...' button"
+                # Extract what was clicked and infer the selection context
+                action_part = current_action[6:].strip()  # Remove "click:" prefix
+                print(f"🎯 Clicked on: '{action_part}'")
+
+                # remove any dropdown/combobox/select text from the click_description
+                action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
+
+            analysis_prompt = f"""
+                Based on the current page state, what is the best option to select for this select field with the placeholder: "{action_part}"?
+                Consider the overall task context and what would be the most logical selection.
+                """
+            selection_info: DropdownSelection = context.ask_question_structured(
+                analysis_prompt,
+                DropdownSelection
+            )
+
+            dropdown_prompt = f"""
+                Based on the current page state, is the dropdown with the placeholder: "{action_part}" visible?
+                """
+            dropdown_visible: IsDropdownVisible = context.ask_question_structured(
+                dropdown_prompt,
+                IsDropdownVisible
+            )
+
+            print(f"🤖 AI Analysis: Select '{selection_info.recommended_option}'")
+            print(f"   Confidence: {selection_info.confidence}")
+
+            # Skip selection if confidence is too low
+            if selection_info.confidence < 0.3:
+                print("⚠️ AI confidence too low, skipping selection")
+                return
+        
+            # if dropdown_visible.is_visible:
+            #     bot.act(f"click: {current_action}")
+                
+            # sleep(1)
+            bot.act(f"type: {selection_info.recommended_option} in {action_part}")
+            sleep(5)
+            bot.act(f"click: {selection_info.recommended_option}")
+        except SelectOptionError as e:
+            print(f"❌ Select option error: {e}")
+        except Exception as e:
+            print(f"❌ Unexpected error in dropdown handler: {e}")
+
+    bot.register_mini_goal(
+        trigger=dropdown_trigger_click,
+        mode=MiniGoalMode.SCRIPTED,
+        handler=select_dropdown_handler,
+        instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
+    )
+    bot.register_mini_goal(
+        trigger=dropdown_trigger_select,
+        mode=MiniGoalMode.SCRIPTED,
+        handler=select_dropdown_handler,
+        instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
+    )
+    # Example 3: Observation-based mini goal
+    # Trigger when a specific error message appears
+    def error_recovery_handler(context: MiniGoalScriptContext):
+        """Handle error messages that appear on the page"""
+        print("🚨 Error detected, running recovery mini-goal...")
+
+        # Get more context about the error
+        error_details = context.ask_question(
+            "An error message appeared on the page. What type of error is this and how should I handle it? "
+            "Consider whether it's a validation error, network error, or user input error."
+        )
+
+        # Try common recovery actions
+        if "network" in error_details.lower():
+            context.bot.page.reload()
+        elif "login" in error_details.lower() or "auth" in error_details.lower():
+            context.ask_question("The user needs to log in. Should I navigate to the login page or ask them for credentials?")
+        else:
+            # For other errors, highlight the error and ask for guidance
+            context.bot.page.evaluate("""
+                const errors = document.querySelectorAll('.error, .alert-danger, [class*="error"]');
+                errors.forEach(el => el.style.backgroundColor = 'yellow');
+            """)
+
+    error_trigger = MiniGoalTrigger(
+        observation_regex=r"(?i)error|failed|invalid|please try again|something went wrong"
+    )
+
+    bot.register_mini_goal(
+        trigger=error_trigger,
+        mode=MiniGoalMode.SCRIPTED,
+        handler=error_recovery_handler
+    )
+
+    # Example 4: Complex multi-step workflow
+    # Handle file upload workflows
+    def file_upload_handler(context: MiniGoalScriptContext):
+        """Guide the user through file upload process"""
+        print("📁 File upload mini-goal activated...")
+
+        # Check what type of files are expected
+        upload_requirements = context.ask_question(
+            "What type of file should be uploaded here? Consider file format, size limits, "
+            "and any specific naming conventions or content requirements."
+        )
+
+        print(f"🤖 Upload requirements: {upload_requirements}")
+
+        # Check current page state
+        upload_state = context.bot.page.evaluate("""
+            () => {
+                const fileInputs = document.querySelectorAll('input[type="file"]');
+                const dragZones = document.querySelectorAll('[class*="drop"], [class*="upload"]');
+                return {
+                    fileInputs: fileInputs.length,
+                    dragZones: dragZones.length,
+                    hasProgress: !!document.querySelector('[class*="progress"], .upload-progress')
+                };
+            }
+        """)
+
+        if upload_state['fileInputs'] > 0:
+            context.ask_question(
+                f"I found {upload_state['fileInputs']} file input fields. "
+                "Should I ask the user to select a file, or do they want me to use a test file?"
+            )
+        elif upload_state['dragZones'] > 0:
+            context.ask_question(
+                "This appears to be a drag-and-drop upload interface. "
+                "Should I guide the user through the drag-and-drop process?"
+            )
+
+    upload_trigger = MiniGoalTrigger(
+        action_type="click",
+        target_regex=r"(?i)upload.*file|choose.*file|select.*file|browse"
+    )
+
+    bot.register_mini_goal(
+        trigger=upload_trigger,
+        mode=MiniGoalMode.SCRIPTED,
+        handler=file_upload_handler
+    )
+
 # Custom callback to show only essential information
 def simple_event_callback(event):
     """
@@ -168,10 +377,10 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gemini/gemini-3-flash-preview",
-        command_model="gemini/gemini-3-flash-preview",
+        agent_model="gpt-5-mini",
+        command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
-        reasoning_level=ReasoningLevel.HIGH
+        reasoning_level=ReasoningLevel.NONE
     ),
     execution=ExecutionConfig(
         max_attempts=30
@@ -181,9 +390,9 @@ config = BotConfig(
         include_textless_overlays=True,
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
-        overlay_only_planning=True,
+        # overlay_only_planning=True,
         include_overlays_in_agent_context=False,
-        max_coordinate_overlays=100  # Limit overlays for better performance
+        # max_coordinate_overlays=100  # Limit overlays for better performance
     ),
     recording=RecordingConfig(
         save_gif=True
@@ -210,40 +419,44 @@ config = BotConfig(
 
 # Create bot with config
 bot = BrowserVisionBot(config=config)
+setup_mini_goals(bot)
 
 # Register custom callback to show only essential information
 bot.event_logger.register_callback(simple_event_callback)
 bot.use(ErrorHandlingMiddleware())
 bot.start()
 bot.page.goto("https://careers.capgemini.com/job/London-IOS-Developer/1264832101/?feedId=388933")
-sleep(3)
+
+# Wait 15 seconds before starting the task
+# sleep(15)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "your job is to apply to the job in this url and you'll be done when the form has been submitted",
+    "your job is to navigate to the job form page, fill the form with the data provided and submit the form. you'll be done when the form has been submitted",
     base_knowledge=[
-        """"use this details: 
-        first name: John, 
-        last name: Doe, 
-        email: john.doe@example.com, 
-        phone: 07385986448, 
+        """"use this details:
+        first name: John,
+        last name: Doe,
+        email: john.doe@example.com,
+        phone: 07385986448,
         address line 1: 3 John Street,
         city: Liverpool,
         state: England,
         country: United Kingdom,
         gender: Male""",
+        "do not repeat interactions you have successfully completed",
+        "don't apply with LinkedIn, just apply with the form",
         "fill all the required fields in the form",
         "you are allowed to use the best value for the field if the user doesn't provide one",
-        "you must always use the upload resume button if it is available to upload the resume",
         "only press Enter after typing in a search field if there are NO visible suggestions or dropdown options to click",
         "if asked to search use the best search box contextually available",
         "if there is a cookie banner, accept all cookies", 
         "if there is a resume upload area and you havent interacted with it yet, look for a button/link to upload the resume",
-        f"use this file for resume upload: {str(Path.cwd() / 'resume.txt')}",
         "DO NOT use Dropbox, Google Drive, or any cloud storage options. ALWAYS choose 'Upload from Device', 'Local File', or similar.",
         "If a file picker dialog opens, the system will handle it. Do not try to interact with the dialog itself.",
     ],
-    show_completion_reasoning_every_iteration=False  # Only show when actually complete
+    show_completion_reasoning_every_iteration=False,  # Only show when actually complete
+    exploration_mode_enabled=False  # Disable exploration mode for faster execution
 )
 
 # Check if task succeeded

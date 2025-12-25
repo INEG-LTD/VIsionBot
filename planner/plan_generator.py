@@ -179,11 +179,18 @@ class PlanGenerator:
             # Increase snippet lengths for better context
             text_snip = text.strip()[:100]  # Increased from 60
             aria_snip = aria.strip()[:60]   # Increased from 40
-            
+
+            # Get surrounding context from parent elements (collected during overlay creation)
+            context_text = (elem.get("contextText") or "").strip()
+
             # Skip elements with no useful text/aria/placeholder
             # Exception: Always include select elements even if they have no text (they have options)
+            # When include_textless_overlays is enabled, also include elements with surrounding context
             is_select = tag == "select" or role in ("combobox", "listbox")
-            if not text_snip and not aria_snip and not placeholder and not is_select:
+            has_identifying_info = text_snip or aria_snip or placeholder or is_select
+            has_context = context_text and len(context_text) > 10  # Require meaningful context
+
+            if not has_identifying_info and not (self.include_textless_overlays and has_context):
                 continue
                 
             role_str = role or "unknown"
@@ -225,7 +232,13 @@ class PlanGenerator:
                 parts.append(f'value="{value}"')
             if href and len(href) < 60:
                 parts.append(f'href="{href}"')
-            
+
+            # Add surrounding context for elements that lack their own identifying information
+            if not has_identifying_info and self.include_textless_overlays and has_context:
+                # Include relevant context from surrounding elements
+                context_snip = context_text[:150]  # Limit context length
+                parts.append(f'context="{context_snip}"')
+
             log_line = f"  • {' '.join(parts)}"
             candidate_lines.append(log_line)
             samples.append(f"- {' '.join(parts)}")
@@ -241,7 +254,7 @@ class PlanGenerator:
             "Your job is to pick the overlay number that best satisfies the browsing instruction.\n"
             "If NONE of the overlays clearly match the instruction (their text/aria labels do not correspond to the requested control), "
             "respond with 0 to indicate that there is no suitable element.\n"
-            f"Instruction: \"{instruction}\"\n"
+            f'Instruction: "{instruction}"\n'
             f"Instruction terms to align with: {goal_token_str}.\n"
         )
 
@@ -362,7 +375,7 @@ class PlanGenerator:
                     if matching_data.get('id'):
                         css_selector = f"#{matching_data['id']}"
                     elif matching_data.get('name'):
-                        css_selector = f"[name=\"{matching_data['name']}\"]"
+                        css_selector = f'[name="{matching_data["name"]}"]'
                     elif matching_data.get('cssSelector'):
                         css_selector = matching_data['cssSelector']
                     

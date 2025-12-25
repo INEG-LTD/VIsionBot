@@ -99,7 +99,8 @@ class CompletionContract:
         self,
         environment_state: EnvironmentState,
         screenshot: Optional[bytes] = None,
-        user_inputs: Optional[List[Dict[str, Any]]] = None
+        user_inputs: Optional[List[Dict[str, Any]]] = None,
+        user_prompt: Optional[str] = None
     ) -> Tuple[bool, str, CompletionEvaluation]:
         """
         Evaluates if the task is complete using LLM with full environment context.
@@ -116,9 +117,8 @@ class CompletionContract:
             (is_complete, reasoning, full_evaluation)
         """
         try:
-            # First, do a quick yes/no check
-            # Note: quick check doesn't include user inputs for speed, but full evaluation will
-            is_complete_quick = self._query_completion_yes_no(environment_state, screenshot)
+            # Stage 1: Yes/No check with prompt override
+            is_complete_quick = self._query_completion_yes_no(environment_state, screenshot, user_prompt=user_prompt)
             
             # If not complete and not showing reason, return early with minimal reasoning
             if not is_complete_quick and not self.show_task_completion_reason:
@@ -134,10 +134,9 @@ class CompletionContract:
                     )
                 )
             
-            # Task is complete OR show_task_completion_reason is True - do full evaluation
-            # Build comprehensive context for LLM
+            # Stage 2: Full evaluation with reasoning
             system_prompt = self._build_system_prompt()
-            user_prompt_text = self._build_evaluation_prompt(environment_state, user_inputs or [])
+            user_prompt_text = self._build_evaluation_prompt(environment_state, user_inputs or [], user_prompt=user_prompt)
             
             # Call LLM with structured schema
             evaluation = generate_model(
@@ -173,13 +172,14 @@ class CompletionContract:
     def _query_completion_yes_no(
         self,
         environment_state: EnvironmentState,
-        screenshot: Optional[bytes] = None
+        screenshot: Optional[bytes] = None,
+        user_prompt: Optional[str] = None
     ) -> bool:
         """
         Lightweight yes/no check to determine if task is complete.
         Returns True if task is complete, False otherwise.
         """
-        prompt = self._build_completion_yes_no_prompt(environment_state)
+        prompt = self._build_completion_yes_no_prompt(environment_state, user_prompt=user_prompt)
         try:
             result = generate_model(
                 prompt=prompt,
@@ -214,15 +214,16 @@ A task is NOT complete when:
 
 Respond with just is_complete (true/false)."""
     
-    def _build_completion_yes_no_prompt(self, state: EnvironmentState) -> str:
+    def _build_completion_yes_no_prompt(self, state: EnvironmentState, user_prompt: Optional[str] = None) -> str:
         """Build a lightweight prompt for yes/no completion decision"""
         interaction_summary = self._summarize_interactions(state.interaction_history)
+        active_prompt = user_prompt if user_prompt else self.user_prompt
         
-        return f"""
+        return f'''
 QUICK COMPLETION CHECK
 ======================
 
-USER PROMPT: "{self.user_prompt}"
+USER PROMPT: "{active_prompt}"
 
 CURRENT STATE:
 - URL: {state.current_url}
@@ -232,16 +233,22 @@ CURRENT STATE:
 INTERACTIONS: {interaction_summary[:300]}...
 
 QUESTION: Is the task complete? (true/false only)
-"""
+'''
     
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, user_prompt: Optional[str] = None) -> str:
         """Build system prompt that guides the LLM on how to evaluate completion"""
+        active_prompt = user_prompt if user_prompt else self.user_prompt
         partial_guidance = ""
         if self.allow_partial_completion:
             partial_guidance = """
 - Partial completion is allowed for this evaluation. If the majority of the user's requested deliverables have been satisfied and missing items are minor or clearly unobtainable, you may mark the task complete but explicitly note any remaining gaps in the reasoning.
 """
         return f"""
+TASK EVALUATION
+===============
+
+USER PROMPT: "{active_prompt}"
+
 You are evaluating whether a web automation task has been successfully completed.
 
 Your task is to determine if the user's request has been fulfilled based on:
@@ -303,8 +310,9 @@ Return your evaluation as structured JSON with:
 - remaining_steps: (DEPRECATED - leave empty) This field is not used. Actions are determined reactively.
 """
     
-    def _build_evaluation_prompt(self, state: EnvironmentState, user_inputs: List[Dict[str, Any]] = None) -> str:
+    def _build_evaluation_prompt(self, state: EnvironmentState, user_inputs: List[Dict[str, Any]] = None, user_prompt: Optional[str] = None) -> str:
         """Build detailed prompt with all environment context"""
+        active_prompt = user_prompt if user_prompt else self.user_prompt
         
         # Summarize interactions
         interaction_summary = self._summarize_interactions(state.interaction_history)
@@ -320,7 +328,7 @@ Return your evaluation as structured JSON with:
         partial_note = ""
         if self.allow_partial_completion:
             partial_note = "\nPARTIAL COMPLETION ENABLED: If substantial progress (e.g., most requested extractions or subtasks) is evident, you may mark the task complete while noting any remaining gaps.\n"
-        prompt = f"""
+        prompt = f'''
 Evaluate if the following task has been completed:
 
 IMPORTANT: You are viewing a VIEWPORT SNAPSHOT (what's currently visible on screen), not the full page.
@@ -329,7 +337,7 @@ IMPORTANT: You are viewing a VIEWPORT SNAPSHOT (what's currently visible on scre
 - The screenshot shows ONLY what's currently visible on screen
 
 ORIGINAL USER PROMPT:
-"{self.user_prompt}"
+"{active_prompt}"
 
 CURRENT BROWSER STATE (VIEWPORT):
 - URL: {state.current_url}
@@ -349,7 +357,7 @@ INTERACTIONS PERFORMED (in chronological order, most recent last):
 - Review the timeline: earlier interactions led to later ones, and the final state reflects all successful actions.
 {f"""
 USER-PROVIDED INPUTS (from defer_input commands):
-{chr(10).join([f"- {entry.get('prompt', 'Input')}: \"{entry.get('response', '')}\"" for entry in reversed(user_inputs[-3:])])}
+{chr(10).join([f'- {entry.get("prompt", "Input")}: "{entry.get("response", "")}"' for entry in reversed(user_inputs[-3:])])}
 """ if user_inputs else ""}
 
 TASK PROGRESS:
@@ -396,7 +404,7 @@ Your job: Check if all actions explicitly listed in the user prompt have been pe
 The rewritten prompt explicitly states what constitutes completion - follow it exactly.
 {"="*60}
 """ if self.strict_mode else ""}
-"""
+'''
         return prompt
     
     def _summarize_interactions(self, interactions: List[Interaction]) -> str:

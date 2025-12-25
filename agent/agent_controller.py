@@ -1,7 +1,7 @@
 import json
 import time
 import threading
-from typing import Optional, List, Dict, Any, Tuple, Set
+from typing import Optional, List, Dict, Any, Tuple, Set, TYPE_CHECKING, Callable
 from enum import Enum
 import re
 import hashlib
@@ -24,6 +24,12 @@ from ai_utils import (
     get_default_agent_reasoning_level,
 )
 from pydantic import BaseModel, ConfigDict, Field
+
+from .mini_goal_manager import MiniGoalManager, MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
+
+if TYPE_CHECKING:
+    from .agent_controller import AgentController
+    from vision_bot import BrowserVisionBot
 
 _REQUIREMENT_KEYWORD_MAP = {
     "lede": ["lede", "introduction", "intro", "opening paragraph"],
@@ -109,6 +115,8 @@ class AgentController:
         strict_mode: bool = False,
         clarification_callback: Optional[Any] = None,
         max_clarification_rounds: int = 0,
+        # Exploration mode configuration
+        exploration_mode_enabled: bool = True,
         # Stuck detector configuration
         stuck_detector_enabled: bool = True,
         stuck_detector_window_size: int = 5,
@@ -139,6 +147,8 @@ class AgentController:
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            Example: ["just press enter after you've typed a search term into a search field"]
             allow_partial_completion: If True, allow partial completion of tasks.
+            exploration_mode_enabled: If True, enable exploration mode that captures full-page screenshots
+                                   when elements are not visible in the viewport. Default: True.
             parallel_completion_and_action: If True, run completion check and next action determination in parallel
                                             for faster feedback. Default: True.
                                             Note: Set to False primarily for debugging purposes, as sequential execution
@@ -171,6 +181,7 @@ class AgentController:
         self.task_start_url: Optional[str] = None
         self.task_start_time: Optional[float] = None
         self.exploration_retry_max = 2  # Max retries when exploration mode returns invalid command
+        self.exploration_mode_enabled = exploration_mode_enabled  # Enable/disable exploration mode
         self.allow_non_clickable_clicks = True  # Allow clicking non-clickable elements (configurable)
         self.track_ineffective_actions = track_ineffective_actions  # Track actions that didn't yield page changes
         self.detect_ineffective_actions = track_ineffective_actions
@@ -186,8 +197,8 @@ class AgentController:
         self._sub_agent_policy_override: Optional[SubAgentPolicyLevel] = None
         self._sub_agent_policy_score: float = 0.0
         self.sub_agent_spawn_count: int = 0
-        self._spawns_this_iteration: int = 0
-        self._current_iteration: int = 0
+        self._spawns_this_iteration = 0
+        self._current_iteration = 0
         self._parallel_plan_done: bool = False
         self._parallel_plan: Optional[_ParallelWorkPlan] = None
         self._main_agent_focus: Optional[str] = None
@@ -267,18 +278,65 @@ class AgentController:
         self.sub_agent_controller: Optional[SubAgentController] = None
         
         # Pause functionality: Allows pausing agent execution between actions
-        # Why: Enables manual inspection, debugging, and user intervention at granular action-level
-        # rather than only at iteration boundaries. This is critical for:
-        # 1. Debugging specific action sequences
-        # 2. Manual verification of intermediate states
-        # 3. Handling edge cases that require human judgment
-        # 4. Inspecting page state after each action completes
         self._paused = False
         self._pause_lock = threading.Lock()  # Thread-safe access to pause state
         self._pause_event = threading.Event()  # Event to block execution when paused
         self._pause_event.set()  # Initially not paused (event is set = not blocking)
         self._pause_message = "Paused"
-    
+
+        self.mini_goal_manager = MiniGoalManager(self.bot)
+        self.mini_goal_stack: List[Dict[str, Any]] = []  # Stack of active mini goals
+
+    def register_mini_goal(
+        self,
+        trigger: MiniGoalTrigger,
+        mode: MiniGoalMode,
+        handler: Optional[Callable[[MiniGoalScriptContext], None]] = None,
+        instruction_override: Optional[str] = None
+    ):
+        """Register a mini goal trigger and handler"""
+        self.mini_goal_manager.register_mini_goal(trigger, mode, handler, instruction_override)
+
+    def _handle_mini_goal_trigger(self, entry: Dict[str, Any], action: Optional[str] = None, action_step: Optional[Any] = None) -> bool:
+        """Process a triggered mini goal"""
+        if len(self.mini_goal_stack) >= self.mini_goal_manager.recursion_limit:
+            self.event_logger.system_warning(f"Mini goal recursion limit reached ({self.mini_goal_manager.recursion_limit})")
+            return False
+
+        # Add instruction if missing
+        if "instruction" not in entry:
+            entry["instruction"] = entry.get("instruction_override") or f"Interact with: {action}"
+        
+        self.mini_goal_stack.append(entry)
+        self.event_logger.system_info(f"🎯 Mini Goal Active: {entry['instruction']}")
+
+        if entry["mode"] == MiniGoalMode.SCRIPTED:
+            try:
+                self.mini_goal_manager.execute_scripted(entry, self, action_step, action)
+                self.mini_goal_stack.pop()
+                self.event_logger.system_info(f"✅ Scripted Mini Goal Complete")
+                return True
+            except Exception as e:
+                self.mini_goal_stack.pop()
+                self.event_logger.system_error(f"❌ Scripted Mini Goal Failed: {e}")
+                return False
+        
+        # Autonomy mode remains on the stack and will be handled by the main loop
+        return True
+
+    def _get_current_prompt(self, base_prompt: str) -> str:
+        """Returns the current task instruction, considering the mini-goal stack"""
+        if self.mini_goal_stack:
+            return self.mini_goal_stack[-1]["instruction"]
+        return base_prompt
+
+    def _is_nav_action(self, action: str) -> bool:
+        """Identify if an action involves navigating away or returning back/forward"""
+        if not action: return False
+        act = action.lower().strip()
+        nav_cmds = ["navigate:", "back", "forward", "open:"]
+        return any(act.startswith(cmd) for cmd in nav_cmds)
+
     def pause(self, message: str = "Paused") -> None:
         """
         Pause the agent execution between actions.
@@ -294,11 +352,6 @@ class AgentController:
         
         Args:
             message: Optional message to display when paused (default: "Paused")
-        
-        Example:
-            >>> controller.pause("Manual verification needed")
-            >>> # Agent will pause before next action
-            >>> controller.resume()  # Continue execution
         """
         with self._pause_lock:
             self._paused = True
@@ -315,11 +368,6 @@ class AgentController:
         
         Unblocks the agent to continue executing actions. If the agent is not paused,
         this method has no effect.
-        
-        Example:
-            >>> controller.pause()
-            >>> # ... do something ...
-            >>> controller.resume()  # Agent continues
         """
         with self._pause_lock:
             was_paused = self._paused
@@ -539,6 +587,16 @@ class AgentController:
             snapshot = self._capture_snapshot(full_page=False)
             self.event_logger.agent_iteration(iteration + 1, self.max_iterations, url=snapshot.url, title=snapshot.title)
             
+            # --- MINI GOAL INTEGRATION: Observational Trigger ---
+            if len(self.mini_goal_stack) < self.mini_goal_manager.recursion_limit:
+                matching_goal = self.mini_goal_manager.find_matching_goal(visible_text=snapshot.visible_text)
+                if matching_goal:
+                    self._handle_mini_goal_trigger(matching_goal)
+            # --------------------------------------------------
+
+            # 2. Use active instruction from stack if available
+            active_user_prompt = self._get_current_prompt(user_prompt)
+            
             # Calculate screenshot hash for phase-out tracking (at start of iteration)
             if snapshot.screenshot:
                 current_screenshot_hash = hashlib.md5(snapshot.screenshot).hexdigest()
@@ -636,7 +694,8 @@ class AgentController:
                         """Run completion evaluation"""
                         return completion_contract.evaluate(
                             environment_state,
-                            screenshot=snapshot.screenshot
+                            screenshot=snapshot.screenshot,
+                            user_prompt=active_user_prompt
                         )
                     
                     def run_next_action_determination():
@@ -692,6 +751,19 @@ class AgentController:
                         
                         if is_complete:
                             self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
+                            
+                            # --- MINI GOAL INTEGRATION: Pop stack if complete ---
+                            if self.mini_goal_stack:
+                                self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
+                                self.mini_goal_stack.pop()
+                                # Wait for subagent policy check (optional finish)
+                                try: subagent_policy_future.result(timeout=1)
+                                except Exception: pass
+                                
+                                time.sleep(self.iteration_delay)
+                                continue # NEXT ITERATION of main loop
+                            # ----------------------------------------------------
+                            
                             evidence_dict: Dict[str, Any] = {}
                             if evaluation.evidence:
                                 try:
@@ -771,65 +843,115 @@ class AgentController:
                 else:
                     # Sequential execution (parallel disabled)
                     print("🔄 Running completion check...")
-                    is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
+                    latest_evaluation = completion_contract.evaluate(
                         environment_state,
-                        screenshot=snapshot.screenshot
+                        screenshot=snapshot.screenshot,
+                        user_prompt=active_user_prompt
                     )
-                    latest_completion_reasoning = completion_reasoning
-                    latest_evaluation = evaluation
+                    latest_completion_reasoning = latest_evaluation.reasoning if latest_evaluation else None
+                    is_complete = latest_evaluation.is_complete if latest_evaluation else False
                     
                     if is_complete:
-                        self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
-                        evidence_dict: Dict[str, Any] = {}
-                        if evaluation.evidence:
-                            try:
-                                import json
-                                evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
-                            except Exception:
-                                evidence_dict = {"evidence": evaluation.evidence}
+                        self.event_logger.completion_check(
+                            is_complete=True, 
+                            reasoning=latest_completion_reasoning, 
+                            confidence=latest_evaluation.confidence, 
+                            evidence=latest_evaluation.evidence
+                        )
                         
-                        evidence_dict = self._build_evidence(evidence_dict)
-                        self._log_event(
-                            "agent_complete",
-                            status="achieved",
-                            confidence=evaluation.confidence,
-                            reasoning=completion_reasoning,
-                        )
-                        # End task timer and log summary
-                        self.bot.execution_timer.end_task()
-                        self.bot.execution_timer.log_summary()
-                        self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                        return TaskResult(
-                            success=True,
-                            confidence=evaluation.confidence,
-                            reasoning=completion_reasoning,
-                            evidence=evidence_dict
-                        )
+                        # --- MINI GOAL INTEGRATION: Pop stack if complete ---
+                        if self.mini_goal_stack:
+                            self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
+                            self.mini_goal_stack.pop()
+                            # Restart iteration to check main goal or next mini-goal
+                            time.sleep(self.iteration_delay)
+                            continue 
+                        # --------------------------------------------------
+
+                        current_action = "stop"
                     else:
-                        self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
+                        if latest_evaluation:
+                            self.event_logger.completion_check(is_complete=False, reasoning=latest_completion_reasoning)
+                        
                         # Task not complete, determine next action
                         self.event_logger.system_debug("Determining next action based on current viewport...")
-                        if self.track_ineffective_actions:
-                            if self.failed_actions:
-                                self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(self.failed_actions)}")
-                            if self.ineffective_actions:
-                                self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(self.ineffective_actions)}")
+                        
+                        failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
+                        ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
+                        
                         current_action, needs_exploration, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
-                            is_exploring=False,  # Start with viewport mode
-                            failed_actions=self.failed_actions if self.track_ineffective_actions else [],
-                            ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []
+                            is_exploring=False,
+                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
                         # Store reasoning for next interaction
                         if reasoning:
                             self.bot.session_tracker.set_current_action_reasoning(reasoning)
+
+            # --- MINI GOAL INTEGRATION: Action/Historical Trigger ---
+            if current_action and not current_action.startswith("mini_goal:"):
+                matching_goal = self.mini_goal_manager.find_matching_goal(action=current_action)
+                if matching_goal:
+                    # Don't trigger if this specific goal (by identity or instruction) is already active
+                    is_already_active = False
+                    if self.mini_goal_stack:
+                        top = self.mini_goal_stack[-1]
+                        # Use instruction_override or instruction for comparison
+                        top_instr = top.get("instruction")
+                        match_instr = matching_goal.get("instruction_override") or f"Interact with: {current_action}"
+                        if top_instr == match_instr:
+                            is_already_active = True
+                    
+                    if not is_already_active:
+                        triggered = self._handle_mini_goal_trigger(matching_goal, action=current_action)
+                        if triggered:
+                            print(f"⚡ Action intercepted by Mini Goal: {current_action}")
+                        # If autonomy mode, it stays on stack and we restart iteration with new prompt
+                        # If scripted mode, it was executed and popped, we continue?
+                        # Scripted mode counts as 1 iteration, so we should skip execution of current_action
+                        if matching_goal["mode"] == MiniGoalMode.SCRIPTED:
+                            time.sleep(self.iteration_delay)
+                            continue
+                        else:
+                            # Autonomy mode - spawn sub-agent to handle the mini goal
+                            self.event_logger.system_info(f"🤖 Starting Autonomy Mini Goal: {matching_goal.get('instruction_override', current_action)}")
+                            try:
+                                result = self.mini_goal_manager.execute_autonomous(matching_goal, self, current_action)
+                                self.mini_goal_stack.pop()
+                                self.event_logger.system_info(f"✅ Autonomy Mini Goal Complete: {result.success}")
+                            except Exception as e:
+                                self.mini_goal_stack.pop()
+                                self.event_logger.system_error(f"❌ Autonomy Mini Goal Failed: {e}")
+                            time.sleep(self.iteration_delay)
+                            continue
+
+            if current_action and current_action.startswith("mini_goal:"):
+                instruction = current_action.split(":", 1)[1].strip()
+                self._handle_mini_goal_trigger({"mode": MiniGoalMode.AUTONOMY, "instruction": instruction}, action=current_action)
+                time.sleep(self.iteration_delay)
+                continue
+            # ----------------------------------------------------------
+            
+            # Block navigation in autonomy mode
+            if self.mini_goal_stack and self._is_nav_action(current_action):
+                self.event_logger.system_warning(f"🚫 Iteration {iteration+1}: Navigation blocked by active Mini Goal.")
+                current_action = None # Skip this action
+            
+            # Wait, if current_action is STOP and we have a stack, pop it
+            if current_action == "stop" and self.mini_goal_stack:
+                 self.event_logger.system_info(f"🎯 Mini Goal requested STOP, finishing: {active_user_prompt}")
+                 self.mini_goal_stack.pop()
+                 time.sleep(self.iteration_delay)
+                 continue
             else:
                 # We have a queued action, so we still need to check completion
                 self.event_logger.system_debug("Running completion check (next action already queued)...")
                 is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
                     environment_state,
-                    screenshot=snapshot.screenshot
+                    screenshot=snapshot.screenshot,
+                    user_prompt=active_user_prompt
                 )
                 latest_completion_reasoning = completion_reasoning
                 latest_evaluation = evaluation
@@ -926,10 +1048,10 @@ class AgentController:
                     print(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
                     current_action = None
             
-            # 4. If no action determined, trigger exploration mode
+            # 4. If no action determined, trigger exploration mode (if enabled)
             # Exploration mode should only be used when we cannot determine any action
             # Only trigger exploration when current_action is None (no valid action found)
-            if current_action is None:
+            if current_action is None and self.exploration_mode_enabled:
                 # Identify what we're looking for
                 remaining_tasks = goal_determiner._identify_remaining_tasks(environment_state.interaction_history)
                 if remaining_tasks:
@@ -2619,9 +2741,9 @@ class AgentController:
     def _get_page_state(self) -> dict:
         """
         Get current page state for change detection.
-        
+
         Returns:
-            Dictionary with url and dom_signature
+            Dictionary with url, dom_signature, and UI state information
         """
         try:
             url = self.bot.page.url
@@ -2630,10 +2752,15 @@ class AgentController:
             sig_src = f"{url}|{element_count}"
             dom_signature = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
             screenshot_hash = getattr(self.bot.page, "_last_screenshot_hash", None)
+
+            # Get additional UI state information for better change detection
+            ui_state = self._get_ui_state_info()
+
             return {
                 "url": url,
                 "dom_signature": dom_signature,
-                "screenshot_hash": screenshot_hash
+                "screenshot_hash": screenshot_hash,
+                **ui_state
             }
         except Exception:
             # Fallback to just URL
@@ -2644,14 +2771,79 @@ class AgentController:
                 return {
                     "url": url,
                     "dom_signature": dom_signature,
-                    "screenshot_hash": screenshot_hash
+                    "screenshot_hash": screenshot_hash,
+                    "visible_elements": [],
+                    "overlay_elements": []
                 }
             except Exception:
                 return {
                     "url": "",
                     "dom_signature": "",
-                    "screenshot_hash": None
+                    "screenshot_hash": None,
+                    "visible_elements": [],
+                    "overlay_elements": []
                 }
+
+    def _get_ui_state_info(self) -> dict:
+        """
+        Get UI state information for change detection.
+
+        Returns:
+            Dictionary with visible elements and overlay information
+        """
+        try:
+            # Get visible elements (simplified version for performance)
+            visible_elements = self.bot.page.evaluate("""
+                () => {
+                    const elements = [];
+                    const allElements = document.querySelectorAll('*');
+
+                    for (let i = 0; i < Math.min(allElements.length, 200); i++) {  // Limit for performance
+                        const el = allElements[i];
+                        const rect = el.getBoundingClientRect();
+
+                        // Check if element is visible in viewport
+                        if (rect.width > 0 && rect.height > 0 &&
+                            rect.bottom > 0 && rect.right > 0 &&
+                            rect.top < window.innerHeight && rect.left < window.innerWidth) {
+
+                            elements.push({
+                                tagName: el.tagName,
+                                textContent: (el.textContent || '').trim().substring(0, 50),
+                                id: el.id || '',
+                                className: el.className || '',
+                                role: el.getAttribute('role') || '',
+                                type: el.type || ''
+                            });
+
+                            if (elements.length >= 100) break;  // Limit visible elements
+                        }
+                    }
+
+                    return elements;
+                }
+            """)
+
+            # Get overlay elements if available
+            overlay_elements = []
+            if hasattr(self.bot, '_cached_overlay_data') and self.bot._cached_overlay_data:
+                # Simplify overlay data for comparison
+                overlay_elements = [{
+                    'tag': elem.get('tagName', ''),
+                    'text': elem.get('textContent', '')[:30],
+                    'id': elem.get('id', '')
+                } for elem in self.bot._cached_overlay_data[:50]]  # Limit overlay elements
+
+            return {
+                "visible_elements": visible_elements or [],
+                "overlay_elements": overlay_elements
+            }
+
+        except Exception:
+            return {
+                "visible_elements": [],
+                "overlay_elements": []
+            }
 
     def _spawn_child_controller(
         self,
@@ -2958,27 +3150,91 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
     def _page_state_changed(self, state_before: dict, state_after: dict) -> bool:
         """
         Check if page state changed after an action.
-        
+
         Args:
             state_before: Page state before action
             state_after: Page state after action
-            
+
         Returns:
             True if page state changed, False otherwise
         """
         # Check if URL changed
         if state_before.get("url") != state_after.get("url"):
             return True
-        
+
         # Check if DOM signature changed
         if state_before.get("dom_signature") != state_after.get("dom_signature"):
             return True
-        
+
         # Check if screenshot hash changed (if available)
         if state_before.get("screenshot_hash") != state_after.get("screenshot_hash"):
             return True
-        
+
+        # Check for UI state changes that DOM signature might miss
+        try:
+            ui_changes = self._detect_ui_state_changes(state_before, state_after)
+            if ui_changes:
+                print(f"   🔄 Detected UI state changes: {ui_changes}")
+                return True
+        except Exception as e:
+            print(f"   ⚠️ Error checking UI state changes: {e}")
+
         return False
+
+    def _detect_ui_state_changes(self, state_before: dict, state_after: dict) -> list[str]:
+        """
+        Detect subtle UI changes that basic DOM comparison might miss.
+
+        Returns:
+            List of detected changes (empty if no changes)
+        """
+        changes = []
+
+        try:
+            # Check for changes in visible elements count
+            visible_before = len(state_before.get("visible_elements", []))
+            visible_after = len(state_after.get("visible_elements", []))
+
+            if abs(visible_before - visible_after) > 2:  # Allow small variations
+                changes.append(f"visible elements: {visible_before} → {visible_after}")
+
+            # Check for new interactive elements appearing
+            interactive_before = set()
+            interactive_after = set()
+
+            for elem in state_before.get("visible_elements", []):
+                if elem.get("tagName", "").lower() in ["button", "input", "select", "a"] or elem.get("role") in ["button", "link", "option", "combobox"]:
+                    interactive_before.add(f"{elem.get('tagName', '')}:{elem.get('textContent', '')[:20]}")
+
+            for elem in state_after.get("visible_elements", []):
+                if elem.get("tagName", "").lower() in ["button", "input", "select", "a"] or elem.get("role") in ["button", "link", "option", "combobox"]:
+                    interactive_after.add(f"{elem.get('tagName', '')}:{elem.get('textContent', '')[:20]}")
+
+            new_interactive = interactive_after - interactive_before
+            if new_interactive:
+                changes.append(f"new interactive elements: {len(new_interactive)}")
+
+            # Check for changes in overlay count (indicates dropdowns/modals)
+            overlays_before = len(state_before.get("overlay_elements", []))
+            overlays_after = len(state_after.get("overlay_elements", []))
+
+            if overlays_before != overlays_after:
+                changes.append(f"overlay elements: {overlays_before} → {overlays_after}")
+
+            # Check for form state changes (expanded forms, new inputs)
+            form_elements_before = sum(1 for elem in state_before.get("visible_elements", [])
+                                     if elem.get("tagName", "").lower() in ["input", "select", "textarea"])
+            form_elements_after = sum(1 for elem in state_after.get("visible_elements", [])
+                                    if elem.get("tagName", "").lower() in ["input", "select", "textarea"])
+
+            if abs(form_elements_before - form_elements_after) > 1:
+                changes.append(f"form elements: {form_elements_before} → {form_elements_after}")
+
+        except Exception:
+            # Don't let UI change detection break the main flow
+            pass
+
+        return changes
     
     def _update_sub_agent_policy(self, user_prompt: str, completion_reasoning: Optional[str]) -> None:
         """

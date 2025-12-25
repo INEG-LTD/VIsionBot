@@ -123,8 +123,18 @@ class SelectorUtils:
                 
                 // Priority 1: ID (most reliable)
                 if (element.id) {{
-                    console.log('Using ID selector:', '#' + element.id);
-                    return '#' + element.id;
+                    // Check if ID contains characters that make it invalid for CSS ID selectors
+                    // CSS ID selectors cannot contain: spaces, colons, periods, hashes, brackets, etc.
+                    const invalidChars = /[ :.#\[\]]/;
+                    if (invalidChars.test(element.id)) {{
+                        // Use attribute selector for IDs with invalid characters
+                        const attrSelector = '[id="' + element.id.replace(/"/g, '\\"') + '"]';
+                        console.log('Using attribute selector for invalid ID:', attrSelector);
+                        return attrSelector;
+                    }} else {{
+                        console.log('Using ID selector:', '#' + element.id);
+                        return '#' + element.id;
+                    }}
                 }}
                 
                 // Priority 2: Name attribute
@@ -238,7 +248,13 @@ class SelectorUtils:
                 
                 // Just try the most basic selectors without validation
                 if (targetElement.id) {{
-                    return '#' + targetElement.id;
+                    // Check if ID contains characters that make it invalid for CSS ID selectors
+                    const invalidChars = /[ :.#\[\]]/;
+                    if (invalidChars.test(targetElement.id)) {{
+                        return '[id="' + targetElement.id.replace(/"/g, '\\"') + '"]';
+                    }} else {{
+                        return '#' + targetElement.id;
+                    }}
                 }}
                 
                 if (targetElement.name) {{

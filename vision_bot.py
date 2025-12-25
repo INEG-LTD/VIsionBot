@@ -14,10 +14,18 @@ from typing import Any, Optional, List, Dict, Tuple, Union, Type, Callable
 from playwright.sync_api import Browser, Page, Playwright
 # Compatible import for playwright_stealth across versions
 try:
-    from playwright_stealth import stealth_sync
-except ImportError:
-    from playwright_stealth.stealth import stealth_sync
+    from playwright_stealth import Stealth
+    stealth_instance = Stealth()
 
+    def stealth_sync(page):
+        return stealth_instance.apply_stealth_sync(page)
+
+except ImportError:
+    # Fallback: disable stealth if not available
+    def stealth_sync(page):
+        pass  # No-op function
+
+from agent.mini_goal_manager import MiniGoalMode, MiniGoalScriptContext, MiniGoalTrigger
 from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType, PageInfo
 from element_detection import ElementDetector
@@ -353,6 +361,9 @@ class BrowserVisionBot:
         
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
+
+        # Mini goals registry (will be passed to AgentController)
+        self.mini_goals: List[Dict[str, Any]] = []
 
         # Action queue system for deferred actions
         self.action_queue = ActionQueue()
@@ -1456,6 +1467,7 @@ class BrowserVisionBot:
         strict_mode: bool = False,
         clarification_callback: Optional[Callable[[str], str]] = None,
         max_clarification_rounds: int = 3,
+        exploration_mode_enabled: bool = True,
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
     ) -> AgentResult:
@@ -1485,6 +1497,8 @@ class BrowserVisionBot:
                                    when the agent wants to infer extra information. If provided and strict_mode is False,
                                    the agent will ask before inferring. Default: None.
             max_clarification_rounds: Maximum number of clarification rounds. Default: 3.
+            exploration_mode_enabled: If True, enable exploration mode that captures full-page screenshots
+                                   when elements are not visible in the viewport. Default: True.
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            These rules influence what actions the agent takes.
                            Example: ["just press enter after you've typed a search term into a search field"]
@@ -1621,6 +1635,7 @@ class BrowserVisionBot:
                 strict_mode=strict_mode,
                 clarification_callback=clarification_callback,
                 max_clarification_rounds=max_clarification_rounds,
+                exploration_mode_enabled=exploration_mode_enabled,
                 stuck_detector_enabled=self.stuck_detector_enabled,
                 stuck_detector_window_size=self.stuck_detector_window_size,
                 stuck_detector_threshold=self.stuck_detector_threshold,
@@ -1638,6 +1653,15 @@ class BrowserVisionBot:
                 interaction_summary_limit_action=interaction_summary_limit_action,
             )
             controller.max_iterations = max_iterations
+            
+            # Register all pre-registered mini goals with the new controller
+            for goal_data in self.mini_goals:
+                controller.register_mini_goal(
+                    trigger=goal_data["trigger"],
+                    mode=goal_data["mode"],
+                    handler=goal_data["handler"],
+                    instruction_override=goal_data["instruction_override"]
+                )
             
             # Store controller for pause/resume access
             # Why: Allows external code to pause/resume the agent during execution
@@ -2436,6 +2460,42 @@ Return only the extracted text that appears in the text content above. Do not ma
             self.logger.log_error(f"Error in register_prompts: {e}", "register_prompts() execution", {"ref_id": ref_id})
             print(f"❌ Error in register_prompts: {e}")
             return False
+
+    def register_mini_goal(
+        self,
+        trigger: 'MiniGoalTrigger',
+        mode: 'MiniGoalMode',
+        handler: Optional[Callable[['MiniGoalScriptContext'], None]] = None,
+        instruction_override: Optional[str] = None
+    ) -> None:
+        """
+        Register a mini goal trigger and handler.
+        
+        Mini goals allow the agent to temporarily switch focus to a sub-objective
+        when specific conditions (observations or actions) are met.
+        
+        Args:
+            trigger: The condition that activates this mini-goal
+            mode: Either AUTONOMY (agent solves it) or SCRIPTED (handler executes)
+            handler: For SCRIPTED mode, the Python function to execute
+            instruction_override: Custom instruction for the agent in AUTONOMY mode
+        """
+        goal_data = {
+            "trigger": trigger,
+            "mode": mode,
+            "handler": handler,
+            "instruction_override": instruction_override
+        }
+        self.mini_goals.append(goal_data)
+
+        # If an agent is already running, register it there too
+        if hasattr(self, 'agent_controller') and self.agent_controller:
+            self.agent_controller.register_mini_goal(
+                trigger=trigger,
+                mode=mode,
+                handler=handler,
+                instruction_override=instruction_override
+            )
 
     def _get_semantic_target(self, description: str) -> Optional[SemanticTarget]:
         """Build semantic target for better element matching."""

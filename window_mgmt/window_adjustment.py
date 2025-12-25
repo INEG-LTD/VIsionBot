@@ -87,7 +87,7 @@ def move_frontmost_window(rect):
     x, y, w, h = map(int, rect)
     right, bottom = x + w, y + h
 
-    ascript = f'''
+    ascript = f"""
     set targetBounds to {{{x}, {y}, {right}, {bottom}}}
     tell application "System Events"
         set frontProc to first application process whose frontmost is true
@@ -110,7 +110,7 @@ def move_frontmost_window(rect):
             end if
         end try
     end tell
-    '''
+    """
     subprocess.run(["osascript", "-e", ascript], check=False)
 
 def launch_chrome_at(pw, rect, channel="chrome"):

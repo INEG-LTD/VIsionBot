@@ -774,10 +774,10 @@ class ActionExecutor:
             return False
 
     def _highlight_overlay(self, overlay_index: int) -> bool:
-        selector = f"[data-automation-overlay-index=\"{overlay_index}\"]"
+        selector = f'[data-automation-overlay-index="{overlay_index}"]'
         if self._highlight_selector(selector):
             return True
-        fallback_selector = f"[data-overlay-index=\"{overlay_index}\"]"
+        fallback_selector = f'[data-overlay-index="{overlay_index}"]'
         return self._highlight_selector(fallback_selector)
 
     def _highlight_box(self, box: List[int], page_info: PageInfo) -> bool:

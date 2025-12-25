@@ -398,9 +398,21 @@ def _build_response_format(model_object_type: Optional[Type[BaseModel]], model: 
     if model_object_type is None:
         return {"type": "json_object"}
     
-    # Gemini models don't support strict json_schema mode well, use basic json_object
+    # Gemini models can use json_schema mode with some limitations
     if "gemini" in model.lower() or "google" in model.lower():
-        return {"type": "json_object"}
+        try:
+            schema = model_object_type.model_json_schema()
+        except AttributeError:
+            schema = model_object_type.schema()
+        _enforce_no_additional_properties(schema)
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": model_object_type.__name__,
+                "schema": schema,
+                "strict": False,  # Less strict for Gemini compatibility
+            },
+        }
     
     try:
         schema = model_object_type.model_json_schema()
