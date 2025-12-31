@@ -131,7 +131,6 @@ __all__ = [
     "generate_text_with_cost",
     "generate_text_gpt_with_cost",
     "generate_text",
-    "rewrite_condition_to_question",
     "answer_question_with_vision",
     "generate_model_with_cost",
     "generate_model_gpt_with_cost",
@@ -1014,26 +1013,6 @@ def generate_text(
         model=model,
         reasoning_level=reasoning_level,
     )[0]
-
-
-def rewrite_condition_to_question(condition: str, model: str | None = None) -> str:
-    """Rewrite a natural language condition into a yes/no question."""
-    if model is None:
-        model = get_default_model()
-    condition = (condition or "").strip()
-    if not condition:
-        return "Is the condition true?"
-
-    system_prompt = (
-        "You rewrite natural-language conditions into concise yes/no questions about a web page. "
-        "Keep the question short and unambiguous."
-    )
-    prompt = f"Condition: {condition}\nRewrite as a yes/no question about the page:"
-    try:
-        question = generate_text(prompt, system_prompt=system_prompt, model=model).strip()
-        return question or f"Is it true that {condition}?"
-    except Exception:
-        return f"Is it true that {condition}?"
 
 
 def answer_question_with_vision(

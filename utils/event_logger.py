@@ -139,23 +139,10 @@ class EventLogger:
             self._event_history = []
             self._max_history = 1000
         
-    def set_debug_mode(self, enabled: bool) -> None:
-        """Enable or disable debug mode"""
-        self.debug_mode = enabled
-    
     def register_callback(self, callback: Callable[[BotEvent], None]) -> None:
         """Register a callback for all events"""
         if callback not in self._callbacks:
             self._callbacks.append(callback)
-    
-    def unregister_callback(self, callback: Callable[[BotEvent], None]) -> None:
-        """Unregister a callback"""
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
-    
-    def clear_callbacks(self) -> None:
-        """Clear all callbacks"""
-        self._callbacks.clear()
     
     def _safe_emit(self, event: BotEvent) -> None:
         """Safely emit an event - never raises exceptions"""
@@ -261,26 +248,6 @@ class EventLogger:
         except Exception:
             pass
     
-    def goal_success(self, goal_description: str, duration_ms: float = None, **details):
-        try:
-            msg = f"Goal achieved: {goal_description}"
-            if duration_ms:
-                msg += f" (took {duration_ms:.1f}ms)"
-            self.emit(EventType.GOAL_SUCCESS, msg, "SUCCESS", 
-                     goal_description=goal_description, duration_ms=duration_ms, **details)
-        except Exception:
-            pass
-    
-    def goal_failure(self, goal_description: str, error: str = None, **details):
-        try:
-            msg = f"Goal failed: {goal_description}"
-            if error:
-                msg += f" - {error}"
-            self.emit(EventType.GOAL_FAILURE, msg, "ERROR", 
-                     goal_description=goal_description, error=error, **details)
-        except Exception:
-            pass
-    
     def system_info(self, message: str, **details):
         try:
             self.emit(EventType.SYSTEM_INFO, message, "INFO", **details)
@@ -326,13 +293,6 @@ class EventLogger:
             if error:
                 msg += f" - {error}"
             self.emit(EventType.EXTRACTION_FAILURE, msg, "ERROR", prompt=prompt, error=error, **details)
-        except Exception:
-            pass
-    
-    def plan_generated(self, step_count: int, reasoning: str = None, **details):
-        try:
-            self.emit(EventType.PLAN_GENERATED, f"Generated plan with {step_count} steps", "INFO", 
-                     step_count=step_count, reasoning=reasoning, **details)
         except Exception:
             pass
     
@@ -542,18 +502,6 @@ class EventLogger:
         except Exception:
             pass
     
-    def get_event_history(self, event_type: Optional[EventType] = None, limit: int = None) -> List[BotEvent]:
-        """Get event history, optionally filtered by type"""
-        events = self._event_history
-        if event_type:
-            events = [e for e in events if e.event_type == event_type]
-        if limit:
-            events = events[-limit:]
-        return events
-    
-    def clear_history(self) -> None:
-        """Clear event history"""
-        self._event_history.clear()
 
 
 # Global instance

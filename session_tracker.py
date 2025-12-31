@@ -257,11 +257,6 @@ class SessionTracker:
             )
         except Exception:
             pass
-    
-    def clear_history(self) -> None:
-        """Clear interaction and state history"""
-        self.interaction_history.clear()
-        self.state_history.clear()
         # Keep url_history as it's useful for navigation context
         # self.url_history.clear()
         # self.url_pointer = -1

@@ -324,12 +324,4 @@ class GIFRecorder:
         """Convert hex color to RGB tuple"""
         hex_color = hex_color.lstrip('#')
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        
-    def get_frame_count(self) -> int:
-        """Get the current number of captured frames"""
-        return len(self.frames)
-        
-    def is_recording(self) -> bool:
-        """Check if currently recording"""
-        return self.recording
 

@@ -41,27 +41,6 @@ class ActionResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
     
-    def is_success(self) -> bool:
-        """
-        Check if action succeeded.
-        
-        Returns:
-            bool: True if action succeeded, False otherwise
-        """
-        return self.success
-    
-    def get_data(self, default: Any = None) -> Any:
-        """
-        Get data with optional default value.
-        
-        Args:
-            default: Default value if data is None
-            
-        Returns:
-            The data if available, otherwise the default value
-        """
-        return self.data if self.data is not None else default
-    
     def __bool__(self) -> bool:
         """
         Allow truthiness check.
