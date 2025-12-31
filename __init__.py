@@ -31,7 +31,6 @@ from bot_config import (
     ModelConfig,
     ExecutionConfig,
     CacheConfig,
-    RecordingConfig,
     ErrorHandlingConfig,
     BrowserConfig as BotBrowserConfig,
 )
@@ -95,7 +94,6 @@ __all__ = [
     "ModelConfig",
     "ExecutionConfig",
     "CacheConfig",
-    "RecordingConfig",
     "ErrorHandlingConfig",
     "BotBrowserConfig",
     # Browser provider

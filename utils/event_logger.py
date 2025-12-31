@@ -58,10 +58,6 @@ class EventType(str, Enum):
     COMPLETION_CHECK = "completion_check"
     COMPLETION_SUCCESS = "completion_success"
     
-    # GIF events
-    GIF_START = "gif_start"
-    GIF_STOP = "gif_stop"
-    
     # Action determination events
     ACTION_DETERMINED = "action_determined"
     ACTION_PARAMS = "action_params"
@@ -342,24 +338,6 @@ class EventLogger:
             level = "SUCCESS" if is_complete else "INFO"
             event_type = EventType.COMPLETION_SUCCESS if is_complete else EventType.COMPLETION_CHECK
             self.emit(event_type, msg, level, is_complete=is_complete, reasoning=reasoning, confidence=confidence, **details)
-        except Exception:
-            pass
-    
-    def gif_start(self, session_id: str = None, **details):
-        try:
-            msg = "GIF recording started"
-            if session_id:
-                msg += f" (session: {session_id})"
-            self.emit(EventType.GIF_START, msg, "INFO", session_id=session_id, **details)
-        except Exception:
-            pass
-    
-    def gif_stop(self, gif_path: str = None, **details):
-        try:
-            msg = "GIF recording stopped"
-            if gif_path:
-                msg += f" - saved to: {gif_path}"
-            self.emit(EventType.GIF_STOP, msg, "INFO", gif_path=gif_path, **details)
         except Exception:
             pass
     

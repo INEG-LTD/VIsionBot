@@ -2,7 +2,7 @@ from time import sleep
 from middlewares.error_handling_middleware import ErrorHandlingMiddleware
 from pathlib import Path
 from browser_provider import BrowserConfig
-from bot_config import BotConfig, ModelConfig, ExecutionConfig, RecordingConfig, ElementConfig, DebugConfig
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, ElementConfig, DebugConfig
 from bot_config import ActFunctionConfig
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
@@ -37,9 +37,6 @@ config = BotConfig(
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
         overlay_only_planning=True
-    ),
-    recording=RecordingConfig(
-        save_gif=True
     ),
     logging=DebugConfig(
         debug_mode=True  # Set to False to use callbacks only

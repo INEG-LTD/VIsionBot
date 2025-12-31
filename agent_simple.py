@@ -13,7 +13,7 @@ import threading
 from middlewares.error_handling_middleware import ErrorHandlingMiddleware
 from pathlib import Path
 from browser_provider import BrowserConfig
-from bot_config import BotConfig, ModelConfig, ExecutionConfig, RecordingConfig, ElementConfig, DebugConfig, UserMessagesConfig
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, ElementConfig, DebugConfig, UserMessagesConfig
 from bot_config import ActFunctionConfig
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
@@ -393,9 +393,6 @@ config = BotConfig(
         # overlay_only_planning=True,
         include_overlays_in_agent_context=False,
         # max_coordinate_overlays=100  # Limit overlays for better performance
-    ),
-    recording=RecordingConfig(
-        save_gif=True
     ),
     logging=DebugConfig(
         debug_mode=True  # Set to False to use callbacks only (no debug prints)

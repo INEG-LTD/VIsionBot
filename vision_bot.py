@@ -46,7 +46,6 @@ from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from utils.event_logger import EventLogger, set_event_logger
-from gif_recorder import GIFRecorder
 from action_ledger import ActionLedger
 from ai_utils import (
     ReasoningLevel,
@@ -372,10 +371,6 @@ class BrowserVisionBot:
         self.action_queue = ActionQueue()
         self._auto_process_queue = True  # Auto-process queue after each act()
 
-        # Extract recording configuration
-        self.save_gif = config.recording.save_gif
-        self.gif_output_dir = config.recording.output_dir
-        self.gif_recorder: Optional[GIFRecorder] = None
 
         # Bot termination state
         self.terminated = False
@@ -687,23 +682,13 @@ class BrowserVisionBot:
         # Initialize action ledger for tracking action execution
         self.action_ledger: ActionLedger = ActionLedger()
         
-        # Initialize GIF recorder if enabled (BEFORE ActionExecutor)
-        if self.save_gif:
-            self.gif_recorder = GIFRecorder(page, self.gif_output_dir)
-            self.gif_recorder.start_recording()
-            try:
-                self.event_logger.gif_start()
-            except Exception:
-                pass
-        
-        # Initialize action executor with deduper, GIF recorder, and action ledger
+        # Initialize action executor with deduper and action ledger
         # Pass a callback so action executor can execute actions through bot infrastructure
         self.action_executor: ActionExecutor = ActionExecutor(
             page, 
             self.session_tracker, 
             self.page_utils, 
             self.deduper, 
-            self.gif_recorder, 
             self.action_ledger,
             execute_action_callback=self._execute_action_via_bot,
             user_messages_config=self.config.user_messages if self.config else None
@@ -762,48 +747,21 @@ class BrowserVisionBot:
             print(f"    ⚠️ Error executing auto-converted action '{action_command}': {e}")
             return False
 
-    def stop_gif_recording(self) -> Optional[str]:
-        """Stop GIF recording and return the path to the generated GIF"""
-        if not self.save_gif or not self.gif_recorder:
-            return None
-            
-        gif_path = self.gif_recorder.stop_recording()
-        self.gif_recorder = None
-        return gif_path
-
-    def end(self) -> Optional[str]:
+    def end(self) -> None:
         """
-        Terminate the bot, stop GIF recording, and prevent any subsequent operations.
-        
-        Returns:
-            Optional[str]: Path to the generated GIF if recording was enabled, None otherwise
+        Terminate the bot and prevent any subsequent operations.
         """
         if self.terminated:
             try:
                 self.event_logger.system_warning("Bot is already terminated")
             except Exception:
                 pass
-            return None
+            return
             
         try:
             self.event_logger.system_info("Terminating bot...")
         except Exception:
             pass
-        
-        # Stop GIF recording first
-        gif_path = None
-        if self.save_gif and self.gif_recorder:
-            try:
-                self.event_logger.system_info("Stopping GIF recording...")
-            except Exception:
-                pass
-            gif_path = self.gif_recorder.stop_recording()
-            self.gif_recorder = None
-            if gif_path:
-                try:
-                    self.event_logger.gif_stop(gif_path=gif_path)
-                except Exception:
-                    pass
         
         # Close browser provider and cleanup
         try:
@@ -827,14 +785,6 @@ class BrowserVisionBot:
             self.event_logger.system_info("Bot terminated successfully")
         except Exception:
             pass
-        
-        if gif_path:
-            try:
-                self.event_logger.system_info(f"GIF recording available at: {gif_path}")
-            except Exception:
-                pass
-        
-        return gif_path
 
     def __enter__(self) -> 'BrowserVisionBot':
         """
@@ -1186,6 +1136,7 @@ class BrowserVisionBot:
         confirm_before_interaction: bool = False,
         action_id: Optional[str] = None,
         max_attempts: Optional[int] = None,
+        base_knowledge: Optional[List[str]] = None,
         **kwargs
     ) -> ActionResult:
         """
@@ -1202,6 +1153,7 @@ class BrowserVisionBot:
             confirm_before_interaction: Require user confirmation before each action
             action_id: Optional action ID for tracking (auto-generated if not provided)
             max_attempts: Override bot's max_attempts for this command (None = use bot default)
+            base_knowledge: Optional list of knowledge rules/instructions that guide planning and element selection
         
         Returns:
             ActionResult - Structured result with success, message, confidence, and metadata
@@ -1400,6 +1352,7 @@ class BrowserVisionBot:
                 confirm_before_interaction=confirm_before_interaction,
                 action_id=action_id,
                 start_time=start_time,
+                base_knowledge=base_knowledge,
             )
             if keyword_command_result is not None:
                 # keyword_action_result is now an ActionResult or bool (temporary compatibility)
@@ -2665,6 +2618,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
         action_id: Optional[str],
         start_time: float,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         """Attempt to execute the action using keyword-based execution. Returns None to fall back."""
         parsed = parse_keyword_command(goal_description)
@@ -2681,6 +2635,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
+                base_knowledge=base_knowledge,
             )
         elif keyword == "type":
             result = self._keyword_type(
@@ -2690,6 +2645,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
+                base_knowledge=base_knowledge,
             )
         elif keyword == "select":
             result = self._keyword_select(
@@ -2699,6 +2655,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
+                base_knowledge=base_knowledge,
             )
         elif keyword == "upload":
             result = self._keyword_upload(
@@ -2708,6 +2665,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
+                base_knowledge=base_knowledge,
             )
         elif keyword == "datetime":
             result = self._keyword_datetime(
@@ -2717,6 +2675,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
+                base_knowledge=base_knowledge,
             )
         elif keyword == "scroll":
             result = self._keyword_scroll(
@@ -2882,6 +2841,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         action_kwargs: Dict[str, Any],
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         max_attempts = self.element_selection_retry_attempts
         instruction = selection_instruction or goal_description
@@ -2921,6 +2881,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 semantic_hint=None,
                 screenshot=clean_screenshot or screenshot_with_overlays,
                 model=selection_model,
+                base_knowledge=base_knowledge,
             )
             try:
                 self.event_logger.overlay_selection(f"Overlay selection response: {selection}")
@@ -3001,6 +2962,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         target_hint_raw = (payload or "").strip()
         if helper:
@@ -3032,6 +2994,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             action_kwargs={},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
+            base_knowledge=base_knowledge,
         )
 
     def _keyword_type(
@@ -3043,6 +3006,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         intent = parse_action_intent(goal_description)
         if not intent or intent.action != "type" or not intent.value:
@@ -3068,6 +3032,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             action_kwargs={"text_to_type": intent.value},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
+            base_knowledge=base_knowledge,
         )
 
     def _keyword_select(
@@ -3079,6 +3044,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         intent = parse_action_intent(goal_description)
         if not intent or intent.action != "select" or not intent.value:
@@ -3106,6 +3072,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             action_kwargs={"select_option_text": intent.value},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
+            base_knowledge=base_knowledge,
         )
 
     def _keyword_upload(
@@ -3117,6 +3084,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         intent = parse_action_intent(goal_description)
         if not intent or intent.action != "upload":
@@ -3144,6 +3112,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             action_kwargs={"upload_file_path": intent.value or None},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
+            base_knowledge=base_knowledge,
         )
 
     def _keyword_datetime(
@@ -3155,6 +3124,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         intent = parse_action_intent(goal_description)
         if not intent or intent.action != "datetime" or not intent.value:
@@ -3180,6 +3150,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             action_kwargs={"datetime_value": intent.value},
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
+            base_knowledge=base_knowledge,
         )
 
     def _keyword_scroll(

@@ -162,22 +162,6 @@ class StuckDetectorConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class RecordingConfig(BaseModel):
-    """GIF recording configuration."""
-    
-    save_gif: bool = Field(
-        default=False,
-        description="Enable GIF recording of browser interactions"
-    )
-    output_dir: str = Field(
-        default="gif_recordings",
-        description="Directory for saving GIF recordings"
-    )
-    
-    class Config:
-        arbitrary_types_allowed = True
-
-
 class ElementConfig(BaseModel):
     """Element detection and overlay configuration."""
     
@@ -335,8 +319,7 @@ class BotConfig(BaseModel):
     Example:
         >>> config = BotConfig(
         ...     model=ModelConfig(agent_model="gpt-5-mini"),
-        ...     execution=ExecutionConfig(),
-        ...     recording=RecordingConfig(save_gif=True)
+        ...     execution=ExecutionConfig()
         ... )
         >>> bot = BrowserVisionBot(config=config)
     """
@@ -356,10 +339,6 @@ class BotConfig(BaseModel):
     stuck_detector: StuckDetectorConfig = Field(
         default_factory=StuckDetectorConfig,
         description="Stuck detection configuration"
-    )
-    recording: RecordingConfig = Field(
-        default_factory=RecordingConfig,
-        description="GIF recording configuration"
     )
     elements: ElementConfig = Field(
         default_factory=ElementConfig,
@@ -395,10 +374,9 @@ class BotConfig(BaseModel):
         Create a configuration optimized for debugging.
         
         Returns:
-            BotConfig with debug mode enabled and GIF recording
+            BotConfig with debug mode enabled
         """
         return cls(
-            recording=RecordingConfig(save_gif=True),
             logging=DebugConfig(debug_mode=True),
             execution=ExecutionConfig(
                 parallel_completion_and_action=False  # Sequential for easier debugging

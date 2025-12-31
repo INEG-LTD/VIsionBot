@@ -15,7 +15,6 @@ from bot_config import (
     ModelConfig,
     ExecutionConfig,
     CacheConfig,
-    RecordingConfig,
     ErrorHandlingConfig,
     ActFunctionConfig,
 )
@@ -74,7 +73,6 @@ __all__ = [
     "ModelConfig",
     "ExecutionConfig",
     "CacheConfig",
-    "RecordingConfig",
     "ErrorHandlingConfig",
     "ActFunctionConfig",
     # Browser provider

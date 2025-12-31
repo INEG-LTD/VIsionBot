@@ -52,6 +52,7 @@ class PlanGenerator:
         screenshot: Optional[bytes] = None,
         max_samples: Optional[int] = None,
         model: Optional[str] = None,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[int]:
         """
         Lightweight helper that asks the LLM to pick a single overlay number.
@@ -67,6 +68,7 @@ class PlanGenerator:
             screenshot=screenshot,
             max_samples=max_samples,
             model=model,
+            base_knowledge=base_knowledge,
         )
         if selection is None:
             return None
@@ -138,6 +140,7 @@ class PlanGenerator:
         screenshot: Optional[bytes] = None,
         max_samples: Optional[int] = None,
         model: Optional[str] = None,
+        base_knowledge: Optional[List[str]] = None,
     ) -> Optional[int]:
         if not element_data:
             return None
@@ -249,6 +252,13 @@ class PlanGenerator:
             except Exception:
                 pass
 
+        # Build base knowledge section if provided
+        base_knowledge_section = ""
+        if base_knowledge:
+            base_knowledge_section = "\n\nBASE KNOWLEDGE (Custom Rules):\n"
+            for i, knowledge in enumerate(base_knowledge, 1):
+                base_knowledge_section += f"{i}. {knowledge}\n"
+
         prompt = (
             "You are given a page screenshot and a list of numbered overlay summaries.\n"
             "Your job is to pick the overlay number that best satisfies the browsing instruction.\n"
@@ -256,6 +266,7 @@ class PlanGenerator:
             "respond with 0 to indicate that there is no suitable element.\n"
             f'Instruction: "{instruction}"\n'
             f"Instruction terms to align with: {goal_token_str}.\n"
+            f"{base_knowledge_section}"
         )
 
         if semantic_hint:

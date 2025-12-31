@@ -1244,7 +1244,8 @@ class AgentController:
                     additional_context=act_params["additional_context"],
                     target_context_guard=act_params["target_context_guard"],
                     max_attempts=5,  # Allow 5 attempts per action for better reliability
-                    allow_non_clickable_clicks=self.allow_non_clickable_clicks  # Pass configurable setting
+                    allow_non_clickable_clicks=self.allow_non_clickable_clicks,  # Pass configurable setting
+                    base_knowledge=self.base_knowledge,  # Pass base knowledge to act() for planning
                 )
                 
                 # Extract success from ActionResult

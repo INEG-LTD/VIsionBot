@@ -62,12 +62,11 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, gif_recorder=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils
         self.deduper = deduper or InteractionDeduper()
-        self.gif_recorder = gif_recorder
         self.action_ledger = action_ledger or ActionLedger()
         self.execute_action_callback = execute_action_callback  # Callback to execute actions through bot infrastructure
         self.last_failure_reason: Optional[str] = None
@@ -1025,32 +1024,6 @@ class ActionExecutor:
         except Exception:
             pass
         
-        # Record interaction for GIF if recorder is available
-        if self.gif_recorder:
-            element_box = None
-            if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
-                for el in elements.elements:
-                    if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
-                        # Convert normalized coordinates to pixel coordinates
-                        from vision_utils import get_gemini_box_2d_center_pixels
-                        center_x, center_y = get_gemini_box_2d_center_pixels(el.box_2d, page_info.width, page_info.height)
-                        # Convert to pixel box coordinates
-                        y_min, x_min, y_max, x_max = el.box_2d
-                        element_box = (
-                            int(x_min / 1000.0 * page_info.width),
-                            int(y_min / 1000.0 * page_info.height),
-                            int(x_max / 1000.0 * page_info.width),
-                            int(y_max / 1000.0 * page_info.height)
-                        )
-                        break
-            
-            self.gif_recorder.record_interaction(
-                interaction_type="click",
-                coordinates=(x, y),
-                element_box=element_box,
-                action_description=f"Click on element at ({x}, {y})"
-            )
-        
         # Capture state BEFORE performing the click (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
         
@@ -1289,30 +1262,6 @@ class ActionExecutor:
         except Exception:
             pass
         
-        # Record interaction for GIF if recorder is available
-        if self.gif_recorder:
-            element_box = None
-            if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
-                for el in elements.elements:
-                    if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
-                        # Convert normalized coordinates to pixel coordinates
-                        y_min, x_min, y_max, x_max = el.box_2d
-                        element_box = (
-                            int(x_min / 1000.0 * page_info.width),
-                            int(y_min / 1000.0 * page_info.height),
-                            int(x_max / 1000.0 * page_info.width),
-                            int(y_max / 1000.0 * page_info.height)
-                        )
-                        break
-            
-            self.gif_recorder.record_interaction(
-                interaction_type="type",
-                coordinates=(x, y) if x is not None and y is not None else None,
-                element_box=element_box,
-                action_description=f"Type '{step.text_to_type}'",
-                text_input=step.text_to_type
-            )
-        
         try:
             # Always clear the field before typing to ensure previous text is removed
             self._clear_input_field(x, y)
@@ -1522,15 +1471,6 @@ class ActionExecutor:
         # Capture state BEFORE performing the scroll (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
         
-        # Record interaction for GIF if recorder is available
-        if self.gif_recorder:
-            self.gif_recorder.record_interaction(
-                interaction_type="scroll",
-                coordinates=None,
-                element_box=None,
-                action_description=f"Scroll {direction} to ({target_x}, {target_y})"
-            )
-        
         try:
             self.page.evaluate(f"window.scrollTo({target_x}, {target_y})")
             
@@ -1617,16 +1557,6 @@ class ActionExecutor:
         
         # Capture state BEFORE performing the press action (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
-        
-        # Record interaction for GIF if recorder is available
-        if self.gif_recorder:
-            self.gif_recorder.record_interaction(
-                interaction_type="press",
-                coordinates=None,
-                element_box=None,
-                action_description=f"Press keys: {step.keys_to_press}",
-                keys_pressed=step.keys_to_press
-            )
         
         # Record planned interaction with goal monitor
         # Removed planned interaction tracking (was for goal evaluation)

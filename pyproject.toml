@@ -74,7 +74,6 @@ py-modules = [
     "ai_utils",
     "command_ledger",
     "error_handling",
-    "gif_recorder",
     "interaction_deduper",
     "middleware",
     "session_tracker",

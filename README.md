@@ -294,7 +294,7 @@ BrowserVisionBot uses Pydantic models for type-safe configuration:
 ### Configuration Groups
 
 ```python
-from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig, RecordingConfig, ErrorHandlingConfig, ActFunctionConfig
+from bot_config import BotConfig, ModelConfig, ExecutionConfig, CacheConfig, ErrorHandlingConfig, ActFunctionConfig
 from ai_utils import ReasoningLevel
 
 config = BotConfig(
@@ -319,12 +319,6 @@ config = BotConfig(
         max_reuse=1
     ),
 
-    # Recording
-    recording=RecordingConfig(
-        save_gif=True,
-        output_dir="gif_recordings"
-    ),
-
     # Error Handling
     error_handling=ErrorHandlingConfig(
         screenshot_on_error=True,
@@ -344,7 +338,7 @@ config = BotConfig(
 ### Preset Configurations
 
 ```python
-# Debug mode - with GIF recording and verbose logging
+# Debug mode - with verbose logging
 config = BotConfig.debug()
 
 # Production mode - balanced for reliability
@@ -379,10 +373,6 @@ config = BotConfig.minimal()
 - `enabled`: Enable plan caching (default: True)
 - `ttl`: Time-to-live for cached plans in seconds (default: 6.0)
 - `max_reuse`: Maximum times a plan can be reused (-1 = unlimited, default: 1)
-
-#### RecordingConfig
-- `save_gif`: Enable GIF recording of browser interactions (default: False)
-- `output_dir`: Directory for saving GIF recordings (default: "gif_recordings")
 
 #### ErrorHandlingConfig
 - `screenshot_on_error`: Take screenshot when errors occur (default: True)
@@ -471,15 +461,13 @@ Initialize the bot and register the initial page. Must be called before using ot
 bot.start()
 ```
 
-##### `end() -> Optional[str]`
+##### `end() -> None`
 
-Terminate the bot, stop GIF recording, and prevent any subsequent operations.
+Terminate the bot and prevent any subsequent operations.
 
 ```python
-gif_path = bot.end()  # Returns path to GIF if recording was enabled
+bot.end()
 ```
-
-**Returns:** `Optional[str]` - Path to generated GIF if recording was enabled, `None` otherwise
 
 ##### `act(goal_description, **kwargs) -> ActionResult`
 
@@ -509,6 +497,7 @@ else:
 - `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
 - `action_id` (str, optional): Optional action ID for tracking (auto-generated if not provided)
 - `max_attempts` (int, optional): Override bot's max_attempts for this action (must be >= 1)
+- `base_knowledge` (List[str], optional): Optional list of knowledge rules/instructions that guide planning and element selection. These rules influence how the bot selects elements and plans actions.
 
 **Returns:** `ActionResult` - Structured result with success, message, confidence, and metadata
 
@@ -791,15 +780,13 @@ new_page = context.new_page()
 bot.switch_to_page(new_page)
 ```
 
-##### `end() -> Optional[str]`
+##### `end() -> None`
 
-Terminate the bot, stop GIF recording, and prevent any subsequent operations.
+Terminate the bot and prevent any subsequent operations.
 
 ```python
-gif_path = bot.end()  # Returns path to GIF if recording was enabled
+bot.end()
 ```
-
-**Returns:** Optional[str] - Path to the generated GIF if recording was enabled, None otherwise
 
 ### Browser Provider
 
@@ -1180,9 +1167,7 @@ if result.success:
         print(f"  - {title}")
 
 # Cleanup
-gif_path = bot.end()
-if gif_path:
-    print(f"Recording saved to: {gif_path}")
+bot.end()
 ```
 
 ## 🛠️ Development
@@ -1199,7 +1184,6 @@ browser-vision-bot/
 ├── interaction_deduper.py    # Deduplication
 ├── middleware.py             # Middleware system
 ├── error_handling.py         # Error handling
-├── gif_recorder.py           # GIF recording
 ├── vision_utils.py           # Vision utilities
 ├── agent/                    # Agent system
 │   ├── agent_controller.py   # Main agent loop
