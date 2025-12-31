@@ -186,47 +186,50 @@ class ExecutionTimer:
             secs = seconds % 60
             return f"{mins}m {secs:.2f}s"
     
-    def log_summary(self) -> None:
+    def log_summary(self, event_logger=None) -> None:
         """Log timing summary to console"""
         summary = self.get_summary()
         
         try:
-            self.event_logger.system_info("\n" + "="*60)
-            self.event_logger.system_info("⏱️  EXECUTION TIMING SUMMARY")
-            self.event_logger.system_info("="*60)
+            # Use event_logger if provided, otherwise use print
+            log_func = event_logger.system_info if event_logger else print
+            
+            log_func("\n" + "="*60)
+            log_func("⏱️  EXECUTION TIMING SUMMARY")
+            log_func("="*60)
             
             # Task timing
             if summary["task"]:
-                self.event_logger.system_info(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
+                log_func(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
             
             # Iteration timings
             if summary["iterations"]:
                 total_iter_time = sum(iter_data["duration_seconds"] for iter_data in summary["iterations"])
                 avg_iter_time = total_iter_time / len(summary["iterations"])
-                self.event_logger.system_info(f"\n🔄 Iterations: {len(summary['iterations'])}")
-                self.event_logger.system_info(f"   Total iteration time: {self._format_duration(total_iter_time)}")
-                self.event_logger.system_info(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
+                log_func(f"\n🔄 Iterations: {len(summary['iterations'])}")
+                log_func(f"   Total iteration time: {self._format_duration(total_iter_time)}")
+                log_func(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
                 fastest_iter = min(summary['iterations'], key=lambda x: x['duration_seconds'])
                 slowest_iter = max(summary['iterations'], key=lambda x: x['duration_seconds'])
-                self.event_logger.system_info(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
-                self.event_logger.system_info(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
+                log_func(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
+                log_func(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
             
             # Action timings
             if summary["actions"]:
                 total_action_time = sum(action_data["duration_seconds"] for action_data in summary["actions"])
                 avg_action_time = total_action_time / len(summary["actions"])
-                self.event_logger.system_info(f"\n🎯 Actions: {len(summary['actions'])}")
-                self.event_logger.system_info(f"   Total action time: {self._format_duration(total_action_time)}")
-                self.event_logger.system_info(f"   Average per action: {self._format_duration(avg_action_time)}")
+                log_func(f"\n🎯 Actions: {len(summary['actions'])}")
+                log_func(f"   Total action time: {self._format_duration(total_action_time)}")
+                log_func(f"   Average per action: {self._format_duration(avg_action_time)}")
                 
                 # Show top 5 slowest actions
                 sorted_actions = sorted(summary["actions"], key=lambda x: x["duration_seconds"], reverse=True)
-                self.event_logger.system_info("\n   Top 5 slowest actions:")
+                log_func("\n   Top 5 slowest actions:")
                 for i, action in enumerate(sorted_actions[:5], 1):
                     goal_text = action["goal"][:50] + "..." if len(action.get("goal", "")) > 50 else action.get("goal", "")
-                    self.event_logger.system_info(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {goal_text}")
+                    log_func(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {goal_text}")
             
-            self.event_logger.system_info("="*60 + "\n")
+            log_func("="*60 + "\n")
         except Exception:
             pass
 
@@ -1287,7 +1290,7 @@ class BrowserVisionBot:
             if not self.started:
                 self.logger.log_error("Bot not started", "act() called before bot.start()")
                 self.event_logger.system_error("Bot not started")
-                if self.execution_timer.current_command_start is not None:
+                if self.execution_timer.current_action_start is not None:
                     self.execution_timer.end_action()
                 duration = (time.time() - start_time) if 'start_time' in locals() else None
                 return _create_result(
@@ -1301,7 +1304,7 @@ class BrowserVisionBot:
             if self.page.url.startswith("about:blank"):
                 self.logger.log_error("Page is on initial blank page", "act() called before navigation")
                 self.event_logger.system_error("Page is on the initial blank page")
-                if self.execution_timer.current_command_start is not None:
+                if self.execution_timer.current_action_start is not None:
                     self.execution_timer.end_action()
                 duration = (time.time() - start_time) if 'start_time' in locals() else None
                 return _create_result(
@@ -1334,7 +1337,7 @@ class BrowserVisionBot:
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
                 self.action_ledger.complete_action(action_id, success=ref_result)
-                self.execution_timer.end_command()
+                self.execution_timer.end_action()
                 duration = time.time() - start_time
                 return _create_result(
                     ref_result,

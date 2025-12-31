@@ -51,9 +51,3 @@ def parse_keyword_command(command: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def extract_press_target(description: str) -> Optional[str]:
-    """Extract key to press from description."""
-    match = re.search(r"(?:press|hit)\s+(?:the\s+)?['\"]?([a-zA-Z0-9_+\s]+)['\"]?", description.lower())
-    if match:
-        return match.group(1)
-    return None

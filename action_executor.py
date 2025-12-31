@@ -1889,31 +1889,6 @@ class ActionExecutor:
         
         return None, None
 
-    def _find_clickable_point_from_overlay(self, overlay_index: int) -> Tuple[Optional[int], Optional[int]]:
-        """Given an overlay index, try to find a clickable descendant within that element and return its center.
-
-        Uses the 'data-automation-overlay-index' attribute set during overlay creation to locate the element.
-        """
-        js = r"""
-        (idx) => {
-          const sel = `[data-automation-overlay-index="${idx}"]`;
-          const root = document.querySelector(sel);
-          if (!root) return null;
-          const cand = root.querySelector('a,button,[role="link"],[role="button"],input,select,textarea') || root;
-          const r = cand.getBoundingClientRect();
-          const cx = Math.round(r.left + r.width/2);
-          const cy = Math.round(r.top + r.height/2);
-          return {x: cx, y: cy};
-        }
-        """
-        try:
-            res = self.page.evaluate(js, overlay_index)
-            if isinstance(res, dict) and 'x' in res and 'y' in res:
-                return int(res['x']), int(res['y'])
-        except Exception:
-            pass
-        return None, None
-
     def _refine_click_coordinates(self, x: int, y: int, page_info: PageInfo, normalized_box=None) -> Tuple[Optional[int], Optional[int]]:
         """Refine coordinates to the center of the nearest clickable element at/within the region.
 
@@ -2271,11 +2246,6 @@ Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or 
         print("🛑 STOP action executed - terminating automation")
         return True
 
-    def _check_goal_achieved(self) -> bool:
-        """Check if goal has been achieved - deprecated, always returns False"""
-        # Goal checking removed - keyword commands handle completion directly
-        return False
-    
     def _mark_element_as_interacted(self, step: ActionStep, elements: PageElements, interaction_type: str) -> None:
         """Mark an element as interacted with for deduplication"""
         if not self.deduper:

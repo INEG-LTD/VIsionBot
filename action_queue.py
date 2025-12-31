@@ -90,23 +90,8 @@ class ActionQueue:
         with self._lock:
             return len(self._queue) == 0
     
-    def size(self) -> int:
-        """Get current queue size"""
-        with self._lock:
-            return len(self._queue)
-    
     def clear(self) -> None:
         """Clear all queued actions"""
         with self._lock:
             self._queue.clear()
             self._queued_ids.clear()
-    
-    def inspect(self) -> List[QueuedAction]:
-        """Inspect queued actions without processing (returns copy)"""
-        with self._lock:
-            return list(self._queue)
-    
-    def peek(self) -> Optional[QueuedAction]:
-        """Peek at next action without removing it"""
-        with self._lock:
-            return self._queue[0] if self._queue else None

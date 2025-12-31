@@ -539,7 +539,7 @@ class AgentController:
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
-                self.bot.execution_timer.log_summary()
+                self.bot.execution_timer.log_summary(self.event_logger)
             result = TaskResult(
                 success=False,
                 confidence=1.0,
@@ -555,7 +555,7 @@ class AgentController:
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
                 self.bot.execution_timer.end_task()
-                self.bot.execution_timer.log_summary()
+                self.bot.execution_timer.log_summary(self.event_logger)
             result = TaskResult(
                 success=False,
                 confidence=1.0,
@@ -773,7 +773,7 @@ class AgentController:
                             )
                             # End task timer and log summary
                             self.bot.execution_timer.end_task()
-                            self.bot.execution_timer.log_summary()
+                            self.bot.execution_timer.log_summary(self.event_logger)
                             # Wait for subagent policy check to complete (for logging)
                             try:
                                 subagent_policy_future.result(timeout=5)
@@ -966,7 +966,7 @@ class AgentController:
                     )
                     # End task timer and log summary
                     self.bot.execution_timer.end_task()
-                    self.bot.execution_timer.log_summary()
+                    self.bot.execution_timer.log_summary(self.event_logger)
                     self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
                     return TaskResult(
                         success=True,
@@ -1054,7 +1054,7 @@ class AgentController:
                     )
                     # End task timer and log summary
                     self.bot.execution_timer.end_task()
-                    self.bot.execution_timer.log_summary()
+                    self.bot.execution_timer.log_summary(self.event_logger)
                     return TaskResult(
                         success=False,
                         confidence=0.5,
@@ -1219,9 +1219,7 @@ class AgentController:
                     'goal_description': act_params['goal_description'],
                     'additional_context': act_params['additional_context'],
                     'target_context_guard': str(act_params['target_context_guard']) if act_params['target_context_guard'] else None,
-                    'modifier': act_params['modifier'],
                     'max_attempts': 5,
-                    'max_retries': 1,
                     'allow_non_clickable_clicks': self.allow_non_clickable_clicks
                 }
                 self.event_logger.action_params(params)
@@ -1245,9 +1243,7 @@ class AgentController:
                     goal_description=act_params["goal_description"],
                     additional_context=act_params["additional_context"],
                     target_context_guard=act_params["target_context_guard"],
-                    modifier=act_params["modifier"],
                     max_attempts=5,  # Allow 5 attempts per action for better reliability
-                    max_retries=1,
                     allow_non_clickable_clicks=self.allow_non_clickable_clicks  # Pass configurable setting
                 )
                 
