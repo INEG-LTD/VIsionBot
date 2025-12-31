@@ -1467,7 +1467,6 @@ class BrowserVisionBot:
         strict_mode: bool = False,
         clarification_callback: Optional[Callable[[str], str]] = None,
         max_clarification_rounds: int = 3,
-        exploration_mode_enabled: bool = True,
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
     ) -> AgentResult:
@@ -1497,8 +1496,6 @@ class BrowserVisionBot:
                                    when the agent wants to infer extra information. If provided and strict_mode is False,
                                    the agent will ask before inferring. Default: None.
             max_clarification_rounds: Maximum number of clarification rounds. Default: 3.
-            exploration_mode_enabled: If True, enable exploration mode that captures full-page screenshots
-                                   when elements are not visible in the viewport. Default: True.
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            These rules influence what actions the agent takes.
                            Example: ["just press enter after you've typed a search term into a search field"]
@@ -1635,7 +1632,6 @@ class BrowserVisionBot:
                 strict_mode=strict_mode,
                 clarification_callback=clarification_callback,
                 max_clarification_rounds=max_clarification_rounds,
-                exploration_mode_enabled=exploration_mode_enabled,
                 stuck_detector_enabled=self.stuck_detector_enabled,
                 stuck_detector_window_size=self.stuck_detector_window_size,
                 stuck_detector_threshold=self.stuck_detector_threshold,
