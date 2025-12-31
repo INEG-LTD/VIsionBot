@@ -508,9 +508,7 @@ else:
 - `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
 - `confirm_before_interaction` (bool, optional): Require user confirmation before each action (default: False)
 - `action_id` (str, optional): Optional action ID for tracking (auto-generated if not provided)
-- `modifier` (List[str], optional): Optional list of modifier strings (deprecated, no longer used)
 - `max_attempts` (int, optional): Override bot's max_attempts for this action (must be >= 1)
-- `max_retries` (int, optional): Maximum retries for this action (deprecated, no longer used)
 
 **Returns:** `ActionResult` - Structured result with success, message, confidence, and metadata
 

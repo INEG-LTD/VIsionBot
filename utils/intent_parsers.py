@@ -97,45 +97,6 @@ def extract_navigation_intent(goal_description: str) -> Optional[str]:
     return None
 
 
-# ---------------- Structured Goal Syntax Parsers ----------------
-
-def parse_structured_if(text: str) -> Optional[tuple[str, str, Optional[str], Optional[str]]]:
-    """Parse explicit IF/THEN[/ELSE] syntax with optional route specification.
-
-    Supported forms (case-insensitive, flexible spacing):
-    - "if: <condition> then: <success> else: <fail>"
-    - "if see: <condition> then: <success> else: <fail>"  # Force vision route
-    - "if page: <condition> then: <success> else: <fail>" # Force page route
-    - "if <condition> then <success> else <fail>"
-    - without else: "if: <condition> then: <success>"
-    - without else: "if see: <condition> then: <success>"
-    - without else: "if page: <condition> then: <success>"
-    
-    Returns (condition, success_action, fail_action_or_None, route_or_None) or None if no match.
-    """
-    t = (text or "").strip()
-    if not t:
-        return None
-    # Normalize whitespace
-    t1 = re.sub(r"\s+", " ", t).strip()
-    
-    # Check for route specification
-    route_match = re.match(r"(?i)^if\s+(see|page)\s*:\s*(.+?)\s+then\s*:\s*(.+?)(?:\s+else\s*:\s*(.+))?$", t1)
-    if route_match:
-        route = route_match.group(1).lower()
-        cond = route_match.group(2).strip()
-        then = route_match.group(3).strip()
-        els = route_match.group(4).strip() if route_match.group(4) else None
-        return cond, then, els, route
-    
-    # Default parsing without route
-    m = re.match(r"(?i)^if\s*:\s*(.+?)\s+then\s*:\s*(.+?)(?:\s+else\s*:\s*(.+))?$", t1)
-    if m:
-        cond = m.group(1).strip()
-        then = m.group(2).strip()
-        els = m.group(3).strip() if m.group(3) else None
-        return cond, then, els, None
-    return None
 
 
 def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]:
@@ -269,68 +230,8 @@ def parse_datetime_command(text: str) -> Optional[tuple[str, Optional[str]]]:
     return _parse_value_target(text, "datetime")
 
 
-def parse_structured_while(text: str) -> Optional[tuple[str, str, Optional[str], Optional[bool]]]:
-    """Parse explicit WHILE/DO syntax with optional route specification and failure mode.
-
-    Supported forms (case-insensitive, flexible spacing):
-    - "while: <condition> do: <body>"
-    - "while see: <condition> do: <body>"  # Force vision route
-    - "while page: <condition> do: <body>" # Force page route
-    - "do: <body> until: <condition>" (or "repeat: <body> until: <condition>")
-    - "do: <body> until see: <condition>"  # Force vision route
-    - "do: <body> until page: <condition>" # Force page route
-    - "while: <condition> do: <body> continue_on_failure"  # Continue on body failure
-    - "while: <condition> do: <body> fail_on_failure"  # Fail on body failure (default)
-    
-    Returns (condition, body, route, fail_on_body_failure) or None if no match.
-    """
-    t = (text or "").strip()
-    if not t:
-        return None
-    t1 = re.sub(r"\s+", " ", t).strip()
-    
-    # Extract failure mode flag if present
-    fail_on_body_failure = None
-    if t1.endswith(" continue_on_failure"):
-        fail_on_body_failure = False
-        t1 = t1[:-len(" continue_on_failure")].strip()
-    elif t1.endswith(" fail_on_failure"):
-        fail_on_body_failure = True
-        t1 = t1[:-len(" fail_on_failure")].strip()
-    
-    # Check for route specification in while syntax
-    route_match = re.match(r"(?i)^while\s+(see|page)\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
-    if route_match:
-        route = route_match.group(1).lower()
-        condition = route_match.group(2).strip()
-        body = route_match.group(3).strip()
-        return condition, body, route, fail_on_body_failure
-    
-    # Check for route specification in do/until syntax
-    until_route_match = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s+(see|page)\s*:\s*(.+)$", t1)
-    if until_route_match:
-        body = until_route_match.group(1).strip()
-        route = until_route_match.group(2).lower()
-        condition = until_route_match.group(3).strip()
-        return condition, body, route, fail_on_body_failure
-    
-    # Default parsing without route
-    m = re.match(r"(?i)^while\s*:\s*(.+?)\s+do\s*:\s*(.+)$", t1)
-    if m:
-        return m.group(1).strip(), m.group(2).strip(), None, fail_on_body_failure
-    
-    m = re.match(r"(?i)^(?:do|repeat)\s*:\s*(.+?)\s+until\s*:\s*(.+)$", t1)
-    if m:
-        body = m.group(1).strip()
-        cond = m.group(2).strip()
-        return cond, body, None, fail_on_body_failure
-    
-    return None
 
 
-def parse_focus_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse focus commands - Focus system removed, always returns None."""
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -619,71 +520,8 @@ def _remove_phrase(text: str, keywords) -> str:
 
 
 
-def parse_undo_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse undo commands - Focus system removed, always returns None."""
-    return None
 
 
-def parse_subfocus_command(text: str) -> Optional[tuple[str, str]]:
-    """Parse subfocus commands - Focus system removed, always returns None."""
-    return None
-
-
-def parse_structured_for(text: str) -> Optional[tuple[str, str, str, Optional[str]]]:
-    """
-    Parse for loop syntax:
-    Returns: (iteration_mode, iteration_target, loop_body, break_conditions)
-    
-    Supported patterns:
-    - "for N times: ACTION" -> (count, N, ACTION, None)
-    - "for each ELEMENT: ACTION" -> (elements, ELEMENT, ACTION, None)
-    - "for each ITEM in LIST: ACTION" -> (items, ITEM, ACTION, None)
-    - "for up to N times: ACTION" -> (count, N, ACTION, None)
-    - "for each ELEMENT: ACTION break if CONDITION" -> (elements, ELEMENT, ACTION, CONDITION)
-    """
-    text = (text or "").strip()
-    
-    if not text.lower().startswith("for"):
-        return None
-    
-    # Pattern 1: "for N times: ACTION"
-    count_pattern = r'for\s+(\d+)\s+times?\s*:\s*(.+?)(?:\s+break\s+if\s+(.+))?$'
-    match = re.match(count_pattern, text, re.IGNORECASE)
-    if match:
-        count = match.group(1)
-        action = match.group(2).strip()
-        break_condition = match.group(3).strip() if match.group(3) else None
-        return "count", count, action, break_condition
-    
-    # Pattern 2: "for up to N times: ACTION"
-    upto_pattern = r'for\s+up\s+to\s+(\d+)\s+times?\s*:\s*(.+?)(?:\s+break\s+if\s+(.+))?$'
-    match = re.match(upto_pattern, text, re.IGNORECASE)
-    if match:
-        count = match.group(1)
-        action = match.group(2).strip()
-        break_condition = match.group(3).strip() if match.group(3) else None
-        return "count", count, action, break_condition
-    
-    # Pattern 3: "for each ELEMENT: ACTION"
-    each_pattern = r'for\s+each\s+([^:]+?)\s*:\s*(.+?)(?:\s+break\s+if\s+(.+))?$'
-    match = re.match(each_pattern, text, re.IGNORECASE)
-    if match:
-        element = match.group(1).strip()
-        action = match.group(2).strip()
-        break_condition = match.group(3).strip() if match.group(3) else None
-        
-        # Check if it's "for each ITEM in LIST" pattern
-        in_pattern = r'(.+?)\s+in\s+(.+)$'
-        in_match = re.match(in_pattern, element, re.IGNORECASE)
-        if in_match:
-            item = in_match.group(1).strip()
-            item_list = in_match.group(2).strip()
-            return "items", f"{item}|{item_list}", action, break_condition
-        
-        # Regular element iteration
-        return "elements", element, action, break_condition
-    
-    return None
 
 
 

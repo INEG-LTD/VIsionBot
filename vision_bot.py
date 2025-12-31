@@ -751,9 +751,7 @@ class BrowserVisionBot:
                 goal_description=action_command,
                 additional_context="",
                 target_context_guard=None,
-                modifier=None,
                 max_attempts=3,  # Fewer attempts for auto-converted actions
-                max_retries=0,  # No retries for auto-converted actions
                 allow_non_clickable_clicks=True,
             )
             return result.success if result else False
@@ -1184,9 +1182,7 @@ class BrowserVisionBot:
         skip_post_guard_refinement: bool = True,
         confirm_before_interaction: bool = False,
         action_id: Optional[str] = None,
-        modifier: Optional[List[str]] = None,
         max_attempts: Optional[int] = None,
-        max_retries: Optional[int] = None,
         **kwargs
     ) -> ActionResult:
         """
@@ -1202,9 +1198,7 @@ class BrowserVisionBot:
             skip_post_guard_refinement: Skip refinement after guard checks
             confirm_before_interaction: Require user confirmation before each action
             action_id: Optional action ID for tracking (auto-generated if not provided)
-            modifier: Optional list of modifier strings (deprecated, no longer used)
             max_attempts: Override bot's max_attempts for this command (None = use bot default)
-            max_retries: Override goal's max_retries for this command (deprecated, no longer used)
         
         Returns:
             ActionResult - Structured result with success, message, confidence, and metadata
@@ -3499,183 +3493,6 @@ Return only the extracted text that appears in the text content above. Do not ma
     # -------------------- Public memory helpers (general) --------------------
     # Memory store methods removed - deduplication now handled by focus manager
 
-    def _create_goal_from_description(self, goal_description: str, modifier: Optional[List[str]] = None) -> tuple[None, str]:
-        """Goal system removed - returns None, description"""
-        return None, goal_description
-
-    def _create_goal_from_keyword(self, keyword: str, payload: str) -> None:
-        """Goal system removed - returns None"""
-        return None
-
-    def _create_while_goal_from_parts(self, goal_description: str, cond_text: str, body_text: str, route: Optional[str] = None, modifier: Optional[List[str]] = None, fail_on_body_failure: Optional[bool] = None) -> Optional[Any]:
-        """Create WhileGoal from explicit condition/body parts with route determination."""
-        try:
-            # Determine route: modifier first, then parsed route, then fail
-            determined_route = None
-            
-            # 1. Check modifier parameter first
-            if modifier:
-                for mod in modifier:
-                    if mod.lower() in ["see", "page"]:
-                        determined_route = mod.lower()
-                        break
-            
-            # 2. Use parsed route if no modifier route
-            if not determined_route and route:
-                determined_route = route.lower()
-            
-            # 3. Fail if no route specified
-            if not determined_route:
-                raise ValueError("While goal requires route specification. Use modifier=['see'] or modifier=['page'] or specify in command like 'while see: condition do: action'")
-            
-            if determined_route not in ["see", "page"]:
-                raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
-            
-            # Get max_retries and fail_on_body_failure from temp kwargs if available
-            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)  # Unused - goal system removed
-            if fail_on_body_failure is None:
-                fail_on_body_failure = getattr(self, '_temp_goal_kwargs', {}).get('fail_on_body_failure', True)
-            
-            # Goal system removed - WhileGoal no longer exists
-            return None
-        except Exception as e:
-            print(f"⚠️ Error creating structured WhileGoal: {e}")
-            return None
-
-    def _create_for_goal_from_parts(self, iteration_mode: str, iteration_target: str, loop_body: str, break_conditions: Optional[str] = None) -> Optional[Any]:
-        """Create ForGoal from parsed iteration parts."""
-        try:
-            # Parse iteration target based on mode (unused - goal system removed)
-            if iteration_mode == "count":
-                _target_count = int(iteration_target)
-                _target = _target_count
-            elif iteration_mode == "elements":
-                _target = iteration_target
-            elif iteration_mode == "items":
-                # Parse "item|list" format
-                if "|" in iteration_target:
-                    item, item_list = iteration_target.split("|", 1)
-                    # For now, create a simple list - in real implementation, this would parse the actual list
-                    _target = [item.strip(), "item2", "item3"]  # Placeholder
-                else:
-                    _target = [iteration_target]
-            else:
-                print(f"⚠️ Unsupported iteration mode: {iteration_mode}")
-                return None
-            
-            # Parse break conditions (unused - goal system removed)
-            _break_conds = [break_conditions] if break_conditions else []
-            
-            # Get max_retries from temp kwargs if available (unused - goal system removed)
-            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
-            
-            # Goal system removed - ForGoal no longer exists
-            return None
-            
-        except Exception as e:
-            print(f"⚠️ Error creating structured ForGoal: {e}")
-            return None
-
-    def _execute_for_loop(self, goal: Any, start_time: float, parent_command_id: Optional[str] = None) -> bool:
-        """Goal system removed - for loops no longer supported"""
-        print("❌ For loops are no longer supported (goal system removed)")
-        return False
-
-    def _execute_while_loop(self, goal: Any, start_time: float) -> bool:
-        """Goal system removed - while loops no longer supported"""
-        print("❌ While loops are no longer supported (goal system removed)")
-        return False
-
-    def _create_if_goal_from_parts(self, condition_text: str, success_text: str, fail_text: Optional[str], route: Optional[str] = None, modifier: Optional[List[str]] = None) -> Optional[Any]:
-        """Create IfGoal from explicit parts with route determination."""
-        try:
-            # Determine route: modifier first, then parsed route, then fail
-            determined_route = None
-            
-            # 1. Check modifier parameter first
-            if modifier:
-                for mod in modifier:
-                    if mod.lower() in ["see", "page"]:
-                        determined_route = mod.lower()
-                        break
-            
-            # 2. Use parsed route if no modifier route
-            if not determined_route and route:
-                determined_route = route.lower()
-            
-            # 3. Default to page route if none specified
-            if not determined_route:
-                determined_route = "page"
-                print("ℹ️ No route specified for IfGoal; defaulting to 'page' evaluation.")
-            
-            if determined_route not in ["see", "page"]:
-                raise ValueError(f"Invalid route '{determined_route}'. Must be 'see' or 'page'")
-
-            print(f"Success text: '{success_text}'")
-            
-            # Handle reference commands differently - don't create goals for them
-            normalized_success = success_text.strip()
-            if normalized_success.lower().startswith("ref:"):
-                # Create a simple placeholder goal for reference commands
-                # Goal system removed - RefPlaceholderGoal removed
-                class RefPlaceholderGoal:
-                    def __init__(self, description: str):
-                        super().__init__(description)
-                    def evaluate(self, context):
-                        return None  # Will be handled by _evaluate_if_goal
-                    def get_description(self, context):
-                        return self.description
-                success_goal = RefPlaceholderGoal(success_text)
-            else:
-                success_goal, _ = self._create_goal_from_description(success_text)
-                if not success_goal:
-                    return None
-            if success_goal:
-                setattr(success_goal, "fast_command_text", success_text)
-            
-            print(f"🔀 Created success goal: '{success_goal.description}'")
-            
-            if fail_text and fail_text.strip():
-                normalized_fail = fail_text.strip()
-                if normalized_fail.lower().startswith("ref:"):
-                    # Create a simple placeholder goal for reference commands
-                    # Goal system removed - BaseGoal removed
-                    class RefPlaceholderGoal:
-                        def __init__(self, description: str):
-                            self.description = description
-                        def evaluate(self, context):
-                            return None  # Will be handled by _evaluate_if_goal
-                        def get_description(self, context):
-                            return self.description
-                    fail_goal = RefPlaceholderGoal(fail_text)
-                else:
-                    fail_goal, _ = self._create_goal_from_description(fail_text)
-                if fail_goal:
-                    setattr(fail_goal, "fast_command_text", fail_text)
-            else:
-                fail_goal = None
-
-            # Unused variables (goal system removed)
-            _fail_desc = fail_goal.description if fail_goal else "(no fail action)"
-            _max_retries = getattr(self, '_temp_goal_kwargs', {}).get('max_retries', 3)
-            
-            # Goal system removed - IfGoal no longer exists
-            return None
-        except Exception as e:
-            print(f"⚠️ Error creating structured IfGoal: {e}")
-            return None
-
-
-    def _evaluate_if_goal(self, if_goal: Any) -> tuple[Optional[Any], str]:
-        """Goal system removed - if goals no longer supported"""
-        print("❌ If goals are no longer supported (goal system removed)")
-        return None, ""
-
-    def _print_goal_summary(self) -> None:
-        """Print a summary of all goal statuses - deprecated, kept for compatibility"""
-        # Goal summaries no longer available without goal system
-        pass
-
     def _add_to_command_history(self, command: str) -> None:
         """Add a command to the history, maintaining max size"""
         if command and command.strip():
@@ -3688,12 +3505,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             except Exception:
                 pass
     
-    def _handle_focus_commands(self, goal_description: str, overlay_manager: OverlayManager) -> Optional[bool]:
-        """
-        Handle focus, subfocus, and undo commands.
-        Focus system removed - returns None (not a focus command).
-        """
-        return None
     
     def _handle_dedup_commands(self, goal_description: str) -> Optional[bool]:
         """
@@ -3765,7 +3576,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 ref_skip_post_guard_refinement = ref_entry.get("skip_post_guard_refinement", True)
                 ref_confirm_before_interaction = ref_entry.get("confirm_before_interaction", False)
                 ref_max_attempts = ref_entry.get("max_attempts")
-                ref_max_retries = ref_entry.get("max_retries")
                 stored_action_id = ref_entry.get("action_id")  # Get the original action ID
 
                 if not stored_prompts:
@@ -3794,7 +3604,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                             confirm_before_interaction=ref_confirm_before_interaction,
                             action_id=child_action_id,  # Pass child ID
                             max_attempts=ref_max_attempts,  # Pass custom max_attempts
-                            max_retries=ref_max_retries,    # Pass custom max_retries
                         )
                     )
                     results.append(success)
