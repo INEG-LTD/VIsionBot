@@ -9,7 +9,7 @@ from typing import Optional, List, ClassVar, Set, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 import re
 
-from session_tracker import BrowserState, Interaction
+from session_tracker import Interaction
 from agent.completion_contract import EnvironmentState
 from ai_utils import (
     generate_model,
@@ -26,7 +26,6 @@ class NextAction(BaseModel):
     reasoning: str = Field(description="Why this action is appropriate given the current viewport")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
     expected_outcome: str = Field(description="What should happen after executing this action")
-    needs_exploration: bool = Field(description="True if the action requires exploring/searching for elements not visible in current viewport (e.g., scrolling to find a field)")
 
     VALID_COMMANDS: ClassVar[Set[str]] = {
         "click",
@@ -207,7 +206,7 @@ class ReactiveGoalDeterminer:
             reasoning = ReasoningLevel.coerce(reasoning_level)
         self.reasoning_level: ReasoningLevel = reasoning
         self.image_detail = image_detail
-        self._system_prompt_cache: dict[bool, str] = {}  # Cache system prompts by is_exploring
+        self._system_prompt_cache: dict[str, str] = {}  # Cache system prompts
         self.interaction_summary_limit = interaction_summary_limit
         self.include_overlays_in_agent_context = include_overlays_in_agent_context
     
@@ -215,44 +214,28 @@ class ReactiveGoalDeterminer:
         self,
         environment_state: EnvironmentState,
         screenshot: bytes,
-        is_exploring: bool = False,
-        viewport_snapshot: Optional[BrowserState] = None,
         failed_actions: Optional[List[str]] = None,
         ineffective_actions: Optional[List[str]] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None
-    ) -> tuple[Optional[str], bool, Optional[str]]:
+    ) -> tuple[Optional[str], Optional[str]]:
         """
         Determine the single next action to take based on current state.
         
         Args:
             environment_state: Current environment state
-            screenshot: Current screenshot (viewport or full-page depending on is_exploring)
-            is_exploring: If True, we're in exploration mode and screenshot is full-page
-            viewport_snapshot: Optional viewport snapshot for comparison when exploring
+            screenshot: Current screenshot (viewport only)
             overlay_data: Optional list of overlay element data with descriptions, SELECT_FIELD markers, options, etc.
             
         Returns:
-            Tuple of (action_command, needs_exploration, reasoning):
+            Tuple of (action_command, reasoning):
             - action_command: Action to take (e.g., "type: John Doe in name field") or None
-              NOTE: In exploration mode, this MUST be "scroll: up" or "scroll: down"
-            - needs_exploration: True if next iteration should use full-page screenshot
             - reasoning: Why this action was chosen (for inclusion in interaction history)
         """
         try:
-            # Identify what element we're looking for if in exploration mode
-            missing_element = None
-            if is_exploring:
-                remaining_tasks = self._identify_remaining_tasks(environment_state.interaction_history)
-                if remaining_tasks:
-                    missing_element = remaining_tasks
-            
             # Generate single action directly
             response = self._generate_single_action(
                 environment_state,
                 screenshot,
-                is_exploring,
-                missing_element,
-                viewport_snapshot,
                 failed_actions or [],
                 ineffective_actions or [],
                 overlay_data
@@ -260,26 +243,10 @@ class ReactiveGoalDeterminer:
             
             if not response:
                 print("⚠️ No action generated")
-                return None, True, None  # Return None and indicate exploration is needed
+                return None, None
             
             action = response.action
             reasoning = response.reasoning
-            
-            # In exploration mode, validate that only scroll commands are returned
-            if is_exploring:
-                if not action or not action.startswith("scroll:"):
-                    print(f"⚠️ Exploration mode returned invalid command: {action}")
-                    print("   Forcing scroll command based on reasoning...")
-                    # Try to extract scroll direction from reasoning
-                    reasoning_lower = response.reasoning.lower()
-                    if "above" in reasoning_lower or "up" in reasoning_lower:
-                        action = "scroll: up"
-                    elif "below" in reasoning_lower or "down" in reasoning_lower:
-                        action = "scroll: down"
-                    else:
-                        # Default to down if unclear
-                        action = "scroll: down"
-                    print(f"   Converted to: {action}")
             
             try:
                 get_event_logger().action_determined(
@@ -290,24 +257,19 @@ class ReactiveGoalDeterminer:
                 )
             except Exception:
                 pass
-            if response.needs_exploration and not is_exploring:
-                print("   🔍 Needs exploration: element not visible in viewport")
             
-            return action, response.needs_exploration, reasoning
+            return action, reasoning
             
         except Exception as e:
             print(f"⚠️ ReactiveGoalDeterminer error: {e}")
             import traceback
             traceback.print_exc()
-            return None, False, None
+            return None, None
     
     def _generate_single_action(
         self,
         environment_state: EnvironmentState,
         screenshot: bytes,
-        is_exploring: bool,
-        missing_element: Optional[str],
-        viewport_snapshot: Optional[BrowserState],
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None
@@ -319,12 +281,9 @@ class ReactiveGoalDeterminer:
             NextAction or None if no action can be determined
         """
         try:
-            system_prompt = self._build_system_prompt(is_exploring)
+            system_prompt = self._build_system_prompt()
             user_prompt_text = self._build_action_prompt(
                 environment_state, 
-                is_exploring, 
-                missing_element,
-                viewport_snapshot,
                 failed_actions or [],
                 ineffective_actions or [],
                 overlay_data
@@ -346,21 +305,11 @@ class ReactiveGoalDeterminer:
             return None
     
     
-    def _build_system_prompt(self, is_exploring: bool = False) -> str:
+    def _build_system_prompt(self) -> str:
         """Build system prompt for reactive action determination"""
         # Use cached prompt if available
-        if is_exploring in self._system_prompt_cache:
-            return self._system_prompt_cache[is_exploring]
-        
-        screenshot_note = "full-page screenshot (entire page)" if is_exploring else "viewport screenshot (currently visible area)"
-        
-        exploration_rules = """
-🔍 EXPLORATION MODE (Full-Page View):
-- Job: Determine scroll direction to bring target element into viewport
-- Commands: Only "scroll: up" or "scroll: down"
-- Logic: Target above current viewport → scroll up; Target below → scroll down
-- Exit: When element enters viewport, you'll switch to interaction mode
-""" if is_exploring else ""
+        if "default" in self._system_prompt_cache:
+            return self._system_prompt_cache["default"]
         
         # Build base knowledge section if provided
         base_knowledge_section = ""
@@ -370,9 +319,8 @@ class ReactiveGoalDeterminer:
                 base_knowledge_section += f"{i}. {knowledge}\n"
         
         prompt = f"""
-You determine the NEXT SINGLE ACTION based on current state ({screenshot_note}).
+You determine the NEXT SINGLE ACTION based on current viewport screenshot.
 
-{exploration_rules}
 {base_knowledge_section}
 
 ACTION RULES:
@@ -402,7 +350,7 @@ ACTION RULES:
    - If "defer" already shows "resumed" in interactions, proceed (don't defer again)
 
 COMMANDS:
-{'' if is_exploring else '''- extract: <what> - Extract visible data from page
+- extract: <what> - Extract visible data from page
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
 - type: <text> in <field-type> <name> - Enter text (field auto-clears first)
 - select: <option> in <dropdown> - Pick option (only if element has SELECT_FIELD/options=)
@@ -414,8 +362,7 @@ COMMANDS:
 - scroll: <up|down> - Move viewport
 - form: <description> - Fill entire form
 - datetime: <value> in <picker> - Set date/time
-- mini_goal: <instruction> - Focus on complex sub-task'''}
-{'- scroll: <up|down> - ONLY command available in exploration mode' if is_exploring else ''}
+- mini_goal: <instruction> - Focus on complex sub-task
 
 EXAMPLES:
 ✅ "select: Canada in country dropdown" | Element: options=[Canada, USA, UK]
@@ -430,18 +377,15 @@ EXAMPLES:
 ✅ "click: Submit button" | Specific type + description
 ❌ "click: button" | Too vague
 
-{'In exploration mode: Only return scroll commands to bring target into viewport' if is_exploring else 'If element is visible, interact with it. Set needs_exploration=True only if NO valid action possible.'}
+Interact with visible elements. If target not visible, use scroll commands.
 """
         # Cache the prompt
-        self._system_prompt_cache[is_exploring] = prompt
+        self._system_prompt_cache["default"] = prompt
         return prompt
     
     def _build_action_prompt(
         self, 
         state: EnvironmentState, 
-        is_exploring: bool = False, 
-        missing_element: Optional[str] = None,
-        viewport_snapshot: Optional[BrowserState] = None,
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None
@@ -471,15 +415,6 @@ EXAMPLES:
             for i, (action, reason) in enumerate(all_ineffective, 1):
                 ineffective_actions_context += f"   {i}. {action} ({reason})\n"
             ineffective_actions_context += "\nDO NOT suggest these same actions again. They were ineffective. Try a different approach or different element.\n"
-        
-        exploration_context = ""
-        if is_exploring:
-            if missing_element:
-                exploration_context = f"\n🔍 EXPLORATION MODE: You are specifically looking for: {missing_element}\n"
-            elif remaining_tasks:
-                exploration_context = f"\n🔍 EXPLORATION MODE: You are searching for elements needed to complete: {remaining_tasks}\n"
-            else:
-                exploration_context = "\n🔍 EXPLORATION MODE: Use the full-page screenshot to locate the target element.\n"
         
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
@@ -594,19 +529,16 @@ CURRENT STATE:
 - Page Title: {state.page_title}
 - Scroll Position: Y={state.browser_state.scroll_y}, X={state.browser_state.scroll_x}
 - Viewport: {state.browser_state.page_width}x{state.browser_state.page_height}
-- {"Screenshot: FULL-PAGE (entire page visible)" if is_exploring else "Screenshot: VIEWPORT ONLY (currently visible area)"}
+- Screenshot: VIEWPORT ONLY (currently visible area)
 - Visible Text: {state.visible_text[:300]}...
 
 NAVIGATION HISTORY:
 {nav_summary}
-{("- Viewport shows content from Y={viewport_snapshot.scroll_y} to Y={viewport_snapshot.scroll_y + viewport_snapshot.page_height}" if is_exploring and viewport_snapshot else "")}
-{("- Target element to find: {missing_element}" if is_exploring and missing_element else "")}
 
 WHAT'S BEEN DONE:
 {interaction_summary}
 
 {ineffective_actions_context if ineffective_actions_context else ""}
-{exploration_context if exploration_context else ""}
 {pending_select_info if pending_select_info else ""}
 {overlay_context if overlay_context else ""}
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}

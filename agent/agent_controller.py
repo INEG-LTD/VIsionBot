@@ -115,8 +115,6 @@ class AgentController:
         strict_mode: bool = False,
         clarification_callback: Optional[Any] = None,
         max_clarification_rounds: int = 0,
-        # Exploration mode configuration
-        exploration_mode_enabled: bool = True,
         # Stuck detector configuration
         stuck_detector_enabled: bool = True,
         stuck_detector_window_size: int = 5,
@@ -147,8 +145,6 @@ class AgentController:
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            Example: ["just press enter after you've typed a search term into a search field"]
             allow_partial_completion: If True, allow partial completion of tasks.
-            exploration_mode_enabled: If True, enable exploration mode that captures full-page screenshots
-                                   when elements are not visible in the viewport. Default: True.
             parallel_completion_and_action: If True, run completion check and next action determination in parallel
                                             for faster feedback. Default: True.
                                             Note: Set to False primarily for debugging purposes, as sequential execution
@@ -180,8 +176,6 @@ class AgentController:
         self.iteration_delay = 0.5
         self.task_start_url: Optional[str] = None
         self.task_start_time: Optional[float] = None
-        self.exploration_retry_max = 2  # Max retries when exploration mode returns invalid command
-        self.exploration_mode_enabled = exploration_mode_enabled  # Enable/disable exploration mode
         self.allow_non_clickable_clicks = True  # Allow clicking non-clickable elements (configurable)
         self.track_ineffective_actions = track_ineffective_actions  # Track actions that didn't yield page changes
         self.detect_ineffective_actions = track_ineffective_actions
@@ -662,7 +656,6 @@ class AgentController:
             
             # 2.3. Check for queued action first (doesn't need LLM)
             current_action: Optional[str] = None
-            needs_exploration = False
             
             if self._queued_action:
                 current_action = self._queued_action
@@ -711,17 +704,16 @@ class AgentController:
                                     self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
                             except Exception:
                                 pass
-                        action, needs_exploration, reasoning = goal_determiner.determine_next_action(
+                        action, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
-                            is_exploring=False,  # Start with viewport mode
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
                         # Store reasoning for next interaction
                         if reasoning:
                             self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                        return action, needs_exploration
+                        return action
                     
                     def run_subagent_policy_check(completion_reasoning_ref):
                         """Run subagent policy check (will use completion_reasoning after completion check finishes)"""
@@ -799,7 +791,7 @@ class AgentController:
                             self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
                             # Task not complete, so we need the next action - wait for it
                             self.event_logger.system_debug("Determining next action based on current viewport...")
-                            current_action, needs_exploration = next_action_future.result()
+                            current_action = next_action_future.result()
                             
                             # Wait for subagent policy check and update policy
                             try:
@@ -879,10 +871,9 @@ class AgentController:
                         failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                         ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
                         
-                        current_action, needs_exploration, reasoning = goal_determiner.determine_next_action(
+                        current_action, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
-                            is_exploring=False,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
@@ -1048,88 +1039,7 @@ class AgentController:
                     print(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
                     current_action = None
             
-            # 4. If no action determined, trigger exploration mode (if enabled)
-            # Exploration mode should only be used when we cannot determine any action
-            # Only trigger exploration when current_action is None (no valid action found)
-            if current_action is None and self.exploration_mode_enabled:
-                # Identify what we're looking for
-                remaining_tasks = goal_determiner._identify_remaining_tasks(environment_state.interaction_history)
-                if remaining_tasks:
-                    print(f"🔍 Element not visible in viewport - looking for: {remaining_tasks}")
-                    print("   Switching to full-page screenshot for exploration")
-                else:
-                    print("🔍 Element not visible in viewport - switching to full-page screenshot for exploration")
-                
-                # Capture both viewport and full-page for comparison
-                viewport_snapshot = snapshot  # Keep the viewport snapshot
-                snapshot = self._capture_snapshot(full_page=True)
-                environment_state = EnvironmentState(
-                    browser_state=snapshot,
-                    interaction_history=self.bot.session_tracker.interaction_history,
-                    user_prompt=user_prompt,
-                    task_start_url=self.task_start_url,
-                    task_start_time=self.task_start_time,
-                    current_url=snapshot.url,
-                    page_title=snapshot.title,
-                    visible_text=snapshot.visible_text,
-                    url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
-                    url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
-                )
-                
-                # Retry logic for exploration mode
-                exploration_retry_count = 0
-                current_action = None
-                
-                while exploration_retry_count <= self.exploration_retry_max:
-                    if exploration_retry_count > 0:
-                        print(f"🔍 Retry {exploration_retry_count}/{self.exploration_retry_max} - Re-determining scroll direction...")
-                    else:
-                        print("🔍 Re-determining scroll direction with full-page screenshot...")
-                    
-                    print(f"   Current scroll position: Y={snapshot.scroll_y}, Viewport height: {snapshot.page_height}")
-                    current_action, needs_exploration, reasoning = goal_determiner.determine_next_action(
-                        environment_state,
-                        screenshot=snapshot.screenshot,
-                        is_exploring=True,  # Now in exploration mode
-                        viewport_snapshot=viewport_snapshot,  # Pass viewport for comparison
-                        failed_actions=self.failed_actions if self.track_ineffective_actions else [],  # Pass failed actions only if tracking enabled
-                        ineffective_actions=self.ineffective_actions if self.track_ineffective_actions else []  # Pass ineffective actions only if tracking enabled
-                    )
-                    # Store reasoning for next interaction
-                    if reasoning:
-                        self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                    
-                    # Safeguard: Filter out actions that exactly match failed/ineffective actions (except scroll commands in exploration mode, only if tracking enabled)
-                    if (
-                        self.track_ineffective_actions
-                        and current_action
-                        and current_action.lower().startswith("click:")
-                        and (current_action in self.failed_actions or current_action in self.ineffective_actions)
-                        and not current_action.startswith("scroll:")
-                    ):
-                        print(f"⚠️ Generated action matches a failed/ineffective action: {current_action}")
-                        current_action = None
-                    
-                    # Validate that exploration mode only returns scroll commands
-                    if current_action and current_action.startswith("scroll:"):
-                        # Valid scroll command - exit retry loop
-                        break
-                    else:
-                        exploration_retry_count += 1
-                        if exploration_retry_count <= self.exploration_retry_max:
-                            print(f"⚠️ Exploration mode returned invalid command: {current_action}")
-                            print(f"   Retrying ({exploration_retry_count}/{self.exploration_retry_max})...")
-                            # Small delay before retry
-                            time.sleep(0.2)
-                        else:
-                            # Max retries reached - use deterministic fallback
-                            print(f"⚠️ Exploration mode returned invalid command after {self.exploration_retry_max} retries: {current_action}")
-                            print("   Using deterministic scroll direction based on element position...")
-                            current_action = self._determine_scroll_direction_from_position(
-                                viewport_snapshot, snapshot, remaining_tasks
-                            )
-            
-            # Fallback if determiner fails
+            # 4. Fallback if determiner fails
             if not current_action:
                 current_action = self._determine_next_action(user_prompt, snapshot)
             

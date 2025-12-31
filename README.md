@@ -36,6 +36,7 @@ The agent system has been optimized for significantly reduced token usage and im
 - Eliminated redundancy (rules no longer repeated 3-5 times across prompts)
 - Streamlined action format validation and command documentation
 - Context-aware summarization (full details for recent, minimal for historical)
+- Removed exploration mode complexity (full-page vs viewport screenshots)
 
 **Impact:**
 - ~83% reduction in total prompt tokens across all agent operations
@@ -43,6 +44,7 @@ The agent system has been optimized for significantly reduced token usage and im
 - Lower API costs for high-volume automation
 - Improved attention to critical rules (no "lost in the middle" effect)
 - Maintains same accuracy and reliability with more efficient prompting
+- Simplified architecture with single viewport-based action determination
 
 ## 📋 Table of Contents
 

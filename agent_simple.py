@@ -453,8 +453,7 @@ result = bot.execute_task(
         "Use best judgment for missing field values that align with provided data",
         "Don't apply via LinkedIn - use the standard form instead"
     ],
-    show_completion_reasoning_every_iteration=False,  # Only show when actually complete
-    exploration_mode_enabled=False  # Disable exploration mode for faster execution
+    show_completion_reasoning_every_iteration=False  # Only show when actually complete
 )
 
 # Check if task succeeded
