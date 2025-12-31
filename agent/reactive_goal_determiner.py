@@ -355,228 +355,82 @@ class ReactiveGoalDeterminer:
         screenshot_note = "full-page screenshot (entire page)" if is_exploring else "viewport screenshot (currently visible area)"
         
         exploration_rules = """
-CRITICAL EXPLORATION MODE RULES:
-- You are in EXPLORATION MODE - you can see the FULL PAGE screenshot
-- Your ONLY job is to determine scroll direction (up or down) to bring the target element into viewport
-- You MUST ONLY return scroll commands: "scroll: up" or "scroll: down"
-- DO NOT return type/click commands - the element is NOT in the viewport yet
-- Look at where the target element is in the full-page screenshot
-- Compare it to what's currently visible in the viewport (based on scroll position)
-- If target is ABOVE current viewport → return "scroll: up"
-- If target is BELOW current viewport → return "scroll: down"
-- Once the element is visible in viewport, you will exit exploration mode and can interact with it
+🔍 EXPLORATION MODE (Full-Page View):
+- Job: Determine scroll direction to bring target element into viewport
+- Commands: Only "scroll: up" or "scroll: down"
+- Logic: Target above current viewport → scroll up; Target below → scroll down
+- Exit: When element enters viewport, you'll switch to interaction mode
 """ if is_exploring else ""
         
         # Build base knowledge section if provided
         base_knowledge_section = ""
         if self.base_knowledge:
-            base_knowledge_section = "\n\nBASE KNOWLEDGE (Rules that guide your behavior):\n"
+            base_knowledge_section = "\n\nBASE KNOWLEDGE (Custom Rules):\n"
             for i, knowledge in enumerate(self.base_knowledge, 1):
                 base_knowledge_section += f"{i}. {knowledge}\n"
-            base_knowledge_section += "\nIMPORTANT: Apply these base knowledge rules when determining actions. They override general assumptions.\n"
         
         prompt = f"""
-You are determining the NEXT SINGLE ACTION to take based on the current state.
-
-Your job is to look at the screenshot ({screenshot_note}) and decide:
-"What should I do RIGHT NOW to progress toward the user's goal?"
+You determine the NEXT SINGLE ACTION based on current state ({screenshot_note}).
 
 {exploration_rules}
 {base_knowledge_section}
-CRITICAL RULES:
-1. **DROPDOWN/SELECT HANDLING - HIGHEST PRIORITY: When you see ANY dropdown, select field, combobox, or listbox WITH ACTUAL OPTIONS, you MUST use "select:" action, NEVER "click:". This is a CRITICAL rule that cannot be violated.**
-   - **HOW TO IDENTIFY: Look for elements with "SELECT_FIELD" marker OR elements showing "options=" in their description. ONLY use "select:" if the element has "options=" showing available choices.**
-   - **MANDATORY: If an element description contains "SELECT_FIELD" OR "options=" with actual options listed, it is a dropdown/select field and REQUIRES "select:" action**
-   - **IMPORTANT: If an element is a "tag=select" but does NOT have "options=" in its description, it may not have options available yet. In that case, use "click:" instead of "select:"**
-   - **⚠️ CRITICAL: WHEN SELECTING AN OPTION, YOU MUST USE ONE OF THE EXACT OPTIONS LISTED IN THE "options=" FIELD. DO NOT MAKE UP OR INVENT OPTION VALUES.**
-     * If an element shows: "options=[options: LinkedIn, METR's Website, METR Employee, Twitter, ...]" → You MUST select one of: "LinkedIn", "METR's Website", "METR Employee", "Twitter", etc.
-     * If an element shows: "options=[options: Please select one, LinkedIn, METR's Website, ...]" → You can select "LinkedIn" or "METR's Website", but NOT "Please select one" (that's a placeholder)
-     * **NEVER invent option values like "Online Search" if it's not in the options list**
-     * **ALWAYS check the options= field and use an exact match from that list**
-   - **EXAMPLES OF DROPDOWN INDICATORS (ONLY USE SELECT: IF OPTIONS ARE SHOWN):**
-     * Element shows: "SELECT_FIELD" → MUST use "select:" (SELECT_FIELD only appears when options are available)
-     * Element shows: "options=[options: LinkedIn, METR Website, ...]" → MUST use "select:" with one of the listed options
-     * Element shows: "tag=select" WITH "options=" → MUST use "select:"
-     * Element shows: "tag=select" WITHOUT "options=" → Use "click:" instead (no options available)
-     * Element shows: "role=combobox" or "role=listbox" WITH "options=" → MUST use "select:"
-     * Element shows: "role=combobox" or "role=listbox" WITHOUT "options=" → Use "click:" instead (no options available)
-   - **CORRECT USAGE:**
-     * ✅ "select: LinkedIn in referral source dropdown" (when element shows SELECT_FIELD or options=[options: LinkedIn, METR Website, ...] and LinkedIn is in the list)
-     * ✅ "select: METR's Website in referral source dropdown" (when element shows SELECT_FIELD or options=[options: LinkedIn, METR's Website, ...] and METR's Website is in the list)
-     * ✅ "select: Canada in country dropdown" (when element shows SELECT_FIELD or options=[options: Canada, USA, ...] and Canada is in the list)
-     * ✅ "click: location suggestion div" (when element is tag=div or tag=span without options= - it's a clickable suggestion, not a select field)
-   - **WRONG USAGE (DO NOT DO THIS):**
-     * ❌ "select: Online Search in referral dropdown" → WRONG! If "Online Search" is NOT in the options=[options: ...] list, you cannot use it
-     * ❌ "select: location suggestion" → WRONG! If element doesn't have SELECT_FIELD or options=, use "click:" instead
-     * ❌ "click: LinkedIn in referral dropdown" → WRONG! If element shows SELECT_FIELD or options=, must be "select: LinkedIn in referral dropdown"
-     * ❌ "select: option in dropdown" → WRONG! If element doesn't have SELECT_FIELD or options=, it's not a select field - use "click:" instead
-     * ❌ Making up option values that don't exist in the options= list → WRONG! Only use options that are explicitly shown
-   - **REMEMBER: Only use "select:" if the element has SELECT_FIELD marker OR "options=" in its description. If an element is a select/dropdown but doesn't have options=, use "click:" instead.**
-   - **REMEMBER: When you see "options=[options: ...]" or "SELECT_FIELD" in an element description, you MUST use "select:" with one of those exact options. Never invent or make up option values.**
-   - **REMEMBER: If an element is tag=select, role=combobox, or role=listbox but does NOT have "options=" or "SELECT_FIELD", it means options are not available - use "click:" instead.**
-2. **FILE UPLOAD HANDLING - HIGHEST PRIORITY: When you see ANY file input, upload control, or element for attaching files, you MUST use "upload:" action, NEVER "click:". This is a CRITICAL rule that cannot be violated.**
-   - **HOW TO IDENTIFY: Look for elements with "type=file", "tag=input" with "type=file", or elements showing file upload indicators in their description**
-   - **MANDATORY: If an element description contains "type=file", "tag=input" with "(type=file)", or shows file upload/attachment indicators, it is a file upload field and REQUIRES "upload:" action**
-   - **⚠️ CRITICAL: DO NOT MAKE UP OR INVENT FILENAMES. Only use a filename if:**
-     * The user explicitly provided a file path or filename in their request
-     * The user's goal explicitly mentions uploading a specific file
-     * You have a real, existing file path to use
-   - **WHEN NO FILE IS PROVIDED:**
-     * If the file upload field is OPTIONAL (not required for form submission), you may SKIP it and proceed with other form fields
-     * If the file upload field is REQUIRED and blocking form submission, use `upload: <target>` (e.g., "upload: file input" or "upload: ATTACH RESUME/CV button") - this will open the file picker for the user
-     * DO NOT create placeholder filenames like "resume.pdf" or "document.pdf" when the user hasn't provided a file
-   - **EXAMPLES OF FILE UPLOAD INDICATORS:**
-     * Element shows: "tag=input" with "(type=file)" → MUST use "upload:"
-     * Element shows: "type=file" → MUST use "upload:"
-     * Element text/aria-label contains: "upload", "attach", "browse", "choose file", "select file", "file" → MUST use "upload:"
-     * Element description mentions file upload, document upload, attachment, etc. → MUST use "upload:"
-   - **CORRECT USAGE:**
-     * ✅ "upload: /path/to/resume.pdf in file input" (when user provided a file path - use "in" to separate file from target)
-     * ✅ "upload: resume.pdf in ATTACH RESUME/CV button" (when user explicitly mentioned resume.pdf - use "in" to separate file from target)
-     * ✅ "upload: file input" (when no file provided but field is required - opens file picker)
-     * ✅ "upload: ATTACH RESUME/CV button" (when no file provided - opens file picker)
-     * ✅ "upload: document.pdf in upload field" (ONLY if user explicitly mentioned this file - use "in" to separate file from target)
-   - **WRONG USAGE (DO NOT DO THIS):**
-     * ❌ "upload: resume.pdf" → WRONG! Missing target element. Must be "upload: resume.pdf in <target>" when file is provided
-     * ❌ "click: file input" → WRONG! Must be "upload: file input" or "upload: <filename> in file input"
-     * ❌ "click: upload button" → WRONG! If it's a file upload control, use "upload: upload button"
-     * ❌ Making up placeholder filenames like "resume.pdf" when user didn't provide a file → WRONG!
-   - **REMEMBER: If you see a file input/upload control and use "click:" instead of "upload:", your answer is INVALID. Always check element descriptions for type=file, tag=input (type=file), or upload/attach/browse indicators.**
-   - **REMEMBER: Never invent or make up filenames. Only use filenames that the user explicitly provided or that exist in the user's request.**
-   - **REMEMBER: When a file IS provided, use "in" to separate it from the target: "upload: <filepath> in <target>". When NO file is provided, just use: "upload: <target>".**
-3. **TEXT INPUT HANDLING - CRITICAL: When typing into input fields, the previous text is automatically cleared before typing. You MUST type the complete, full desired text in a single type command. Do NOT assume you can append to existing text or modify it incrementally.**
-   - **HOW IT WORKS: The system automatically clears any existing text in the input field before typing your specified text. This means the field will contain ONLY the text you specify in your type command.**
-   - **CRITICAL: Always type the FULL desired text value, not just what needs to be added or changed.**
-   - **EXAMPLES:**
-     * ✅ If a field currently shows "City, State" and you want "New York, NY", use: "type: New York, NY in location input field" (NOT "type: New York, NY" or trying to modify incrementally)
-     * ✅ If a field shows "old@example.com" and you want "new@example.com", use: "type: new@example.com in email input field" (NOT just "new@example.com" or trying to edit the existing text)
-     * ✅ If a field is empty and you want "John Doe", use: "type: John Doe in name input field" (works the same whether field is empty or has existing text)
-   - **WRONG USAGE (DO NOT DO THIS):**
-     * ❌ Trying to type only the part that needs to change (e.g., typing "NY" when field has "City, State" and you want "New York, NY")
-     * ❌ Assuming you can append text to existing content
-     * ❌ Trying to modify text incrementally in multiple steps
-   - **REMEMBER: The field is automatically cleared before typing, so always provide the complete, final desired text value in your type command.**
-4. **MINI GOALS - PROACTIVE HANDLING: When you see a complex UI interaction (like an un-expanded dropdown, a multi-step component, or a specialized widget) that requires multiple steps, you CAN suggest a "mini_goal:" command to focus on it.**
-   - **HOW TO USE: Use "mini_goal: <specific sub-instruction>" to temporarily shift your focus.**
-   - **EXAMPLES:**
-     * ✅ "mini_goal: select 'United Kingdom' from the country dropdown"
-     * ✅ "mini_goal: fill the address section of the form"
-   - **BENEFIT: This ensures you prioritize completing this specific sub-task before returning to the main goal.**
-5. **TASK COMPLETION AWARENESS: If the user's goal involves clicking a link/button that navigates to a new page, and you are now on that destination page, the task is likely complete. Do NOT suggest going back to the original page unless the user explicitly requested returning there. Examples:**
-   - "go to X and click Y" → If you've clicked Y and are on Y's page, task is complete (don't go back to X)
-   - "click the first article" → If you've clicked it and are viewing the article, task is complete
-   - "navigate to homepage and click login" → If you're on the login page, task is complete (don't go back)
-5. **EXTRACTION PRIORITY: If the user's goal involves extracting, getting, finding, collecting, listing, showing, displaying, or retrieving data from the page, you MUST use "extract:" commands. After any necessary navigation/interaction is complete and the data is visible, your next action MUST be an "extract:" command.**
-   - Examples: "extract the price" → "extract: price"
-   - Examples: "get the stock price" → "extract: stock price"  
-   - Examples: "find the current price" → "extract: current price"
-   - Examples: "collect product information" → "extract: product information"
-   - Examples: "list the top 5 stocks" → "extract: top 5 stocks with prices and percentage change"
-   - Examples: "show me the prices" → "extract: prices"
-   - Examples: "display the results" → "extract: results"
-   - Examples: "what are the top stocks?" → "extract: top stocks with prices and percentage change"
-   - **CRITICAL: If data is already visible on the page and the user wants it extracted, use "extract:" immediately. Do not click/type/scroll unless needed to make the data visible first.**
-6. {"You can see the FULL PAGE in this screenshot - use it to determine scroll direction ONLY" if is_exploring else "You can ONLY see what's in the current viewport screenshot - nothing below or above"}
-7. Determine ONE action at a time - be reactive, not pre-planned
-8. {"You are in exploration mode - you MUST ONLY return scroll commands until the target element is visible in viewport" if is_exploring else "If elements are visible in the viewport, suggest actions for them. Only indicate exploration is needed if NO valid action can be determined."}
-9. {"Only return scroll commands (scroll: up or scroll: down) - do NOT return type/click commands" if is_exploring else "Only suggest actions for elements clearly visible in the screenshot. If you can determine a valid action, return it and set needs_exploration=False."}
-10. **CRITICAL: If the prompt mentions failed actions that didn't yield any change, DO NOT suggest those same actions again. Try a different element or approach.**
-11. **HANDOFFS: When the user explicitly asks to pause, give control to them, or resolve something manually (captcha, MFA, legal acknowledgement, etc.), respond with a `defer:` command instead of continuing automation.**
-   **CRITICAL: If the INTERACTIONS PERFORMED section shows a "defer" interaction that was "resumed", this means control was already given to the user and returned to the agent. DO NOT defer again - proceed with the next step in the task. Only defer if no defer action has been executed yet, or if the user explicitly requests another handoff.**
-12. **NAVIGATION HISTORY: Use the navigation history summary to decide when to issue `back:` or `forward:` commands. If the goal requires revisiting a previous page or moving ahead in session history, prefer these commands over retyping URLs.**
-13. Format actions as executable commands:
-   - **For EXTRACT commands: HIGHEST PRIORITY when user wants data** - Use "extract: <description>" when the user prompt contains extraction keywords (extract, get, find, note, collect, gather, retrieve, pull, fetch, list, show, display, return, output, print, read, scan, capture, obtain, acquire, present, report, summarize, detail, enumerate, itemize, catalog, record, document, save, export, download, copy, quote, cite) and the data is (or will be) visible. Examples: "extract: price", "extract: stock price", "extract: current and after market price", "extract: top 5 stocks with prices and percentage change"
-   - **For CLICK commands: MUST include element TYPE (button, link, div, input, etc.) AND be specific** - e.g., "click: Google Search button", "click: first article link titled 'Introduction'", "click: search suggestion 'yahoo finance' link", "click: Accept all cookies button". NEVER use vague terms like 'first element', 'that button', or ambiguous text without element type like "click: search suggestion 'yahoo finance'" (must specify: link, button, div, etc.).
-   - **For TYPE commands: MUST include element type** - e.g., "type: John Doe in name input field", "type: john@example.com in email input field". NEVER use vague terms like 'the field' or 'it'.
-   - **For PRESS commands: MUST be brief** - just the key name (e.g., "press: Enter", "press: Escape", "press: Tab"). Do NOT add descriptions or context.
-14. **IMPORTANT: needs_exploration should ONLY be True when you cannot determine ANY valid action. If you can see actionable elements, return an action and set needs_exploration=False.**
 
-AVAILABLE COMMANDS:
-- extract: <description>  (e.g., "extract: product price", "extract: article title", "extract: current and after market price")
-  **PRIORITY COMMAND**: Use this when user wants to extract/collect data from the page.
-  **When to use**: 
-    - If data is already visible → use "extract:" immediately
-    - If data needs page interaction first → do that, then use "extract:"
-  **Examples**:
-    - "extract: stock price" (when price is visible)
-    - "extract: current and after market price" (when both prices are visible)
-    - "extract: product name and price" (when product info is visible)
-  This triggers automatic extraction using the bot's extract function.
-- defer: <optional message or seconds>  (e.g., "defer", "defer: 15", "defer: give control to the user")
-  Use this when automation must pause and hand control to the user.
-  - "defer" → pause indefinitely until the user resumes
-  - "defer: 10" → pause for 10 seconds, then resume automatically
-  - "defer: take over" → pause and show the provided message to the user
-  Only defer when the user explicitly requests manual control or human input is required (captcha, multi-factor auth, etc.).
-  **IMPORTANT: Check the INTERACTIONS PERFORMED section before deferring. If you see a "defer" interaction that shows "resumed", this means control was already given to the user and returned. In that case, DO NOT defer again - proceed with the next step in the task.**
-- subagents: <mode>  (e.g., "subagents: single", "subagents: parallel", "subagents: reset")
-  Override the adaptive sub-agent utilization policy when it is clearly misaligned with the task or the user explicitly requests a change.
-  - "single"/"single-threaded"/"off"/"conservative" → minimize or block spawning.
-  - "parallel"/"aggressive"/"max" → encourage eager spawning for independent work.
-  - "reset"/"default"/"auto"/"adaptive" → clear overrides and return to adaptive mode.
-  Only issue this command when the current policy is blocking progress or after the user asks for a different parallelism mode.
-- scroll: <direction>  (e.g., "scroll: down", "scroll: up") - {"Use this ONLY in exploration mode" if is_exploring else "Use if needed elements aren't visible"}
-{"- DO NOT use type/click commands in exploration mode - element is not in viewport yet" if is_exploring else ""}
-{'- type: <value> in <specific field description>  (e.g., "type: John Doe in name field", "type: john@example.com in email input field") - Only use when NOT in exploration mode' if not is_exploring else ''}
-{'   * ⚠️ CRITICAL: The input field is automatically cleared before typing. Always type the COMPLETE, FULL desired text value, not just what needs to be added or changed. The field will contain ONLY the text you specify.' if not is_exploring else ''}
-{'   * GOOD: "type: John Doe in name field"' if not is_exploring else ''}
-{'   * GOOD: "type: john@example.com in email input field"' if not is_exploring else ''}
-{'   * GOOD: "type: New York, NY in location input field" (even if field currently shows "City, State" - the full desired value is typed)' if not is_exploring else ''}
-{'   * BAD: "type: John Doe in field" (too vague)' if not is_exploring else ''}
-{'   * BAD: "type: John Doe in it" (unclear)' if not is_exploring else ''}
-{'   * BAD: Trying to type only part of the text or modify incrementally (the field is cleared, so type the complete value)' if not is_exploring else ''}
-{'- click: <specific element description WITH element type>  (e.g., "click: Google Search button", "click: first article link titled "Introduction to Python"", "click: Accept all cookies button", "click: search suggestion "yahoo finance" link") - Only use when NOT in exploration mode' if not is_exploring else ''}
-{"   * CRITICAL: Always include element TYPE (button, link, div, input, etc.) in click commands" if not is_exploring else ""}
-{"   * ⚠️ CRITICAL DROPDOWN CHECK: Before using click:, ALWAYS check the element description for dropdown/select indicators. If you see SELECT_FIELD or options=, you MUST use select: instead of click:. However, if an element is tag=select, role=combobox, or role=listbox but does NOT have options= or SELECT_FIELD, use click: instead (options not available)." if not is_exploring else ""}
-{"   * ⚠️ CRITICAL FILE UPLOAD CHECK: Before using click:, ALWAYS check the element description for file upload indicators. If you see type=file, tag=input (type=file), or upload/attach/browse in the element description, you MUST use upload: instead of click:. Using click: on a file upload control is WRONG and will cause your answer to be invalid." if not is_exploring else ""}
-{"   * CRITICAL: Never use click to operate dropdowns/select/combobox/listbox; use select: ... instead" if not is_exploring else ""}
-{"   * CRITICAL: Never use click to operate file inputs/upload controls; use upload: ... instead" if not is_exploring else ""}
-{'   * Use select: for ANY option picking (native <select>, custom dropdowns, listboxes, comboboxes); only use click for non-option interactions' if not is_exploring else ''}
-{'   * HOW TO IDENTIFY SELECT FIELDS: Look for elements marked with SELECT_FIELD or elements showing options= in their description. ONLY use select: if options are shown.' if not is_exploring else ''}
-{'   * When you see "SELECT_FIELD" or "options=" in element descriptions, this is a dropdown that requires "select:" action' if not is_exploring else ''}
-{'   * REMEMBER: If an element shows "options=[options: ...]" or has SELECT_FIELD marker, it is a dropdown and requires "select:" action, NOT "click:"' if not is_exploring else ''}
-{'   * REMEMBER: If an element is tag=select, role=combobox, or role=listbox but does NOT have "options=" or "SELECT_FIELD", use "click:" instead (options not available)' if not is_exploring else ''}
-{'   * GOOD select: "select: Canada in country dropdown" (native select with SELECT_FIELD marker)' if not is_exploring else ''}
-{'   * GOOD select: "select: LinkedIn in referral source dropdown" (when element shows options=[options: LinkedIn, METR Website, ...])' if not is_exploring else ''}
-{'   * GOOD select: "select: Winter jacket size L in size dropdown" (placeholder native select)' if not is_exploring else ''}
-{'   * GOOD select: "select: Blue option in theme picker" (custom listbox/button)' if not is_exploring else ''}
-{'   * BAD click: "click: Canada in country dropdown" (should be select: ...)' if not is_exploring else ''}
-{'   * BAD click: "click: LinkedIn in referral dropdown" (should be select: LinkedIn in referral dropdown)' if not is_exploring else ''}
-{'   * BAD click: "click: Blue option in theme picker" (should be select: ...)' if not is_exploring else ''}
-{'   * GOOD: "click: Google Search button" (includes type: button)' if not is_exploring else ''}
-{'   * GOOD: "click: first article link titled "Introduction to Python"" (includes type: link)' if not is_exploring else ''}
-{'   * GOOD: "click: search suggestion "yahoo finance" link" (includes type: link)' if not is_exploring else ''}
-{'   * GOOD: "click: Accept all cookies button" (includes type: button)' if not is_exploring else ''}
-{'   * BAD: "click: search suggestion "yahoo finance"" (missing element type - is it a link? button? div?)' if not is_exploring else ''}
-{'   * BAD: "click: first element" (too vague - what element? what type?)' if not is_exploring else ''}
-{'   * BAD: "click: button" (too vague - which button?)' if not is_exploring else ''}
-{'   * BAD: "click: that button" (unclear reference)' if not is_exploring else ''}
-{"   IMPORTANT: If the user's goal contains ordinal information (first, second, third, etc.), PRESERVE IT and make it specific WITH element type:" if not is_exploring else ""}
-{'   - "click: first article" → "click: first article link titled "<title>"" or "click: first article link in the list" (NOT "click: first article" - must include type)' if not is_exploring else ''}
-{'   - "click: second button" → "click: second submit button" or "click: second button labeled "<text>"" (already includes type: button)' if not is_exploring else ''}
-{'   - "click: third link" → "click: third link titled "<text>"" or "click: third navigation link" (already includes type: link)' if not is_exploring else ''}
-{'   - "click: search suggestion "yahoo finance"" → "click: search suggestion "yahoo finance" link" or "click: search suggestion "yahoo finance" button" (must specify type)' if not is_exploring else ''}
-{'- navigate: <url or site>  (e.g., "navigate: https://news.ycombinator.com") - Only use when the navigation history summary shows no way back/forward and no other tab already has the required page. Prefer taking advantage of history or existing tabs first.' if not is_exploring else ''}
-{'- press: <key>  (e.g., "press: Enter", "press: Escape", "press: Tab") - MUST be brief, just the key name. Do NOT add descriptions or context.' if not is_exploring else ''}
-{'   * GOOD: "press: Enter"' if not is_exploring else ''}
-{'   * GOOD: "press: Escape"' if not is_exploring else ''}
-{'   * BAD: "press: Enter in the search input field" (too descriptive - press commands should be brief)' if not is_exploring else ''}
-{'   * BAD: "press: Enter to search" (too descriptive - press commands should be brief)' if not is_exploring else ''}
-{'- form: <description>  (e.g., "form: complete checkout form") - Use when the task explicitly refers to filling an entire form or multiple related fields. Keep description precise.' if not is_exploring else ''}
-{'- select: <option description>  (e.g., "select: United States option in country dropdown", "select: LinkedIn in referral source dropdown") - **MANDATORY FOR DROPDOWNS/SELECTS WITH OPTIONS**. This is REQUIRED for picking options from dropdowns/select fields that have "SELECT_FIELD" marker or "options=" in their description. **CRITICAL: Only use select: if the element has SELECT_FIELD or options= in its description. If an element is tag=select, role=combobox, or role=listbox but does NOT have options= or SELECT_FIELD, use click: instead.** **⚠️ CRITICAL: When an element shows "options=[options: Option1, Option2, ...]" in its description, you MUST use one of those exact options. Never invent or make up option values that are not in the list. Check the options= field and use an exact match.**' if not is_exploring else ''}
-{'- upload: <target> or upload: <filepath> in <target>  (e.g., "upload: file input", "upload: resume.pdf in file input", "upload: ATTACH RESUME/CV button") - **MANDATORY FOR ALL FILE UPLOADS**. This is REQUIRED for attaching files to ANY file input, upload control, or file attachment element. Do NOT use click for these; if you use click on a file upload control, your answer is invalid. **CRITICAL: Before using click: on any element, check if it has type=file, tag=input (type=file), or upload/attach/browse indicators - if it does, you MUST use upload: instead.** When no file is provided, use "upload: <target>". When a file is provided, use "upload: <filepath> in <target>".' if not is_exploring else ''}
-{'- datetime: <value and field>  (e.g., "datetime: 2024-06-01 in start date picker") - Use for date/time pickers that need structured input.' if not is_exploring else ''}
-{'- back: <steps>  (e.g., "back: 1") and forward: <steps>  - Use when the navigation history summary shows the desired page is behind/ahead or when the user explicitly requests it. Defaults to 1 step if omitted.' if not is_exploring else ''}
-{"   * Confirm the target using the history summary (previous page, next page) before issuing back/forward." if not is_exploring else ""}
-# Focus system removed - no longer available
+ACTION RULES:
+1. SELECT FIELDS (with SELECT_FIELD or options=): Use "select: <exact-option> in <field>"
+   - Must use an option from the options= list (never invent values)
+   - If tag=select but NO options= shown → use "click:" (options not loaded)
 
-{"EXPLORATION MODE (Full-Page Visible):" if is_exploring else "VIEWPORT-FIRST APPROACH:"}
-- Look at the screenshot carefully
-- {"Identify where the target element is in the full-page screenshot" if is_exploring else "Identify what's visible and what's needed"}
-{"- Compare target element position with current viewport position (scroll_y tells you current position)" if is_exploring else ""}
-{'- If target is ABOVE viewport → return "scroll: up"' if is_exploring else "- If target element is visible → interact with it"}
-{'- If target is BELOW viewport → return "scroll: down"' if is_exploring else "- If target element is NOT visible → scroll to reveal it"}
-- Don't plan ahead - just decide the immediate next action
+2. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
+   - With file: "upload: resume.pdf in file input"
+   - Without file: "upload: file input" (opens picker)
+   - Never invent filenames
+
+3. TEXT INPUTS: Fields auto-clear before typing - type complete desired value
+   - "type: john@example.com in email input field" (not just "john")
+
+4. EXTRACTION: Use "extract: <what>" when user wants data retrieved
+   - Keywords: extract, get, find, collect, list, show, display
+
+5. COMMAND FORMAT:
+   - Click: Must include element type (button/link/div) - "click: Submit button"
+   - Type: Must include field type - "type: John in name input field"
+   - Press: Just key name - "press: Enter"
+
+6. AVOID REPEATING: Failed actions mentioned in prompt should not be repeated
+
+7. DEFER: Use "defer:" when user requests manual control or captcha appears
+   - If "defer" already shows "resumed" in interactions, proceed (don't defer again)
+
+COMMANDS:
+{'' if is_exploring else '''- extract: <what> - Extract visible data from page
+- click: <type> <description> - Interact with element (must specify type: button/link/etc)
+- type: <text> in <field-type> <name> - Enter text (field auto-clears first)
+- select: <option> in <dropdown> - Pick option (only if element has SELECT_FIELD/options=)
+- upload: [file] in <target> - Handle file uploads (file optional, opens picker if omitted)
+- press: <key> - Press single key (Enter/Escape/Tab)
+- navigate: <url> - Direct navigation (prefer back/forward if in history)
+- back: [n] / forward: [n] - Navigate history (default n=1)
+- defer: [msg|seconds] - Pause for user (use when captcha/manual input needed)
+- scroll: <up|down> - Move viewport
+- form: <description> - Fill entire form
+- datetime: <value> in <picker> - Set date/time
+- mini_goal: <instruction> - Focus on complex sub-task'''}
+{'- scroll: <up|down> - ONLY command available in exploration mode' if is_exploring else ''}
+
+EXAMPLES:
+✅ "select: Canada in country dropdown" | Element: options=[Canada, USA, UK]
+❌ "click: Canada option" | Should use select: for dropdowns with options=
+
+✅ "upload: resume.pdf in file input" | User provided file
+❌ "click: file input" | Should use upload: for type=file elements
+
+✅ "type: john@example.com in email input field" | Complete value + field type
+❌ "type: john in field" | Incomplete value + vague target
+
+✅ "click: Submit button" | Specific type + description
+❌ "click: button" | Too vague
+
+{'In exploration mode: Only return scroll commands to bring target into viewport' if is_exploring else 'If element is visible, interact with it. Set needs_exploration=True only if NO valid action possible.'}
 """
         # Cache the prompt
         self._system_prompt_cache[is_exploring] = prompt

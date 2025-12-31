@@ -434,26 +434,24 @@ bot.page.goto("https://careers.capgemini.com/job/London-IOS-Developer/1264832101
 result = bot.execute_task(
     "your job is to navigate to the job form page, fill the form with the data provided and submit the form. you'll be done when the form has been submitted",
     base_knowledge=[
-        """"use this details:
-        first name: John,
-        last name: Doe,
-        email: john.doe@example.com,
-        phone: 07385986448,
-        address line 1: 3 John Street,
-        city: Liverpool,
-        state: England,
-        country: United Kingdom,
-        gender: Male""",
-        "do not repeat interactions you have successfully completed",
-        "don't apply with LinkedIn, just apply with the form",
-        "fill all the required fields in the form",
-        "you are allowed to use the best value for the field if the user doesn't provide one",
-        "only press Enter after typing in a search field if there are NO visible suggestions or dropdown options to click",
-        "if asked to search use the best search box contextually available",
-        "if there is a cookie banner, accept all cookies", 
-        "if there is a resume upload area and you havent interacted with it yet, look for a button/link to upload the resume",
-        "DO NOT use Dropbox, Google Drive, or any cloud storage options. ALWAYS choose 'Upload from Device', 'Local File', or similar.",
-        "If a file picker dialog opens, the system will handle it. Do not try to interact with the dialog itself.",
+        # Form data (structured)
+        """Form data to use:
+        - First name: John
+        - Last name: Doe
+        - Email: john.doe@example.com
+        - Phone: 07385986448
+        - Address: 3 John Street
+        - City: Liverpool
+        - State: England
+        - Country: United Kingdom
+        - Gender: Male""",
+        
+        # Behavioral rules (concise)
+        "For search fields: Only press Enter if NO dropdown suggestions are visible",
+        "For file uploads: Prefer 'Upload from Device' or 'Local File' over cloud storage options",
+        "File picker dialogs are handled automatically - do not interact with them",
+        "Use best judgment for missing field values that align with provided data",
+        "Don't apply via LinkedIn - use the standard form instead"
     ],
     show_completion_reasoning_every_iteration=False,  # Only show when actually complete
     exploration_mode_enabled=False  # Disable exploration mode for faster execution

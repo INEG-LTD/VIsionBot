@@ -238,76 +238,52 @@ QUESTION: Is the task complete? (true/false only)
     def _build_system_prompt(self, user_prompt: Optional[str] = None) -> str:
         """Build system prompt that guides the LLM on how to evaluate completion"""
         active_prompt = user_prompt if user_prompt else self.user_prompt
-        partial_guidance = ""
-        if self.allow_partial_completion:
-            partial_guidance = """
-- Partial completion is allowed for this evaluation. If the majority of the user's requested deliverables have been satisfied and missing items are minor or clearly unobtainable, you may mark the task complete but explicitly note any remaining gaps in the reasoning.
-"""
+        partial_guidance = "- Partial completion allowed: Mark complete if most deliverables satisfied, noting gaps in reasoning.\n" if self.allow_partial_completion else ""
+        
         return f"""
 TASK EVALUATION
 ===============
-
 USER PROMPT: "{active_prompt}"
 
-You are evaluating whether a web automation task has been successfully completed.
-
-Your task is to determine if the user's request has been fulfilled based on:
-1. The original user prompt and intent
+Determine if the automation task is complete based on:
+1. Original user intent
 2. Current browser state (URL, page content, visible elements)
-3. Interaction history (what actions were taken)
-4. Visual evidence from screenshots (if provided)
+3. Interaction history (actions taken)
+4. Visual evidence (screenshot)
 
-Evaluation Guidelines:
-- Be conservative: only mark complete when you have high confidence the task is done
-- Consider the intent: a "navigate" task completes when the target page loads
-- **CRITICAL: For tasks involving clicking links/buttons that navigate to new pages, the task is complete when the click action has been performed AND navigation to the new page has occurred. Do NOT require being back on the original page - clicking a link and being on the destination page IS completion. Examples:**
-  * "go to X and click Y" → Complete when you've navigated to X, clicked Y, and are now on the page that Y links to
-  * "click the first article" → Complete when you've clicked the article and are now viewing the article page
-  * "navigate to homepage and click login" → Complete when you're on the homepage, clicked login, and are now on the login page
-- **CRITICAL for extraction tasks: If the user prompt involves extracting, getting, finding, or collecting data, the task is ONLY complete if an EXTRACT interaction has been successfully performed AND the extracted data matches what was requested. Do NOT mark complete if data is just visible on the page - extraction must have actually occurred.**
-- Consider data collection: a "collect info" task completes when required data is visible/collected AND extraction has been performed
-- Consider form submission: a "submit" or "login" task completes when:
-  * Confirmation appears or success indicators are visible, OR
-  * Navigation to a new page occurs (URL changed), OR  
-  * The final action (clicking submit/login button) was performed - if the user's goal explicitly states "click the login button" or "click submit", and that action has been executed, consider the task complete even if there's no immediate page change
-  **STRICT MODE: If strict_mode is enabled, ONLY check if the explicitly requested actions have been executed. Do NOT infer that login/submit must succeed - if the user asked to "click the login button", consider it complete after clicking, regardless of success/failure or error messages.**
-  
-  **STRICT MODE EXAMPLES:**
-  - User goal: "click the login button"
-    * Strict mode: Task is COMPLETE after the login button is clicked, even if a "Wrong password!" error appears
-    * Non-strict mode: Task is NOT complete if login fails (would infer success is required)
-  
-  - User goal: "Fill in username 'exampleuser2' and when I say 'continue', click the login button"
-    * Strict mode: Task is COMPLETE if:
-      ✓ Username was filled in
-      ✓ "continue" command was received (check user inputs/interaction history)
-      ✓ Login button was clicked
-    * Do NOT check if password was correct, do NOT check if login succeeded, do NOT consider error messages as failure
-  
-  - User goal: "navigate to https://example.com and click submit"
-    * Strict mode: Task is COMPLETE if:
-      ✓ Navigation to the URL occurred (URL matches)
-      ✓ Submit button was clicked
-    * Do NOT check if form submission succeeded, do NOT check for validation errors
-  
-  **Key principle: In strict mode, completion = all explicitly requested actions were performed, regardless of outcomes, errors, or success indicators.**
-- Look for explicit success indicators: confirmation messages, success pages, completion banners
-- Consider navigation patterns: unexpected navigation away from target may indicate failure
-- Be aware of intermediate states: don't mark complete during multi-step workflows unless truly finished
-- **Note: Also consider the interaction history - if the user requested specific actions and they appear to have been executed successfully, this can support completion even if page state hasn't changed yet**
+COMPLETION CRITERIA:
+- Navigation: Complete when target page loads
+- Link clicks: Complete when on destination page (don't require returning to original page)
+  Example: "go to X and click Y" → Done when clicked Y and viewing Y's page
+- Extraction: Complete ONLY if EXTRACT interaction succeeded with matching data
+  Example: "get price" → Done only after successful EXTRACT, not just visible data
+- Forms/Login: Complete when confirmation visible, URL changed, OR final action performed
 {partial_guidance}
+{self._get_strict_mode_guidance() if self.strict_mode else ""}
 
-Your evaluation should be:
-- Precise: Base conclusions on concrete evidence
-- Context-aware: Understand the difference between progress and completion
-- Explainable: Provide clear reasoning for your assessment
+EVALUATION APPROACH:
+- Conservative: High confidence required
+- Precise: Base on concrete evidence
+- Context-aware: Progress ≠ completion
+- Consider interaction timeline as sequence leading to current state
 
-Return your evaluation as structured JSON with:
-- is_complete: boolean indicating completion
-- confidence: float 0-1 indicating confidence level
+Return JSON:
+- is_complete: boolean
+- confidence: float (0-1)
 - reasoning: detailed explanation
-- evidence: supporting facts (URL patterns, text found, parameters checked)
-- remaining_steps: (DEPRECATED - leave empty) This field is not used. Actions are determined reactively.
+- evidence: supporting facts
+- remaining_steps: (DEPRECATED - leave empty)
+"""
+    
+    def _get_strict_mode_guidance(self) -> str:
+        """Get strict mode guidance text"""
+        return """
+STRICT MODE ENABLED:
+- Only verify explicitly requested actions were performed
+- Ignore outcomes, errors, success indicators (unless explicitly required)
+- Examples:
+  * "click login" → Done after click, regardless of success
+  * "fill X then click Y" → Done after both actions, regardless of validation
 """
     
     def _build_evaluation_prompt(self, state: EnvironmentState, user_inputs: List[Dict[str, Any]] = None, user_prompt: Optional[str] = None) -> str:
@@ -329,81 +305,44 @@ Return your evaluation as structured JSON with:
         if self.allow_partial_completion:
             partial_note = "\nPARTIAL COMPLETION ENABLED: If substantial progress (e.g., most requested extractions or subtasks) is evident, you may mark the task complete while noting any remaining gaps.\n"
         prompt = f'''
-Evaluate if the following task has been completed:
+EVALUATE TASK COMPLETION
 
-IMPORTANT: You are viewing a VIEWPORT SNAPSHOT (what's currently visible on screen), not the full page.
-- Only elements visible in the current viewport are accessible
-- If required elements are not visible, you must suggest scrolling first
-- The screenshot shows ONLY what's currently visible on screen
+USER PROMPT: "{active_prompt}"
 
-ORIGINAL USER PROMPT:
-"{active_prompt}"
+CURRENT STATE (Viewport Only):
+URL: {state.current_url}
+Title: {state.page_title}
+Scroll: Y={state.browser_state.scroll_y}
+Visible: {state.visible_text[:500] if state.visible_text else "None"}...
 
-CURRENT BROWSER STATE (VIEWPORT):
-- URL: {state.current_url}
-- Page Title: {state.page_title}
-- Scroll Position: Y={state.browser_state.scroll_y}, X={state.browser_state.scroll_x}
-- Viewport Size: {state.browser_state.page_width}x{state.browser_state.page_height}
-- Visible Text (first 2000 chars): {state.visible_text}
-
-NAVIGATION HISTORY:
+NAVIGATION:
 {nav_summary}
 
-INTERACTIONS PERFORMED (in chronological order, most recent last):
+INTERACTIONS (chronological, current state = result of these):
 {interaction_summary}
-
-**IMPORTANT: These interactions happened in sequence. The current browser state is the RESULT of these actions.**
-- If a click interaction shows it happened on a specific page, and the URL changed to a new page, that means the click successfully navigated to the new page.
-- Review the timeline: earlier interactions led to later ones, and the final state reflects all successful actions.
 {f"""
-USER-PROVIDED INPUTS (from defer_input commands):
+USER INPUTS:
 {chr(10).join([f'- {entry.get("prompt", "Input")}: "{entry.get("response", "")}"' for entry in reversed(user_inputs[-3:])])}
 """ if user_inputs else ""}
 
-TASK PROGRESS:
-- Started at: {state.task_start_url}
-- Started at time: {state.task_start_time}
-- Current time: {state.browser_state.timestamp}
-- Session duration: {state.browser_state.timestamp - state.task_start_time:.1f} seconds
+DURATION: {state.browser_state.timestamp - state.task_start_time:.1f}s
 {partial_note}
 
-Based on this comprehensive state, determine:
-1. Has the user's request been fulfilled?
-2. What evidence supports your conclusion?
-
-IMPORTANT: Your job is ONLY to evaluate if the task is complete. Do NOT plan ahead or list remaining steps.
-The agent will determine what to do next reactively based on the current viewport state.
-
-Consider:
-- **CRITICAL: Review the INTERACTIONS PERFORMED section as a TIMELINE. Actions happened in sequence, and the current browser state is the RESULT of those actions.**
-- **CRITICAL: If INTERACTIONS PERFORMED shows:**
-  * A click interaction that happened on page X (shown in "on page: X")
-  * With reasoning indicating it was the requested action (e.g., "click the first article")
-  * AND the URL changed from X to Y (shown in the interaction summary)
-  * AND the current URL is Y
-  * THEN the task IS COMPLETE - the click successfully navigated to the destination page.
-- **For link-clicking tasks: The interaction timeline shows WHERE each action happened. If you see a click on the requested link/article that happened on the source page, and the URL changed to the destination page, and you're now on that destination page, the task IS COMPLETE.**
-- **For DEFER actions: If INTERACTIONS PERFORMED shows a "defer" interaction with "resumed", this means control was given to the user and returned to the agent. This counts as completing the "give control" step. After a defer is resumed, the agent should proceed with the next step in the task.**
-- Whether the current page/state matches what would be expected after task completion
-- Whether all required interactions have been performed (review the INTERACTIONS PERFORMED section chronologically - check both the action type AND the reasoning/why AND where it happened)
-- Whether the user's explicitly stated final action (if any) has been executed (check interaction timeline for matching action with appropriate reasoning)
-- Whether success indicators are present
-- Whether error messages indicate a problem or are transient/disappearing
-- Whether the task reached a natural completion point vs. being in progress
+REVIEW CHECKLIST:
+1. Interaction timeline (sequence → current state)
+2. Link clicks: If clicked on page X, URL changed to Y, now on Y = complete
+3. Extractions: Must have EXTRACT interaction (visible ≠ extracted)
+4. Defer: "resumed" means handoff complete, proceed with next step
+5. Success indicators: Confirmations, URL changes, completion state
+6. Required actions: All explicitly requested actions performed
 {f"""
-{"="*60}
-STRICT MODE IS ENABLED - EVALUATION RULES:
-{"="*60}
-The user prompt has been rewritten to explicitly state completion criteria.
-
-Your job: Check if all actions explicitly listed in the user prompt have been performed.
-- Review the INTERACTIONS PERFORMED section
-- Review the USER-PROVIDED INPUTS section for conditional commands (e.g., "continue")
-- DO NOT check outcomes, error messages, success indicators, or page navigation unless explicitly required
-
-The rewritten prompt explicitly states what constitutes completion - follow it exactly.
-{"="*60}
+{'='*40}
+STRICT MODE: Check only if explicitly requested actions performed.
+Ignore outcomes/errors unless explicitly required.
+{'='*40}
 """ if self.strict_mode else ""}
+
+Has the user's request been fulfilled? What evidence supports this?
 '''
         return prompt
     
@@ -418,19 +357,35 @@ The rewritten prompt explicitly states what constitutes completion - follow it e
         
         limit = self.interaction_summary_limit
         interactions_to_summarize = interactions if not limit or limit <= 0 else interactions[-limit:]
+        
+        # Only show full details for last 3 interactions, summarize older ones
+        recent_threshold = len(interactions_to_summarize) - 3
+        
         for i, interaction in enumerate(interactions_to_summarize, 1):
+            is_recent = i > recent_threshold
             interaction_type = interaction.interaction_type.value
             summary = f"{i}. {interaction_type}"
             
-            # Always show where the action originated from (the page URL when action was performed)
-            if interaction.before_state and interaction.before_state.url:
-                summary += f" (on page: {interaction.before_state.url[:60]}...)"
+            # For recent interactions, show full context
+            if is_recent:
+                # Show where the action originated from
+                if interaction.before_state and interaction.before_state.url:
+                    summary += f" (on: {interaction.before_state.url[:50]}...)"
+                
+                # Add reasoning (truncated for token efficiency)
+                if interaction.reasoning:
+                    summary += f"\n   Why: {interaction.reasoning[:150]}"  # Truncate to 150 chars
+            else:
+                # For older interactions, just show success/failure indicator
+                if not interaction.success:
+                    summary += " ✗"
+                elif interaction.before_state and interaction.after_state:
+                    if interaction.before_state.url != interaction.after_state.url:
+                        summary += " ✓ (nav)"
+                    else:
+                        summary += " ✓"
             
-            # Add reasoning if available (why the action was taken) - this is critical for understanding intent
-            if interaction.reasoning:
-                summary += f"\n   Why: {interaction.reasoning}"  # Show full reasoning - it's important for completion checks
-            
-            # Special handling for navigation interactions - show explicit from/to
+            # Special handling for navigation interactions
             if interaction.interaction_type == InteractionType.NAVIGATION:
                 if interaction.target_element_info:
                     direction = interaction.target_element_info.get('direction', '')
