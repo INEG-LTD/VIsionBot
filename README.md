@@ -9,7 +9,6 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - **Mini Goals System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
 - **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text.
-- **Smart Select Handling**: Automatic detection and handling of native `<select>` elements, custom dropdowns, listboxes, and combobox patterns. Agent can see available options in overlays and make intelligent selections. Select elements are prominently marked with `SELECT_FIELD` in element descriptions, and available options are displayed in the `options=` field to help the agent understand when to use `select:` actions instead of `click:`. Conservative detection prevents false positives for regular inputs with lists. When select handler detects a non-select element, it automatically converts the action to a click action using the full bot infrastructure (overlay detection, element finding, etc.), ensuring seamless interaction with suggestion lists and other clickable option elements.
 - **Form Field Context Detection**: Automatically detects and includes associated labels/questions for form elements (inputs, radios, checkboxes). This allows the agent to distinguish between similar options (like "Yes" buttons) that belong to different questions, significantly improving accuracy when filling out complex forms.
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
@@ -282,7 +281,6 @@ Flexible action system with multiple execution strategies:
 - **Type**: Text input with keyboard simulation
 - **Press**: Keyboard key presses (Enter, Tab, Arrow keys, etc.)
 - **Scroll**: Scroll to elements or by amount
-- **Select**: Dropdown selection
 - **Form**: Multi-field form filling
 - **Upload**: File upload handling
 - **Navigate**: URL navigation with back/forward support
@@ -1201,7 +1199,6 @@ browser-vision-bot/
 │   ├── element_detector.py   # Element detection
 │   └── overlay_manager.py    # Overlay management
 ├── handlers/                 # Specialized handlers
-│   ├── select_handler.py     # Dropdown/select handling (native & custom)
 │   ├── upload_handler.py     # File upload handling
 │   └── datetime_handler.py   # Date/time handling
 ├── middlewares/              # Built-in middleware
@@ -1255,18 +1252,7 @@ pytest tests/ --cov=. --cov-report=html
 # Run specific test file
 pytest tests/unit/test_tab_manager.py -v
 
-# Test select field handling (native and custom patterns)
-pytest tests/integration/test_select_handler_fixture.py -v
 pytest tests/integration/test_selector_coordinates.py -v  # Test selector coordinate resolution
-```
-
-### Select fixture for manual testing
-
-Open `tests/integration/select_fixtures.html` in a browser to exercise native and custom dropdown scenarios. One simple way is to serve the integration folder locally:
-
-```bash
-python -m http.server 8000 -d tests/integration
-# visit http://localhost:8000/select_fixtures.html
 ```
 
 ### Environment Variables

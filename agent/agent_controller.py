@@ -3081,10 +3081,12 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
         try:
             ui_changes = self._detect_ui_state_changes(state_before, state_after)
             if ui_changes:
-                print(f"   🔄 Detected UI state changes: {ui_changes}")
+                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                    print(f"   🔄 Detected UI state changes: {ui_changes}")
                 return True
         except Exception as e:
-            print(f"   ⚠️ Error checking UI state changes: {e}")
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"   ⚠️ Error checking UI state changes: {e}")
 
         return False
 

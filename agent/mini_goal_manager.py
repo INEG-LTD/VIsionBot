@@ -20,7 +20,7 @@ class MiniGoalTrigger(BaseModel):
     selector: Optional[str] = None     # explicit selector match
     observation_regex: Optional[str] = None # regex matching any text in the viewport
 
-    def matches_action(self, action: str) -> bool:
+    def matches_action(self, action: str, debug: bool = False) -> bool:
         """Check if a determined action matches this trigger"""
         if not self.action_type and not self.target_regex:
             return False
@@ -29,14 +29,16 @@ class MiniGoalTrigger(BaseModel):
         act_type = parts[0].strip().lower()
         act_target = parts[1].strip() if len(parts) > 1 else ""
 
-        print(f"🔍 Checking trigger match for action: '{action}' against trigger (type={self.action_type}, regex={self.target_regex})")
+        if debug:
+            print(f"🔍 Checking trigger match for action: '{action}' against trigger (type={self.action_type}, regex={self.target_regex})")
         if self.action_type and self.action_type.lower() != act_type:
             return False
         
         if self.target_regex and not re.search(self.target_regex, act_target, re.IGNORECASE):
             return False
             
-        print(f"🎯 TRIGGER MATCHED! action='{action}'")
+        if debug:
+            print(f"🎯 TRIGGER MATCHED! action='{action}'")
         return True
 
     def matches_observation(self, visible_text: str) -> bool:
@@ -141,10 +143,18 @@ class MiniGoalManager:
 
     def find_matching_goal(self, action: Optional[str] = None, visible_text: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Find a registered mini goal that matches the current action or observation"""
-        print(f"🔍 find_matching_goal: registry_size={len(self.registry)}, action='{action}', text_len={len(visible_text) if visible_text else 0}")
+        # Check if debug mode is enabled
+        debug_mode = (
+            hasattr(self.bot, 'event_logger') and 
+            hasattr(self.bot.event_logger, 'debug_mode') and 
+            self.bot.event_logger.debug_mode
+        )
+        
+        if debug_mode:
+            print(f"🔍 find_matching_goal: registry_size={len(self.registry)}, action='{action}', text_len={len(visible_text) if visible_text else 0}")
         for entry in self.registry:
             trigger = entry["trigger"]
-            if action and trigger.matches_action(action):
+            if action and trigger.matches_action(action, debug=debug_mode):
                 return entry
             if visible_text and trigger.matches_observation(visible_text):
                 return entry

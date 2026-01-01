@@ -9,7 +9,7 @@ from enum import Enum
 
 from playwright.sync_api import Page
 from models import ActionStep, ActionType, PageElements, PageInfo
-from handlers import SelectHandler, UploadHandler
+from handlers import UploadHandler
 from utils import SelectorUtils
 from unittest.mock import Mock
 from utils.page_utils import PageUtils
@@ -96,7 +96,6 @@ class ActionExecutor:
         except Exception:
             # Fallback if DateTimeHandler hasn't been updated yet
             self.datetime_handler = None
-        self.select_handler = SelectHandler(page)
         self.upload_handler = UploadHandler(page, user_messages_config=user_messages_config)
         self.selector_utils = SelectorUtils(page)
         # ContextGuard doesn't need element_analyzer anymore
@@ -204,11 +203,6 @@ class ActionExecutor:
                 self.datetime_handler.set_page(page)
             else:
                 self.datetime_handler.page = page
-        if self.select_handler:
-            if hasattr(self.select_handler, "set_page"):
-                self.select_handler.set_page(page)
-            else:
-                self.select_handler.page = page
         if self.upload_handler:
             if hasattr(self.upload_handler, "set_page"):
                 self.upload_handler.set_page(page)
@@ -485,94 +479,6 @@ class ActionExecutor:
                     step_success = self._execute_wait(step)
                 elif step.action == ActionType.PRESS:
                     step_success = self._execute_press(step)
-                elif step.action == ActionType.HANDLE_SELECT:
-                    # Get coordinates for the select element first
-                    x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)
-                    
-                    # If we have a detected element for this overlay, pass its selector to the handler
-                    if step.overlay_index is not None and plan.detected_elements and getattr(plan.detected_elements, "elements", None):
-                        for el in plan.detected_elements.elements:
-                            if getattr(el, "overlay_number", None) == step.overlay_index:
-                                element_label = getattr(el, "element_label", None)
-                                if element_label and (element_label.startswith("#") or element_label.startswith("[") or element_label.startswith(".")):
-                                    try:
-                                        setattr(self.select_handler, "selector_override", element_label)
-                                    except Exception:
-                                        pass
-                                break
-                    
-                    # Use the goal's target_description for field matching (not the option value)
-                    # The option value is separate and used for the actual selection
-                    target_description = step.select_option_text
-                    # Use target description from step
-                    target_description = step.select_option_text
-                    
-                    # Record interaction
-                    self.session_tracker.record_interaction(
-                        InteractionType.SELECT,
-                        coordinates=(x, y) if x is not None and y is not None else None,
-                        target_description=target_description,
-                        select_option_text=step.select_option_text,
-                    )
-                    
-                    # Check for retry requests from goals immediately after evaluation
-                    # Removed retry goal check - retries are handled elsewhere
-                    retry_goal = None
-                    if False:  # Disabled retry check
-                        try:
-                            self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
-                            self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
-                        except Exception:
-                            pass
-                        return False
-                    
-                    if confirm_before_interaction:
-                        self._confirm_interaction_visual(
-                            action_label="select",
-                            overlay_index=step.overlay_index,
-                            selector=None,
-                            coordinates=None,
-                            box=None,
-                            page_info=page_info,
-                        )
-                    # Trust the agent's decision to use select - try to handle it as a select
-                    # If it fails, let it fail naturally so the agent can decide what to do next
-                    self.select_handler.handle_select_field(step, plan.detected_elements, page_info)
-                    step_success = True  # Assume success for handlers that don't return values yet
-                    
-                    # Check if handler extracted available options (when no option was specified)
-                    available_options = getattr(self.select_handler, "available_options", None)
-                    pending_select_field = getattr(self.select_handler, "pending_select_field", None)
-                    pending_select_selector = getattr(self.select_handler, "pending_select_selector", None)
-                    
-                    # Build target element info with available options if present
-                    target_element_info = {
-                        "overlay_index": step.overlay_index,
-                        "select_option_text": step.select_option_text,
-                    }
-                    
-                    # If available options were extracted, include them so the agent can use them
-                    if available_options is not None:
-                        target_element_info["available_options"] = available_options
-                        target_element_info["pending_select"] = True
-                        target_element_info["select_field_description"] = pending_select_field
-                        target_element_info["select_selector"] = pending_select_selector
-                        # Clear the handler attributes after storing
-                        if hasattr(self.select_handler, "available_options"):
-                            delattr(self.select_handler, "available_options")
-                        if hasattr(self.select_handler, "pending_select_field"):
-                            delattr(self.select_handler, "pending_select_field")
-                        if hasattr(self.select_handler, "pending_select_selector"):
-                            delattr(self.select_handler, "pending_select_selector")
-                    
-                    # Record the select interaction
-                    self.session_tracker.record_interaction(
-                        InteractionType.SELECT,
-                        coordinates=(step.x, step.y) if step.x and step.y else None,
-                        target_element_info=target_element_info,
-                        text_input=step.select_option_text,
-                        success=step_success,
-                    )
                 elif step.action == ActionType.HANDLE_UPLOAD:
                     # Get coordinates for the upload element first
                     x, y = self._get_click_coordinates(step, plan.detected_elements, page_info)

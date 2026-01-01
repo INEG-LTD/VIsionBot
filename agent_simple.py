@@ -20,9 +20,9 @@ from vision_bot import BrowserVisionBot
 from utils.event_logger import EventType
 from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
 from utils.select_option_utils import SelectOptionError
-from pydantic import BaseModel
-from typing import Optional
 import random
+from prompt_toolkit import HTML, print_formatted_text as print
+
 
 def type_text_sequentially(page, text: str, delay: int = None):
     """
@@ -39,15 +39,6 @@ def type_text_sequentially(page, text: str, delay: int = None):
     # Type text sequentially using keyboard.type with delay
     page.keyboard.type(text, delay=delay)
     print(f"Typed text: {text}")
-
-class DropdownSelection(BaseModel):
-    """Structured response for dropdown selection analysis"""
-    recommended_option: str
-    confidence: float = 1.0  # How confident the agent is in this recommendation
-    reasoning: Optional[str] = None  # Why this option was chosen
-
-class IsDropdownVisible(BaseModel):
-    is_visible: bool
 
 # Global state for spinner
 _spinner_active = False
@@ -181,38 +172,8 @@ def setup_mini_goals(bot: BrowserVisionBot):
                 # remove any dropdown/combobox/select text from the click_description
                 action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
 
-            analysis_prompt = f"""
-                Based on the current page state, what is the best option to select for this select field with the placeholder: "{action_part}"?
-                Consider the overall task context and what would be the most logical selection.
-                """
-            selection_info: DropdownSelection = context.ask_question_structured(
-                analysis_prompt,
-                DropdownSelection
-            )
-
-            dropdown_prompt = f"""
-                Based on the current page state, is the dropdown with the placeholder: "{action_part}" visible?
-                """
-            dropdown_visible: IsDropdownVisible = context.ask_question_structured(
-                dropdown_prompt,
-                IsDropdownVisible
-            )
-
-            print(f"🤖 AI Analysis: Select '{selection_info.recommended_option}'")
-            print(f"   Confidence: {selection_info.confidence}")
-
-            # Skip selection if confidence is too low
-            if selection_info.confidence < 0.3:
-                print("⚠️ AI confidence too low, skipping selection")
-                return
-        
-            # if dropdown_visible.is_visible:
-            #     bot.act(f"click: {current_action}")
-                
-            # sleep(1)
-            bot.act(f"type: {selection_info.recommended_option} in {action_part}")
-            sleep(5)
-            bot.act(f"click: {selection_info.recommended_option}")
+            # Use bot.act() directly - it has access to base knowledge for proper selection
+            bot.act(f"select: appropriate option for {action_part}")
         except SelectOptionError as e:
             print(f"❌ Select option error: {e}")
         except Exception as e:
@@ -326,7 +287,7 @@ def simple_event_callback(event):
     if event.event_type == EventType.AGENT_ITERATION:
         iteration = event.details.get('iteration', '?')
         max_iterations = event.details.get('max_iterations', '?')
-        print(f"\n🔄 Iteration {iteration}/{max_iterations}")
+        print(HTML(f"\n<b>🔄 Iteration {iteration}/{max_iterations}</b>"))
         # Start spinner while thinking
         _start_spinner()
     
@@ -341,7 +302,7 @@ def simple_event_callback(event):
         if reasoning:
             # Convert to first person
             first_person_reasoning = _convert_to_first_person(reasoning)
-            print(f"> Here's what the agent is thinking: {first_person_reasoning}")
+            print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
         # Format action in first person
         first_person_action = _format_action_first_person(action)
         print(f"    ⚡ {first_person_action}")
@@ -395,7 +356,7 @@ config = BotConfig(
         # max_coordinate_overlays=100  # Limit overlays for better performance
     ),
     logging=DebugConfig(
-        debug_mode=True  # Set to False to use callbacks only (no debug prints)
+        debug_mode=False  # Set to False to use callbacks only (no debug prints)
     ),
     browser=BrowserConfig(
         provider_type="persistent",
@@ -422,7 +383,7 @@ setup_mini_goals(bot)
 bot.event_logger.register_callback(simple_event_callback)
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://careers.capgemini.com/job/London-IOS-Developer/1264832101/?feedId=388933")
+bot.page.goto("https://jobs.ashbyhq.com/ElevenLabs/39631124-d10a-41b9-b539-b8055cd68985")
 
 # Wait 15 seconds before starting the task
 # sleep(15)
