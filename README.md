@@ -14,6 +14,7 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
 - **Middleware System**: Extensible middleware for logging, caching, error handling, and custom behaviors
 - **Smart Error Recovery**: Automatic retry logic, fallback strategies, and native user question support with contextual guidance that preserves original task intent
+- **Single-Use User Suggestions**: User-provided suggestions and clarifications (from both defer inputs and ask commands) are now only available for the next command, preventing outdated guidance from persisting across iterations
 - **Configuration-Driven**: Type-safe configuration using Pydantic models
 - **Optimized Prompts**: Token-efficient prompts reduce LLM costs by ~83% while maintaining accuracy
 

@@ -210,6 +210,7 @@ class AgentController:
         self.interaction_summary_limit_completion = interaction_summary_limit_completion
         self.interaction_summary_limit_action = interaction_summary_limit_action
         self._user_inputs: List[Dict[str, Any]] = []
+        self._temp_user_inputs: List[Dict[str, Any]] = []  # Single-use suggestions
         self._requirement_flags: Dict[str, bool] = {}
         self._original_user_prompt: str = ""
         self._primary_output_tasks_initialized: bool = False
@@ -1898,8 +1899,10 @@ class AgentController:
             "action": action_command,
             "page_url": payload.get("page_url"),
             "page_title": payload.get("page_title"),
+            "temporary": True,  # Mark as single-use suggestion
         }
-        self._user_inputs.append(entry)
+        # Store defer inputs as temporary (single-use) suggestions
+        self._temp_user_inputs.append(entry)
         print(f"📝 Captured user input from defer: {response}")
         self._log_event(
             "defer_input_received",
@@ -1948,13 +1951,19 @@ class AgentController:
             answer = self.user_question_callback(question, context)
             
             if answer:
-                # Add user guidance as context for the original task, not as a new primary task
-                # This preserves the original task while providing guidance on how to accomplish it
-                guidance = f"USER GUIDANCE: When attempting the original task, remember that: {question} → User suggested: '{answer}'. Apply this guidance while continuing the original task."
-                self.base_knowledge.append(guidance)
+                # Add user guidance as temporary context for the next action only
+                # This provides guidance for the immediate next command without persisting
+                temp_guidance = {
+                    "prompt": question,
+                    "response": answer,
+                    "timestamp": time.time(),
+                    "action": "ask_response",
+                    "temporary": True
+                }
+                self._temp_user_inputs.append(temp_guidance)
                 # Track that we just got an answer (to block consecutive asks)
                 self._last_ask_iteration = iteration
-                print(f"📝 User guidance added for original task: {answer}")
+                print(f"📝 User guidance added for next command: {answer}")
                 self._log_event(
                     "ask_command_answered",
                     question=question,
@@ -2186,16 +2195,21 @@ class AgentController:
                             lines.append(f"       url: {blocker_url}")
             lines.append("")
             lines.append("Tip: If the required content is on a different site, use `navigate: <url>` to open it directly.")
-        if self._user_inputs:
+        # Collect all user inputs (permanent and temporary)
+        all_user_inputs = self._user_inputs + self._temp_user_inputs
+        if all_user_inputs:
             lines.append("")
             lines.append("User-provided clarifications (most recent first):")
-            for entry in reversed(self._user_inputs[-3:]):
+            for entry in reversed(all_user_inputs[-3:]):
                 prompt = (entry.get("prompt") or "").strip()
                 response = (entry.get("response") or "").strip()
                 if prompt:
                     lines.append(f"- {prompt}: {response}")
                 else:
                     lines.append(f"- {response}")
+
+        # Clear temporary user inputs after they've been included in the prompt
+        self._temp_user_inputs.clear()
 
         if self._last_action_summary:
             summary = self._last_action_summary
