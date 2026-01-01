@@ -15,7 +15,11 @@ from agent.reactive_goal_determiner import ReactiveGoalDeterminer
 from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
-from agent.stuck_detector import HeuristicStuckDetector, IterationSnapshot
+from typing import Callable
+
+# Type alias for user question callback (ask: command handler)
+# Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
+UserQuestionCallback = Callable[[str, dict], Optional[str]]
 from tab_management import TabDecisionEngine, TabAction
 from ai_utils import (
     generate_model,
@@ -115,16 +119,8 @@ class AgentController:
         strict_mode: bool = False,
         clarification_callback: Optional[Any] = None,
         max_clarification_rounds: int = 0,
-        # Stuck detector configuration
-        stuck_detector_enabled: bool = True,
-        stuck_detector_window_size: int = 5,
-        stuck_detector_threshold: float = 0.6,
-        stuck_detector_weight_repeated_action: float = 0.15,
-        stuck_detector_weight_repetitive_action_no_change: float = 0.4,
-        stuck_detector_weight_no_state_change: float = 0.3,
-        stuck_detector_weight_no_progress: float = 0.2,
-        stuck_detector_weight_error_spiral: float = 0.2,
-        stuck_detector_weight_high_confidence_no_progress: float = 0.1,
+        # User question callback for ask: command
+        user_question_callback: Optional[UserQuestionCallback] = None,
         # Act function parameter configuration
         act_enable_target_context_guard: bool = True,
         act_enable_modifier: bool = True,
@@ -223,18 +219,8 @@ class AgentController:
         self._last_completion_evaluation: Optional[CompletionEvaluation] = None
         self._last_screenshot_hash: Optional[str] = None  # Store screenshot hash for phase-out tracking
 
-        # Initialize stuck detector
-        self.stuck_detector = HeuristicStuckDetector(
-            enabled=stuck_detector_enabled,
-            window_size=stuck_detector_window_size,
-            threshold=stuck_detector_threshold,
-            weight_repeated_action=stuck_detector_weight_repeated_action,
-            weight_repetitive_action_no_change=stuck_detector_weight_repetitive_action_no_change,
-            weight_no_state_change=stuck_detector_weight_no_state_change,
-            weight_no_progress=stuck_detector_weight_no_progress,
-            weight_error_spiral=stuck_detector_weight_error_spiral,
-            weight_high_confidence_no_progress=stuck_detector_weight_high_confidence_no_progress,
-        )
+        # Store user question callback for ask: command
+        self.user_question_callback = user_question_callback
         
         # Store act function parameter configuration
         # These flags control which parameters are passed to bot.act() during execution
@@ -459,8 +445,6 @@ class AgentController:
         self._primary_output_tasks_initialized = False
         self._initialize_requirement_flags(user_prompt)
         self._ensure_primary_output_tasks(user_prompt)
-        # Reset stuck detector history for new task
-        self.stuck_detector.clear()
         # Reset page change counter for new task
         self._consecutive_page_changes = 0
         # Reset screenshot hash tracking
@@ -629,21 +613,7 @@ class AgentController:
                 url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
             )
             
-            # 2.1. Check for stuck state at the beginning of iteration (before determining action)
-            # Use completion reasoning from previous iteration if available
-            if self._last_completion_reasoning and self._last_completion_evaluation:
-                prompt_rewritten = self._check_and_handle_stuck(
-                    user_prompt=user_prompt,
-                    environment_state=environment_state,
-                    completion_reasoning=self._last_completion_reasoning,
-                    evaluation=self._last_completion_evaluation,
-                    current_action=None,
-                    iteration=iteration,
-                )
-                if prompt_rewritten:
-                    print("📝 Using rewritten prompt for this iteration")
-            
-            # 2.2. Prepare goal determiner with current prompt (original or rewritten)
+            # 2.1. Prepare goal determiner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
             goal_determiner = ReactiveGoalDeterminer(
                 dynamic_prompt,
@@ -1392,19 +1362,6 @@ class AgentController:
                 url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
                 url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
             )
-            # Use stored completion reasoning and evaluation from this iteration
-            if latest_completion_reasoning and latest_evaluation:
-                self._update_stuck_detector_snapshot(
-                    iteration=iteration,
-                    current_action=current_action if current_action else None,
-                    environment_state=environment_state_after,
-                    completion_reasoning=latest_completion_reasoning,
-                    evaluation=latest_evaluation,
-                )
-                # Store for next iteration's stuck detection
-                self._last_completion_reasoning = latest_completion_reasoning
-                self._last_completion_evaluation = latest_evaluation
-            
             # End iteration timer
             self.bot.execution_timer.end_iteration()
             
@@ -2850,122 +2807,6 @@ class AgentController:
             }
         return evidence
 
-    def _check_and_handle_stuck(
-        self,
-        user_prompt: str,
-        environment_state: EnvironmentState,
-        completion_reasoning: str,
-        evaluation: CompletionEvaluation,
-        current_action: Optional[str],
-        iteration: int,
-    ) -> bool:
-        """
-        Check if agent is stuck and rewrite prompt if needed.
-        
-        This is called after completion check but before determining next action.
-        
-        Returns:
-            True if prompt was rewritten (action should be recomputed), False otherwise
-        """
-        # Assess stuck status
-        stuck_status = self.stuck_detector.assess()
-        
-        if stuck_status.is_stuck:
-            print(f"⚠️ Stuck detection triggered (score={stuck_status.score:.2f}): {stuck_status.reason}")
-            self._log_event(
-                "stuck_detected",
-                score=stuck_status.score,
-                reason=stuck_status.reason,
-                contributing_factors=stuck_status.contributing_factors,
-            )
-            
-            # Rewrite prompt using completion reasoning
-            rewritten = self._rewrite_task_prompt_using_completion_reasoning(
-                original_user_prompt=user_prompt,
-                current_task_prompt=self._current_task_prompt or user_prompt,
-                completion_reasoning=completion_reasoning,
-            )
-            
-            if rewritten and rewritten != (self._current_task_prompt or user_prompt):
-                self._current_task_prompt = rewritten
-                print(f"📝 Rewritten task prompt: {rewritten}")
-                self._log_event(
-                    "prompt_rewritten",
-                    original_prompt=user_prompt,
-                    rewritten_prompt=rewritten,
-                    completion_reasoning=completion_reasoning,
-                )
-                return True  # Prompt was rewritten, action should be recomputed
-        
-        return False  # No prompt rewrite
-    
-    def _update_stuck_detector_snapshot(
-        self,
-        iteration: int,
-        current_action: Optional[str],
-        environment_state: EnvironmentState,
-        completion_reasoning: str,
-        evaluation: CompletionEvaluation,
-    ) -> None:
-        """
-        Update stuck detector with current iteration snapshot.
-        
-        This is called after we determine the next action but before executing it.
-        We'll update it again after execution to track success/failure and state changes.
-        """
-        # Get last interaction to determine success and state changes
-        last_interaction = None
-        if environment_state.interaction_history:
-            last_interaction = environment_state.interaction_history[-1]
-        
-        # Determine URL change
-        url_changed = False
-        if len(environment_state.url_history) >= 2:
-            url_changed = environment_state.url_history[-1] != environment_state.url_history[-2]
-        
-        # Determine DOM change from last interaction
-        dom_changed = False
-        if last_interaction and last_interaction.before_state and last_interaction.after_state:
-            if last_interaction.before_state.dom_snapshot and last_interaction.after_state.dom_snapshot:
-                dom_changed = last_interaction.before_state.dom_snapshot != last_interaction.after_state.dom_snapshot
-            elif url_changed:
-                # If URL changed, DOM likely changed too
-                dom_changed = True
-        
-        # Get extracted items count
-        extracted_count = len(self.extracted_data) if self.extracted_data else 0
-        
-        # Normalize action text
-        action_text_norm = None
-        action_type = None
-        if current_action:
-            action_text_norm = current_action.lower().strip()
-            # Extract action type (e.g., "click:", "type:", "scroll:")
-            if ":" in action_text_norm:
-                action_type = action_text_norm.split(":")[0].strip().upper()
-        
-        # Get success from last interaction
-        success = None
-        if last_interaction:
-            success = last_interaction.success
-        
-        # Create snapshot
-        snap = IterationSnapshot(
-            iteration=iteration + 1,
-            action_text_norm=action_text_norm,
-            action_type=action_type,
-            success=success,
-            url=environment_state.current_url,
-            page_title=environment_state.page_title,
-            url_changed=url_changed,
-            dom_changed=dom_changed,
-            extracted_items_count=extracted_count,
-            completion_reasoning=completion_reasoning,
-            completion_confidence=evaluation.confidence,
-        )
-        
-        self.stuck_detector.add_iteration(snap)
-    
     def _rewrite_task_prompt_using_completion_reasoning(
         self,
         original_user_prompt: str,

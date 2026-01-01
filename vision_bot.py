@@ -327,17 +327,6 @@ class BrowserVisionBot:
         self.element_selection_fallback_model = config.elements.selection_fallback_model
         self.include_overlays_in_agent_context = config.elements.include_overlays_in_agent_context
         
-        # Extract stuck detector configuration
-        self.stuck_detector_enabled = config.stuck_detector.enabled
-        self.stuck_detector_window_size = config.stuck_detector.window_size
-        self.stuck_detector_threshold = config.stuck_detector.threshold
-        self.stuck_detector_weight_repeated_action = config.stuck_detector.weight_repeated_action
-        self.stuck_detector_weight_repetitive_action_no_change = config.stuck_detector.weight_repetitive_action_no_change
-        self.stuck_detector_weight_no_state_change = config.stuck_detector.weight_no_state_change
-        self.stuck_detector_weight_no_progress = config.stuck_detector.weight_no_progress
-        self.stuck_detector_weight_error_spiral = config.stuck_detector.weight_error_spiral
-        self.stuck_detector_weight_high_confidence_no_progress = config.stuck_detector.weight_high_confidence_no_progress
-        
         # Extract act function configuration
         self.act_enable_target_context_guard = config.act_function.enable_target_context_guard
         self.act_enable_modifier = config.act_function.enable_modifier
@@ -1419,6 +1408,7 @@ class BrowserVisionBot:
         max_clarification_rounds: int = 3,
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
+        user_question_callback: Optional[Callable[[str, dict], Optional[str]]] = None,
     ) -> AgentResult:
         """
         Execute a task autonomously (Step 1: Basic Reactive Agent).
@@ -1453,6 +1443,9 @@ class BrowserVisionBot:
                                                   None means include all interactions. Default: None.
             interaction_summary_limit_action: Max interactions to feed into next-action prompts.
                                               None means include all interactions. Default: None.
+            user_question_callback: Optional callback for asking user questions when the agent gets stuck.
+                                   Signature: (question: str, context: dict) -> Optional[str]
+                                   Return user's answer or None to skip. Default: None.
             
         Returns:
             AgentResult object containing:
@@ -1582,15 +1575,7 @@ class BrowserVisionBot:
                 strict_mode=strict_mode,
                 clarification_callback=clarification_callback,
                 max_clarification_rounds=max_clarification_rounds,
-                stuck_detector_enabled=self.stuck_detector_enabled,
-                stuck_detector_window_size=self.stuck_detector_window_size,
-                stuck_detector_threshold=self.stuck_detector_threshold,
-                stuck_detector_weight_repeated_action=self.stuck_detector_weight_repeated_action,
-                stuck_detector_weight_repetitive_action_no_change=self.stuck_detector_weight_repetitive_action_no_change,
-                stuck_detector_weight_no_state_change=self.stuck_detector_weight_no_state_change,
-                stuck_detector_weight_no_progress=self.stuck_detector_weight_no_progress,
-                stuck_detector_weight_error_spiral=self.stuck_detector_weight_error_spiral,
-                stuck_detector_weight_high_confidence_no_progress=self.stuck_detector_weight_high_confidence_no_progress,
+                user_question_callback=user_question_callback,
                 act_enable_target_context_guard=self.act_enable_target_context_guard,
                 act_enable_modifier=self.act_enable_modifier,
                 act_enable_additional_context=self.act_enable_additional_context,

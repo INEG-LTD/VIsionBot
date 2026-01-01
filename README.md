@@ -13,7 +13,7 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
 - **Middleware System**: Extensible middleware for logging, caching, error handling, and custom behaviors
-- **Smart Error Recovery**: Automatic retry logic, fallback strategies, and stuck detection
+- **Smart Error Recovery**: Automatic retry logic, fallback strategies, and native user question support
 - **Configuration-Driven**: Type-safe configuration using Pydantic models
 - **Optimized Prompts**: Token-efficient prompts reduce LLM costs by ~83% while maintaining accuracy
 
@@ -223,7 +223,7 @@ The agent system enables autonomous task completion:
 - **Reactive Loop**: Observe → Evaluate Completion → Determine Next Action → Execute → Repeat
 - **Completion Evaluation**: LLM-based assessment of whether the task is completed
 - **Adaptive Planning**: Dynamically adjusts strategy based on page state and history
-- **Stuck Detection**: Identifies when the agent is stuck in a loop and takes corrective action
+- **Native User Questions**: Agent can ask the user for help using `ask:` command when stuck or needing clarification
 - **Pause/Resume Control**: Fine-grained pause functionality between actions for debugging and inspection
 
 ### Tab Management
@@ -648,6 +648,7 @@ if result.success:
 - `strict_mode` (bool): Follow instructions exactly without inferring extra requirements (default: False)
 - `clarification_callback` (Callable[[str], str], optional): Callback for asking user clarification questions
 - `max_clarification_rounds` (int): Maximum number of clarification rounds (default: 3, must be >= 0)
+- `user_question_callback` (Callable[[str, dict], Optional[str]], optional): Callback for handling `ask:` command. When the agent uses `ask: <question>`, this callback is invoked. Receives `(question, context)` and should return user's answer or `None` to skip
 
 **Returns:** `AgentResult` object with:
 - `success`: Whether the task completed successfully
@@ -1168,6 +1169,52 @@ if result.success:
 bot.end()
 ```
 
+### Example 6: Agent Asking User Questions
+
+The agent can natively ask the user for help using the `ask:` command when it's stuck or needs clarification:
+
+```python
+from browser_vision_bot import BrowserVisionBot, BotConfig
+
+# Define a callback to handle agent questions
+def handle_agent_question(question: str, context: dict) -> str | None:
+    """
+    Called when the agent uses ask: command.
+    
+    Args:
+        question: The question the agent wants to ask
+        context: Additional context (iteration, current_url, etc.)
+        
+    Returns:
+        User's answer, or None to skip
+    """
+    print(f"\n❓ Agent asks: {question}")
+    print(f"   (Press Enter to skip)")
+    
+    try:
+        answer = input("   Your answer: ").strip()
+        return answer if answer else None
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+# Use the callback
+bot = BrowserVisionBot(config=BotConfig.production())
+bot.start()
+bot.page.goto("https://example.com/job-application")
+
+result = bot.execute_task(
+    user_prompt="Fill out the job application form",
+    base_knowledge=[
+        "Name: John Doe",
+        "Email: john@example.com",
+        "City: Liverpool"
+    ],
+    user_question_callback=handle_agent_question,
+)
+```
+
+When the agent encounters a situation where it needs help (e.g., a tricky dropdown, unclear form field, or missing information), it will use `ask: <question>` and the callback will be invoked. The user's answer is added to base knowledge for the rest of the task.
+
 ## 🛠️ Development
 
 ```
@@ -1189,7 +1236,6 @@ browser-vision-bot/
 │   ├── agent_result.py        # Agent results
 │   ├── completion_contract.py # Completion evaluation
 │   ├── reactive_goal_determiner.py # Next action determination
-│   ├── stuck_detector.py      # Stuck detection
 │   └── sub_agent_controller.py # Sub-agent management
 ├── tab_management/           # Tab orchestration
 │   ├── tab_manager.py        # Tab tracking

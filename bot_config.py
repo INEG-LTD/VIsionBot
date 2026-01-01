@@ -103,65 +103,6 @@ class CacheConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class StuckDetectorConfig(BaseModel):
-    """Stuck detection configuration."""
-    
-    enabled: bool = Field(
-        default=True,
-        description="Enable stuck detection"
-    )
-    window_size: int = Field(
-        default=5,
-        ge=1,
-        description="Number of recent actions to analyze"
-    )
-    threshold: float = Field(
-        default=0.6,
-        ge=0.0,
-        le=1.0,
-        description="Threshold for stuck detection (0.0-1.0)"
-    )
-    weight_repeated_action: float = Field(
-        default=0.15,
-        ge=0.0,
-        le=1.0,
-        description="Weight for repeated action detection"
-    )
-    weight_repetitive_action_no_change: float = Field(
-        default=0.4,
-        ge=0.0,
-        le=1.0,
-        description="Weight for repetitive actions with no state change"
-    )
-    weight_no_state_change: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        description="Weight for no state change detection"
-    )
-    weight_no_progress: float = Field(
-        default=0.2,
-        ge=0.0,
-        le=1.0,
-        description="Weight for no progress detection"
-    )
-    weight_error_spiral: float = Field(
-        default=0.2,
-        ge=0.0,
-        le=1.0,
-        description="Weight for error spiral detection"
-    )
-    weight_high_confidence_no_progress: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="Weight for high confidence but no progress"
-    )
-    
-    class Config:
-        arbitrary_types_allowed = True
-
-
 class ElementConfig(BaseModel):
     """Element detection and overlay configuration."""
     
@@ -336,10 +277,6 @@ class BotConfig(BaseModel):
         default_factory=CacheConfig,
         description="Plan caching configuration"
     )
-    stuck_detector: StuckDetectorConfig = Field(
-        default_factory=StuckDetectorConfig,
-        description="Stuck detection configuration"
-    )
     elements: ElementConfig = Field(
         default_factory=ElementConfig,
         description="Element detection configuration"
@@ -394,10 +331,6 @@ class BotConfig(BaseModel):
         return cls(
             execution=ExecutionConfig(
                 max_attempts=15
-            ),
-            stuck_detector=StuckDetectorConfig(
-                enabled=True,
-                threshold=0.5  # More sensitive in production
             ),
             logging=DebugConfig(debug_mode=False)
         )

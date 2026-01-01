@@ -331,6 +331,30 @@ def simple_event_callback(event):
             if confidence is not None:
                 print(f"🎯 Confidence: {confidence:.2f}")
 
+# User question callback - handles agent's ask: command
+def ask_user_for_help(question: str, context: dict) -> str | None:
+    """
+    Callback invoked when agent uses ask: command to get user input.
+    
+    Args:
+        question: The question from the agent's ask: command
+        context: Additional context (iteration, current_url, etc.)
+        
+    Returns:
+        User's answer (added to base_knowledge), or None to skip
+    """
+    print(f"\n❓ Agent asks: {question}")
+    print(f"   (Press Enter to skip, or type your answer)")
+    
+    try:
+        answer = input("   Your answer: ").strip()
+        if answer:
+            return answer
+        return None  # User skipped
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+
 # Ensure the user data directory exists
 user_data_path = Path.home() / "Desktop" / "bot_user_data_dir"
 user_data_path.mkdir(parents=True, exist_ok=True)
@@ -411,7 +435,8 @@ result = bot.execute_task(
         "Use best judgment for missing field values that align with provided data",
         "Don't apply via LinkedIn - use the standard form instead"
     ],
-    show_completion_reasoning_every_iteration=False  # Only show when actually complete
+    show_completion_reasoning_every_iteration=False,  # Only show when actually complete
+    user_question_callback=ask_user_for_help,  # Ask user for help when stuck
 )
 
 # Check if task succeeded
