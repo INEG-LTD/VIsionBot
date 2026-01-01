@@ -77,6 +77,116 @@ def _stop_spinner():
     if _spinner_thread:
         _spinner_thread.join(timeout=0.2)
 
+# --- New Thread-Safe Border Effect ---
+
+class ThinkingBorderManager:
+    """Manages the flashing blue border effect using monkey-patching for thread safety."""
+    
+    _JS_INIT = """
+    (function() {
+        if (window.__agentThinkingBorder) return;
+        window.__agentThinkingBorder = {
+            overlay: null,
+            init: function() {
+                if (this.overlay) return;
+                const style = document.createElement('style');
+                style.textContent = `
+                    @keyframes agent-thinking-pulse {
+                        0%, 100% { box-shadow: inset 0 0 60px 20px rgba(59, 130, 246, 0.6); }
+                        50% { box-shadow: inset 0 0 80px 30px rgba(59, 130, 246, 0.8); }
+                    }
+                    @keyframes agent-thinking-fadeout {
+                        from { opacity: 1; }
+                        to { opacity: 0; }
+                    }
+                `;
+                document.head.appendChild(style);
+                this.overlay = document.createElement('div');
+                this.overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:2147483647;display:none;opacity:0;';
+                document.body.appendChild(this.overlay);
+            },
+            start: function() {
+                this.init();
+                this.overlay.style.display = 'block';
+                this.overlay.style.opacity = '1';
+                this.overlay.style.animation = 'agent-thinking-pulse 1.5s ease-in-out infinite';
+            },
+            stop: function() {
+                if (!this.overlay) return;
+                this.overlay.style.animation = 'agent-thinking-fadeout 0.5s ease-out forwards';
+                setTimeout(() => { this.overlay.style.display = 'none'; }, 500);
+            }
+        };
+    })();
+    """
+
+    def __init__(self, bot: BrowserVisionBot):
+        self.bot = bot
+        self._enabled = not bot.config.logging.debug_mode
+        self._last_page_id = None
+
+    def _ensure_init(self):
+        """Ensure JS is initialized on the current page."""
+        if not self._enabled or not self.bot.page:
+            return
+        
+        page_id = id(self.bot.page)
+        if self._last_page_id != page_id:
+            try:
+                self.bot.page.evaluate(self._JS_INIT)
+                self._last_page_id = page_id
+            except Exception:
+                pass
+
+    def start(self):
+        """Start the flashing border."""
+        if not self._enabled: return
+        self._ensure_init()
+        try:
+            self.bot.page.evaluate("if(window.__agentThinkingBorder) window.__agentThinkingBorder.start();")
+        except Exception:
+            pass
+
+    def stop(self):
+        """Stop the flashing border."""
+        if not self._enabled: return
+        try:
+            self.bot.page.evaluate("if(window.__agentThinkingBorder) window.__agentThinkingBorder.stop();")
+        except Exception:
+            pass
+
+def apply_thinking_border(bot: BrowserVisionBot):
+    """Monkey-patch the bot and agent controller to show the thinking border."""
+    manager = ThinkingBorderManager(bot)
+    
+    from agent import AgentController
+    from vision_bot import BrowserVisionBot
+    
+    # 1. Start border when capturing snapshot (beginning of iteration)
+    original_capture = AgentController._capture_snapshot
+    def patched_capture(self, *args, **kwargs):
+        # We are on the main thread here in AgentController.run_execute_task loop
+        manager.start()
+        return original_capture(self, *args, **kwargs)
+    AgentController._capture_snapshot = patched_capture
+
+    # 2. Stop border when starting an action
+    original_act = BrowserVisionBot.act
+    def patched_act(self, *args, **kwargs):
+        # We are on the main thread here
+        manager.stop()
+        return original_act(self, *args, **kwargs)
+    BrowserVisionBot.act = patched_act
+
+    # 3. Stop border when starting an extraction
+    original_extract = BrowserVisionBot.extract
+    def patched_extract(self, *args, **kwargs):
+        manager.stop()
+        return original_extract(self, *args, **kwargs)
+    BrowserVisionBot.extract = patched_extract
+
+    return manager
+
 def _convert_to_first_person(text: str) -> str:
     """Convert reasoning text to first person"""
     if not text:
@@ -319,62 +429,63 @@ def setup_mini_goals(bot: BrowserVisionBot):
         handler=file_upload_handler
     )
 
-# Custom callback to show only essential information
-def simple_event_callback(event):
+# Custom callback factory to show only essential information
+def create_event_callback(bot, debug_mode: bool = True):
     """
-    Custom callback that only shows:
+    Create a custom callback that shows:
     - Agent iteration number
     - What the agent is thinking (reasoning)
     - What action it's about to take
     - Task completion reasoning (only when task is actually done)
+    - Flashing blue border effect on browser when thinking (if not in debug mode)
+    
+    Args:
+        bot: The BrowserVisionBot instance (for page access)
+        debug_mode: If False, shows flashing blue border on browser while thinking
+    
+    Returns:
+        Event callback function
     """
-    # Show iteration number
-    if event.event_type == EventType.AGENT_ITERATION:
-        iteration = event.details.get('iteration', '?')
-        max_iterations = event.details.get('max_iterations', '?')
-        print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
-        # Start spinner while thinking
-        _start_spinner()
-    
-    # Show what the agent is thinking and what action it's about to take
-    elif event.event_type == EventType.ACTION_DETERMINED:
-        # Stop spinner
-        _stop_spinner()
+    def simple_event_callback(event):
+        # Show iteration number
+        if event.event_type == EventType.AGENT_ITERATION:
+            iteration = event.details.get('iteration', '?')
+            max_iterations = event.details.get('max_iterations', '?')
+            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
+            # Start spinner while thinking
+            _start_spinner()
         
-        action = event.details.get('action', 'Unknown action')
-        reasoning = event.details.get('reasoning', '')
+        # Show what the agent is thinking and what action it's about to take
+        elif event.event_type == EventType.ACTION_DETERMINED:
+            # Stop spinner
+            _stop_spinner()
+            
+            action = event.details.get('action', 'Unknown action')
+            reasoning = event.details.get('reasoning', '')
+            
+            if reasoning:
+                # Convert to first person
+                first_person_reasoning = _convert_to_first_person(reasoning)
+                print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
+            # Format action in first person
+            first_person_action = _format_action_first_person(action)
+            print(f"    ⚡ {first_person_action}")
         
-        if reasoning:
-            # Convert to first person
-            first_person_reasoning = _convert_to_first_person(reasoning)
-            print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
-        # Format action in first person
-        first_person_action = _format_action_first_person(action)
-        print(f"    ⚡ {first_person_action}")
+        # Also show completion from agent_complete event (backup - only if COMPLETION_SUCCESS didn't fire)
+        elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):
+            # Only show if we haven't already shown a completion message
+            # This is a fallback in case COMPLETION_SUCCESS event doesn't fire
+            reasoning = event.details.get('reasoning', '')
+            confidence = event.details.get('confidence')
+            if reasoning:
+                # Convert reasoning to first person
+                first_person_reasoning = _convert_to_first_person(reasoning)
+                print("\n✅ The task has been completed!")
+                print(f"📝 Reasoning: {first_person_reasoning}")
+                if confidence is not None:
+                    print(f"🎯 Confidence: {confidence:.2f}")
     
-    # Show task completion reasoning only when task is actually complete
-    # elif event.event_type == EventType.COMPLETION_SUCCESS:
-    #     reasoning = event.details.get('reasoning', '')
-    #     confidence = event.details.get('confidence')
-    #     if reasoning:
-    #         print("\n✅ Task Complete!")
-    #         print(f"📝 Reasoning: {reasoning}")
-    #         if confidence is not None:
-    #             print(f"🎯 Confidence: {confidence:.2f}")
-    
-    # Also show completion from agent_complete event (backup - only if COMPLETION_SUCCESS didn't fire)
-    elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):
-        # Only show if we haven't already shown a completion message
-        # This is a fallback in case COMPLETION_SUCCESS event doesn't fire
-        reasoning = event.details.get('reasoning', '')
-        confidence = event.details.get('confidence')
-        if reasoning:
-            # Convert reasoning to first person
-            first_person_reasoning = _convert_to_first_person(reasoning)
-            print("\n✅ The task has been completed!")
-            print(f"📝 Reasoning: {first_person_reasoning}")
-            if confidence is not None:
-                print(f"🎯 Confidence: {confidence:.2f}")
+    return simple_event_callback
 
 # User question callback - handles agent's ask: command
 def ask_user_for_help(question: str, context: dict) -> str | None:
@@ -449,10 +560,14 @@ bot = BrowserVisionBot(config=config)
 setup_mini_goals(bot)
 
 # Register custom callback to show only essential information
-bot.event_logger.register_callback(simple_event_callback)
+# Pass bot and debug_mode to enable browser border effect when not debugging
+bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
 bot.page.goto("https://jobs.ashbyhq.com/ElevenLabs/39631124-d10a-41b9-b539-b8055cd68985")
+
+# Setup border effect if not in debug mode
+apply_thinking_border(bot)
 
 # Wait 15 seconds before starting the task
 # sleep(15)
