@@ -1948,12 +1948,13 @@ class AgentController:
             answer = self.user_question_callback(question, context)
             
             if answer:
-                # Add actionable guidance to base knowledge (include both Q&A for context)
-                guidance = f"IMPORTANT - Act on this now: Question was '{question}' → User said: '{answer}'. Do NOT ask again, use this answer immediately."
+                # Add user guidance as context for the original task, not as a new primary task
+                # This preserves the original task while providing guidance on how to accomplish it
+                guidance = f"USER GUIDANCE: When attempting the original task, remember that: {question} → User suggested: '{answer}'. Apply this guidance while continuing the original task."
                 self.base_knowledge.append(guidance)
                 # Track that we just got an answer (to block consecutive asks)
                 self._last_ask_iteration = iteration
-                print(f"📝 User answer added to knowledge: {answer}")
+                print(f"📝 User guidance added for original task: {answer}")
                 self._log_event(
                     "ask_command_answered",
                     question=question,

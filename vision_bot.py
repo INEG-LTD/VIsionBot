@@ -2527,9 +2527,12 @@ Return only the extracted text that appears in the text content above. Do not ma
             except Exception:
                 pass
 
+        # Create overlays (visibility controlled by config)
+        show_overlays = self.config.elements.show_overlays
         element_data = self.overlay_manager.create_numbered_overlays(
             page_info,
             mode=self.overlay_mode,
+            visible=show_overlays,
         ) or []
 
         # Focus system removed - no longer filtering by focus context

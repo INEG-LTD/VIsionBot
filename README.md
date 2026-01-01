@@ -8,12 +8,12 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 - **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
 - **Mini Goals System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
-- **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text.
+- **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text. Robust fallback mechanisms ensure reliable typing for both short and long text inputs, including proper element focusing for complex web forms. Intelligent text parsing handles complex sentences with prepositions and special characters without truncation.
 - **Form Field Context Detection**: Automatically detects and includes associated labels/questions for form elements (inputs, radios, checkboxes). This allows the agent to distinguish between similar options (like "Yes" buttons) that belong to different questions, significantly improving accuracy when filling out complex forms.
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
 - **Middleware System**: Extensible middleware for logging, caching, error handling, and custom behaviors
-- **Smart Error Recovery**: Automatic retry logic, fallback strategies, and native user question support
+- **Smart Error Recovery**: Automatic retry logic, fallback strategies, and native user question support with contextual guidance that preserves original task intent
 - **Configuration-Driven**: Type-safe configuration using Pydantic models
 - **Optimized Prompts**: Token-efficient prompts reduce LLM costs by ~83% while maintaining accuracy
 
@@ -362,6 +362,7 @@ config = BotConfig.minimal()
 
 #### ElementConfig
 - `overlay_mode`: Overlay drawing mode (`"interactive"` default, `"all"` includes every visible element)
+- `show_overlays`: Show visual overlays on page elements (default: False) - controls overlay visibility independently of debug mode
 - `include_textless_overlays`: Keep overlays with no text/aria/placeholder in LLM selection lists, using surrounding DOM context to identify them (default: False)
 - `max_detailed_elements`: Maximum number of detailed elements to include (default: 400)
 - `max_coordinate_overlays`: Maximum number of coordinate overlays (default: 600)
@@ -412,6 +413,7 @@ from bot_config import BotConfig, ElementConfig
 config = BotConfig(
     elements=ElementConfig(
         overlay_mode="all",                 # draw overlays on every visible element
+        show_overlays=True,                 # make overlays visible (independent of debug mode)
         include_textless_overlays=True,     # allow unlabeled overlays in LLM selection (uses surrounding context)
         overlay_selection_max_samples=800,  # widen the candidate list
     )

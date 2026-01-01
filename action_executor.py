@@ -1202,6 +1202,13 @@ class ActionExecutor:
             
             # Fallback to keyboard method if fill() didn't work
             if not element_selector:
+                # Ensure element is focused before keyboard typing
+                if x is not None and y is not None:
+                    try:
+                        self.page.mouse.click(x, y)
+                        time.sleep(0.1)
+                    except Exception:
+                        pass
                 # Field was already cleared above, so just type the new text
                 self.page.keyboard.type(step.text_to_type, delay=50)
                 success = True

@@ -18,7 +18,7 @@ class OverlayManager:
     def __init__(self, page: Page):
         self.page = page
     
-    def create_numbered_overlays(self, page_info: PageInfo, mode: str = "interactive") -> List[Dict[str, Any]]:
+    def create_numbered_overlays(self, page_info: PageInfo, mode: str = "interactive", visible: bool = True) -> List[Dict[str, Any]]:
         """Draw numbered overlays and return their normalized coordinates.
 
         Args:
@@ -30,11 +30,12 @@ class OverlayManager:
             // Remove any existing overlays
             const existingOverlays = document.querySelectorAll('.automation-element-overlay');
             existingOverlays.forEach(overlay => overlay.remove());
-            
+
             const viewportWidth = {page_info.width};
             const viewportHeight = {page_info.height};
             const MODE = "{mode}";
             const INCLUDE_ALL = (MODE === 'all' || MODE === 'visible');
+            const VISIBLE = {str(visible).lower()};
             
             function collectContextText(element) {{
                 const pieces = [];
@@ -215,7 +216,7 @@ class OverlayManager:
                 // Create main border
                 const border = document.createElement('div');
                 border.className = 'automation-element-overlay';
-                border.style.cssText = `
+                border.style.cssText = VISIBLE ? `
                     position: fixed;
                     left: ${{rect.left}}px;
                     top: ${{rect.top}}px;
@@ -226,18 +227,42 @@ class OverlayManager:
                     z-index: 999999;
                     background: rgba(255, 0, 0, 0.1);
                     box-sizing: border-box;
+                ` : `
+                    position: fixed;
+                    left: ${{rect.left}}px;
+                    top: ${{rect.top}}px;
+                    width: ${{rect.width}}px;
+                    height: ${{rect.height}}px;
+                    border: 2px solid transparent;
+                    pointer-events: none;
+                    z-index: 999999;
+                    background: transparent;
+                    box-sizing: border-box;
                 `;
                 
                 // Create number label
                 const label = document.createElement('div');
                 label.className = 'automation-element-overlay';
                 label.textContent = index.toString();
-                label.style.cssText = `
+                label.style.cssText = VISIBLE ? `
                     position: fixed;
                     left: ${{rect.left - 2}}px;
                     top: ${{rect.top - 25}}px;
                     background: #ff0000;
                     color: white;
+                    padding: 2px 6px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    border-radius: 3px;
+                    pointer-events: none;
+                    z-index: 1000000;
+                    font-family: Arial, sans-serif;
+                ` : `
+                    position: fixed;
+                    left: ${{rect.left - 2}}px;
+                    top: ${{rect.top - 25}}px;
+                    background: transparent;
+                    color: transparent;
                     padding: 2px 6px;
                     font-size: 12px;
                     font-weight: bold;

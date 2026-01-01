@@ -176,12 +176,33 @@ def parse_type_command(text: str) -> Optional[tuple[str, Optional[str]]]:
     if not m:
         return None
     rest = m.group(1).strip()
-    # Split on into/in
-    m2 = re.match(r"^(.*?)(?:\s+(?:into|in|to)\s*:?\s*(.+))?$", rest, flags=re.IGNORECASE)
-    if not m2:
-        return None
-    raw_val = (m2.group(1) or "").strip()
-    target = (m2.group(2) or "").strip() or None
+
+    # Split on into/in - look for the LAST occurrence of preposition + target pattern
+    # Find all matches of "into/in + target" and take the last one
+    matches = list(re.finditer(r"\s+(into|in)\s*:?\s*([^.\s]+(?:\s+[^.\s]+)*?)(?:\s|$)", rest, flags=re.IGNORECASE))
+
+    if matches:
+        # Take the last match (closest to end)
+        last_match = matches[-1]
+        preposition_pos = last_match.start()
+
+        # Check if this looks like a valid target (short, contains target-like words)
+        potential_target = last_match.group(2).strip()
+        target_keywords = ['textarea', 'input', 'field', 'box', 'area', 'element', 'search', 'form', 'login', 'email', 'password', 'name']
+
+        # If the potential target is short (< 20 chars) or contains target keywords, use it
+        if len(potential_target) < 20 or any(keyword in potential_target.lower() for keyword in target_keywords):
+            raw_val = rest[:preposition_pos].strip()
+            target = potential_target
+        else:
+            # Doesn't look like a target, treat as no target
+            raw_val = rest
+            target = None
+    else:
+        # No preposition found
+        raw_val = rest
+        target = None
+
     # Strip quotes
     if (raw_val.startswith("'") and raw_val.endswith("'")) or (raw_val.startswith('"') and raw_val.endswith('"')):
         raw_val = raw_val[1:-1]

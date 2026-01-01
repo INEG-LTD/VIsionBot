@@ -136,6 +136,10 @@ class ElementConfig(BaseModel):
         default="interactive",
         description="Overlay drawing mode: 'interactive' (default) or 'all'"
     )
+    show_overlays: bool = Field(
+        default=False,
+        description="Show visual overlays on page elements (default: False, overrides debug mode)"
+    )
     include_textless_overlays: bool = Field(
         default=False,
         description="Keep overlays with no text/aria/placeholder in LLM selection lists"
