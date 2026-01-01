@@ -617,9 +617,18 @@ class AgentController:
             
             # 2.1. Prepare goal determiner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
+            
+            # Combine base_knowledge with temporary user guidance
+            combined_knowledge = list(self.base_knowledge) if self.base_knowledge else []
+            if self._temp_user_inputs:
+                for entry in self._temp_user_inputs:
+                    response = entry.get("response", "").strip()
+                    if response:
+                        combined_knowledge.append(f"User instruction for this specific state: {response}")
+            
             goal_determiner = ReactiveGoalDeterminer(
                 dynamic_prompt,
-                base_knowledge=self.base_knowledge,
+                base_knowledge=combined_knowledge,
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
                 interaction_summary_limit=self.interaction_summary_limit_action,
@@ -2098,6 +2107,13 @@ class AgentController:
             summary["note"] = "No visible page change detected."
         self._last_action_summary = summary
         self._update_task_blockers(summary)
+        
+        # Clear temporary user inputs only if action succeeded and was NOT an ask commission
+        # Why: Persists user guidance until it's actually used by a successful action
+        if success and not action.lower().startswith("ask:"):
+            if self._temp_user_inputs:
+                # print(f"✨ Successful action '{action}' executed, clearing temporary user guidance.")
+                self._temp_user_inputs.clear()
 
     def _update_task_blockers(self, summary: Dict[str, Any]) -> None:
         """
@@ -2200,16 +2216,17 @@ class AgentController:
         if all_user_inputs:
             lines.append("")
             lines.append("User-provided clarifications (most recent first):")
+            # We don't clear self._temp_user_inputs here anymore; handled in _record_action_outcome
             for entry in reversed(all_user_inputs[-3:]):
                 prompt = (entry.get("prompt") or "").strip()
                 response = (entry.get("response") or "").strip()
                 if prompt:
                     lines.append(f"- {prompt}: {response}")
+                    # Also print to terminal for user verification
+                    print(f"🔹 [DEBUG] Including user guidance in prompt: {prompt} -> {response}")
                 else:
                     lines.append(f"- {response}")
-
-        # Clear temporary user inputs after they've been included in the prompt
-        self._temp_user_inputs.clear()
+                    print(f"🔹 [DEBUG] Including user guidance in prompt: {response}")
 
         if self._last_action_summary:
             summary = self._last_action_summary

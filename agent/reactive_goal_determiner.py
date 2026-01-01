@@ -324,9 +324,13 @@ You determine the NEXT SINGLE ACTION based on current viewport screenshot.
 
 {base_knowledge_section}
 
-⚠️ IMPORTANT - ASK FOR HELP WHEN STUCK:
+⚠️ IMPORTANT - PRIORITIZE USER GUIDANCE & RULES:
+1. CUSTOM RULES (Base Knowledge): Always follow instructions in "BASE KNOWLEDGE".
+2. USER CLARIFICATIONS (Interaction History): Check "User-provided clarifications" section. If a previous answer addresses the current situation, you MUST act on it instead of asking again.
+3. ASK FOR HELP WHEN STUCK: Use "ask: <question>" ONLY IF no previous guidance covers the current blocker. Do not repeat questions if you have an answer.
+
 Use "ask: <question>" immediately when:
-- A dropdown/autocomplete shows "no results" or doesn't match expected values
+- A dropdown/autocomplete shows "no results" or doesn't match expected values AND no clarification exists
 - You've tried the same element 2+ times without success  
 - The provided data doesn't work (e.g., city not in location options)
 - You're unsure what value to use or how to proceed
