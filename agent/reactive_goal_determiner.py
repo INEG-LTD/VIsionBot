@@ -46,6 +46,7 @@ class NextAction(BaseModel):
         "open",
         "handle_datetime",
         "mini_goal",
+        "ask",  # Ask user for help/clarification
     }
 
     @field_validator("action", mode="before")
@@ -224,7 +225,7 @@ class ReactiveGoalDeterminer:
         Args:
             environment_state: Current environment state
             screenshot: Current screenshot (viewport only)
-            overlay_data: Optional list of overlay element data with descriptions, SELECT_FIELD markers, options, etc.
+            overlay_data: Optional list of overlay element data with descriptions.
             
         Returns:
             Tuple of (action_command, reasoning):
@@ -323,61 +324,57 @@ You determine the NEXT SINGLE ACTION based on current viewport screenshot.
 
 {base_knowledge_section}
 
-ACTION RULES:
-1. SELECT FIELDS (with SELECT_FIELD or options=): Use "select: <exact-option> in <field>"
-   - Must use an option from the options= list (never invent values)
-   - If tag=select but NO options= shown → use "click:" (options not loaded)
+⚠️ IMPORTANT - ASK FOR HELP WHEN STUCK:
+Use "ask: <question>" immediately when:
+- A dropdown/autocomplete shows "no results" or doesn't match expected values
+- You've tried the same element 2+ times without success  
+- The provided data doesn't work (e.g., city not in location options)
+- You're unsure what value to use or how to proceed
+- An element behaves unexpectedly
 
-2. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
+Examples:
+- "ask: The location field shows 'no results' for Liverpool. What location should I use instead?"
+- "ask: I've tried selecting the date but the picker won't accept it. How should I proceed?"
+- "ask: The form requires a field I don't have data for. What should I enter?"
+
+ACTION RULES:
+1. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
    - With file: "upload: resume.pdf in file input"
    - Without file: "upload: file input" (opens picker)
    - Never invent filenames
 
-3. TEXT INPUTS: Fields auto-clear before typing - type complete desired value
+2. TEXT INPUTS: Fields auto-clear before typing - type complete desired value
    - "type: john@example.com in email input field" (not just "john")
 
-4. EXTRACTION: Use "extract: <what>" when user wants data retrieved
-   - Keywords: extract, get, find, collect, list, show, display
+3. EXTRACTION: Use "extract: <what>" when user wants data retrieved
 
-5. COMMAND FORMAT:
+4. COMMAND FORMAT:
    - Click: Must include element type (button/link/div) - "click: Submit button"
    - Type: Must include field type - "type: John in name input field"
    - Press: Just key name - "press: Enter"
 
-6. AVOID REPEATING: Failed actions mentioned in prompt should not be repeated
+5. AVOID REPEATING: Failed actions should not be repeated - ASK for help instead
 
-7. DEFER: Use "defer:" when user requests manual control or captcha appears
-   - If "defer" already shows "resumed" in interactions, proceed (don't defer again)
+6. DEFER: Use "defer:" when user requests manual control or captcha appears
 
 COMMANDS:
-- extract: <what> - Extract visible data from page
+- ask: <question> - ASK USER when stuck, confused, or element not working as expected
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
 - type: <text> in <field-type> <name> - Enter text (field auto-clears first)
-- select: <option> in <dropdown> - Pick option (only if element has SELECT_FIELD/options=)
+- select: <option> in <dropdown> - Pick option from dropdown
 - upload: [file] in <target> - Handle file uploads (file optional, opens picker if omitted)
 - press: <key> - Press single key (Enter/Escape/Tab)
-- navigate: <url> - Direct navigation (prefer back/forward if in history)
-- back: [n] / forward: [n] - Navigate history (default n=1)
-- defer: [msg|seconds] - Pause for user (use when captcha/manual input needed)
 - scroll: <up|down> - Move viewport
+- extract: <what> - Extract visible data from page
+- navigate: <url> - Direct navigation
+- back: [n] / forward: [n] - Navigate history
+- defer: [msg|seconds] - Pause for user (captcha/manual input)
 - form: <description> - Fill entire form
 - datetime: <value> in <picker> - Set date/time
 - mini_goal: <instruction> - Focus on complex sub-task
 
-EXAMPLES:
-✅ "select: Canada in country dropdown" | Element: options=[Canada, USA, UK]
-❌ "click: Canada option" | Should use select: for dropdowns with options=
-
-✅ "upload: resume.pdf in file input" | User provided file
-❌ "click: file input" | Should use upload: for type=file elements
-
-✅ "type: john@example.com in email input field" | Complete value + field type
-❌ "type: john in field" | Incomplete value + vague target
-
-✅ "click: Submit button" | Specific type + description
-❌ "click: button" | Too vague
-
 Interact with visible elements. If target not visible, use scroll commands.
+If something isn't working after 1-2 attempts, use "ask:" to get user guidance.
 """
         # Cache the prompt
         self._system_prompt_cache["default"] = prompt
@@ -398,9 +395,6 @@ Interact with visible elements. If target not visible, use scroll commands.
         # Extract what still needs to be done from user prompt and interactions
         remaining_tasks = self._identify_remaining_tasks(state.interaction_history)
         
-        # Check for pending select fields that need an option to be selected
-        pending_select_info = self._check_pending_select_fields(state.interaction_history)
-        
         # Add failed and ineffective actions context
         ineffective_actions_context = ""
         all_ineffective = []
@@ -411,10 +405,10 @@ Interact with visible elements. If target not visible, use scroll commands.
             all_ineffective.extend([(action, "succeeded but no change") for action in ineffective_actions])
         
         if all_ineffective:
-            ineffective_actions_context = "\n⚠️ IMPORTANT: The following actions were recently tried and did NOT yield any page change (same URL, same DOM state):\n"
+            ineffective_actions_context = "\n⚠️ ACTIONS THAT DIDN'T WORK - Consider using 'ask:' for help:\n"
             for i, (action, reason) in enumerate(all_ineffective, 1):
                 ineffective_actions_context += f"   {i}. {action} ({reason})\n"
-            ineffective_actions_context += "\nDO NOT suggest these same actions again. They were ineffective. Try a different approach or different element.\n"
+            ineffective_actions_context += "\nDO NOT repeat these. If you've tried 2+ different approaches without success, use 'ask: <your question>' to get user guidance.\n"
         
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
@@ -435,11 +429,9 @@ Interact with visible elements. If target not visible, use scroll commands.
                 text = (elem.get("textContent") or "").strip()
                 aria = (elem.get("ariaLabel") or "").strip()
                 placeholder = (elem.get("placeholder") or "").strip()
-                select_options = elem.get("selectOptions") or ""
                 
                 # Include elements that are interactive or have useful text
                 is_select = tag == "select" or role in ("combobox", "listbox")
-                is_native_select = tag == "select"  # Native <select> elements
                 has_content = text or aria or placeholder or is_select
                 
                 if has_content:
@@ -447,21 +439,11 @@ Interact with visible elements. If target not visible, use scroll commands.
                     parts = []
                     parts.append(f"#{idx} tag={tag}")
                     
-                    # Highlight SELECT_FIELD for native selects (always) or custom selects with options
-                    # Native <select> elements should always use select: action, even if options aren't shown
-                    # because the select handler can extract options from the DOM
-                    if is_native_select or (is_select and select_options):
-                        parts.append("SELECT_FIELD")
-                    
                     if role and role != tag:
                         parts.append(f"role={role}")
                     
                     if placeholder:
                         parts.append(f'placeholder="{placeholder[:40]}"')
-                    
-                    # Include select options prominently
-                    if select_options:
-                        parts.append(f'options={select_options.strip()}')
                     
                     if text:
                         parts.append(f'txt="{text[:60]}"')
@@ -482,36 +464,13 @@ Interact with visible elements. If target not visible, use scroll commands.
                         parts.append(group_info)
                         description = " ".join(parts)
                     
-                    # Add recommended action hint for elements with options
-                    action_hint = ""
-                    if is_native_select or (is_select and select_options):
-                        # Extract first real option (skip placeholder like "Please select one")
-                        options_text = select_options.strip()
-                        if options_text.startswith("[options:"):
-                            # Parse options from format: [options: Option1, Option2, ...]
-                            options_list = options_text[9:].rstrip("]").split(",")
-                            # Find first non-placeholder option
-                            for opt in options_list:
-                                opt_clean = opt.strip()
-                                if opt_clean and opt_clean.lower() not in ["please select one", "select one", "--", ""]:
-                                    action_hint = f" → Recommended: select: {opt_clean} in {tag} field"
-                                    break
-                        if not action_hint:
-                            action_hint = f" → Recommended: select: <option> in {tag} field"
-                    
-                    if action_hint:
-                        description += action_hint
-                    
                     relevant_elements.append(description)
             
             if relevant_elements:
-                # Limit to most relevant elements (prioritize select fields, inputs, buttons)
+                # Limit to most relevant elements (prioritize inputs, buttons)
                 # Show up to 30 elements to give good context without overwhelming
                 overlay_context = "\n\nAVAILABLE INTERACTIVE ELEMENTS (numbered overlays visible in screenshot):\n"
                 overlay_context += "These elements are marked with numbered red overlays in the screenshot.\n"
-                overlay_context += "Pay special attention to elements marked with SELECT_FIELD - these are dropdown/select fields that require 'select:' action.\n"
-                overlay_context += "Elements showing 'options=' have available options listed - use one of those exact options when selecting.\n"
-                overlay_context += "Elements with '→ Recommended: select:' show a suggested action format - follow this format when interacting with that element.\n"
                 overlay_context += "Elements with '[GROUP: elements #X, #Y, ...]' belong to the same question/group - clicking one when another in the group is already selected may be ineffective.\n\n"
                 for elem_desc in relevant_elements[:30]:  # Limit to 30 most relevant
                     overlay_context += f"  • {elem_desc}\n"
@@ -539,7 +498,6 @@ WHAT'S BEEN DONE:
 {interaction_summary}
 
 {ineffective_actions_context if ineffective_actions_context else ""}
-{pending_select_info if pending_select_info else ""}
 {overlay_context if overlay_context else ""}
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
@@ -622,42 +580,6 @@ Look at the screenshot and determine the single next action to progress toward t
             summary_parts.append(summary)
         
         return "\n".join(summary_parts) if summary_parts else "No interactions."
-
-    def _check_pending_select_fields(self, interactions: List[Interaction]) -> Optional[str]:
-        """
-        Check if there's a pending select field that needs an option to be selected.
-        Returns a formatted string with information about the pending select field and available options.
-        """
-        if not interactions:
-            return None
-        
-        # Check the most recent interactions for pending select fields
-        # Look at the last few interactions (in case the select was opened recently)
-        for interaction in reversed(interactions[-5:]):  # Check last 5 interactions
-            if interaction.interaction_type.value == "select":
-                target_info = interaction.target_element_info or {}
-                if target_info.get("pending_select") and target_info.get("available_options"):
-                    available_options = target_info.get("available_options", [])
-                    select_field = target_info.get("select_field_description", "select field")
-                    
-                    # Format available options for display
-                    option_texts = [opt.get('text', '') or opt.get('label', '') or opt.get('value', '') 
-                                   for opt in available_options if opt.get('text') or opt.get('label') or opt.get('value')]
-                    
-                    if option_texts:
-                        options_display = ', '.join(option_texts[:15])
-                        if len(option_texts) > 15:
-                            options_display += f" (and {len(option_texts) - 15} more)"
-                        
-                        return (
-                            f"\n🎯 PENDING SELECT FIELD:\n"
-                            f"A select field '{select_field}' was recently opened but no option was selected.\n"
-                            f"Available options: {options_display}\n"
-                            f"Your next action should be to select an appropriate option using: 'select: <option text>'\n"
-                            f"Choose the option that best matches the user's goal.\n"
-                        )
-        
-        return None
     
     def _summarize_navigation_history(self, url_history: List[str], url_pointer: Optional[int]) -> str:
         """Provide a concise navigation summary for the prompt."""

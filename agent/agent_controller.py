@@ -221,6 +221,7 @@ class AgentController:
 
         # Store user question callback for ask: command
         self.user_question_callback = user_question_callback
+        self._last_ask_iteration: int = -2  # Track last iteration where ask: was answered (to prevent consecutive asks)
         
         # Store act function parameter configuration
         # These flags control which parameters are passed to bot.act() during execution
@@ -894,6 +895,27 @@ class AgentController:
                 time.sleep(self.iteration_delay)
                 continue
             # ----------------------------------------------------------
+            
+            # --- ASK COMMAND: Agent asks user for help ---
+            if current_action and current_action.lower().startswith("ask:"):
+                # Block consecutive ask: commands - must act on previous answer first
+                if iteration <= self._last_ask_iteration + 1:
+                    print("⚠️ Cannot ask again - must act on previous answer first")
+                    self._log_event(
+                        "ask_command_blocked",
+                        reason="consecutive_ask_blocked",
+                        iteration=iteration,
+                    )
+                    # Force agent to continue without asking - it has the answer in base_knowledge
+                    current_action = None
+                else:
+                    question = current_action.split(":", 1)[1].strip()
+                    handled = self._handle_ask_command(question, iteration, environment_state)
+                    if handled:
+                        # User provided answer, retry with new knowledge
+                        time.sleep(self.iteration_delay)
+                        continue
+                    # User skipped or no callback - agent should try something else
             
             # Block navigation in autonomy mode
             if self.mini_goal_stack and self._is_nav_action(current_action):
@@ -1888,6 +1910,75 @@ class AgentController:
             page_url=entry.get("page_url"),
             page_title=entry.get("page_title"),
         )
+
+    def _handle_ask_command(
+        self,
+        question: str,
+        iteration: int,
+        environment_state: "EnvironmentState"
+    ) -> bool:
+        """
+        Handle the ask: command - agent asking user for help/clarification.
+        
+        Args:
+            question: The question the agent wants to ask
+            iteration: Current iteration number
+            environment_state: Current environment state
+            
+        Returns:
+            True if user provided an answer (added to base_knowledge), False otherwise
+        """
+        if not self.user_question_callback:
+            print("⚠️ Agent wants to ask a question but no callback configured")
+            self._log_event(
+                "ask_command_no_callback",
+                question=question,
+                iteration=iteration,
+            )
+            return False
+        
+        # Build context for the callback
+        context = {
+            "iteration": iteration,
+            "current_url": environment_state.current_url,
+            "page_title": environment_state.page_title,
+        }
+        
+        try:
+            answer = self.user_question_callback(question, context)
+            
+            if answer:
+                # Add actionable guidance to base knowledge (include both Q&A for context)
+                guidance = f"IMPORTANT - Act on this now: Question was '{question}' → User said: '{answer}'. Do NOT ask again, use this answer immediately."
+                self.base_knowledge.append(guidance)
+                # Track that we just got an answer (to block consecutive asks)
+                self._last_ask_iteration = iteration
+                print(f"📝 User answer added to knowledge: {answer}")
+                self._log_event(
+                    "ask_command_answered",
+                    question=question,
+                    answer=answer,
+                    iteration=iteration,
+                )
+                return True
+            else:
+                print("⏭️ User skipped the question")
+                self._log_event(
+                    "ask_command_skipped",
+                    question=question,
+                    iteration=iteration,
+                )
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Error in ask callback: {e}")
+            self._log_event(
+                "ask_command_error",
+                question=question,
+                error=str(e),
+                iteration=iteration,
+            )
+            return False
 
     def _ensure_primary_output_tasks(self, user_prompt: str) -> None:
         """

@@ -10,6 +10,8 @@ This is a cleaner version of agent_dummy.py with minimal logging output.
 from time import sleep
 import sys
 import threading
+
+from pydantic import BaseModel
 from middlewares.error_handling_middleware import ErrorHandlingMiddleware
 from pathlib import Path
 from browser_provider import BrowserConfig
@@ -122,12 +124,24 @@ def _format_action_first_person(action: str) -> str:
     action_type = parts[0].strip().upper()
     target = parts[1].strip()
     
+    if action_type == "ASK":
+        return "I will now ask the user a question"
     # Format: "I will now [ACTION_TYPE] >target<"
     return f"I will now [{action_type}] >{target}<"
 
 def setup_mini_goals(bot: BrowserVisionBot):
     """Register various mini goal examples"""
+    
+    from typing import Optional
+    class DropdownSelection(BaseModel):
+        """Structured response for dropdown selection analysis"""
+        recommended_option: str
+        confidence: float = 1.0  # How confident the agent is in this recommendation
+        reasoning: Optional[str] = None  # Why this option was chosen
 
+    class IsDropdownVisible(BaseModel):
+        is_visible: bool
+        
     # Example 1: Autonomous dropdown handling
     # When the agent clicks on any dropdown, it automatically focuses on selecting the right option
     dropdown_trigger_select = MiniGoalTrigger(
@@ -172,8 +186,39 @@ def setup_mini_goals(bot: BrowserVisionBot):
                 # remove any dropdown/combobox/select text from the click_description
                 action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
 
-            # Use bot.act() directly - it has access to base knowledge for proper selection
-            bot.act(f"select: appropriate option for {action_part}")
+            analysis_prompt = f"""
+                Based on the current page state, what is the best option to select for this select field with the placeholder: "{action_part}"?
+                Consider the overall task context and what would be the most logical selection.
+                """
+            selection_info: DropdownSelection = context.ask_question_structured(
+                analysis_prompt,
+                DropdownSelection
+            )
+
+            dropdown_prompt = f"""
+                Based on the current page state, is the dropdown with the placeholder: "{action_part}" visible?
+                """
+            dropdown_visible: IsDropdownVisible = context.ask_question_structured(
+                dropdown_prompt,
+                IsDropdownVisible
+            )
+
+            print(f"🤖 AI Analysis: Select '{selection_info.recommended_option}'")
+            print(f"   Confidence: {selection_info.confidence}")
+
+            # Skip selection if confidence is too low
+            if selection_info.confidence < 0.3:
+                print("⚠️ AI confidence too low, skipping selection")
+                return
+        
+            # if dropdown_visible.is_visible:
+            #     bot.act(f"click: {current_action}")
+                
+            # sleep(1)
+            if not dropdown_visible.is_visible:
+                bot.act(f"type: {selection_info.recommended_option} in {action_part}")
+                sleep(5)
+            bot.act(f"click: {selection_info.recommended_option}")
         except SelectOptionError as e:
             print(f"❌ Select option error: {e}")
         except Exception as e:
@@ -287,7 +332,7 @@ def simple_event_callback(event):
     if event.event_type == EventType.AGENT_ITERATION:
         iteration = event.details.get('iteration', '?')
         max_iterations = event.details.get('max_iterations', '?')
-        print(HTML(f"\n<b>🔄 Iteration {iteration}/{max_iterations}</b>"))
+        print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
         # Start spinner while thinking
         _start_spinner()
     

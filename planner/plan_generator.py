@@ -177,7 +177,6 @@ class PlanGenerator:
             value = (elem.get("value") or "").strip()
             href = (elem.get("href") or "").strip()
             field_label = (elem.get("fieldLabel") or "").strip()  # Associated label/question for form elements
-            select_options = elem.get("selectOptions") or ""  # Available options for select elements
             
             # Increase snippet lengths for better context
             text_snip = text.strip()[:100]  # Increased from 60
@@ -187,7 +186,6 @@ class PlanGenerator:
             context_text = (elem.get("contextText") or "").strip()
 
             # Skip elements with no useful text/aria/placeholder
-            # Exception: Always include select elements even if they have no text (they have options)
             # When include_textless_overlays is enabled, also include elements with surrounding context
             is_select = tag == "select" or role in ("combobox", "listbox")
             has_identifying_info = text_snip or aria_snip or placeholder or is_select
@@ -205,11 +203,6 @@ class PlanGenerator:
             parts = []
             parts.append(f"#{idx} tag={tag_str}")
             
-            # Only mark as SELECT_FIELD if it's a select element AND has actual options
-            # This ensures we only use select: action for elements that actually have options to choose from
-            if is_select and select_options:
-                parts.append("SELECT_FIELD")  # Prominent marker for select elements with options
-            
             if role_str:
                 parts.append(f"role={role_str}")
             if elem_type:
@@ -223,10 +216,6 @@ class PlanGenerator:
                 parts.append(f'txt="{text_snip}"')
             if placeholder:
                 parts.append(f'placeholder="{placeholder[:40]}"')
-            # Prominently display select options if available
-            if select_options:
-                # Extract options from the selectOptions string (format: " [options: opt1, opt2, ...]")
-                parts.append(f'options={select_options.strip()}')
             if name:
                 parts.append(f'name="{name[:30]}"')
             if elem_id:
@@ -283,9 +272,6 @@ class PlanGenerator:
             "- Prefer overlays whose visible text, aria labels, or placeholders contain several instruction or must-have terms.\n"
             "- For search/input tasks, look for elements with type='text', type='search', role='combobox', or 'search' in aria/placeholder.\n"
             "- For typing tasks, prioritize input/textarea elements with matching placeholder, name, or aria labels.\n"
-            "- ⚠️ CRITICAL DROPDOWN/SELECT HANDLING: For ANY dropdown/select task, you MUST look for elements marked with SELECT_FIELD or showing 'options=' in their description. These elements show available options in the 'options=' field. When you see SELECT_FIELD or options= in an element description, this indicates a dropdown/select field that REQUIRES using 'select:' action (NOT 'click:'). IMPORTANT: Only elements with SELECT_FIELD or options= should use 'select:' action. If an element is tag=select, role=combobox, or role=listbox but does NOT have options= or SELECT_FIELD, the agent will use 'click:' instead.\n"
-            "- ⚠️ CRITICAL: When an element shows 'options=[options: Option1, Option2, ...]' in its description, the agent MUST use one of those exact options. Never invent or make up option values that are not in the list. The options= field shows the ONLY valid choices.\n"
-            "- When you see SELECT_FIELD or options=, this indicates a dropdown/select field that requires using 'select:' action (not 'click:'). If you see tag=select, role=combobox, or role=listbox WITHOUT options= or SELECT_FIELD, the element does not have options available and should use 'click:' instead.\n"
             "- ⚠️ CRITICAL FILE UPLOAD HANDLING: For ANY file upload/attachment task, you MUST look for elements with type='file', tag=input (type=file), or elements showing upload/attach/browse indicators. When you see type=file, tag=input (type=file), or upload/attach/browse in an element description, this indicates a file upload control that REQUIRES using 'upload:' action (NOT 'click:'). If the instruction mentions uploading, attaching, browsing for files, or selecting files, you MUST choose an element with type=file or upload/attach indicators.\n"
             "- Reject overlays that describe entire job cards, long descriptions, or containers that lack a primary action.\n"
             "- If you cannot find any overlay that reasonably matches the instruction, respond with 0.\n"
@@ -294,9 +280,6 @@ class PlanGenerator:
             "- Instruction: 'type into search box' → Choose: textarea role=combobox aria='Search' or input type='search'\n"
             "- Instruction: 'enter email' → Choose: input type='email' or input placeholder='Email'\n"
             "- Instruction: 'click submit button' → Choose: button txt='Submit' or input type='submit'\n"
-            "- Instruction: 'select country' or 'choose country' or 'pick country' or 'fill country dropdown' → Choose: SELECT_FIELD tag=select options=[options: USA, Canada, UK...] (MUST have SELECT_FIELD or options=)\n"
-            "- Instruction: 'fill dropdown' or 'pick option' or 'select option' → Choose: SELECT_FIELD tag=select with options= field showing available choices (MUST have SELECT_FIELD or options=)\n"
-            "- Instruction: 'click dropdown' or 'open dropdown' → If it's a dropdown/select field with SELECT_FIELD or options=, choose that element (the agent will use select: action, not click:). If it's tag=select without options=, choose it anyway (agent will use click:)\n"
             "- Instruction: 'upload file' or 'attach file' or 'browse for file' or 'choose file' or 'select file' → Choose: tag=input (type=file) or element with type=file (MUST have type=file)\n"
             "- Instruction: 'upload resume' or 'attach document' → Choose: tag=input (type=file) or element showing upload/attach indicators (MUST have type=file or upload/attach text)\n"
             "- Instruction: 'click upload button' or 'click file input' → If it's a file upload control (has type=file or tag=input (type=file)), still choose that element (the agent will use upload: action, not click:)\n"

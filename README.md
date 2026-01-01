@@ -1213,7 +1213,13 @@ result = bot.execute_task(
 )
 ```
 
-When the agent encounters a situation where it needs help (e.g., a tricky dropdown, unclear form field, or missing information), it will use `ask: <question>` and the callback will be invoked. The user's answer is added to base knowledge for the rest of the task.
+The agent will automatically use `ask: <question>` when:
+- A dropdown shows "no results" or doesn't match expected values
+- The same element fails 2+ times
+- Provided data doesn't work (e.g., city not in location options)
+- It's unsure how to proceed
+
+The user's answer is added to base knowledge for the rest of the task.
 
 ## 🛠️ Development
 
