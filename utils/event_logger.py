@@ -340,7 +340,17 @@ class EventLogger:
             self.emit(event_type, msg, level, is_complete=is_complete, reasoning=reasoning, confidence=confidence, **details)
         except Exception:
             pass
-    
+
+    def agent_completed(self, reasoning: str = None, **details):
+        """Log when agent signals task completion via 'complete:' command"""
+        try:
+            msg = "✅ Agent signaled task completion"
+            if reasoning:
+                msg += f"\n   Reasoning: {reasoning}"
+            self.emit(EventType.COMPLETION_SUCCESS, msg, "SUCCESS", completion_type="agent_signaled", reasoning=reasoning, **details)
+        except Exception:
+            pass
+
     def action_determined(self, action: str, reasoning: str = None, confidence: float = None, expected_outcome: str = None, **details):
         try:
             msg = f"Next action determined: {action}"

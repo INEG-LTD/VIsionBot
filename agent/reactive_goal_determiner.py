@@ -47,6 +47,7 @@ class NextAction(BaseModel):
         "handle_datetime",
         "mini_goal",
         "ask",  # Ask user for help/clarification
+        "complete",  # Agent signals task completion
     }
 
     @field_validator("action", mode="before")
@@ -363,7 +364,13 @@ ACTION RULES:
 
 6. DEFER: Use "defer:" when user requests manual control or captcha appears
 
+7. COMPLETION: Use "complete: <reasoning>" when you've successfully accomplished the user's goal
+   - Only call when task is truly finished
+   - Provide clear reasoning explaining what was accomplished
+   - Example: "complete: Successfully submitted job application. All required fields filled and form submitted."
+
 COMMANDS:
+- complete: <reasoning> - CALL WHEN TASK FINISHED - Explain what was accomplished
 - ask: <question> - ASK USER when stuck, confused, or element not working as expected
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
 - type: <text> in <field-type> <name> - Enter text (field auto-clears first)
@@ -379,8 +386,10 @@ COMMANDS:
 - datetime: <value> in <picker> - Set date/time
 - mini_goal: <instruction> - Focus on complex sub-task
 
-Interact with visible elements. If target not visible, use scroll commands.
-If something isn't working after 1-2 attempts, use "ask:" to get user guidance.
+DECISION MAKING:
+- If user's goal is accomplished, use "complete: <reasoning>" immediately
+- Interact with visible elements. If target not visible, use scroll commands
+- If something isn't working after 1-2 attempts, use "ask:" to get user guidance
 """
         # Cache the prompt
         self._system_prompt_cache["default"] = prompt
@@ -512,7 +521,12 @@ WHAT'S BEEN DONE:
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
 
-Look at the screenshot and determine the single next action to progress toward the goal.
+COMPLETION CHECK:
+Before taking another action, ask yourself: "Is the user's goal fully accomplished?"
+- If YES: Use "complete: <reasoning>" explaining what was accomplished
+- If NO: Determine the next action to progress toward the goal
+
+Look at the screenshot and determine the single next action (or complete if done).
 """
         return prompt
     

@@ -8,7 +8,7 @@ import hashlib
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-from session_tracker import BrowserState
+from session_tracker import BrowserState, Interaction, InteractionType
 from .task_result import TaskResult
 from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
 from agent.reactive_goal_determiner import ReactiveGoalDeterminer
@@ -115,12 +115,15 @@ class AgentController:
         base_knowledge: Optional[List[str]] = None,
         allow_partial_completion: bool = False,
         parallel_completion_and_action: bool = True,
+        completion_mode: str = "agent_only",
         show_completion_reasoning_every_iteration: bool = False,
         strict_mode: bool = False,
         clarification_callback: Optional[Any] = None,
         max_clarification_rounds: int = 0,
         # User question callback for ask: command
         user_question_callback: Optional[UserQuestionCallback] = None,
+        # Completion callback for complete: command
+        completion_callback: Optional[Callable[[str], None]] = None,
         # Act function parameter configuration
         act_enable_target_context_guard: bool = True,
         act_enable_modifier: bool = True,
@@ -204,6 +207,7 @@ class AgentController:
         self._task_tracker: Dict[str, Dict[str, Any]] = {}
         self.allow_partial_completion = allow_partial_completion
         self.parallel_completion_and_action = parallel_completion_and_action
+        self.completion_mode = completion_mode  # "agent_only", "hybrid", or "external_only"
         # Completion / evaluation behavior
         self.show_completion_reasoning_every_iteration = show_completion_reasoning_every_iteration
         self.strict_mode = strict_mode
@@ -225,7 +229,10 @@ class AgentController:
         # Store user question callback for ask: command
         self.user_question_callback = user_question_callback
         self._last_ask_iteration: int = -2  # Track last iteration where ask: was answered (to prevent consecutive asks)
-        
+
+        # Store completion callback for complete: command
+        self.completion_callback = completion_callback
+
         # Store act function parameter configuration
         # These flags control which parameters are passed to bot.act() during execution
         self.act_enable_target_context_guard = act_enable_target_context_guard
@@ -666,7 +673,10 @@ class AgentController:
             latest_completion_reasoning: Optional[str] = None
             latest_evaluation: Optional[CompletionEvaluation] = None
             if current_action is None:
-                if self.parallel_completion_and_action:
+                # Only run external completion checking if mode allows it
+                should_run_external_completion = self.completion_mode in ("hybrid", "external_only")
+
+                if self.parallel_completion_and_action and should_run_external_completion:
                     try:
                         self.event_logger.system_debug("Running completion check, next action determination, and subagent policy check in parallel...")
                     except Exception:
@@ -818,48 +828,69 @@ class AgentController:
                                 # Fallback: update policy sequentially
                                 self._update_sub_agent_policy(
                                     user_prompt=user_prompt,
-                                    completion_reasoning=completion_reasoning
+                                    completion_reasoning=latest_completion_reasoning
                                 )
                                 policy_updated_in_parallel = True
                 else:
-                    # Sequential execution (parallel disabled)
-                    print("🔄 Running completion check...")
-                    latest_evaluation = completion_contract.evaluate(
-                        environment_state,
-                        screenshot=snapshot.screenshot,
-                        user_prompt=active_user_prompt
-                    )
-                    latest_completion_reasoning = latest_evaluation.reasoning if latest_evaluation else None
-                    is_complete = latest_evaluation.is_complete if latest_evaluation else False
-                    
-                    if is_complete:
-                        self.event_logger.completion_check(
-                            is_complete=True, 
-                            reasoning=latest_completion_reasoning, 
-                            confidence=latest_evaluation.confidence, 
-                            evidence=latest_evaluation.evidence
+                    # Sequential execution (parallel disabled) OR agent-only mode
+                    if should_run_external_completion:
+                        # Run external completion check
+                        print("🔄 Running completion check...")
+                        latest_evaluation = completion_contract.evaluate(
+                            environment_state,
+                            screenshot=snapshot.screenshot,
+                            user_prompt=active_user_prompt
                         )
-                        
-                        # --- MINI GOAL INTEGRATION: Pop stack if complete ---
-                        if self.mini_goal_stack:
-                            self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
-                            self.mini_goal_stack.pop()
-                            # Restart iteration to check main goal or next mini-goal
-                            time.sleep(self.iteration_delay)
-                            continue 
-                        # --------------------------------------------------
+                        latest_completion_reasoning = latest_evaluation.reasoning if latest_evaluation else None
+                        is_complete = latest_evaluation.is_complete if latest_evaluation else False
 
-                        current_action = "stop"
+                        if is_complete:
+                            self.event_logger.completion_check(
+                                is_complete=True,
+                                reasoning=latest_completion_reasoning,
+                                confidence=latest_evaluation.confidence,
+                                evidence=latest_evaluation.evidence
+                            )
+
+                            # --- MINI GOAL INTEGRATION: Pop stack if complete ---
+                            if self.mini_goal_stack:
+                                self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
+                                self.mini_goal_stack.pop()
+                                # Restart iteration to check main goal or next mini-goal
+                                time.sleep(self.iteration_delay)
+                                continue
+                            # --------------------------------------------------
+
+                            current_action = "stop"
+                        else:
+                            if latest_evaluation:
+                                self.event_logger.completion_check(is_complete=False, reasoning=latest_completion_reasoning)
+
+                            # Task not complete, determine next action
+                            self.event_logger.system_debug("Determining next action based on current viewport...")
+
+                            failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
+                            ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
+
+                            current_action, reasoning = goal_determiner.determine_next_action(
+                                environment_state,
+                                screenshot=snapshot.screenshot,
+                                failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
+                                ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
+                            )
+                            # Store reasoning for next interaction
+                            if reasoning:
+                                self.bot.session_tracker.set_current_action_reasoning(reasoning)
                     else:
-                        if latest_evaluation:
-                            self.event_logger.completion_check(is_complete=False, reasoning=latest_completion_reasoning)
-                        
-                        # Task not complete, determine next action
-                        self.event_logger.system_debug("Determining next action based on current viewport...")
-                        
+                        # Agent-only mode: Skip external completion check, just determine next action
+                        try:
+                            self.event_logger.system_debug("Agent-only mode: Determining next action (no external completion check)...")
+                        except Exception:
+                            pass
+
                         failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                         ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
-                        
+
                         current_action, reasoning = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
@@ -950,45 +981,49 @@ class AgentController:
                  time.sleep(self.iteration_delay)
                  continue
             else:
-                # We have a queued action, so we still need to check completion
-                self.event_logger.system_debug("Running completion check (next action already queued)...")
-                is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
-                    environment_state,
-                    screenshot=snapshot.screenshot,
-                    user_prompt=active_user_prompt
-                )
-                latest_completion_reasoning = completion_reasoning
-                latest_evaluation = evaluation
-                
-                if is_complete:
-                    self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
-                    evidence_dict: Dict[str, Any] = {}
-                    if evaluation.evidence:
-                        try:
-                            import json
-                            evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
-                        except Exception:
-                            evidence_dict = {"evidence": evaluation.evidence}
-                    
-                    evidence_dict = self._build_evidence(evidence_dict)
-                    self._log_event(
-                        "agent_complete",
-                        status="achieved",
-                        confidence=evaluation.confidence,
-                        reasoning=completion_reasoning,
+                # We have a queued action - only check completion if mode allows external checks
+                if should_run_external_completion:
+                    self.event_logger.system_debug("Running completion check (next action already queued)...")
+                    is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
+                        environment_state,
+                        screenshot=snapshot.screenshot,
+                        user_prompt=active_user_prompt
                     )
-                    # End task timer and log summary
-                    self.bot.execution_timer.end_task()
-                    self.bot.execution_timer.log_summary(self.event_logger)
-                    self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                    return TaskResult(
-                        success=True,
-                        confidence=evaluation.confidence,
-                        reasoning=completion_reasoning,
-                        evidence=evidence_dict
-                    )
+                    latest_completion_reasoning = completion_reasoning
+                    latest_evaluation = evaluation
+
+                    if is_complete:
+                        self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
+                        evidence_dict: Dict[str, Any] = {}
+                        if evaluation.evidence:
+                            try:
+                                import json
+                                evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
+                            except Exception:
+                                evidence_dict = {"evidence": evaluation.evidence}
+
+                        evidence_dict = self._build_evidence(evidence_dict)
+                        self._log_event(
+                            "agent_complete",
+                            status="achieved",
+                            confidence=evaluation.confidence,
+                            reasoning=completion_reasoning,
+                        )
+                        # End task timer and log summary
+                        self.bot.execution_timer.end_task()
+                        self.bot.execution_timer.log_summary(self.event_logger)
+                        self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
+                        return TaskResult(
+                            success=True,
+                            confidence=evaluation.confidence,
+                            reasoning=completion_reasoning,
+                            evidence=evidence_dict
+                        )
+                    else:
+                        self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
                 else:
-                    self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
+                    # Agent-only mode: Skip external completion check for queued actions
+                    self.event_logger.system_debug("Agent-only mode: Skipping external completion check (action already queued)...")
             
             # Update adaptive sub-agent utilization policy (only if not already done in parallel path)
             # In parallel path, policy is updated after next_action_future.result()
@@ -996,7 +1031,7 @@ class AgentController:
             if not policy_updated_in_parallel:
                 self._update_sub_agent_policy(
                     user_prompt=user_prompt,
-                    completion_reasoning=completion_reasoning
+                    completion_reasoning=latest_completion_reasoning
                 )
             
             if (
@@ -1018,7 +1053,7 @@ class AgentController:
                             task_context={
                                 "iteration": iteration + 1,
                                 "max_iterations": self.max_iterations,
-                                    "completion_reasoning": completion_reasoning,
+                                    "completion_reasoning": latest_completion_reasoning,
                                     "sub_agent_policy": self.sub_agent_policy_level.value,
                                     "sub_agent_policy_score": round(self._sub_agent_policy_score, 2),
                                     "sub_agent_policy_reason": self.sub_agent_policy_rationale,
@@ -1081,7 +1116,51 @@ class AgentController:
                 self.event_logger.system_info(f"Next action: {current_action}")
             except Exception:
                 pass
-            
+
+            # --- COMPLETE COMMAND: Agent signals task completion ---
+            if current_action and current_action.lower().startswith("complete:"):
+                completion_reasoning = current_action.split(":", 1)[1].strip() if ":" in current_action else "Task completed"
+
+                # Log completion event
+                try:
+                    self.event_logger.agent_completed(completion_reasoning)
+                except Exception:
+                    pass
+
+                # Store completion in interaction history
+                try:
+                    completion_interaction = Interaction(
+                        timestamp=time.time(),
+                        interaction_type=InteractionType.CONTEXT_GUARD,  # Reuse existing type or add new one
+                        reasoning=f"Agent signaled completion: {completion_reasoning}",
+                        success=True
+                    )
+                    self.bot.session_tracker.interaction_history.append(completion_interaction)
+                except Exception:
+                    pass
+
+                # Call completion callback if provided
+                if hasattr(self, 'completion_callback') and self.completion_callback:
+                    try:
+                        self.completion_callback(completion_reasoning)
+                    except Exception as e:
+                        print(f"⚠️ Completion callback error: {e}")
+
+                # End task successfully
+                self.bot.execution_timer.end_task()
+                self.bot.execution_timer.log_summary(self.event_logger)
+
+                return TaskResult(
+                    success=True,
+                    confidence=1.0,
+                    reasoning=completion_reasoning,
+                    evidence=self._build_evidence({
+                        "completion_type": "agent_signaled",
+                        "iterations": iteration + 1
+                    })
+                )
+            # ----------------------------------------------------------
+
             # 4. Check if this is an extraction command or detect extraction needs from natural language
             extraction_prompt = self._detect_extraction_need(current_action, user_prompt)
             

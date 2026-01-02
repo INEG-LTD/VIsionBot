@@ -19,7 +19,7 @@ from bot_config import BotConfig, ModelConfig, ExecutionConfig, ElementConfig, D
 from bot_config import ActFunctionConfig
 from ai_utils import ReasoningLevel
 from vision_bot import BrowserVisionBot
-from utils.event_logger import EventType
+from utils.event_logger import BotEvent, EventType
 from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
 from utils.select_option_utils import SelectOptionError
 import random
@@ -507,7 +507,7 @@ def create_event_callback(bot, debug_mode: bool = True):
     Returns:
         Event callback function
     """
-    def simple_event_callback(event):
+    def simple_event_callback(event: BotEvent):
         # Show iteration number
         if event.event_type == EventType.AGENT_ITERATION:
             iteration = event.details.get('iteration', '?')
@@ -597,7 +597,7 @@ config = BotConfig(
         # max_coordinate_overlays=100  # Limit overlays for better performance
     ),
     logging=DebugConfig(
-        debug_mode=False  # Set to False to use callbacks only (no debug prints)
+        debug_mode=True  # Set to False to use callbacks only (no debug prints)
     ),
     browser=BrowserConfig(
         provider_type="persistent",

@@ -76,7 +76,11 @@ class ExecutionConfig(BaseModel):
         default=-1,
         description="Number of interactions to track for dedup (-1 = unlimited)"
     )
-    
+    completion_mode: str = Field(
+        default="agent_only",
+        description="Task completion determination mode: 'agent_only' (agent decides via complete: command), 'hybrid' (agent can complete OR external validation can force complete), 'external_only' (legacy mode using external CompletionContract)"
+    )
+
     class Config:
         arbitrary_types_allowed = True
 
