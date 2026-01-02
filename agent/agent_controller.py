@@ -925,7 +925,10 @@ class AgentController:
                         # User provided answer, retry with new knowledge
                         time.sleep(self.iteration_delay)
                         continue
-                    # User skipped or no callback - agent should try something else
+                    # User skipped or no callback - clear action so agent determines a new one
+                    current_action = None
+                    time.sleep(self.iteration_delay)
+                    continue
             
             # Block navigation in autonomy mode
             if self.mini_goal_stack and self._is_nav_action(current_action):
