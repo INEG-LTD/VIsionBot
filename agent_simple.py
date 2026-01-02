@@ -580,7 +580,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 config = BotConfig(
     model=ModelConfig(
         agent_model="gpt-5-mini",
-        command_model="gpt-5-mini",
+        command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.MEDIUM
     ),
@@ -597,7 +597,7 @@ config = BotConfig(
         # max_coordinate_overlays=100  # Limit overlays for better performance
     ),
     logging=DebugConfig(
-        debug_mode=True  # Set to False to use callbacks only (no debug prints)
+        debug_mode=False  # Set to False to use callbacks only (no debug prints)
     ),
     browser=BrowserConfig(
         provider_type="persistent",
@@ -625,7 +625,7 @@ setup_mini_goals(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://jobs.ashbyhq.com/ElevenLabs/39631124-d10a-41b9-b539-b8055cd68985")
+bot.page.goto("https://www.collinsongrouptalent.com/jobs/5081808-ios-developer?jobPipeline=Indeed&ittk=9J6BXDOPEV")
 
 # Setup border effect if not in debug mode
 apply_thinking_border(bot)

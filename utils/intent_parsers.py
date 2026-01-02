@@ -179,23 +179,24 @@ def parse_type_command(text: str) -> Optional[tuple[str, Optional[str]]]:
 
     # Split on into/in - look for the LAST occurrence of preposition + target pattern
     # Find all matches of "into/in + target" and take the last one
-    matches = list(re.finditer(r"\s+(into|in)\s*:?\s*([^.\s]+(?:\s+[^.\s]+)*?)(?:\s|$)", rest, flags=re.IGNORECASE))
+    # Use greedy matching to capture full target phrase (e.g., "text input field 'What...'")
+    matches = list(re.finditer(r"\s+(into|in)\s*:?\s*(.+?)(?:\s*$)", rest, flags=re.IGNORECASE))
 
     if matches:
         # Take the last match (closest to end)
         last_match = matches[-1]
         preposition_pos = last_match.start()
 
-        # Check if this looks like a valid target (short, contains target-like words)
+        # Check if this looks like a valid target (must contain target-like words)
         potential_target = last_match.group(2).strip()
-        target_keywords = ['textarea', 'input', 'field', 'box', 'area', 'element', 'search', 'form', 'login', 'email', 'password', 'name']
+        target_keywords = ['textarea', 'input', 'field', 'box', 'area', 'element', 'search', 'form', 'login', 'email', 'password', 'name', 'button', 'textbox']
 
-        # If the potential target is short (< 20 chars) or contains target keywords, use it
-        if len(potential_target) < 20 or any(keyword in potential_target.lower() for keyword in target_keywords):
+        # Target must contain at least one target keyword to be valid
+        if any(keyword in potential_target.lower() for keyword in target_keywords):
             raw_val = rest[:preposition_pos].strip()
             target = potential_target
         else:
-            # Doesn't look like a target, treat as no target
+            # Doesn't look like a field target, treat entire string as value
             raw_val = rest
             target = None
     else:
