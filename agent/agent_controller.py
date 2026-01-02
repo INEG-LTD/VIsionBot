@@ -127,6 +127,8 @@ class AgentController:
         act_enable_additional_context: bool = True,
         # Overlay inclusion in agent context
         include_overlays_in_agent_context: bool = True,
+        # Visible text inclusion in agent context
+        include_visible_text_in_agent_context: bool = False,
         # Interaction summarization
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
@@ -233,6 +235,10 @@ class AgentController:
         # Store overlay inclusion configuration
         # Controls whether overlay element data is included in agent's context for action determination
         self.include_overlays_in_agent_context = include_overlays_in_agent_context
+
+        # Store visible text inclusion configuration
+        # Controls whether visible text is included in agent's context for action determination
+        self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
 
         self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
         agent_reasoning = getattr(bot, "agent_reasoning_level", None)
@@ -517,6 +523,7 @@ class AgentController:
             model_name=self.agent_model_name,
             reasoning_level=self.agent_reasoning_level,
             interaction_summary_limit=self.interaction_summary_limit_completion,
+            include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
         )
         
         if not self.bot.started:
@@ -633,6 +640,7 @@ class AgentController:
                 reasoning_level=self.agent_reasoning_level,
                 interaction_summary_limit=self.interaction_summary_limit_action,
                 include_overlays_in_agent_context=self.include_overlays_in_agent_context,
+                include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
             )
             
             # 2.3. Check for queued action first (doesn't need LLM)

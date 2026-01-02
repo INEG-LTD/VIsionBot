@@ -326,7 +326,8 @@ class BrowserVisionBot:
         self.element_selection_retry_attempts = max(1, int(config.elements.selection_retry_attempts))
         self.element_selection_fallback_model = config.elements.selection_fallback_model
         self.include_overlays_in_agent_context = config.elements.include_overlays_in_agent_context
-        
+        self.include_visible_text_in_agent_context = config.elements.include_visible_text_in_agent_context
+
         # Extract act function configuration
         self.act_enable_target_context_guard = config.act_function.enable_target_context_guard
         self.act_enable_modifier = config.act_function.enable_modifier
@@ -1580,6 +1581,7 @@ class BrowserVisionBot:
                 act_enable_modifier=self.act_enable_modifier,
                 act_enable_additional_context=self.act_enable_additional_context,
                 include_overlays_in_agent_context=self.include_overlays_in_agent_context,
+                include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
                 interaction_summary_limit_completion=interaction_summary_limit_completion,
                 interaction_summary_limit_action=interaction_summary_limit_action,
             )

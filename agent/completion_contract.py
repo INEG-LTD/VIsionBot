@@ -82,6 +82,7 @@ class CompletionContract:
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
         interaction_summary_limit: Optional[int] = None,
+        include_visible_text_in_agent_context: bool = False,
     ):
         self.user_prompt = user_prompt
         self.allow_partial_completion = allow_partial_completion
@@ -94,6 +95,7 @@ class CompletionContract:
             reasoning = ReasoningLevel.coerce(reasoning_level)
         self.reasoning_level: ReasoningLevel = reasoning
         self.interaction_summary_limit = interaction_summary_limit
+        self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
     
     def evaluate(
         self,
@@ -218,7 +220,12 @@ Respond with just is_complete (true/false)."""
         """Build a lightweight prompt for yes/no completion decision"""
         interaction_summary = self._summarize_interactions(state.interaction_history)
         active_prompt = user_prompt if user_prompt else self.user_prompt
-        
+
+        # Build visible text context if enabled
+        visible_text_context = ""
+        if self.include_visible_text_in_agent_context and state.visible_text:
+            visible_text_context = f"- Visible Text: {state.visible_text[:500]}...\n"
+
         return f'''
 QUICK COMPLETION CHECK
 ======================
@@ -228,8 +235,7 @@ USER PROMPT: "{active_prompt}"
 CURRENT STATE:
 - URL: {state.current_url}
 - Page Title: {state.page_title}
-- Visible Text: {state.visible_text[:500] if state.visible_text else "None"}...
-
+{visible_text_context}
 INTERACTIONS: {interaction_summary[:300]}...
 
 QUESTION: Is the task complete? (true/false only)
@@ -304,6 +310,12 @@ STRICT MODE ENABLED:
         partial_note = ""
         if self.allow_partial_completion:
             partial_note = "\nPARTIAL COMPLETION ENABLED: If substantial progress (e.g., most requested extractions or subtasks) is evident, you may mark the task complete while noting any remaining gaps.\n"
+
+        # Build visible text context if enabled
+        visible_text_context = ""
+        if self.include_visible_text_in_agent_context and state.visible_text:
+            visible_text_context = f"Visible: {state.visible_text[:500]}...\n"
+
         prompt = f'''
 EVALUATE TASK COMPLETION
 
@@ -313,8 +325,7 @@ CURRENT STATE (Viewport Only):
 URL: {state.current_url}
 Title: {state.page_title}
 Scroll: Y={state.browser_state.scroll_y}
-Visible: {state.visible_text[:500] if state.visible_text else "None"}...
-
+{visible_text_context}
 NAVIGATION:
 {nav_summary}
 

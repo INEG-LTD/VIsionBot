@@ -185,6 +185,7 @@ class ReactiveGoalDeterminer:
         image_detail: str = "low",
         interaction_summary_limit: Optional[int] = None,
         include_overlays_in_agent_context: bool = True,
+        include_visible_text_in_agent_context: bool = False,
     ):
         """
         Initialize the reactive goal determiner.
@@ -210,6 +211,7 @@ class ReactiveGoalDeterminer:
         self._system_prompt_cache: dict[str, str] = {}  # Cache system prompts
         self.interaction_summary_limit = interaction_summary_limit
         self.include_overlays_in_agent_context = include_overlays_in_agent_context
+        self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
     
     def determine_next_action(
         self,
@@ -481,6 +483,11 @@ If something isn't working after 1-2 attempts, use "ask:" to get user guidance.
                 if len(relevant_elements) > 30:
                     overlay_context += f"  ... and {len(relevant_elements) - 30} more elements\n"
         
+        # Build visible text context if enabled
+        visible_text_context = ""
+        if self.include_visible_text_in_agent_context and state.visible_text:
+            visible_text_context = f"- Visible Text: {state.visible_text[:300]}...\n"
+
         # Simplified user prompt - only essential context (rules/examples are in system prompt)
         prompt = f"""
 Determine the NEXT SINGLE ACTION to take based on:
@@ -493,8 +500,7 @@ CURRENT STATE:
 - Scroll Position: Y={state.browser_state.scroll_y}, X={state.browser_state.scroll_x}
 - Viewport: {state.browser_state.page_width}x{state.browser_state.page_height}
 - Screenshot: VIEWPORT ONLY (currently visible area)
-- Visible Text: {state.visible_text[:300]}...
-
+{visible_text_context}
 NAVIGATION HISTORY:
 {nav_summary}
 

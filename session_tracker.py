@@ -145,14 +145,65 @@ class SessionTracker:
             except Exception:
                 pass
             
-            # Get visible text (first 2000 chars)
+            # Get visible text (first 2000 chars) - VIEWPORT ONLY
             visible_text = ""
             try:
                 if self.page:
-                    body = self.page.query_selector("body")
-                    if body:
-                        text = body.inner_text() if hasattr(body, 'inner_text') else ""
-                        visible_text = text[:2000] if text else ""
+                    # Only capture text from elements visible in the current viewport
+                    # This matches the viewport-only screenshot
+                    viewport_text = self.page.evaluate("""
+                        () => {
+                            const viewportHeight = window.innerHeight;
+                            const viewportWidth = window.innerWidth;
+                            const textParts = [];
+
+                            // Get all text nodes that are visible in viewport
+                            const walker = document.createTreeWalker(
+                                document.body,
+                                NodeFilter.SHOW_TEXT,
+                                {
+                                    acceptNode: function(node) {
+                                        // Skip empty text nodes
+                                        if (!node.textContent.trim()) {
+                                            return NodeFilter.FILTER_REJECT;
+                                        }
+
+                                        // Check if parent element is visible in viewport
+                                        const parent = node.parentElement;
+                                        if (!parent) return NodeFilter.FILTER_REJECT;
+
+                                        // Skip hidden elements
+                                        const style = window.getComputedStyle(parent);
+                                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                                            return NodeFilter.FILTER_REJECT;
+                                        }
+
+                                        // Check if element is in viewport
+                                        const rect = parent.getBoundingClientRect();
+                                        const isInViewport = (
+                                            rect.top < viewportHeight &&
+                                            rect.bottom > 0 &&
+                                            rect.left < viewportWidth &&
+                                            rect.right > 0
+                                        );
+
+                                        return isInViewport ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                                    }
+                                }
+                            );
+
+                            let node;
+                            while (node = walker.nextNode()) {
+                                const text = node.textContent.trim();
+                                if (text) {
+                                    textParts.push(text);
+                                }
+                            }
+
+                            return textParts.join(' ');
+                        }
+                    """)
+                    visible_text = viewport_text[:2000] if viewport_text else ""
             except Exception:
                 pass
             

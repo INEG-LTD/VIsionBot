@@ -579,10 +579,10 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-nano",
-        command_model="gpt-5-nano",
+        agent_model="gpt-5-mini",
+        command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
-        reasoning_level=ReasoningLevel.NONE
+        reasoning_level=ReasoningLevel.MEDIUM
     ),
     execution=ExecutionConfig(
         max_attempts=30
