@@ -116,6 +116,7 @@ class AgentController:
         allow_partial_completion: bool = False,
         parallel_completion_and_action: bool = True,
         completion_mode: str = "agent_only",
+        enable_sub_agents: bool = False,
         show_completion_reasoning_every_iteration: bool = False,
         strict_mode: bool = False,
         clarification_callback: Optional[Any] = None,
@@ -208,6 +209,7 @@ class AgentController:
         self.allow_partial_completion = allow_partial_completion
         self.parallel_completion_and_action = parallel_completion_and_action
         self.completion_mode = completion_mode  # "agent_only", "hybrid", or "external_only"
+        self.enable_sub_agents = enable_sub_agents  # Enable/disable sub-agent spawning
         # Completion / evaluation behavior
         self.show_completion_reasoning_every_iteration = show_completion_reasoning_every_iteration
         self.strict_mode = strict_mode
@@ -736,10 +738,12 @@ class AgentController:
                         completion_reasoning_ref[0] = completion_reasoning  # Share with subagent policy check
                         latest_completion_reasoning = completion_reasoning
                         latest_evaluation = evaluation
-                        
-                        # Start subagent policy check now that we have completion_reasoning
-                        subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
-                        
+
+                        # Start subagent policy check now that we have completion_reasoning (only if enabled)
+                        subagent_policy_future = None
+                        if self.enable_sub_agents:
+                            subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
+
                         if is_complete:
                             self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
                             
@@ -748,8 +752,9 @@ class AgentController:
                                 self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
                                 self.mini_goal_stack.pop()
                                 # Wait for subagent policy check (optional finish)
-                                try: subagent_policy_future.result(timeout=1)
-                                except Exception: pass
+                                if subagent_policy_future:
+                                    try: subagent_policy_future.result(timeout=1)
+                                    except Exception: pass
                                 
                                 time.sleep(self.iteration_delay)
                                 continue # NEXT ITERATION of main loop
@@ -774,10 +779,11 @@ class AgentController:
                             self.bot.execution_timer.end_task()
                             self.bot.execution_timer.log_summary(self.event_logger)
                             # Wait for subagent policy check to complete (for logging)
-                            try:
-                                subagent_policy_future.result(timeout=5)
-                            except Exception:
-                                pass  # Ignore timeout, task is complete anyway
+                            if subagent_policy_future:
+                                try:
+                                    subagent_policy_future.result(timeout=5)
+                                except Exception:
+                                    pass  # Ignore timeout, task is complete anyway
                             # Next action result will be ignored (task is complete)
                             self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
                             return TaskResult(
@@ -791,46 +797,47 @@ class AgentController:
                             # Task not complete, so we need the next action - wait for it
                             self.event_logger.system_debug("Determining next action based on current viewport...")
                             current_action = next_action_future.result()
-                            
-                            # Wait for subagent policy check and update policy
-                            try:
-                                new_level, new_score, new_rationale = subagent_policy_future.result()
-                                
-                                # Check for changes before updating
-                                level_changed = new_level != self.sub_agent_policy_level
-                                score_changed = abs(new_score - self._sub_agent_policy_score) >= 0.1
-                                rationale_changed = new_rationale != self.sub_agent_policy_rationale
-                                
-                                # Update policy
-                                self.sub_agent_policy_level = new_level
-                                self._sub_agent_policy_score = new_score
-                                self.sub_agent_policy_rationale = new_rationale
-                                
-                                if level_changed or score_changed or rationale_changed:
-                                    try:
-                                        self.event_logger.sub_agent_policy(
-                                            policy=self._policy_display_name(new_level),
+
+                            # Wait for subagent policy check and update policy (only if enabled)
+                            if subagent_policy_future:
+                                try:
+                                    new_level, new_score, new_rationale = subagent_policy_future.result()
+
+                                    # Check for changes before updating
+                                    level_changed = new_level != self.sub_agent_policy_level
+                                    score_changed = abs(new_score - self._sub_agent_policy_score) >= 0.1
+                                    rationale_changed = new_rationale != self.sub_agent_policy_rationale
+
+                                    # Update policy
+                                    self.sub_agent_policy_level = new_level
+                                    self._sub_agent_policy_score = new_score
+                                    self.sub_agent_policy_rationale = new_rationale
+
+                                    if level_changed or score_changed or rationale_changed:
+                                        try:
+                                            self.event_logger.sub_agent_policy(
+                                                policy=self._policy_display_name(new_level),
+                                                score=new_score,
+                                                reason=new_rationale
+                                            )
+                                        except Exception:
+                                            pass
+                                        self._log_event(
+                                            "sub_agent_policy_update",
+                                            policy=new_level.value,
                                             score=new_score,
-                                            reason=new_rationale
+                                            rationale=new_rationale,
+                                            override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None
                                         )
-                                    except Exception:
-                                        pass
-                                    self._log_event(
-                                        "sub_agent_policy_update",
-                                        policy=new_level.value,
-                                        score=new_score,
-                                        rationale=new_rationale,
-                                        override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None
+                                    policy_updated_in_parallel = True
+                                except Exception as e:
+                                    print(f"⚠️ Subagent policy check failed: {e}")
+                                    # Fallback: update policy sequentially
+                                    self._update_sub_agent_policy(
+                                        user_prompt=user_prompt,
+                                        completion_reasoning=latest_completion_reasoning
                                     )
-                                policy_updated_in_parallel = True
-                            except Exception as e:
-                                print(f"⚠️ Subagent policy check failed: {e}")
-                                # Fallback: update policy sequentially
-                                self._update_sub_agent_policy(
-                                    user_prompt=user_prompt,
-                                    completion_reasoning=latest_completion_reasoning
-                                )
-                                policy_updated_in_parallel = True
+                                    policy_updated_in_parallel = True
                 else:
                     # Sequential execution (parallel disabled) OR agent-only mode
                     if should_run_external_completion:
@@ -1035,7 +1042,8 @@ class AgentController:
                 )
             
             if (
-                self.sub_agent_policy_level == SubAgentPolicyLevel.PARALLELIZED
+                self.enable_sub_agents
+                and self.sub_agent_policy_level == SubAgentPolicyLevel.PARALLELIZED
                 and not self._parallel_plan_done
                 and (not self.agent_context or self.agent_context.parent_agent_id is None)
             ):
@@ -3212,6 +3220,10 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
         """
         Evaluate and update the adaptive sub-agent utilization policy.
         """
+        # Skip policy updates when sub-agents are disabled
+        if not self.enable_sub_agents:
+            return
+
         new_level, new_score, new_rationale = self._compute_sub_agent_policy(
             user_prompt=user_prompt,
             completion_reasoning=completion_reasoning or "",
@@ -3754,12 +3766,15 @@ Provide a plan that:
         """
         Determine if a sub-agent can be spawned under the current policy and budgets.
         """
+        if not self.enable_sub_agents:
+            return False, "Sub-agents disabled in configuration."
+
         if not self.sub_agent_controller:
             return False, "Sub-agent controller not initialized."
-        
+
         if self.sub_agent_policy_level == SubAgentPolicyLevel.SINGLE_THREADED:
             return False, "Policy set to single-threaded."
-        
+
         return True, ""
     
     def _execute_tab_decision(self, decision) -> bool:

@@ -290,8 +290,9 @@ class BrowserVisionBot:
         self.max_attempts = config.execution.max_attempts
         self.parallel_completion_and_action = config.execution.parallel_completion_and_action
         self.completion_mode = config.execution.completion_mode
+        self.enable_sub_agents = config.execution.enable_sub_agents
         self.dedup_mode = config.execution.dedup_mode
-        
+
         self.started = False
         
         # Extract element configuration
@@ -1574,6 +1575,7 @@ class BrowserVisionBot:
                 allow_partial_completion=allow_partial_completion,
                 parallel_completion_and_action=self.parallel_completion_and_action,
                 completion_mode=self.completion_mode,
+                enable_sub_agents=self.enable_sub_agents,
                 show_completion_reasoning_every_iteration=show_completion_reasoning_every_iteration,
                 strict_mode=strict_mode,
                 clarification_callback=clarification_callback,

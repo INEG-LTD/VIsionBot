@@ -80,6 +80,10 @@ class ExecutionConfig(BaseModel):
         default="agent_only",
         description="Task completion determination mode: 'agent_only' (agent decides via complete: command), 'hybrid' (agent can complete OR external validation can force complete), 'external_only' (legacy mode using external CompletionContract)"
     )
+    enable_sub_agents: bool = Field(
+        default=False,
+        description="Enable sub-agent spawning for parallel task execution. When enabled, the agent can spawn sub-agents to handle subtasks in parallel."
+    )
 
     class Config:
         arbitrary_types_allowed = True
