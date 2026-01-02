@@ -87,6 +87,7 @@ class ThinkingBorderManager:
         if (window.__agentThinkingBorder) return;
         window.__agentThinkingBorder = {
             overlay: null,
+            blockingOverlay: null,
             init: function() {
                 if (this.overlay) return;
                 const style = document.createElement('style');
@@ -101,9 +102,16 @@ class ThinkingBorderManager:
                     }
                 `;
                 document.head.appendChild(style);
+
+                // Thinking border overlay (visual only, no blocking)
                 this.overlay = document.createElement('div');
                 this.overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:2147483647;display:none;opacity:0;';
                 document.body.appendChild(this.overlay);
+
+                // Blocking overlay (blocks all interactions)
+                this.blockingOverlay = document.createElement('div');
+                this.blockingOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;pointer-events:auto;z-index:2147483646;display:none;cursor:not-allowed;';
+                document.body.appendChild(this.blockingOverlay);
             },
             start: function() {
                 this.init();
@@ -115,6 +123,20 @@ class ThinkingBorderManager:
                 if (!this.overlay) return;
                 this.overlay.style.animation = 'agent-thinking-fadeout 0.5s ease-out forwards';
                 setTimeout(() => { this.overlay.style.display = 'none'; }, 500);
+            },
+            enableBlocking: function() {
+                this.init();
+                this.blockingOverlay.style.display = 'block';
+                // Disable scrolling
+                document.documentElement.style.overflow = 'hidden';
+                document.body.style.overflow = 'hidden';
+            },
+            disableBlocking: function() {
+                if (!this.blockingOverlay) return;
+                this.blockingOverlay.style.display = 'none';
+                // Re-enable scrolling
+                document.documentElement.style.overflow = '';
+                document.body.style.overflow = '';
             }
         };
     })();
@@ -155,13 +177,33 @@ class ThinkingBorderManager:
         except Exception:
             pass
 
+    def enable_blocking(self):
+        """Enable the blocking overlay to prevent page interactions."""
+        if not self._enabled: return
+        self._ensure_init()
+        try:
+            self.bot.page.evaluate("if(window.__agentThinkingBorder) window.__agentThinkingBorder.enableBlocking();")
+        except Exception:
+            pass
+
+    def disable_blocking(self):
+        """Disable the blocking overlay to allow page interactions."""
+        if not self._enabled: return
+        try:
+            self.bot.page.evaluate("if(window.__agentThinkingBorder) window.__agentThinkingBorder.disableBlocking();")
+        except Exception:
+            pass
+
 def apply_thinking_border(bot: BrowserVisionBot):
     """Monkey-patch the bot and agent controller to show the thinking border."""
     manager = ThinkingBorderManager(bot)
-    
+
+    # Store manager on bot for access by agent controller
+    bot._thinking_border_manager = manager
+
     from agent import AgentController
     from vision_bot import BrowserVisionBot
-    
+
     # 1. Start border when capturing snapshot (beginning of iteration)
     original_capture = AgentController._capture_snapshot
     def patched_capture(self, *args, **kwargs):
@@ -170,20 +212,39 @@ def apply_thinking_border(bot: BrowserVisionBot):
         return original_capture(self, *args, **kwargs)
     AgentController._capture_snapshot = patched_capture
 
-    # 2. Stop border when starting an action
+    # 2. Stop border and disable blocking when starting an action
     original_act = BrowserVisionBot.act
     def patched_act(self, *args, **kwargs):
         # We are on the main thread here
         manager.stop()
-        return original_act(self, *args, **kwargs)
+        manager.disable_blocking()
+        try:
+            return original_act(self, *args, **kwargs)
+        finally:
+            manager.enable_blocking()
     BrowserVisionBot.act = patched_act
 
-    # 3. Stop border when starting an extraction
+    # 3. Stop border and disable blocking when starting an extraction
     original_extract = BrowserVisionBot.extract
     def patched_extract(self, *args, **kwargs):
         manager.stop()
-        return original_extract(self, *args, **kwargs)
+        manager.disable_blocking()
+        try:
+            return original_extract(self, *args, **kwargs)
+        finally:
+            manager.enable_blocking()
     BrowserVisionBot.extract = patched_extract
+
+    # 4. Enable blocking at start of task, disable at end
+    original_run = AgentController.run_execute_task
+    def patched_run(self, *args, **kwargs):
+        manager.enable_blocking()
+        try:
+            result = original_run(self, *args, **kwargs)
+            return result
+        finally:
+            manager.disable_blocking()
+    AgentController.run_execute_task = patched_run
 
     return manager
 
@@ -518,8 +579,8 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-mini",
-        command_model="gpt-5-mini",
+        agent_model="gpt-5-nano",
+        command_model="gpt-5-nano",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.NONE
     ),

@@ -1955,9 +1955,18 @@ class AgentController:
             "current_url": environment_state.current_url,
             "page_title": environment_state.page_title,
         }
-        
+
         try:
-            answer = self.user_question_callback(question, context)
+            # Disable page blocking while asking user question
+            if hasattr(self.bot, '_thinking_border_manager'):
+                self.bot._thinking_border_manager.disable_blocking()
+
+            try:
+                answer = self.user_question_callback(question, context)
+            finally:
+                # Re-enable page blocking after user responds
+                if hasattr(self.bot, '_thinking_border_manager'):
+                    self.bot._thinking_border_manager.enable_blocking()
             
             if answer:
                 # Add user guidance as temporary context for the next action only
