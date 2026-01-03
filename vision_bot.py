@@ -2859,28 +2859,48 @@ Return only the extracted text that appears in the text content above. Do not ma
                 print("❌ No interactive elements detected after all retries")
                 return False
 
-            # Use fallback model for retry attempts if configured
-            selection_model = None
-            if attempt > 1 and self.element_selection_fallback_model:
-                selection_model = self.element_selection_fallback_model
-                print(f"[KeywordCommand] Using fallback model: {selection_model}")
+            # ==================================================================================
+            # OPTIMIZATION: Check if agent already provided overlay_index
+            # ==================================================================================
+            # If the agent saw overlays and provided an overlay_index directly,
+            # skip the LLM overlay selection call and use the agent's choice.
+            # This reduces from 2 LLM calls to 1 per iteration and improves accuracy.
+            # ==================================================================================
+            agent_overlay_index = self.session_tracker.get_current_action_overlay_index()
 
-            try:
-                self.event_logger.overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
-            except Exception:
-                pass
-            selection = self.plan_generator.select_best_overlay(
-                instruction=instruction,
-                element_data=element_data,
-                semantic_hint=None,
-                screenshot=clean_screenshot or screenshot_with_overlays,
-                model=selection_model,
-                base_knowledge=base_knowledge,
-            )
-            try:
-                self.event_logger.overlay_selection(f"Overlay selection response: {selection}")
-            except Exception:
-                pass
+            if agent_overlay_index is not None:
+                # Agent provided overlay index - use it directly
+                selection = agent_overlay_index
+                try:
+                    self.event_logger.overlay_selection(f"Using agent's overlay selection: #{selection} (skipped LLM overlay selection call)")
+                except Exception:
+                    pass
+                # Clear the stored index for next action
+                self.session_tracker.clear_current_action_overlay_index()
+            else:
+                # Agent didn't provide overlay index - fall back to LLM selection
+                # Use fallback model for retry attempts if configured
+                selection_model = None
+                if attempt > 1 and self.element_selection_fallback_model:
+                    selection_model = self.element_selection_fallback_model
+                    print(f"[KeywordCommand] Using fallback model: {selection_model}")
+
+                try:
+                    self.event_logger.overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+                except Exception:
+                    pass
+                selection = self.plan_generator.select_best_overlay(
+                    instruction=instruction,
+                    element_data=element_data,
+                    semantic_hint=None,
+                    screenshot=clean_screenshot or screenshot_with_overlays,
+                    model=selection_model,
+                    base_knowledge=base_knowledge,
+                )
+                try:
+                    self.event_logger.overlay_selection(f"Overlay selection response: {selection}")
+                except Exception:
+                    pass
 
             if selection is None:
                 if attempt < max_attempts:

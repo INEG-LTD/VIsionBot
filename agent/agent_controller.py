@@ -705,7 +705,7 @@ class AgentController:
                                     self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
                             except Exception:
                                 pass
-                        action, reasoning = goal_determiner.determine_next_action(
+                        action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
@@ -879,15 +879,17 @@ class AgentController:
                             failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                             ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
 
-                            current_action, reasoning = goal_determiner.determine_next_action(
+                            current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                                 environment_state,
                                 screenshot=snapshot.screenshot,
                                 failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                                 ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                             )
-                            # Store reasoning for next interaction
+                            # Store reasoning and overlay index for next interaction
                             if reasoning:
                                 self.bot.session_tracker.set_current_action_reasoning(reasoning)
+                            if agent_overlay_index is not None:
+                                self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
                     else:
                         # Agent-only mode: Skip external completion check, just determine next action
                         try:
@@ -898,15 +900,17 @@ class AgentController:
                         failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                         ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
 
-                        current_action, reasoning = goal_determiner.determine_next_action(
+                        current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
-                        # Store reasoning for next interaction
+                        # Store reasoning and overlay index for next interaction
                         if reasoning:
                             self.bot.session_tracker.set_current_action_reasoning(reasoning)
+                        if agent_overlay_index is not None:
+                            self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
 
             # --- MINI GOAL INTEGRATION: Action/Historical Trigger ---
             if current_action and not current_action.startswith("mini_goal:"):

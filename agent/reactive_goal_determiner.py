@@ -26,6 +26,7 @@ class NextAction(BaseModel):
     reasoning: str = Field(description="Why this action is appropriate given the current viewport")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
     expected_outcome: str = Field(description="What should happen after executing this action")
+    overlay_index: Optional[int] = Field(default=None, description="The numbered overlay index of the element to interact with (e.g., 25 for overlay #25). Only applicable for click, type, and select commands. Leave empty for scroll, navigate, press, or other non-element actions.")
 
     VALID_COMMANDS: ClassVar[Set[str]] = {
         "click",
@@ -231,9 +232,10 @@ class ReactiveGoalDeterminer:
             overlay_data: Optional list of overlay element data with descriptions.
             
         Returns:
-            Tuple of (action_command, reasoning):
+            Tuple of (action_command, reasoning, overlay_index):
             - action_command: Action to take (e.g., "type: John Doe in name field") or None
             - reasoning: Why this action was chosen (for inclusion in interaction history)
+            - overlay_index: Optional overlay number if agent provided one (e.g., 25 for #25)
         """
         try:
             # Generate single action directly
@@ -247,11 +249,12 @@ class ReactiveGoalDeterminer:
             
             if not response:
                 print("⚠️ No action generated")
-                return None, None
-            
+                return None, None, None
+
             action = response.action
             reasoning = response.reasoning
-            
+            overlay_index = response.overlay_index
+
             try:
                 get_event_logger().action_determined(
                     action=action,
@@ -261,14 +264,14 @@ class ReactiveGoalDeterminer:
                 )
             except Exception:
                 pass
-            
-            return action, reasoning
-            
+
+            return action, reasoning, overlay_index
+
         except Exception as e:
             print(f"⚠️ ReactiveGoalDeterminer error: {e}")
             import traceback
             traceback.print_exc()
-            return None, None
+            return None, None, None
     
     def _generate_single_action(
         self,
@@ -486,6 +489,7 @@ DECISION MAKING:
                 # Show up to 30 elements to give good context without overwhelming
                 overlay_context = "\n\nAVAILABLE INTERACTIVE ELEMENTS (numbered overlays visible in screenshot):\n"
                 overlay_context += "These elements are marked with numbered red overlays in the screenshot.\n"
+                overlay_context += "IMPORTANT: When your action targets one of these elements (click, type, select, upload), you MUST provide the overlay_index (just the number, e.g., 25 for #25).\n"
                 overlay_context += "Elements with '[GROUP: elements #X, #Y, ...]' belong to the same question/group - clicking one when another in the group is already selected may be ineffective.\n\n"
                 for elem_desc in relevant_elements[:30]:  # Limit to 30 most relevant
                     overlay_context += f"  • {elem_desc}\n"

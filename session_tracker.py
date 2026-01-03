@@ -119,7 +119,19 @@ class SessionTracker:
     def set_current_action_reasoning(self, reasoning: Optional[str]) -> None:
         """Set the reasoning for the next action to be executed"""
         self._current_action_reasoning = reasoning
-    
+
+    def set_current_action_overlay_index(self, overlay_index: Optional[int]) -> None:
+        """Set the overlay index for the next action to be executed"""
+        self._current_action_overlay_index = overlay_index
+
+    def get_current_action_overlay_index(self) -> Optional[int]:
+        """Get the overlay index for the current action"""
+        return getattr(self, '_current_action_overlay_index', None)
+
+    def clear_current_action_overlay_index(self) -> None:
+        """Clear the overlay index after action execution"""
+        self._current_action_overlay_index = None
+
     def _capture_current_state(self, include_screenshot: bool = False) -> BrowserState:
         """Capture current browser state"""
         try:
