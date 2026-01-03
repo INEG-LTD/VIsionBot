@@ -603,7 +603,11 @@ config = BotConfig(
         provider_type="persistent",
         headless=False,
         apply_stealth=False,
-        user_data_dir=str(user_data_path)
+        user_data_dir=str(user_data_path),
+        extra_args=[
+            "--exclude-switches=enable-automation",
+            "--disable-infobars",
+        ]
     ),
     act_function=ActFunctionConfig(
         enable_target_context_guard=False,

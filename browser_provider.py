@@ -78,10 +78,11 @@ class BrowserConfig(BaseModel):
     # Browser args
     extra_args: list[str] = Field(
         default_factory=lambda: [
-            "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
             "--disable-features=VizDisplayCompositor",
+            "--disable-infobars",  # Hide "Chrome is being controlled" banner
+            "--disable-automation",  # Disable automation flags
         ],
         description="Additional browser launch arguments"
     )
@@ -167,7 +168,7 @@ class LocalPlaywrightProvider(BrowserProvider):
             f"--window-position=0,0",
             f"--window-size={self.config.viewport_width},{self.config.viewport_height}",
         ])
-        
+
         # Launch persistent context
         self._browser = self._playwright.chromium.launch_persistent_context(
             viewport={
@@ -177,7 +178,9 @@ class LocalPlaywrightProvider(BrowserProvider):
             user_data_dir=user_data_dir,
             headless=self.config.headless,
             args=args,
-            channel=self.config.channel
+            channel=self.config.channel,
+            ignore_default_args=["--enable-automation"],
+            chromium_sandbox=True  # Keep sandbox enabled to avoid warning
         )
         
         # Get or create page
@@ -319,7 +322,7 @@ class PersistentContextProvider(BrowserProvider):
             f"--window-position=0,0",
             f"--window-size={self.config.viewport_width},{self.config.viewport_height}",
         ])
-        
+
         # Launch persistent context
         self._browser = self._playwright.chromium.launch_persistent_context(
             viewport={
@@ -329,7 +332,9 @@ class PersistentContextProvider(BrowserProvider):
             user_data_dir=self.config.user_data_dir,
             headless=self.config.headless,
             args=args,
-            channel=self.config.channel
+            channel=self.config.channel,
+            ignore_default_args=["--enable-automation"],
+            chromium_sandbox=True  # Keep sandbox enabled to avoid warning
         )
         
         # Get or create page
