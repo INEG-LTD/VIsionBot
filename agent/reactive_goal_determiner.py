@@ -22,7 +22,7 @@ from utils.event_logger import get_event_logger
 
 class NextAction(BaseModel):
     """Structured LLM response for next action determination"""
-    action: str = Field(description="The specific action to take RIGHT NOW in proper command format. For CLICK commands: MUST include the element TYPE (button, link, div, input, etc.) AND be descriptive - e.g., 'click: Google Search button', 'click: first article link titled 'Introduction'', 'click: Accept all cookies button', 'click: search suggestion 'yahoo finance' link'. For TYPE commands: MUST be descriptive with element type - e.g., 'type: John Doe in name input field'. For PRESS commands: MUST be brief - just the key name (e.g., 'press: Enter', 'press: Escape'). NEVER use vague terms like 'first element', 'that button', 'the field', or ambiguous text without element type for click/type commands.")
+    action: str = Field(description="The specific action to take RIGHT NOW in proper command format. For CLICK commands: MUST include the element TYPE (button, link, div, input, etc.) AND be descriptive - e.g., 'click: Google Search button', 'click: first article link titled 'Introduction'', 'click: Accept all cookies button', 'click: search suggestion 'yahoo finance' link'. For TYPE commands: Use format 'type: <text> : <field>' with colon separator - e.g., 'type: John Doe : name input field', 'type: john@example.com : email input field'. For PRESS commands: MUST be brief - just the key name (e.g., 'press: Enter', 'press: Escape'). NEVER use vague terms like 'first element', 'that button', 'the field', or ambiguous text without element type for click/type commands.")
     reasoning: str = Field(description="Why this action is appropriate given the current viewport")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
     expected_outcome: str = Field(description="What should happen after executing this action")
@@ -138,16 +138,37 @@ class NextAction(BaseModel):
 
     @staticmethod
     def _normalize_type_body(body: str) -> str:
+        """
+        Validate and normalize type command body.
+
+        Accepted formats:
+        - New format: "<text> : <field>" - colon separator
+        - Legacy format: "<text> in <field>" or "<text> into <field>"
+        """
         if not body:
             raise ValueError("type command requires text and target")
+
         lowered = body.lower()
-        if ":" in body and not re.search(r"\b(in|into)\b", lowered):
-            pass  # assume already structured
-        elif not re.search(r"\b(in|into)\b", lowered):
-            raise ValueError("type command must specify target field using 'in'")
-        if not re.search(r"\b(field|input|area|box|textbox)\b", lowered):
-            body = re.sub(r"\b(in|into)\b\s*", lambda m: f"{m.group(0)}input field ", body, count=1, flags=re.IGNORECASE)
-        return re.sub(r"\s+", " ", body).strip()
+
+        # Check for new colon separator format: "text : field"
+        if " : " in body:
+            # New format with colon separator - validate and normalize
+            parts = body.split(" : ", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                raise ValueError("type command with ':' separator must be 'text : field'")
+            # Already in correct format
+            return re.sub(r"\s+", " ", body).strip()
+
+        # Legacy format: Check for "in" or "into"
+        if re.search(r"\b(in|into)\b", lowered):
+            # Has "in/into" - validate field keyword present
+            if not re.search(r"\b(field|input|area|box|textbox)\b", lowered):
+                # Add "input field" after the preposition
+                body = re.sub(r"\b(in|into)\b\s*", lambda m: f"{m.group(0)}input field ", body, count=1, flags=re.IGNORECASE)
+            return re.sub(r"\s+", " ", body).strip()
+
+        # No separator found - invalid format
+        raise ValueError("type command must use format 'text : field' or 'text in field'")
 
     @staticmethod
     def _normalize_press_body(body: str) -> str:
@@ -354,13 +375,14 @@ ACTION RULES:
    - Never invent filenames
 
 2. TEXT INPUTS: Fields auto-clear before typing - type complete desired value
-   - "type: john@example.com in email input field" (not just "john")
+   - Format: "type: <text> : <field>" - Use colon to separate text from target
+   - Example: "type: john@example.com : email input field" (not "type: john")
 
 3. EXTRACTION: Use "extract: <what>" when user wants data retrieved
 
 4. COMMAND FORMAT:
    - Click: Must include element type (button/link/div) - "click: Submit button"
-   - Type: Must include field type - "type: John in name input field"
+   - Type: Use colon separator - "type: John Doe : name input field"
    - Press: Just key name - "press: Enter"
 
 5. AVOID REPEATING: Failed actions should not be repeated - ASK for help instead
@@ -376,7 +398,7 @@ COMMANDS:
 - complete: <reasoning> - CALL WHEN TASK FINISHED - Explain what was accomplished
 - ask: <question> - ASK USER when stuck, confused, or element not working as expected
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
-- type: <text> in <field-type> <name> - Enter text (field auto-clears first)
+- type: <text> : <field> - Enter text (use colon separator, field auto-clears first)
 - select: <option> in <dropdown> - Pick option from dropdown
 - upload: [file] in <target> - Handle file uploads (file optional, opens picker if omitted)
 - press: <key> - Press single key (Enter/Escape/Tab)
