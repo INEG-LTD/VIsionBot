@@ -136,6 +136,11 @@ class AgentController:
         # Interaction summarization
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
+        # Image detail level for vision API
+        image_detail: str = "high",
+        # Screenshot saving for debugging
+        save_screenshots: bool = False,
+        screenshot_dir: str = "agent_screenshots",
     ):
         """
         Initialize agent controller.
@@ -248,6 +253,14 @@ class AgentController:
         # Store visible text inclusion configuration
         # Controls whether visible text is included in agent's context for action determination
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
+
+        # Store image detail level for vision API
+        self.image_detail = image_detail
+
+        # Store screenshot saving configuration
+        self.save_screenshots = save_screenshots
+        self.screenshot_dir = screenshot_dir
+        self._screenshot_counter = 0  # Counter for naming screenshots
 
         self.agent_model_name: str = getattr(bot, "agent_model_name", get_default_agent_model())
         agent_reasoning = getattr(bot, "agent_reasoning_level", None)
@@ -647,6 +660,7 @@ class AgentController:
                 base_knowledge=combined_knowledge,
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
+                image_detail=self.image_detail,
                 interaction_summary_limit=self.interaction_summary_limit_action,
                 include_overlays_in_agent_context=self.include_overlays_in_agent_context,
                 include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
@@ -1544,7 +1558,30 @@ class AgentController:
         except Exception as e:
             print(f"⚠️ Failed to capture screenshot: {e}")
             snapshot.screenshot = None
-        
+
+        # Save screenshot for debugging if enabled
+        if self.save_screenshots and snapshot.screenshot:
+            try:
+                from pathlib import Path
+                from datetime import datetime
+
+                # Create directory if it doesn't exist
+                screenshot_path = Path(self.screenshot_dir)
+                screenshot_path.mkdir(parents=True, exist_ok=True)
+
+                # Generate filename with iteration and timestamp
+                self._screenshot_counter += 1
+                timestamp = datetime.now().strftime("%H%M%S")
+                filename = f"iter{self._current_iteration:03d}_snap{self._screenshot_counter:03d}_{timestamp}.png"
+                filepath = screenshot_path / filename
+
+                # Save the screenshot
+                with open(filepath, "wb") as f:
+                    f.write(snapshot.screenshot)
+                print(f"📸 Saved screenshot: {filepath}")
+            except Exception as e:
+                print(f"⚠️ Failed to save screenshot: {e}")
+
         # Compute screenshot hash for change detection
         screenshot_data = getattr(snapshot, "screenshot", None)
         screenshot_hash = None

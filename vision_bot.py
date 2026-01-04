@@ -279,6 +279,7 @@ class BrowserVisionBot:
         self.command_reasoning_level = ReasoningLevel.coerce(config.model.command_reasoning_level)
         self.agent_reasoning_level = ReasoningLevel.coerce(config.model.agent_reasoning_level)
         self.reasoning_level = self.command_reasoning_level
+        self.image_detail = config.model.image_detail
 
         # Set the centralized model configuration
         set_default_model(self.command_model_name)
@@ -298,10 +299,6 @@ class BrowserVisionBot:
         # Extract element configuration
         self.max_detailed_elements = config.elements.max_detailed_elements
         self.include_detailed_elements = config.elements.include_detailed_elements
-        self.two_pass_planning = config.elements.two_pass_planning
-        self.max_coordinate_overlays = config.elements.max_coordinate_overlays
-        self.merge_overlay_selection = config.elements.merge_overlay_selection
-        self.overlay_only_planning = config.elements.overlay_only_planning
         self.overlay_mode = getattr(config.elements, "overlay_mode", "interactive")
         self.include_textless_overlays = getattr(config.elements, "include_textless_overlays", False)
         
@@ -372,7 +369,9 @@ class BrowserVisionBot:
         
         # Extract debug configuration
         _debug_mode = config.logging.debug_mode
-        
+        self.save_screenshots = config.logging.save_screenshots
+        self.screenshot_dir = config.logging.screenshot_dir
+
         # Initialize event logger early (before any methods that might use it)
         # Create a safe logger that never fails
         class SafeLogger:
@@ -690,8 +689,6 @@ class BrowserVisionBot:
         self.plan_generator: PlanGenerator = PlanGenerator(
             include_detailed_elements=self.include_detailed_elements,
             max_detailed_elements=self.max_detailed_elements,
-            merge_overlay_selection=self.merge_overlay_selection,
-            return_overlay_only=self.overlay_only_planning,
             overlay_selection_max_samples=self.overlay_selection_max_samples,
             include_textless_overlays=self.include_textless_overlays,
         )
@@ -1588,6 +1585,9 @@ class BrowserVisionBot:
                 include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
                 interaction_summary_limit_completion=interaction_summary_limit_completion,
                 interaction_summary_limit_action=interaction_summary_limit_action,
+                image_detail=self.image_detail,
+                save_screenshots=self.save_screenshots,
+                screenshot_dir=self.screenshot_dir,
             )
             controller.max_iterations = max_iterations
             

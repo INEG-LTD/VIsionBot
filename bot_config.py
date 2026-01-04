@@ -26,7 +26,7 @@ BrowserConfig = BrowserProviderConfig
 
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
-    
+
     model_name: str = Field(
         default="gpt-5-mini",
         description="Default model for all operations"
@@ -50,6 +50,10 @@ class ModelConfig(BaseModel):
     command_reasoning_level: ReasoningLevel = Field(
         default=ReasoningLevel.MEDIUM,
         description="Reasoning level for command generation"
+    )
+    image_detail: str = Field(
+        default="high",
+        description="Image detail level for vision API: 'low' (faster, cheaper), 'high' (more accurate), or 'auto'"
     )
     
     class Config:
@@ -123,23 +127,6 @@ class ElementConfig(BaseModel):
         default=True,
         description="Include detailed element information in prompts"
     )
-    max_coordinate_overlays: int = Field(
-        default=600,
-        ge=1,
-        description="Maximum number of coordinate overlays"
-    )
-    two_pass_planning: bool = Field(
-        default=True,
-        description="Use two-pass planning for element selection"
-    )
-    merge_overlay_selection: bool = Field(
-        default=True,
-        description="Merge overlay selection with plan generation"
-    )
-    overlay_only_planning: bool = Field(
-        default=False,
-        description="Return only overlay index from planning"
-    )
     overlay_mode: str = Field(
         default="interactive",
         description="Overlay drawing mode: 'interactive' (default) or 'all'"
@@ -180,12 +167,20 @@ class ElementConfig(BaseModel):
 
 class DebugConfig(BaseModel):
     """Debugging and logging configuration."""
-    
+
     debug_mode: bool = Field(
         default=True,
         description="Enable debug mode with verbose logging"
     )
-    
+    save_screenshots: bool = Field(
+        default=False,
+        description="Save screenshots sent to the agent for debugging"
+    )
+    screenshot_dir: str = Field(
+        default="agent_screenshots",
+        description="Directory to save agent screenshots"
+    )
+
     class Config:
         arbitrary_types_allowed = True
 

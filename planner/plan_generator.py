@@ -25,7 +25,6 @@ class PlanGenerator:
         include_detailed_elements: bool = True,
         max_detailed_elements: int = 400,
         max_steps: Optional[int] = None,
-        merge_overlay_selection: bool = False,
         return_overlay_only: bool = False,
         overlay_selection_max_samples: Optional[int] = None,
         include_textless_overlays: bool = False,
@@ -34,7 +33,6 @@ class PlanGenerator:
         self.include_detailed_elements = include_detailed_elements
         self.max_detailed_elements = max_detailed_elements
         self.max_steps = max_steps  # Maximum number of steps to generate (None = no limit, uses default 1-3)
-        self.merge_overlay_selection = merge_overlay_selection
         self.return_overlay_only = return_overlay_only
         self.include_textless_overlays = include_textless_overlays
         if overlay_selection_max_samples is not None and overlay_selection_max_samples <= 0:

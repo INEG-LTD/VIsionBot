@@ -366,7 +366,6 @@ config = BotConfig.minimal()
 - `show_overlays`: Show visual overlays on page elements (default: False) - controls overlay visibility independently of debug mode
 - `include_textless_overlays`: Keep overlays with no text/aria/placeholder in LLM selection lists, using surrounding DOM context to identify them (default: False)
 - `max_detailed_elements`: Maximum number of detailed elements to include (default: 400)
-- `max_coordinate_overlays`: Maximum number of coordinate overlays (default: 600)
 - `overlay_selection_max_samples`: Limit overlays considered during LLM selection (None for unlimited)
 
 #### CacheConfig

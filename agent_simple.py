@@ -579,7 +579,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-mini",
+        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.MEDIUM
@@ -592,17 +592,16 @@ config = BotConfig(
         include_textless_overlays=True,
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
-        # overlay_only_planning=True,
-        include_overlays_in_agent_context=True,  # Agent sees overlays and selects directly
-        # max_coordinate_overlays=100  # Limit overlays for better performance
+        include_overlays_in_agent_context=False,  # Agent sees overlays and selects directly
     ),
     logging=DebugConfig(
-        debug_mode=False  # Set to False to use callbacks only (no debug prints)
+        debug_mode=False,  # Set to False to use callbacks only (no debug prints)
+        save_screenshots=True,
     ),
     browser=BrowserConfig(
         provider_type="persistent",
         headless=False,
-        apply_stealth=False,
+        apply_stealth=True,
         user_data_dir=str(user_data_path),
         extra_args=[
             "--exclude-switches=enable-automation",
@@ -629,7 +628,7 @@ setup_mini_goals(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://www.collinsongrouptalent.com/jobs/5081808-ios-developer?jobPipeline=Indeed&ittk=9J6BXDOPEV")
+bot.page.goto("https://www.indeed.com/")
 
 # Setup border effect if not in debug mode
 apply_thinking_border(bot)
@@ -639,7 +638,7 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "your job is to navigate to the job form page, fill the form with the data provided and submit the form. you'll be done when the form has been submitted",
+    "your job is done if you are on indeed",
     base_knowledge=[
         # Form data (structured)
         """Form data to use:

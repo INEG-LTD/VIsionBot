@@ -36,7 +36,6 @@ config = BotConfig(
         include_textless_overlays=True,
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
-        overlay_only_planning=True
     ),
     logging=DebugConfig(
         debug_mode=True  # Set to False to use callbacks only

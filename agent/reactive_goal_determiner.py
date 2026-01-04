@@ -26,7 +26,7 @@ class NextAction(BaseModel):
     reasoning: str = Field(description="Why this action is appropriate given the current viewport")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
     expected_outcome: str = Field(description="What should happen after executing this action")
-    overlay_index: Optional[int] = Field(default=None, description="The numbered overlay index of the element to interact with (e.g., 25 for overlay #25). Only applicable for click, type, and select commands. Leave empty for scroll, navigate, press, or other non-element actions.")
+    overlay_index: Optional[int] = Field(default=None, description="The overlay ID that matches the element you chose VISUALLY from the screenshot. First decide what to interact with by looking at the screenshot, then find the matching element in the reference table and provide its number (e.g., 25 for #25). Only for click, type, select, upload. Leave empty for scroll, navigate, press, or other non-element actions.")
 
     VALID_COMMANDS: ClassVar[Set[str]] = {
         "click",
@@ -349,6 +349,22 @@ class ReactiveGoalDeterminer:
         prompt = f"""
 You determine the NEXT SINGLE ACTION based on current viewport screenshot.
 
+CRITICAL - VISUAL-FIRST DECISION MAKING:
+You MUST make decisions based on what you SEE in the screenshot, NOT based on the overlay list.
+1. Look at the screenshot to understand the page and identify what element to interact with
+2. Use the visual appearance, text, position, and context to decide your action
+3. ONLY THEN match your chosen element to an overlay ID from the reference list
+The overlay list is purely for IDENTIFICATION - it tells you which number corresponds to which element.
+Never let the overlay numbers influence WHAT you decide to do - only use them to reference your visual choice.
+
+MODAL/POPUP AWARENESS:
+After clicking a button (especially "Apply", "Submit", "Continue"), CHECK if a modal, popup, or new form appeared:
+- If you see a darkened/grayed background with a centered panel, a MODAL has opened
+- If new form fields appeared that weren't there before, interact with THOSE instead
+- NEVER click the same button repeatedly - if it didn't work, something else is now in focus
+- If an overlay/modal is blocking the page, interact with the modal content FIRST
+- Look for close buttons (X), form fields, or action buttons INSIDE any visible modal
+
 {base_knowledge_section}
 
 ⚠️ IMPORTANT - PRIORITIZE USER GUIDANCE & RULES:
@@ -509,10 +525,11 @@ DECISION MAKING:
             if relevant_elements:
                 # Limit to most relevant elements (prioritize inputs, buttons)
                 # Show up to 30 elements to give good context without overwhelming
-                overlay_context = "\n\nAVAILABLE INTERACTIVE ELEMENTS (numbered overlays visible in screenshot):\n"
-                overlay_context += "These elements are marked with numbered red overlays in the screenshot.\n"
-                overlay_context += "IMPORTANT: When your action targets one of these elements (click, type, select, upload), you MUST provide the overlay_index (just the number, e.g., 25 for #25).\n"
-                overlay_context += "Elements with '[GROUP: elements #X, #Y, ...]' belong to the same question/group - clicking one when another in the group is already selected may be ineffective.\n\n"
+                overlay_context = "\n\nELEMENT REFERENCE TABLE (for matching your visual choice to an ID):\n"
+                overlay_context += "DO NOT use this list to decide what to do - use the SCREENSHOT for that.\n"
+                overlay_context += "This table helps you find the overlay_index for the element you've already chosen visually.\n"
+                overlay_context += "After deciding which element to interact with based on the screenshot, find it here and provide its overlay_index.\n"
+                overlay_context += "Elements with '[GROUP: ...]' belong to the same question/group.\n\n"
                 for elem_desc in relevant_elements[:30]:  # Limit to 30 most relevant
                     overlay_context += f"  • {elem_desc}\n"
                 if len(relevant_elements) > 30:
@@ -539,8 +556,11 @@ CURRENT STATE:
 NAVIGATION HISTORY:
 {nav_summary}
 
-WHAT'S BEEN DONE:
+WHAT'S BEEN DONE (DO NOT REPEAT THESE):
 {interaction_summary}
+
+⚠️ CRITICAL: Review the list above. If your intended action matches something already done (especially clicks),
+the page state has likely CHANGED. Look for NEW elements like modals, forms, or popups that appeared as a result.
 
 {ineffective_actions_context if ineffective_actions_context else ""}
 {overlay_context if overlay_context else ""}
@@ -623,9 +643,12 @@ Look at the screenshot and determine the single next action (or complete if done
             if interaction.text_input:
                 summary += f" - entered: '{interaction.text_input[:30]}'"
             if interaction.target_element_info:
-                element_desc = interaction.target_element_info.get('description', '')[:40]
+                element_desc = interaction.target_element_info.get('description', '')[:50]
                 if element_desc:
                     summary += f" on: {element_desc}"
+            # Add reasoning for click actions to help agent understand what happened
+            if interaction.interaction_type.value == "click" and interaction.reasoning:
+                summary += f" (reason: {interaction.reasoning[:40]}...)"
             
             summary_parts.append(summary)
         
