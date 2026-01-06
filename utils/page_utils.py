@@ -86,9 +86,9 @@ class PageUtils:
         # Try to find and scroll the foreground element
         try:
             scrolled_modal = self.page.evaluate("""
-            (scrollAmount) => {{
+            (scrollAmount) => {
                 // Try multiple scroll methods on an element
-                function tryScrollElement(el, amount) {{
+                function tryScrollElement(el, amount) {
                     if (!el) return false;
 
                     const scrollBefore = el.scrollTop;
@@ -102,101 +102,101 @@ class PageUtils:
                     if (el.scrollTop !== scrollBefore) return true;
 
                     // Method 3: Dispatch wheel event (for custom scroll handlers)
-                    try {{
-                        const wheelEvent = new WheelEvent('wheel', {{
+                    try {
+                        const wheelEvent = new WheelEvent('wheel', {
                             deltaY: amount,
                             deltaMode: 0,
                             bubbles: true,
                             cancelable: true
-                        }});
+                        });
                         el.dispatchEvent(wheelEvent);
                         // Give it a moment to process
-                        setTimeout(() => {{}}, 10);
+                        setTimeout(() => {}, 10);
                         if (el.scrollTop !== scrollBefore) return true;
-                    }} catch (e) {{}}
+                    } catch (e) {}
 
                     return false;
-                }}
+                }
 
                 // Check if element has scrollable content (relaxed check)
-                function hasScrollableContent(el) {{
+                function hasScrollableContent(el) {
                     if (!el) return false;
                     return el.scrollHeight > el.clientHeight + 1;
-                }}
+                }
 
                 // Find scrollable element walking up the tree
-                function findScrollableAncestor(el) {{
+                function findScrollableAncestor(el) {
                     let current = el;
                     const candidates = [];
 
-                    while (current && current !== document.body && current !== document.documentElement) {{
-                        if (hasScrollableContent(current)) {{
+                    while (current && current !== document.body && current !== document.documentElement) {
+                        if (hasScrollableContent(current)) {
                             candidates.push(current);
-                        }}
+                        }
                         current = current.parentElement;
-                    }}
+                    }
 
                     return candidates;
-                }}
+                }
 
                 // Strategy 1: Element at center of viewport
                 const centerX = window.innerWidth / 2;
                 const centerY = window.innerHeight / 2;
                 const elementAtCenter = document.elementFromPoint(centerX, centerY);
 
-                if (elementAtCenter) {{
+                if (elementAtCenter) {
                     // Try all scrollable ancestors
                     const scrollableAncestors = findScrollableAncestor(elementAtCenter);
 
-                    for (const ancestor of scrollableAncestors) {{
-                        if (tryScrollElement(ancestor, scrollAmount)) {{
+                    for (const ancestor of scrollableAncestors) {
+                        if (tryScrollElement(ancestor, scrollAmount)) {
                             console.log('[Scroll] Success - viewport center ancestor:', ancestor.tagName, ancestor.className);
                             return true;
-                        }}
-                    }}
-                }}
+                        }
+                    }
+                }
 
                 // Strategy 2: Any element with high z-index that has scrollable content
                 const allElements = Array.from(document.querySelectorAll('*'));
                 const candidates = [];
 
-                for (const el of allElements) {{
+                for (const el of allElements) {
                     const style = window.getComputedStyle(el);
 
                     // Skip hidden
-                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {{
+                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
                         continue;
-                    }}
+                    }
 
                     // Must have scrollable content
-                    if (!hasScrollableContent(el)) {{
+                    if (!hasScrollableContent(el)) {
                         continue;
-                    }}
+                    }
 
                     const zIndex = parseInt(style.zIndex) || 0;
                     const position = style.position;
 
                     // Prioritize fixed/absolute with any z-index, or any element with z-index > 0
-                    if ((position === 'fixed' || position === 'absolute') || zIndex > 0) {{
+                    if ((position === 'fixed' || position === 'absolute') || zIndex > 0) {
                         const priority = (position === 'fixed' || position === 'absolute' ? 10000 : 0) + zIndex;
-                        candidates.push({{ el, priority }});
-                    }}
-                }}
+                        candidates.push({ el, priority });
+                    }
+                }
 
                 // Sort by priority
                 candidates.sort((a, b) => b.priority - a.priority);
 
                 // Try each candidate
-                for (const candidate of candidates) {{
-                    if (tryScrollElement(candidate.el, scrollAmount)) {{
+                for (const candidate of candidates) {
+                    if (tryScrollElement(candidate.el, scrollAmount)) {
                         console.log('[Scroll] Success - z-index element:', candidate.el.tagName, candidate.el.className, 'priority:', candidate.priority);
                         return true;
-                    }}
-                }}
+                    }
+                }
 
                 console.log('[Scroll] No foreground scrollable found, falling back to page scroll');
                 return false;
-            }}
+            }
         """, scroll_amount)
             print(f"🔍 [PageUtils] Modal scroll result: {scrolled_modal}")
         except Exception as e:

@@ -79,10 +79,10 @@ class BrowserConfig(BaseModel):
     extra_args: list[str] = Field(
         default_factory=lambda: [
             "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
+            "--disable-blink-features=AutomationControlled",  # Required for Cloudflare bypass
             "--disable-features=VizDisplayCompositor",
-            "--disable-infobars",  # Hide "Chrome is being controlled" banner
-            "--disable-automation",  # Disable automation flags
+            "--disable-infobars",
+            "--disable-automation",
         ],
         description="Additional browser launch arguments"
     )
