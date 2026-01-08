@@ -867,31 +867,6 @@ class ActionExecutor:
                 page_info=page_info,
             )
 
-        # Capture screenshot before resolving click target for vision-based child detection
-        screenshot_for_click = None
-        try:
-            screenshot_for_click = self.page.screenshot(type="jpeg", quality=50, full_page=False)
-        except Exception:
-            pass
-        
-        target_selector = None
-        if allow_refinement:
-            try:
-                rx, ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box, screenshot=screenshot_for_click)
-                if rx is not None and ry is not None and (rx != x or ry != y):
-                    try:
-                        self.event_logger.action_refinement(f"Adjusted click target to ({rx}, {ry}) from ({x}, {y}) for clickable element")
-                    except Exception:
-                        pass
-                    x, y = rx, ry
-            except Exception:
-                target_selector = None
-        else:
-            try:
-                _rx, _ry, target_selector = self._resolve_click_target(x, y, page_info, normalized_box=box, screenshot=screenshot_for_click)
-            except Exception:
-                target_selector = None
-
         # Removed planned interaction tracking (was for goal evaluation)
         # Check for retry requests - disabled as retries are handled elsewhere
         retry_goal = None
@@ -906,106 +881,28 @@ class ActionExecutor:
         
         # Goal system removed - pre-evaluation checks removed
         
-        # Determine preferred click method (use preferred method, but switch if retry detected)
-        preferred_method = self.preferred_click_method
-        current_url = self.page.url
-        current_dom_sig = self._get_simple_dom_signature()
-        
-        # Check if this is a retry: same selector, same URL, same DOM signature
-        # If so, switch to the alternative method
-        if target_selector:
-            if (self.last_click_selector == target_selector and 
-                self.last_click_url == current_url and 
-                self.last_click_dom_signature == current_dom_sig):
-                # Switch to alternative method for retry
-                preferred_method = "programmatic" if self.preferred_click_method == "mouse" else "mouse"
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print(f"  🔄 Retry detected: same element, page unchanged. Switching to {preferred_method} click method")
-        
-        # print(f"Elements: {elements.model_dump_json()}")
-        # print(f"Step: {step.model_dump_json()}")
         try:
-            self.event_logger.system_debug(f"Clicking at ({x}, {y}) using {preferred_method} click (with fallback)")
+            self.event_logger.system_debug(f"Clicking at ({x}, {y}) using mouse click")
         except Exception:
             pass
-        
+
         # Capture state BEFORE performing the click (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
-        
-        # Perform the click with fallback
+
         success = False
         error_msg = None
-        click_method_used = None
-        
-        # Try preferred method first
+
         try:
-            if preferred_method == "programmatic" and target_selector:
-                # Try programmatic click via selector
-                try:
-                    element = self.page.locator(target_selector).first
-                    element.click(timeout=5000)
-                    try:
-                        self.event_logger.action_success(f"Programmatically clicked element: {target_selector}")
-                    except Exception:
-                        pass
-                    success = True
-                    click_method_used = "programmatic"
-                except Exception as selector_error:
-                    # Only show in debug mode
-                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        print(f"  ⚠️ Programmatic click failed ({selector_error}), trying mouse click fallback")
-                    # Fallback to mouse click
-                    try:
-                        self.page.mouse.click(x, y)
-                        success = True
-                        click_method_used = "mouse"
-                        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                            print("  ✅ Fallback mouse click succeeded")
-                    except Exception as mouse_error:
-                        error_msg = f"Both programmatic ({selector_error}) and mouse ({mouse_error}) clicks failed"
-            else:
-                # Try mouse click first
-                try:
-                    self._human_mouse_move(x, y)
-                    self.page.mouse.click(x, y)
-                    success = True
-                    click_method_used = "mouse"
-                except Exception as mouse_error:
-                    # Only show in debug mode
-                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        print(f"  ⚠️ Mouse click failed ({mouse_error}), trying programmatic click fallback")
-                    # Fallback to programmatic click if selector available
-                    if target_selector:
-                        try:
-                            element = self.page.locator(target_selector).first
-                            element.click(timeout=5000)
-                            success = True
-                            click_method_used = "programmatic"
-                            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                                print("  ✅ Fallback programmatic click succeeded")
-                        except Exception as selector_error:
-                            error_msg = f"Both mouse ({mouse_error}) and programmatic ({selector_error}) clicks failed"
-                    else:
-                        error_msg = f"Mouse click failed ({mouse_error}) and no selector available for fallback"
+            self._human_mouse_move(x, y)
+            self.page.mouse.click(x, y)
+            success = True
         except Exception as e:
             error_msg = str(e)
-        
+            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                print(f"  ⚠️ Mouse click failed ({e})")
+
         if not success:
             print(f"  ❌ Click failed: {error_msg}")
-        
-        # Update tracking: capture page state after click to detect if it changed
-        if target_selector and click_method_used:
-            # Wait a moment for page to potentially change
-            time.sleep(0.1)
-            new_url = self.page.url
-            new_dom_sig = self._get_simple_dom_signature()
-            
-            # Update tracking for next retry check
-            self.last_click_selector = target_selector
-            self.last_click_url = new_url
-            self.last_click_dom_signature = new_dom_sig
-            self.last_click_method = click_method_used
         
         # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
         self.session_tracker.record_interaction(
@@ -1106,6 +1003,11 @@ class ActionExecutor:
         # Get coordinates for the element to type into
         x, y = self._get_click_coordinates(step, elements, page_info)
         box = None
+        if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
+            for el in elements.elements:
+                if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
+                    box = el.box_2d
+                    break
         
         # Record planned interaction - removed (was for goal evaluation)
         
@@ -1129,30 +1031,16 @@ class ActionExecutor:
             elements=elements,
             coordinates=(x, y) if x is not None and y is not None else None,
         )
-        
+
         # Click first to focus the element
         if x is not None and y is not None:
             # Validate and clamp coordinates to viewport
-            # x, y = validate_and_clamp_coordinates(x, y, page_info.width, page_info.height)
-            # Refine to a truly focusable/clickable target before clicking to focus
-            if allow_refinement:
-                try:
-                    if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
-                        for el in elements.elements:
-                            if getattr(el, 'overlay_number', None) == step.overlay_index and getattr(el, 'box_2d', None):
-                                box = el.box_2d
-                                break
-                    rx, ry = self._refine_click_coordinates(x, y, page_info, normalized_box=box)
-                    if rx is not None and ry is not None:
-                        x, y = rx, ry
-                except Exception:
-                    pass
             if confirm_before_interaction:
                 self._confirm_interaction_visual(
                     action_label="type",
                     overlay_index=step.overlay_index,
                     selector=None,
-                    coordinates=(x, y) if x is not None and y is not None else None,
+                    coordinates=(x, y),
                     box=box,
                     page_info=page_info,
                 )
@@ -1861,6 +1749,13 @@ class ActionExecutor:
 
     def _get_click_coordinates(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> Tuple[Optional[int], Optional[int]]:
         """Get the coordinates to click based on the step"""
+        # Prefer explicit coordinates when provided
+        if step.x is not None and step.y is not None:
+            try:
+                self.event_logger.action_coordinates(f"Using explicit coordinates=({int(step.x)},{int(step.y)})")
+            except Exception:
+                pass
+            return int(step.x), int(step.y)
         # Prefer overlay index → convert to pixel center from normalized box
         if step.overlay_index is not None:
             # First try to find by overlay number (preferred)
@@ -1907,350 +1802,7 @@ class ActionExecutor:
                             pass
                         return center_x, center_y
 
-        # Fallback: use raw coordinates if provided
-        if step.x is not None and step.y is not None:
-            try:
-                self.event_logger.action_coordinates(f"Using explicit coordinates=({int(step.x)},{int(step.y)})")
-            except Exception:
-                pass
-            return int(step.x), int(step.y)
-        
         return None, None
-
-    def _refine_click_coordinates(self, x: int, y: int, page_info: PageInfo, normalized_box=None) -> Tuple[Optional[int], Optional[int]]:
-        """Refine coordinates to the center of the nearest clickable element at/within the region.
-
-        - First try the exact point (x,y): ascend to a clickable ancestor.
-        - If not found, sample multiple points within the element box (if provided) or around (x,y).
-        - Clickable definition: anchor/button/input/select/textarea or role=button/link, onclick, tabindex, pointer cursor.
-        """
-        js = r"""
-        (arg) => {
-          const x = arg && arg.x !== undefined ? arg.x : 0;
-          const y = arg && arg.y !== undefined ? arg.y : 0;
-          const region = arg ? arg.region : null;
-          function isClickable(el) {
-            if (!el || el.nodeType !== 1) return false;
-            const tag = el.tagName.toLowerCase();
-            if (["a","button","input","select","textarea","summary","label"].includes(tag)) return true;
-            const role = el.getAttribute && el.getAttribute('role');
-            if (role && ["button","link","tab","menuitem","option","combobox"].includes(role.toLowerCase())) return true;
-            if (el.onclick || el.getAttribute && el.getAttribute('onclick')) return true;
-            if (el.hasAttribute && el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
-            const style = window.getComputedStyle(el);
-            if (style && style.cursor === 'pointer') return true;
-            return false;
-          }
-
-          function toPoint(el){
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), tag: el.tagName.toLowerCase()};
-          }
-
-          function findClickableFromPoint(px, py){
-            let el = document.elementFromPoint(px, py);
-            // Ascend to clickable ancestor
-            let cur = el;
-            while (cur && cur !== document.body && !isClickable(cur)) cur = cur.parentElement;
-            if (cur && isClickable(cur)) return toPoint(cur);
-            // Try clickable descendant from the element
-            if (el && el.querySelector) {
-              const cand = el.querySelector('a,button,input,select,textarea,[role="button"],[role="link"],[onclick],[tabindex]');
-              if (cand) return toPoint(cand);
-            }
-            // Try closest anchor for common SERP structures (h3 within a)
-            if (el && el.closest) {
-              const link = el.closest('a,[role="link"]');
-              if (link) return toPoint(link);
-            }
-            return null;
-          }
-
-          function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
-
-          // Region rectangle in viewport pixels
-          const vw = window.innerWidth, vh = window.innerHeight;
-          let xMin, yMin, xMax, yMax;
-          if (region && Array.isArray(region) && region.length === 4){
-            yMin = region[0]/1000*vh; xMin = region[1]/1000*vw; yMax = region[2]/1000*vh; xMax = region[3]/1000*vw;
-          } else {
-            const w = 220, h = 140; // default search window around the point
-            xMin = x - w/2; xMax = x + w/2; yMin = y - h/2; yMax = y + h/2;
-          }
-          xMin = clamp(Math.round(xMin), 0, vw-1); xMax = clamp(Math.round(xMax), 0, vw-1);
-          yMin = clamp(Math.round(yMin), 0, vh-1); yMax = clamp(Math.round(yMax), 0, vh-1);
-          const cx = Math.round((xMin + xMax)/2), cy = Math.round((yMin + yMax)/2);
-
-          // Build sample points (center, edges, corners)
-          const pts = [
-            [cx, cy],
-            [xMin + 4, cy], [xMax - 4, cy],
-            [cx, yMin + 4], [cx, yMax - 4],
-            [xMin + 8, yMin + 8], [xMax - 8, yMin + 8],
-            [xMin + 8, yMax - 8], [xMax - 8, yMax - 8]
-          ];
-          for (const [sx, sy] of pts){
-            const p = findClickableFromPoint(sx, sy);
-            if (p) return p;
-          }
-
-          // Fallback: search clickable elements intersecting the region
-          function overlapArea(r1, r2){
-            const x1 = Math.max(r1.left, r2.left), y1 = Math.max(r1.top, r2.top);
-            const x2 = Math.min(r1.right, r2.right), y2 = Math.min(r1.bottom, r2.bottom);
-            const w = Math.max(0, x2 - x1), h = Math.max(0, y2 - y1);
-            return w * h;
-          }
-          const regionRect = {left: xMin, top: yMin, right: xMax, bottom: yMax};
-          const candSel = 'a,button,[role="link"],[role="button"],input,select,textarea';
-          const cands = Array.from(document.querySelectorAll(candSel))
-            .filter(el => {
-              const st = getComputedStyle(el);
-              if (st.display === 'none' || st.visibility === 'hidden' || st.pointerEvents === 'none') return false;
-              const r = el.getBoundingClientRect();
-              if (r.width < 4 || r.height < 4) return false;
-              return true;
-            });
-          let best = null, bestScore = -1;
-          for (const el of cands){
-            const r = el.getBoundingClientRect();
-            const ia = overlapArea(r, regionRect);
-            const centerDist = Math.hypot((r.left + r.width/2) - cx, (r.top + r.height/2) - cy);
-            // Score: prioritize overlap, break ties by closeness to center
-            const score = ia > 0 ? ia - centerDist : -centerDist;
-            if (score > bestScore){ bestScore = score; best = el; }
-          }
-          if (best) return toPoint(best);
-
-          return null;
-        }
-        """
-
-        try:
-            result = self.page.evaluate(js, {"x": x, "y": y, "region": normalized_box})
-            if result and isinstance(result, dict) and 'x' in result and 'y' in result:
-                rx, ry = int(result['x']), int(result['y'])
-                # Clamp to viewport
-                rx = max(0, min(page_info.width - 1, rx))
-                ry = max(0, min(page_info.height - 1, ry))
-                try:
-                    tag = result.get('tag')
-                    if tag:
-                        try:
-                            self.event_logger.action_refinement(f"Refinement found clickable <{tag}> at ({rx}, {ry})")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                return rx, ry
-        except Exception:
-            pass
-        return x, y
-
-    def _resolve_click_target(self, x: int, y: int, page_info: PageInfo, normalized_box=None, screenshot: Optional[bytes] = None) -> Tuple[Optional[int], Optional[int], Optional[str]]:
-        """Resolve a clickable element near a point/region and mark it with a temporary selector.
-        
-        Uses vision + DOM approach: vision provides guidance on what to look for, DOM finds it.
-        
-        Args:
-            x, y: Click coordinates
-            page_info: Page information
-            normalized_box: Optional normalized box coordinates
-            screenshot: Optional screenshot for vision-based click target identification
-        
-        Returns (rx, ry, selector) where selector is a CSS selector to the marked element.
-        """
-        import random
-        token = f"auto-{int(time.time()*1000)}-{random.randint(1000,9999)}"
-        
-        # Use vision to identify what element tag should be clicked at these coordinates
-        vision_tag_hint = None
-        if screenshot and getattr(self, "enable_vision_tag_hint", True):
-            vision_tag_hint = self._get_vision_tag_hint(x, y, screenshot, page_info, normalized_box)
-        
-        js = r"""
-        ({ x, y, region, token, visionTagHint }) => {
-          function isClickable(el) {
-            if (!el || el.nodeType !== 1) return false;
-            const tag = el.tagName.toLowerCase();
-            if (["a","button","input","select","textarea","summary","label"].includes(tag)) return true;
-            const role = el.getAttribute && el.getAttribute('role');
-            if (role && ["button","link","tab","menuitem","option","combobox"].includes(role.toLowerCase())) return true;
-            if (el.onclick || el.getAttribute && el.getAttribute('onclick')) return true;
-            if (el.hasAttribute && el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
-            const style = window.getComputedStyle(el);
-            if (style && style.cursor === 'pointer') return true;
-            return false;
-          }
-          function toPoint(el){
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), tag: el.tagName.toLowerCase()};
-          }
-          function findClickableFromPoint(px, py){
-            let el = document.elementFromPoint(px, py);
-            
-            // If vision suggested a specific tag, try to find that tag first (even if not directly clickable)
-            if (visionTagHint) {
-              let cur = el;
-              // Walk up the tree looking for the vision-suggested tag
-              while (cur && cur !== document.body) {
-                if (cur.tagName && cur.tagName.toLowerCase() === visionTagHint) {
-                  // Found the vision-suggested tag - check if it's clickable or inside a clickable parent
-                  if (isClickable(cur)) {
-                    return cur;
-                  }
-                  // Check if it's inside a clickable parent (like h3 inside <a>)
-                  let parent = cur.parentElement;
-                  while (parent && parent !== document.body) {
-                    if (isClickable(parent)) {
-                      // Return the vision-suggested child, not the parent
-                      return cur;
-                    }
-                    parent = parent.parentElement;
-                  }
-                }
-                cur = cur.parentElement;
-              }
-            }
-            
-            // Fallback to standard clickable element detection
-            let cur = el;
-            while (cur && cur !== document.body && !isClickable(cur)) cur = cur.parentElement;
-            if (cur && isClickable(cur)) return cur;
-            if (el && el.querySelector) {
-              const cand = el.querySelector('a,button,input,select,textarea,[role="button"],[role="link"],[onclick],[tabindex]');
-              if (cand) return cand;
-            }
-            if (el && el.closest) {
-              const link = el.closest('a,[role="link"]');
-              if (link) return link;
-            }
-            return null;
-          }
-          function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
-          const vw = window.innerWidth, vh = window.innerHeight;
-          let xMin, yMin, xMax, yMax;
-          if (region && Array.isArray(region) && region.length === 4){
-            yMin = region[0]/1000*vh; xMin = region[1]/1000*vw; yMax = region[2]/1000*vh; xMax = region[3]/1000*vw;
-          } else {
-            const w = 220, h = 140;
-            xMin = x - w/2; xMax = x + w/2; yMin = y - h/2; yMax = y + h/2;
-          }
-          xMin = clamp(Math.round(xMin), 0, vw-1); xMax = clamp(Math.round(xMax), 0, vw-1);
-          yMin = clamp(Math.round(yMin), 0, vh-1); yMax = clamp(Math.round(yMax), 0, vh-1);
-          const cx = Math.round((xMin + xMax)/2), cy = Math.round((yMin + yMax)/2);
-          const pts = [ [cx, cy], [xMin+4, cy], [xMax-4, cy], [cx, yMin+4], [cx, yMax-4], [xMin+8, yMin+8], [xMax-8, yMin+8], [xMin+8, yMax-8], [xMax-8, yMax-8] ];
-          let target = null;
-          for (const [sx, sy] of pts){
-            const cand = findClickableFromPoint(sx, sy);
-            if (cand){ target = cand; break; }
-          }
-          if (!target){
-            // Fallback: search clickable elements overlapping the region
-            const regionRect = {left: xMin, top: yMin, right: xMax, bottom: yMax};
-            function overlapArea(r1, r2){
-              const x1 = Math.max(r1.left, r2.left), y1 = Math.max(r1.top, r2.top);
-              const x2 = Math.min(r1.right, r2.right), y2 = Math.min(r1.bottom, r2.bottom);
-              const w = Math.max(0, x2 - x1), h = Math.max(0, y2 - y1);
-              return w * h;
-            }
-            const candSel = 'a,button,[role="link"],[role="button"],input,select,textarea';
-            let best = null, bestScore = -1;
-            for (const el of document.querySelectorAll(candSel)){
-              const st = getComputedStyle(el);
-              if (st.display === 'none' || st.visibility === 'hidden' || st.pointerEvents === 'none') continue;
-              const r = el.getBoundingClientRect();
-              if (r.width < 4 || r.height < 4) continue;
-              const ia = overlapArea(r, regionRect);
-              const centerDist = Math.hypot((r.left + r.width/2) - cx, (r.top + r.height/2) - cy);
-              const score = ia > 0 ? ia - centerDist : -centerDist;
-              if (score > bestScore){ bestScore = score; best = el; }
-            }
-            target = best;
-          }
-          if (target){
-            try { target.setAttribute('data-automation-click-target', token); } catch(e){}
-            const p = toPoint(target);
-            return { x: p.x, y: p.y, tag: p.tag, selector: `[data-automation-click-target="${token}"]` };
-          }
-          return null;
-        }
-        """
-        # Use DOM to find clickable elements (with vision tag hint if available)
-        try:
-            result = self.page.evaluate(js, {"x": x, "y": y, "region": normalized_box, "token": token, "visionTagHint": vision_tag_hint})
-            if isinstance(result, dict) and 'x' in result and 'y' in result:
-                rx, ry = int(result['x']), int(result['y'])
-                rx = max(0, min(page_info.width - 1, rx))
-                ry = max(0, min(page_info.height - 1, ry))
-                selector = result.get('selector')
-                tag = result.get('tag')
-                
-                try:
-                    if tag:
-                        vision_note = f" (vision suggested: {vision_tag_hint})" if vision_tag_hint and tag == vision_tag_hint else ""
-                        # Only show in debug mode
-                        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                            print(f"  Refinement found clickable <{tag}> at ({rx}, {ry}){vision_note}")
-                except Exception:
-                    pass
-                return rx, ry, selector
-        except Exception:
-            pass
-        return x, y, None
-    
-    def _get_vision_tag_hint(self, x: int, y: int, screenshot: bytes, page_info: PageInfo, normalized_box=None) -> Optional[str]:
-        """Use vision to identify what HTML tag should be clicked at the given coordinates."""
-        try:
-            from ai_utils import generate_text
-            
-            # Calculate region bounds for context
-            if normalized_box and len(normalized_box) == 4:
-                vw, vh = page_info.width, page_info.height
-                y_min = int(normalized_box[0] / 1000.0 * vh)
-                x_min = int(normalized_box[1] / 1000.0 * vw)
-                y_max = int(normalized_box[2] / 1000.0 * vh)
-                x_max = int(normalized_box[3] / 1000.0 * vw)
-            else:
-                w, h = 220, 140
-                x_min = max(0, x - w // 2)
-                x_max = min(page_info.width - 1, x + w // 2)
-                y_min = max(0, y - h // 2)
-                y_max = min(page_info.height - 1, y + h // 2)
-            
-            prompt = f"""
-Look at this screenshot. At coordinates ({x}, {y}) in the viewport, identify what HTML element should be clicked.
-
-Context:
-- Click target region: approximately ({x_min}, {y_min}) to ({x_max}, {y_max})
-- Center point: ({x}, {y})
-
-For search result links (like Google search results), the actual clickable element is often a heading (h3) inside a link wrapper, not the link itself.
-
-Question: What HTML tag should be clicked at this location? (e.g., "h3", "a", "button", "div")
-
-Respond with ONLY the tag name in lowercase, nothing else. For example: "h3" or "a" or "button"
-"""
-            
-            response = generate_text(
-                prompt=prompt,
-                image=screenshot,
-                system_prompt="You are analyzing a webpage to identify the HTML tag of the clickable element. Return only the tag name in lowercase."
-            )
-            
-            if not response:
-                return None
-            
-            tag = response.strip().lower().replace('<', '').replace('>', '').split()[0] if response.strip() else None
-            
-            # Validate it's a reasonable tag name
-            if tag and len(tag) < 10 and tag.replace('-', '').replace('_', '').isalnum():
-                return tag
-            
-            return None
-        except Exception as e:
-            print(f"  ⚠️ Vision tag hint failed: {e}")
-            return None
 
     def _get_simple_dom_signature(self) -> str:
         """Get a simple DOM signature for change detection (URL + element count)"""

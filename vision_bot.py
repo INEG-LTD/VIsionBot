@@ -28,14 +28,13 @@ except ImportError:
 from agent.mini_goal_manager import MiniGoalMode, MiniGoalScriptContext, MiniGoalTrigger
 from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType, PageInfo
-from element_detection import ElementDetector
-from element_detection.overlay_manager import OverlayManager
+from dom_snapshot import build_page_elements, capture_dom_elements
 from action_executor import ActionExecutor
 from utils import PageUtils
 from action_queue import ActionQueue
+from planner.plan_generator import PlanGenerator
 from session_tracker import SessionTracker, InteractionType
 # Removed goal imports - goals system no longer used
-from planner.plan_generator import PlanGenerator
 from utils.intent_parsers import (
     extract_click_target,
     extract_press_target,
@@ -69,6 +68,23 @@ from error_handling import (
     ValidationError,
     ErrorContext,
 )
+
+DOM_ELEMENT_CENTER_SCRIPT = """
+(idx) => {
+    const el = document.querySelector(`[data-dom-index="${idx}"]`);
+    if (!el) {
+        return null;
+    }
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) {
+        return null;
+    }
+    return {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+    };
+}
+"""
 
 
 class ExecutionTimer:
@@ -625,10 +641,9 @@ class BrowserVisionBot:
         self._agent_mode = False  # Flag to track if we're in agent mode (disables DOM unchanged scroll check)
         self.agent_controller = None  # Current agent controller instance (set during execute_task)
         
-        # Screenshot and overlay caching for performance optimization
-        self._cached_screenshot_with_overlays = None
+        # Screenshot caching for performance optimization
         self._cached_clean_screenshot = None
-        self._cached_overlay_data = None
+        self._cached_element_data = None
         self._cached_dom_signature = None
         # Focus system removed - no longer caching focus context
         self._pre_dedup_element_data = []
@@ -638,7 +653,6 @@ class BrowserVisionBot:
         
         # Initialize components
         self.session_tracker: SessionTracker = SessionTracker(page)
-        self.overlay_manager = OverlayManager(page)
         
         # Initialize tab management (Phase 1)
         try:
@@ -660,8 +674,15 @@ class BrowserVisionBot:
             except Exception:
                 pass
             self.tab_manager: Optional[TabManager] = None
-        self.element_detector = ElementDetector(model_name=self.model_name)
         self.page_utils = PageUtils(page)
+
+        # Plan generator for DOM-based prompts
+        self.plan_generator: PlanGenerator = PlanGenerator(
+            include_detailed_elements=self.include_detailed_elements,
+            max_detailed_elements=self.max_detailed_elements,
+            overlay_selection_max_samples=None,
+            include_textless_overlays=False,
+        )
         
         # Initialize deduplication system
         self.deduper = InteractionDeduper()
@@ -686,12 +707,6 @@ class BrowserVisionBot:
         )
         
         # Plan generator for AI planning prompts
-        self.plan_generator: PlanGenerator = PlanGenerator(
-            include_detailed_elements=self.include_detailed_elements,
-            max_detailed_elements=self.max_detailed_elements,
-            overlay_selection_max_samples=self.overlay_selection_max_samples,
-            include_textless_overlays=self.include_textless_overlays,
-        )
         
         # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
         try:
@@ -899,16 +914,9 @@ class BrowserVisionBot:
             except Exception:
                 pass
             # Focus system removed - no longer needed
-            # Always refresh overlay manager for the new page context
+            # Clear cached screenshot/element data tied to previous page
             try:
-                self.overlay_manager = OverlayManager(new_page)
-            except Exception:
-                pass
-
-            # Clear cached overlay/screenshot data tied to previous page
-            try:
-                self._cached_screenshot_with_overlays = None
-                self._cached_overlay_data = None
+                self._cached_element_data = None
                 self._cached_clean_screenshot = None
                 self._cached_dom_signature = None
                 self.last_dom_signature = None
@@ -2519,44 +2527,31 @@ Return only the extracted text that appears in the text content above. Do not ma
         goal_description: str,
         page_info: PageInfo,
     ) -> tuple[List[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
-        """Collect overlay metadata and screenshots, with caching and dedup filtering."""
+        """Capture DOM element metadata and screenshots for element selection."""
+        screenshot = None
         try:
-            self.event_logger.system_debug("Numbering interactive elements...")
-        except Exception:
-            pass
-        clean_screenshot = None
-        try:
-            clean_screenshot = self.page.screenshot(type="jpeg", quality=35, full_page=False)
+            screenshot = self.page.screenshot(type="jpeg", quality=65, full_page=False)
         except Exception as e:
             try:
-                self.event_logger.system_error("Failed to capture clean screenshot before overlays", error=e)
+                self.event_logger.system_error("Failed to capture screenshot for DOM elements", error=e)
             except Exception:
                 pass
 
-        # Create overlays (visibility controlled by config)
-        show_overlays = self.config.elements.show_overlays
-        element_data = self.overlay_manager.create_numbered_overlays(
-            page_info,
-            mode=self.overlay_mode,
-            visible=show_overlays,
-        ) or []
-
-        # Focus system removed - no longer filtering by focus context
-        self._pre_dedup_element_data = element_data.copy() if element_data else []
-
         try:
-            self.event_logger.system_debug("Capturing screenshot with overlays...")
+            self.event_logger.system_debug("Capturing DOM-based interactive elements...")
         except Exception:
             pass
-        screenshot_with_overlays = self.page.screenshot(type="jpeg", quality=35, full_page=False)
-        self._cached_screenshot_with_overlays = screenshot_with_overlays
-        self._cached_clean_screenshot = clean_screenshot
-        self._cached_overlay_data = (
+
+        element_data = capture_dom_elements(self.page, page_info, max_elements=self.max_detailed_elements)
+        self._pre_dedup_element_data = element_data.copy() if element_data else []
+        self._cached_clean_screenshot = screenshot
+        self._cached_element_data = (
             self._pre_dedup_element_data.copy() if hasattr(self, "_pre_dedup_element_data") else element_data.copy()
         )
         self._cached_dom_signature = self.last_dom_signature
+
         try:
-            self.event_logger.system_debug(f"Cached screenshot and {len(self._cached_overlay_data)} overlay elements")
+            self.event_logger.system_debug(f"Cached screenshot and {len(self._cached_element_data or [])} DOM elements")
         except Exception:
             pass
 
@@ -2573,9 +2568,8 @@ Return only the extracted text that appears in the text content above. Do not ma
                     elements_for_dedup.append(
                         {
                             "tagName": elem.get("tagName", ""),
-                            "text": elem.get("text", ""),
-                            "textContent": elem.get("text", ""),
-                            "description": elem.get("description", ""),
+                            "text": elem.get("text", elem.get("textContent", "")),
+                            "textContent": elem.get("description", ""),
                             "element_type": elem.get("tagName", ""),
                             "href": elem.get("href", ""),
                             "ariaLabel": elem.get("ariaLabel", ""),
@@ -2602,7 +2596,18 @@ Return only the extracted text that appears in the text content above. Do not ma
                         filtered_element_data.append(original_elem.copy())
                 element_data = filtered_element_data
 
-        return element_data, screenshot_with_overlays, clean_screenshot
+        return element_data, screenshot, screenshot
+
+    def _get_dom_element_center(self, index: int) -> tuple[Optional[int], Optional[int]]:
+        if index is None or self.page is None:
+            return None, None
+        try:
+            result = self.page.evaluate(DOM_ELEMENT_CENTER_SCRIPT, index)
+            if isinstance(result, dict) and "x" in result and "y" in result:
+                return int(result["x"]), int(result["y"])
+        except Exception:
+            pass
+        return None, None
     
     def _execute_keyword_command(
         self,
@@ -2844,6 +2849,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         element_data = None
         overlay_index = None
         
+        filtered_kwargs = {k: v for k, v in action_kwargs.items() if v is not None}
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
                 print(f"[KeywordCommand] Retry attempt {attempt}/{max_attempts} for element selection")
@@ -2851,7 +2857,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 time.sleep(0.5)
             
             page_info = self.page_utils.get_page_info()
-            element_data, screenshot_with_overlays, clean_screenshot = self._collect_overlay_data(goal_description, page_info)
+            element_data, screenshot, _ = self._collect_overlay_data(goal_description, page_info)
             if not element_data:
                 if attempt < max_attempts:
                     print(f"⚠️ No interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
@@ -2886,14 +2892,14 @@ Return only the extracted text that appears in the text content above. Do not ma
                     print(f"[KeywordCommand] Using fallback model: {selection_model}")
 
                 try:
-                    self.event_logger.overlay_selection(f"Requesting overlay selection from LLM (attempt {attempt}/{max_attempts})")
+                    self.event_logger.overlay_selection(f"Requesting element selection from LLM (attempt {attempt}/{max_attempts})")
                 except Exception:
                     pass
                 selection = self.plan_generator.select_best_overlay(
                     instruction=instruction,
                     element_data=element_data,
                     semantic_hint=None,
-                    screenshot=clean_screenshot or screenshot_with_overlays,
+                    screenshot=screenshot,
                     model=selection_model,
                     base_knowledge=base_knowledge,
                 )
@@ -2904,17 +2910,9 @@ Return only the extracted text that appears in the text content above. Do not ma
 
             if selection is None:
                 if attempt < max_attempts:
-                    print(f"⚠️ Overlay selection failed (attempt {attempt}/{max_attempts}), retrying...")
-                    try:
-                        self.overlay_manager.remove_overlays()
-                    except Exception:
-                        pass
+                    print(f"⚠️ Element selection failed (attempt {attempt}/{max_attempts}), retrying...")
                     continue
-                print("❌ Overlay selection failed after all retries")
-                try:
-                    self.overlay_manager.remove_overlays()
-                except Exception:
-                    pass
+                print("❌ Element selection failed after all retries")
                 return False
 
             overlay_index = selection
@@ -2927,45 +2925,31 @@ Return only the extracted text that appears in the text content above. Do not ma
             if not matching_data:
                 if attempt < max_attempts:
                     print(f"⚠️ Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
-                    try:
-                        self.overlay_manager.remove_overlays()
-                    except Exception:
-                        pass
                     continue
                 print(f"[KeywordCommand] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
-                try:
-                    self.overlay_manager.remove_overlays()
-                except Exception:
-                    pass
                 return False
             
+            # Record exact DOM coordinates for reliable clicking
+            center_x, center_y = self._get_dom_element_center(overlay_index)
+            if center_x is not None and center_y is not None:
+                filtered_kwargs["x"] = center_x
+                filtered_kwargs["y"] = center_y
+
             # Success - break out of retry loop
             break
 
-        try:
-            self.overlay_manager.remove_overlays()
-        except Exception:
-            pass
-
-        filtered_kwargs = {k: v for k, v in action_kwargs.items() if v is not None}
         action_step = ActionStep(action=action_type, overlay_index=overlay_index, **filtered_kwargs)
         detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
 
-        try:
-            return self._execute_keyword_plan(
-                action_steps=[action_step],
-                reasoning=f"Selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
-                target_context_guard=target_context_guard,
-                confirm_before_interaction=confirm_before_interaction,
-                detected_elements=detected_elements,
-                page_info=page_info,
-                disable_vision_tag_hint=True,
-            )
-        finally:
-            try:
-                self.overlay_manager.remove_overlays()
-            except Exception:
-                pass
+        return self._execute_keyword_plan(
+            action_steps=[action_step],
+            reasoning=f"Selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
+            target_context_guard=target_context_guard,
+            confirm_before_interaction=confirm_before_interaction,
+            detected_elements=detected_elements,
+            page_info=page_info,
+            disable_vision_tag_hint=True,
+        )
 
     def _keyword_click(
         self,
