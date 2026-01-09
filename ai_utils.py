@@ -280,11 +280,34 @@ def _resolve_api_key(model: str, provider: str) -> str:
     )
 
 
+def _detect_image_type(image_bytes: bytes) -> str:
+    """Determine MIME suffix for raw image bytes without relying on imghdr."""
+    try:
+        import imghdr
+
+        detected = imghdr.what(None, image_bytes)
+        if detected:
+            return detected
+    except ModuleNotFoundError:
+        pass
+
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    return "jpeg"
+
+
 def _prepare_image_part(image: Union[bytes, bytearray, str], image_detail: str) -> dict[str, Any]:
     """Convert bytes/base64 content into the structure expected by LiteLLM."""
     if isinstance(image, (bytes, bytearray)):
+        detected_type = _detect_image_type(image)
         b64 = base64.b64encode(image).decode("ascii")
-        url = f"data:image/jpeg;base64,{b64}"
+        url = f"data:image/{detected_type};base64,{b64}"
     else:
         string_value = str(image)
         url = string_value if string_value.startswith("data:image/") else f"data:image/jpeg;base64,{string_value}"
@@ -1272,4 +1295,3 @@ def generate_model(
         reasoning_level=reasoning_level,
         model=model,
     )
-
