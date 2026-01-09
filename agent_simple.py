@@ -151,14 +151,26 @@ class ThinkingBorderManager:
         """Ensure JS is initialized on the current page."""
         if not self._enabled or not self.bot.page:
             return
-        
+
         page_id = id(self.bot.page)
-        if self._last_page_id != page_id:
+        needs_init = self._last_page_id != page_id
+
+        if not needs_init:
+            try:
+                needs_init = self.bot.page.evaluate(
+                    "() => !window.__agentThinkingBorder || !window.__agentThinkingBorder.overlay"
+                )
+            except Exception:
+                # If we can't detect the overlay, reinitialize to be safe
+                needs_init = True
+
+        if needs_init:
             try:
                 self.bot.page.evaluate(self._JS_INIT)
-                self._last_page_id = page_id
             except Exception:
                 pass
+
+        self._last_page_id = page_id
 
     def start(self):
         """Start the flashing border."""
@@ -595,7 +607,7 @@ config = BotConfig(
         include_overlays_in_agent_context=True,  # Agent sees overlays and selects directly
     ),
     logging=DebugConfig(
-        debug_mode=True,  # Set to False to use callbacks only (no debug prints)
+        debug_mode=False,  # Set to False to use callbacks only (no debug prints)
         save_screenshots=True,
     ),
     browser=BrowserConfig(
