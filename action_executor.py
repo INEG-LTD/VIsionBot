@@ -1188,19 +1188,7 @@ class ActionExecutor:
 
     def _execute_scroll(self, step: ActionStep) -> bool:
         """
-        Execute a scroll action with intelligent modal/overlay detection.
-
-        This method attempts to scroll foreground elements (modals, overlays, dropdowns)
-        before falling back to scrolling the main page window. This ensures that when
-        a modal is open, scrolling affects the modal content rather than the background.
-
-        Strategy:
-        1. Calculate scroll delta from current to target position
-        2. Attempt to detect and scroll foreground scrollable elements:
-           - Strategy A: Find element at viewport center and walk up DOM tree
-           - Strategy B: Scan all elements, prioritize by z-index and position
-        3. Try multiple scroll methods on each candidate (scrollBy, scrollTop, WheelEvent)
-        4. Fall back to window.scrollTo() if no foreground element was scrolled
+        Execute a scroll action via a straightforward Playwright scroll call.
 
         Args:
             step: ActionStep containing scroll direction and parameters
@@ -1209,47 +1197,38 @@ class ActionExecutor:
             bool: True if scroll succeeded, False otherwise
         """
         direction = step.scroll_direction or "down"
-        axis = "vertical"  # Default to vertical
-        
-        # Get current scroll position
-        # Normalize scroll positions to integers to satisfy PageInfo validation
+        axis = "vertical"
         current_scroll_x = int(self.page.evaluate("window.pageXOffset || window.scrollX") or 0)
         current_scroll_y = int(self.page.evaluate("window.pageYOffset || window.scrollY") or 0)
-        
-        # Try to get the interpreted scroll position from ScrollGoal
+
         interpreted_scroll = self._get_interpreted_scroll_position(direction)
         if interpreted_scroll:
             target_x = interpreted_scroll.target_x
             target_y = interpreted_scroll.target_y
             axis = interpreted_scroll.axis
             direction = interpreted_scroll.direction
-            # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                 print(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         else:
-            # Fallback to default scroll behavior
             if direction == "down":
                 target_x = current_scroll_x
-                target_y = min(current_scroll_y + 300, 9999)  # Default 300px down
+                target_y = min(current_scroll_y + 300, 9999)
             elif direction == "up":
                 target_x = current_scroll_x
-                target_y = max(current_scroll_y - 300, 0)  # Default 300px up
+                target_y = max(current_scroll_y - 300, 0)
             elif direction == "right":
-                target_x = min(current_scroll_x + 300, 9999)  # Default 300px right
+                target_x = min(current_scroll_x + 300, 9999)
                 target_y = current_scroll_y
                 axis = "horizontal"
-            else:  # left
-                target_x = max(current_scroll_x - 300, 0)  # Default 300px left
+            else:
+                target_x = max(current_scroll_x - 300, 0)
                 target_y = current_scroll_y
                 axis = "horizontal"
-            # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                 print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
-        # Ensure targets are integers before validation
         target_x = int(target_x)
         target_y = int(target_y)
-        
-        # Trigger pre-action hooks early, before goal evaluations
+
         page_info = PageInfo(
             url=self.page.url, width=1200, height=800,
             scroll_x=current_scroll_x, scroll_y=current_scroll_y,
@@ -1266,237 +1245,42 @@ class ActionExecutor:
             elements=elements,
             coordinates=None,
         )
-        
-        # Record planned interaction with goal monitor and get pre-interaction evaluations
-        # Removed planned interaction tracking (was for goal evaluation)
-        
-        # Check for retry requests from the goal immediately after evaluation
-        # Removed retry goal check - retries are handled elsewhere
+
         retry_goal = None
-        # retry_goal = self.goal_monitor.check_for_retry_request()
         if retry_goal:
             try:
-                self.event_logger.system_info(f"Goals have requested retry - aborting current plan execution")
+                self.event_logger.system_info("Goals have requested retry - aborting current plan execution")
                 self.event_logger.system_info(f"   {retry_goal}: Retry requested (attempt {retry_goal.retry_count}/{retry_goal.max_retries})")
             except Exception:
                 pass
-            # Return False to indicate plan should be regenerated
             return False
-        
-        # Goal system removed - pre-evaluation checks removed
-        
-        # Only show in debug mode
+
         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
             print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
-        
-        # Capture state BEFORE performing the scroll (critical for accurate before_state)
-        before_state = self.session_tracker._capture_current_state()
 
+        before_state = self.session_tracker._capture_current_state()
+        success = False
+        error_msg = None
         try:
-            # Calculate scroll delta (how much to scroll from current position)
             scroll_amount_y = target_y - current_scroll_y
             scroll_amount_x = target_x - current_scroll_x
-
-            # Debug logging
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                 print(f"🔍 [ActionExecutor] Attempting to scroll {direction} by ({scroll_amount_x}, {scroll_amount_y})px")
-
-            # ==================================================================================
-            # MODAL/OVERLAY DETECTION AND SCROLLING
-            # ==================================================================================
-            # This JavaScript code runs in the browser to detect and scroll foreground elements
-            # (modals, overlays, dropdowns) before falling back to the main page scroll.
-            #
-            # It uses two strategies:
-            # 1. Find the element at viewport center and walk up the DOM tree
-            # 2. Scan all elements and prioritize by z-index and position (fixed/absolute)
-            #
-            # For each candidate, it tries three scroll methods:
-            # - scrollBy() - standard API
-            # - scrollTop direct assignment - for elements that don't support scrollBy
-            # - WheelEvent dispatch - for custom scroll handlers
-            # ==================================================================================
-            scrolled_modal = self.page.evaluate(f"""
-            (() => {{
-                const scrollAmountX = {scroll_amount_x};
-                const scrollAmountY = {scroll_amount_y};
-
-                // Try multiple scroll methods on an element.
-                // Returns true if any method successfully scrolled the element.
-                function tryScrollElement(el, amountX, amountY) {{
-                    if (!el) return false;
-
-                    const scrollBeforeY = el.scrollTop;
-                    const scrollBeforeX = el.scrollLeft;
-
-                    // Method 1: scrollBy() - Standard scroll API
-                    // Works for most scrollable elements
-                    el.scrollBy(amountX, amountY);
-                    if (el.scrollTop !== scrollBeforeY || el.scrollLeft !== scrollBeforeX) return true;
-
-                    // Method 2: Direct scrollTop/scrollLeft assignment
-                    // Some elements don't support scrollBy but allow direct assignment
-                    el.scrollTop = scrollBeforeY + amountY;
-                    el.scrollLeft = scrollBeforeX + amountX;
-                    if (el.scrollTop !== scrollBeforeY || el.scrollLeft !== scrollBeforeX) return true;
-
-                    // Method 3: Dispatch WheelEvent
-                    // For elements with custom scroll handlers that intercept wheel events
-                    try {{
-                        const wheelEvent = new WheelEvent('wheel', {{
-                            deltaY: amountY,
-                            deltaX: amountX,
-                            deltaMode: 0,
-                            bubbles: true,
-                            cancelable: true
-                        }});
-                        el.dispatchEvent(wheelEvent);
-                        // Give it a moment to process
-                        setTimeout(() => {{}}, 10);
-                        if (el.scrollTop !== scrollBeforeY || el.scrollLeft !== scrollBeforeX) return true;
-                    }} catch (e) {{}}
-
-                    return false;
-                }}
-
-                // Check if element has scrollable content
-                // Returns true if element has overflow content (scrollHeight/Width > clientHeight/Width)
-                function hasScrollableContent(el) {{
-                    if (!el) return false;
-                    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
-                }}
-
-                // Walk up the DOM tree to find all scrollable ancestors
-                // Stops at body/documentElement to avoid infinite loops
-                function findScrollableAncestor(el) {{
-                    let current = el;
-                    const candidates = [];
-
-                    while (current && current !== document.body && current !== document.documentElement) {{
-                        if (hasScrollableContent(current)) {{
-                            candidates.push(current);
-                        }}
-                        current = current.parentElement;
-                    }}
-
-                    return candidates;
-                }}
-
-                // ============================================================
-                // STRATEGY 1: Viewport Center Element
-                // ============================================================
-                // Find the element at the center of the viewport and walk up
-                // the DOM tree to find scrollable ancestors. This catches most
-                // modals since they typically cover the center of the screen.
-                // ============================================================
-                const centerX = window.innerWidth / 2;
-                const centerY = window.innerHeight / 2;
-                const elementAtCenter = document.elementFromPoint(centerX, centerY);
-
-                if (elementAtCenter) {{
-                    // Try all scrollable ancestors from innermost to outermost
-                    const scrollableAncestors = findScrollableAncestor(elementAtCenter);
-
-                    for (const ancestor of scrollableAncestors) {{
-                        if (tryScrollElement(ancestor, scrollAmountX, scrollAmountY)) {{
-                            console.log('[Scroll] Success - viewport center ancestor:', ancestor.tagName, ancestor.className);
-                            return true;
-                        }}
-                    }}
-                }}
-
-                // ============================================================
-                // STRATEGY 2: Z-Index Priority Scan
-                // ============================================================
-                // Scan all page elements and prioritize by z-index and position.
-                // Elements with position: fixed/absolute get priority boost.
-                // This catches modals that might not be at viewport center.
-                // ============================================================
-                const allElements = Array.from(document.querySelectorAll('*'));
-                const candidates = [];
-
-                for (const el of allElements) {{
-                    const style = window.getComputedStyle(el);
-
-                    // Skip hidden elements
-                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {{
-                        continue;
-                    }}
-
-                    // Skip elements without scrollable content
-                    if (!hasScrollableContent(el)) {{
-                        continue;
-                    }}
-
-                    const zIndex = parseInt(style.zIndex) || 0;
-                    const position = style.position;
-
-                    // Select candidates: fixed/absolute positioned OR z-index > 0
-                    // Priority calculation:
-                    // - fixed/absolute: +10,000 (modals are usually fixed/absolute)
-                    // - z-index: add raw z-index value
-                    // Example: position:fixed with z-index:50 = priority 10,050
-                    if ((position === 'fixed' || position === 'absolute') || zIndex > 0) {{
-                        const priority = (position === 'fixed' || position === 'absolute' ? 10000 : 0) + zIndex;
-                        candidates.push({{ el, priority }});
-                    }}
-                }}
-
-                // Sort by priority (highest first) to try most likely modal candidates first
-                candidates.sort((a, b) => b.priority - a.priority);
-
-                // Try each candidate in priority order
-                for (const candidate of candidates) {{
-                    if (tryScrollElement(candidate.el, scrollAmountX, scrollAmountY)) {{
-                        console.log('[Scroll] Success - z-index element:', candidate.el.tagName, candidate.el.className, 'priority:', candidate.priority);
-                        return true;
-                    }}
-                }}
-
-                // No foreground element was successfully scrolled
-                console.log('[Scroll] No foreground scrollable found, falling back to page scroll');
-                return false;
-            }})()
-        """)
-
-            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"🔍 [ActionExecutor] Modal scroll result: {scrolled_modal}")
-
-            # ==================================================================================
-            # FALLBACK: Main Page Scroll
-            # ==================================================================================
-            # If the JavaScript modal detection didn't find any foreground element to scroll,
-            # fall back to the traditional window.scrollTo() to scroll the main page.
-            # This ensures scrolling always works, even on pages without modals.
-            # ==================================================================================
-            if not scrolled_modal:
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print("🔍 [ActionExecutor] Falling back to main page scroll")
-                self.page.evaluate(f"window.scrollTo({target_x}, {target_y})")
-            else:
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print("✅ [ActionExecutor] Successfully scrolled modal/foreground element")
-
-            # Update tracked scroll position for deduplication/passive scroll detection
-            # Note: We read the actual scroll position from the page rather than assuming
-            # the scroll completed to the target position (some pages may restrict scrolling)
+            self.page.evaluate(f"window.scrollBy({scroll_amount_x}, {scroll_amount_y})")
             if self.page_utils:
                 actual_scroll_y = int(self.page.evaluate("window.pageYOffset || window.scrollY") or 0)
                 actual_scroll_x = int(self.page.evaluate("window.pageXOffset || window.scrollX") or 0)
                 self.page_utils.last_scroll_y = actual_scroll_y
                 self.page_utils.last_scroll_x = actual_scroll_x
-
             success = True
-            error_msg = None
-        except Exception as e:
+        except Exception as exc:
+            error_msg = str(exc)
             success = False
-            error_msg = str(e)
-            print(f"  ❌ Scroll failed: {e}")
-        
-        # Record actual interaction with goal monitor (pass explicit before_state since scroll already happened)
+            print(f"  ❌ Scroll failed: {exc}")
+
         self.session_tracker.record_interaction(
             InteractionType.SCROLL,
-            before_state=before_state,  # Pass explicit before_state captured before the scroll
+            before_state=before_state,
             target_x=target_x,
             target_y=target_y,
             scroll_direction=direction,
@@ -1504,8 +1288,7 @@ class ActionExecutor:
             success=success,
             error_message=error_msg
         )
-        
-        # Trigger post-action hooks (note: scroll doesn't use elements, use empty PageElements)
+
         from models import PageElements as PE, PageInfo as PI
         current_page_info = self.page_utils.get_page_info() if self.page_utils else PI(
             width=1200, height=800, scroll_x=target_x, scroll_y=target_y,
@@ -1523,7 +1306,7 @@ class ActionExecutor:
             error_message=error_msg,
             action_id=getattr(self, '_current_plan_action_id', None),
         )
-        
+
         return success
 
     def _execute_wait(self, step: ActionStep) -> bool:
