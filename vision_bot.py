@@ -1627,9 +1627,16 @@ class BrowserVisionBot:
                 self.action_executor.set_pause_callback(pause_check)
             
             task_result = controller.run_execute_task(user_prompt)
-            
+
+            # Convert notebook list to extracted_data dict for backwards compatibility
+            extracted_data = {}
+            for entry in controller.notebook:
+                prompt = entry.get("prompt", "unknown")
+                data = entry.get("data")
+                extracted_data[prompt] = data
+
             # Create result
-            result = AgentResult(task_result, controller.extracted_data)
+            result = AgentResult(task_result, extracted_data)
             
             # Execute after hooks
             result = self.middleware.execute_after(context, result)
@@ -2035,9 +2042,9 @@ Return only the extracted text that appears in the text content above. Do not ma
                     except json.JSONDecodeError as e:
                         raise ValueError(f"Failed to parse extracted_data as JSON: {e}. Raw data: {result.extracted_data}")
                     
-                    # Validate that extracted_dict is actually a dict (not a list or other type)
-                    if not isinstance(extracted_dict, dict):
-                        raise ValueError(f"Expected extracted_data to be a JSON object (dict), but got {type(extracted_dict).__name__}: {extracted_dict}")
+                    # Accept both dicts and lists as valid extracted data
+                    if not isinstance(extracted_dict, (dict, list)):
+                        raise ValueError(f"Expected JSON object or array, got {type(extracted_dict).__name__}")
                     
                     # Validate extracted values against page text to catch hallucinations
                     if visible_text:
@@ -2071,31 +2078,44 @@ Return only the extracted text that appears in the text content above. Do not ma
                                             validation_warnings.append(f"Value at '{key_path}' may not exist on page: '{value}'")
                         
                         # Validate all extracted values
-                        for key, value in extracted_dict.items():
-                            if not key.startswith('_'):  # Skip metadata fields
-                                validate_value(value, key)
-                        
+                        if isinstance(extracted_dict, dict):
+                            for key, value in extracted_dict.items():
+                                if not key.startswith('_'):  # Skip metadata fields
+                                    validate_value(value, key)
+                        else:
+                            # It's a list - validate each item
+                            validate_value(extracted_dict, "")
+
                         if validation_warnings:
                             print("⚠️ Validation warnings - some extracted values may not exist on page:")
                             for warning in validation_warnings[:5]:  # Show first 5 warnings
                                 print(f"   - {warning}")
                             if len(validation_warnings) > 5:
                                 print(f"   ... and {len(validation_warnings) - 5} more warnings")
-                    
-                    # Add metadata
-                    extracted_dict["_confidence"] = result.confidence
-                    extracted_dict["_reasoning"] = result.reasoning
+
+                    # Wrap result with metadata (handle both dict and list)
+                    if isinstance(extracted_dict, dict):
+                        extracted_dict["_confidence"] = result.confidence
+                        extracted_dict["_reasoning"] = result.reasoning
+                        final_data = extracted_dict
+                    else:
+                        # Wrap list in a dict with metadata
+                        final_data = {
+                            "items": extracted_dict,
+                            "_confidence": result.confidence,
+                            "_reasoning": result.reasoning
+                        }
                     
                     # Record extraction in interaction history
                     self.session_tracker.record_interaction(
                         IT.EXTRACT,
                         extraction_prompt=prompt,
-                        extracted_data=extracted_dict,
+                        extracted_data=final_data,
                         success=True
                     )
-                    
+
                     return _create_extraction_result(
-                        data=extracted_dict,
+                        data=final_data,
                         confidence=result.confidence,
                         message="JSON extraction completed successfully",
                         extraction_result=result

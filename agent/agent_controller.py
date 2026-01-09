@@ -189,7 +189,7 @@ class AgentController:
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
         self._consecutive_page_changes: int = 0  # Track consecutive page state changes for phase-out
-        self.extracted_data: Dict[str, Any] = {}  # Store extracted data (key: extraction prompt, value: result)
+        self.notebook: List[Dict[str, Any]] = []  # Append-only notebook for extracted data
         self.sub_agent_results: List[SubAgentResult] = []  # Store completed sub-agent results
         self.orchestration_events: List[Dict[str, Any]] = []  # Track orchestration events for reporting
         self.sub_agent_policy_level: SubAgentPolicyLevel = SubAgentPolicyLevel.SINGLE_THREADED
@@ -212,8 +212,6 @@ class AgentController:
         self._main_agent_focus: Optional[str] = None
         self._integration_notes: Optional[str] = None
         self._extraction_failures: Dict[str, int] = {}
-        self._completed_extractions: Set[str] = set()
-        self._extraction_prompt_map: Dict[str, str] = {}
         self._retarget_attempts: Dict[str, int] = {}
         self._queued_action: Optional[str] = None
         self._queued_action_reason: Optional[str] = None
@@ -750,7 +748,8 @@ class AgentController:
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
+                            notebook=self.notebook
                         )
                         return plan
                     
@@ -924,7 +923,8 @@ class AgentController:
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
+                            notebook=self.notebook
                         )
                         if plan:
                             self._start_action_plan(plan, iteration)
@@ -943,7 +943,8 @@ class AgentController:
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
+                            notebook=self.notebook
                         )
                         if plan:
                             self._start_action_plan(plan, iteration)
@@ -1232,143 +1233,49 @@ class AgentController:
             extraction_prompt = self._detect_extraction_need(current_action, user_prompt)
             
             if extraction_prompt:
-                self._update_requirement_flags_from_text(extraction_prompt)
-                subject = self._infer_extraction_subject(extraction_prompt)
-                normalized_key_source = subject if subject else extraction_prompt
-                normalized_key = self._normalize_extraction_prompt(normalized_key_source)
-                canonical_prompt = self._build_comprehensive_extraction_prompt(
-                    extraction_prompt,
-                    subject,
-                    self._original_user_prompt or user_prompt,
-                    snapshot.url if snapshot else None
-                )
-                self._extraction_prompt_map[normalized_key] = canonical_prompt
-                task_description = self._build_extraction_task_description(subject, extraction_prompt)
-                self._register_task(normalized_key, task_description, "extraction")
+                # Simple extraction: run it and append results to notebook
                 try:
-                    self.event_logger.extraction_detected(canonical_prompt)
+                    self.event_logger.extraction_start(extraction_prompt)
                 except Exception:
                     pass
-                already_completed = normalized_key in self._completed_extractions
-                task_entry = self._task_tracker.get(normalized_key)
-                if task_entry and not already_completed:
-                    task_entry["status"] = "running"
-                    task_entry["updated_at"] = time.time()
-                
-                if already_completed:
-                    try:
-                        self.event_logger.system_info(f"Extraction skipped (already completed): {canonical_prompt}")
-                    except Exception:
-                        pass
-                    if task_entry:
-                        task_entry["status"] = "completed"
-                    self._activate_primary_output_task("Required Wikipedia fields already captured.")
-                    # Consume the plan step so we don't loop forever on the same action
-                    if plan_step_consumed:
-                        self._pop_pending_action_plan_step()
-                        self._plan_step_counter += 1
-                    time.sleep(self.iteration_delay)
-                    continue
-                if self._should_skip_extraction(normalized_key):
-                    try:
-                        self.event_logger.system_warning(f"Extraction skipped after repeated failures: {canonical_prompt}")
-                    except Exception:
-                        pass
-                    # Consume the plan step so we don't loop forever
-                    if plan_step_consumed:
-                        self._pop_pending_action_plan_step()
-                        self._plan_step_counter += 1
-                    time.sleep(self.iteration_delay)
-                    continue
-                
+
                 try:
-                    # Call extract() directly - simpler and more efficient
                     result = self.bot.extract(
-                        prompt=canonical_prompt,
+                        prompt=extraction_prompt,
                         output_format="json",
                         scope="viewport"
                     )
                     if result.success:
-                        self._record_extraction_success(normalized_key)
-                        self._completed_extractions.add(normalized_key)
-                        
-                        self._extraction_prompt_map[normalized_key] = canonical_prompt
-                        
-                        # Store extracted data (the actual dict/text)
-                        data = result.data
-                        self.extracted_data[canonical_prompt] = data
-                        
-                        fields = []
-                        if isinstance(data, dict):
-                            fields = list(data.keys())
-                        elif isinstance(data, str):
-                            fields = ["text"]
-                            
-                        self._mark_task_completed(
-                            normalized_key,
-                            {
-                                "type": "extraction",
-                                "fields": fields,
-                            }
-                        )
-                        self._activate_primary_output_task("Extraction completed successfully.")
+                        # Append to notebook
+                        self.notebook.append({
+                            "timestamp": time.time(),
+                            "prompt": extraction_prompt,
+                            "data": result.data,
+                            "url": snapshot.url if snapshot else None,
+                        })
                         try:
-                            self.event_logger.extraction_success(canonical_prompt, result=result)
+                            self.event_logger.extraction_success(extraction_prompt, result=result)
                         except Exception:
                             pass
                     else:
-                        # Handle extraction failure
                         error_msg = result.error or result.message
                         try:
-                            self.event_logger.system_warning(f"Extraction failed: {canonical_prompt} - {error_msg}")
+                            self.event_logger.system_warning(f"Extraction failed: {error_msg}")
                         except Exception:
                             pass
-                        # We don't raise here, just let it continue to next iteration
-                    
-                    # Continue to next iteration (extraction is complete)
-                    time.sleep(self.iteration_delay)
-                    continue
                 except Exception as e:
                     try:
-                        self.event_logger.extraction_failure(canonical_prompt, error=str(e))
+                        self.event_logger.extraction_failure(extraction_prompt, error=str(e))
                     except Exception:
                         pass
-                    import traceback
-                    traceback.print_exc()
-                    self._record_extraction_failure(normalized_key)
-                    self._mark_task_failed(normalized_key, str(e))
-                    
-                    retarget_decision = self._retarget_after_extraction_failure(
-                        prompt_key=normalized_key,
-                        extraction_prompt=canonical_prompt,
-                        snapshot=snapshot,
-                        environment_state=environment_state,
-                        user_prompt=user_prompt
-                    )
-                    if retarget_decision and retarget_decision.action:
-                        action_lower = retarget_decision.action.lower()
-                        if action_lower != "none":
-                            self._queued_action = retarget_decision.action
-                            self._queued_action_reason = retarget_decision.rationale
-                            try:
-                                self.event_logger.system_info(f"Retargeting after extraction failure → {retarget_decision.action}")
-                                self.event_logger.system_info(f"   Rationale: {retarget_decision.rationale}")
-                            except Exception:
-                                pass
-                            self._log_event(
-                                "retarget_suggested",
-                                action=retarget_decision.action,
-                                rationale=retarget_decision.rationale,
-                                prompt=canonical_prompt,
-                                failures=self._extraction_failures.get(normalized_key, 0),
-                            )
-                        else:
-                            print(f"ℹ️ Retarget assessment: no navigation change needed ({retarget_decision.rationale})")
-                    
-                    # Continue to next iteration anyway
-                    time.sleep(self.iteration_delay)
-                    continue
-            
+
+                # Consume plan step and continue
+                if plan_step_consumed:
+                    self._pop_pending_action_plan_step()
+                    self._plan_step_counter += 1
+                time.sleep(self.iteration_delay)
+                continue
+
             # 4.1. Handle internal control commands (e.g., policy overrides)
             if self._handle_internal_command(current_action, user_prompt):
                 time.sleep(self.iteration_delay)
@@ -3231,13 +3138,11 @@ class AgentController:
             print(f"{status_icon} Sub-agent [{result.agent_id}] ({result.instruction}) -> {result.status} "
                   f"(confidence={result.confidence:.2f}, duration={duration:.2f}s)")
             
-            # Merge extracted data into main agent store if provided
+            # Merge sub-agent's notebook entries into main notebook
             evidence = result.evidence or {}
-            extracted = evidence.get("extracted_data")
-            if isinstance(extracted, dict):
-                for key, value in extracted.items():
-                    if key not in self.extracted_data:
-                        self.extracted_data[key] = value
+            sub_notebook = evidence.get("notebook", [])
+            if isinstance(sub_notebook, list):
+                self.notebook.extend(sub_notebook)
             self._log_event(
                 "sub_agent_result_recorded",
                 agent_id=result.agent_id,
@@ -3252,8 +3157,8 @@ class AgentController:
         evidence: Dict[str, Any] = {}
         if base:
             evidence.update(base)
-        if self.extracted_data and "extracted_data" not in evidence:
-            evidence["extracted_data"] = self.extracted_data.copy()
+        if self.notebook and "notebook" not in evidence:
+            evidence["notebook"] = list(self.notebook)
         if self.sub_agent_results:
             evidence["sub_agents"] = [result.to_dict() for result in self.sub_agent_results]
         orchestration = {

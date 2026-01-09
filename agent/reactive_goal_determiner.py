@@ -212,16 +212,18 @@ class ReactiveGoalDeterminer:
         screenshot: bytes,
         failed_actions: Optional[List[str]] = None,
         ineffective_actions: Optional[List[str]] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None
+        overlay_data: Optional[List[Dict[str, Any]]] = None,
+        notebook: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[ActionPlan]:
         """
         Determine an ordered action plan that can be executed before the viewport changes.
-        
+
         Args:
             environment_state: Current environment state
             screenshot: Current screenshot (viewport only)
             overlay_data: Optional list of overlay element data with descriptions.
-            
+            notebook: Agent's notebook with previously extracted data.
+
         Returns:
             An ActionPlan describing the steps to take, or None if no plan could be generated.
         """
@@ -231,7 +233,8 @@ class ReactiveGoalDeterminer:
                 screenshot,
                 failed_actions or [],
                 ineffective_actions or [],
-                overlay_data
+                overlay_data,
+                notebook or []
             )
             
             if not plan:
@@ -252,21 +255,23 @@ class ReactiveGoalDeterminer:
         screenshot: bytes,
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None
+        overlay_data: Optional[List[Dict[str, Any]]] = None,
+        notebook: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[ActionPlan]:
         """
         Generate an ordered action plan.
-        
+
         Returns:
             ActionPlan or None if no plan can be determined
         """
         try:
             system_prompt = self._build_system_prompt()
             user_prompt_text = self._build_action_prompt(
-                environment_state, 
+                environment_state,
                 failed_actions or [],
                 ineffective_actions or [],
-                overlay_data
+                overlay_data,
+                notebook or []
             )
             plan = generate_model(
                 prompt=user_prompt_text,
@@ -398,12 +403,14 @@ ACTION RULES:
 6. DEFER: Use "defer:" when user requests manual control or captcha appears
 
 7. COMPLETION: Use "complete: <reasoning>" when you've successfully accomplished the user's goal
-   - Only call when task is truly finished
+   - CRITICAL: If a NOTEBOOK section appears below, CHECK IT FIRST before planning more actions
+   - If the notebook already contains the data the user asked for, use "complete:" IMMEDIATELY
+   - Do NOT extract the same data twice - if it's in the notebook, the task is DONE
    - Provide clear reasoning explaining what was accomplished
-   - Example: "complete: Successfully submitted job application. All required fields filled and form submitted."
+   - Example: "complete: Successfully extracted 10 job listings. Data includes job titles, companies, and locations."
 
 COMMANDS:
-- complete: <reasoning> - CALL WHEN TASK FINISHED - Explain what was accomplished
+- complete: <reasoning> - CALL WHEN TASK FINISHED - Check notebook first! If data is there, use this
 - ask: <question> - ASK USER when stuck, confused, or element not working as expected
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
 - type: <text> : <field> - Enter text (use colon separator, field auto-clears first)
@@ -434,14 +441,15 @@ DECISION MAKING:
         return self.history_manager.history_block(limit=self.interaction_summary_limit)
     
     def _build_action_prompt(
-        self, 
-        state: EnvironmentState, 
+        self,
+        state: EnvironmentState,
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None
+        overlay_data: Optional[List[Dict[str, Any]]] = None,
+        notebook: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """Build prompt for determining next action"""
-        
+
         # Summarize what's been done
         interaction_summary = self._summarize_interactions(state.interaction_history)
         
@@ -570,11 +578,15 @@ the page state has likely CHANGED. Look for NEW elements like modals, forms, or 
 {overlay_context if overlay_context else ""}
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
-
-COMPLETION CHECK:
-Before taking another action, ask yourself: "Is the user's goal fully accomplished?"
-- If YES: Use "complete: <reasoning>" explaining what was accomplished, including what pages were filled, data validated, and key confirmations.
-- If NO: Determine a viewport-safe plan of actions that move toward the goal without relying on yet-to-appear elements.
+{self._format_notebook(notebook) if notebook else ""}
+COMPLETION CHECK (DO THIS FIRST):
+1. IF there is a NOTEBOOK section above with extracted data:
+   - Compare the extracted data against the USER GOAL
+   - If the data satisfies what the user asked for → use "complete:" IMMEDIATELY
+   - Example: If user asked for "job listings" and notebook has job listings → DONE
+2. ONLY if the notebook is empty OR data doesn't match the goal:
+   - Plan the next actions to achieve the goal
+- NEVER extract the same data twice - check the notebook first!
 
 PLAN GUIDELINES:
 - Choose a sequential plan of 3-6 steps that can all be executed without leaving the current viewport.
@@ -584,21 +596,83 @@ PLAN GUIDELINES:
 - Plan for the full set of actions you can safely execute now (e.g., typing into a field and then pressing Enter) and stop once the next action would require new UI content (modal, suggestion list, navigation, etc.).
 
 RESPOND IN THIS JSON SHAPE:
+
+For COMPLETION (when notebook has the requested data or goal is achieved):
+{{
+  "steps": [
+    {{"action": "complete: Successfully extracted 10 job listings including titles, companies, and locations.", "reasoning": "The notebook contains the job data the user requested. Task is done."}}
+  ],
+  "reasoning": "The notebook already contains the extracted job listings. No further actions needed.",
+  "confidence": 0.95,
+  "expected_outcome": "Task complete. User has the requested data."
+}}
+
+For ACTIONS (when more work is needed):
 {{
   "steps": [
     {{"action": "type: john@example.com : email input field", "overlay_index": 12, "reasoning": "Enter the recipient address that is currently visible and required."}},
-    {{"action": "press: Tab", "reasoning": "Move focus to the next input that's already visible."}},
-    {{"action": "type: Testing : message textarea", "overlay_index": 15, "reasoning": "Fill the main message field that the user requested."}}
+    {{"action": "press: Tab", "reasoning": "Move focus to the next input that's already visible."}}
   ],
-  "reasoning": "Explain how these steps progress toward the goal without leaving the current viewport.",
+  "reasoning": "Explain how these steps progress toward the goal.",
   "confidence": 0.0-1.0,
   "expected_outcome": "Describe what should happen after executing the plan."
 }}
 
-Each overlay_index should correspond to the element you selected visually and matched in the overlay reference table. Only include overlay_index when the step targets an element (skip it for scroll/press/defer actions).
+overlay_index is only needed when targeting a visible element. Skip it for complete/press/scroll/defer actions.
 """
         return prompt
     
+    def _format_notebook(self, notebook: List[Dict[str, Any]]) -> str:
+        """Format notebook entries for inclusion in the prompt."""
+        if not notebook:
+            return ""
+
+        lines = [
+            "",
+            "=" * 60,
+            "🛑 STOP - CHECK THIS BEFORE PLANNING MORE ACTIONS:",
+            "=" * 60,
+            f"USER GOAL: \"{self.user_prompt}\"",
+            "",
+            "EXTRACTED DATA IN NOTEBOOK:"
+        ]
+
+        for i, entry in enumerate(notebook[-5:], 1):  # Show last 5 entries
+            prompt = entry.get("prompt", "unknown")
+            data = entry.get("data", {})
+
+            # Show actual data samples so LLM can verify extraction matches user goal
+            if isinstance(data, dict) and "items" in data:
+                items = data["items"]
+                lines.append(f"  Entry {i}: [{prompt}] - {len(items)} items")
+                # Show first 2-3 items as samples
+                for j, item in enumerate(items[:3]):
+                    item_str = str(item)
+                    if len(item_str) > 150:
+                        item_str = item_str[:150] + "..."
+                    lines.append(f"    Sample {j+1}: {item_str}")
+                if len(items) > 3:
+                    lines.append(f"    ... and {len(items) - 3} more items")
+            else:
+                data_str = str(data)
+                if len(data_str) > 300:
+                    data_str = data_str[:300] + "..."
+                lines.append(f"  Entry {i}: [{prompt}] - {data_str}")
+
+        lines.extend([
+            "",
+            "=" * 60,
+            "⚠️ DECISION REQUIRED:",
+            "  - Does the notebook data above satisfy the USER GOAL?",
+            "  - If YES: Use 'complete: Successfully extracted [X items/data]. Summary: [brief description]'",
+            "  - If NO: Explain what's missing and plan next action",
+            "  - DO NOT extract the same data again!",
+            "=" * 60,
+            ""
+        ])
+
+        return "\n".join(lines)
+
     def _identify_remaining_tasks(self, interactions: List[Interaction]) -> Optional[str]:
         """
         Identify what still needs to be done by comparing user prompt with interaction history.
