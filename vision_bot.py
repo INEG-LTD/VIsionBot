@@ -2556,7 +2556,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             and self.deduper.dedup_enabled
             and element_data
         ):
-            print(f"[Debug] element_data before dedup: {len(element_data)}")
+            if self.config.logging.debug_mode:
+                print(f"[Debug] element_data before dedup: {len(element_data)}")
             should_avoid, reason = self._determine_dedup_usage(goal_description)
             if should_avoid:
                 print(f"🚫 Filtering out interacted elements (reason: {reason})...")
@@ -2592,7 +2593,8 @@ Return only the extracted text that appears in the text content above. Do not ma
                     if original_elem:
                         filtered_element_data.append(original_elem.copy())
                 element_data = filtered_element_data
-            print(f"[Debug] element_data after dedup: {len(element_data)}")
+            if self.config.logging.debug_mode:
+                print(f"[Debug] element_data after dedup: {len(element_data)}")
 
         return element_data, screenshot, screenshot
 

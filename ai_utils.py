@@ -508,6 +508,8 @@ def _extract_json_object(text: str) -> Optional[Any]:
 def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
     """Attempt lightweight manual parsing when the model fails to return valid JSON."""
     try:
+        if model_object_type.__name__ == "ActionPlan":
+            return _manual_parse_action_plan(text, model_object_type)
         if model_object_type.__name__ == "NextAction":
             return _manual_parse_next_action(text, model_object_type)
         if model_object_type.__name__ == "CompletionEvaluation":
@@ -590,6 +592,27 @@ def _manual_parse_next_action(text: str, model_object_type: Type[BaseModel]) -> 
             print(f"⚠️ Manual NextAction JSON parse failed validation: {exc}")
         except Exception as exc:
             print(f"⚠️ Manual NextAction JSON parse error: {exc}")
+
+def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
+    """
+    Parse ActionPlan output when the LLM emits JSON or lightly-structured prose.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+
+    json_obj = _extract_json_object(cleaned)
+    if isinstance(json_obj, dict):
+        try:
+            if hasattr(model_object_type, "model_validate"):
+                return model_object_type.model_validate(json_obj)
+            return model_object_type(**json_obj)
+        except ValidationError as exc:
+            print(f"⚠️ Manual ActionPlan JSON parse failed validation: {exc}")
+        except Exception as exc:
+            print(f"⚠️ Manual ActionPlan JSON parse error: {exc}")
+
+    return None
 
     # Try explicit key-value extraction first.
     pairs = {}

@@ -10,7 +10,7 @@ This combines three related decisions into one efficient call made at each agent
 from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
-from agent.reactive_goal_determiner import NextAction
+from agent.reactive_goal_determiner import ActionPlan
 
 
 class AgentIterationDecision(BaseModel):
@@ -24,7 +24,7 @@ class AgentIterationDecision(BaseModel):
     needs_sub_agents: bool = Field(description="True if sub-agents should be used, False otherwise")
     
     # Next action (only needed if task is not complete)
-    next_action: Optional[NextAction] = Field(
+    next_action: Optional[ActionPlan] = Field(
         default=None,
         description="The next action to take. Only required if is_complete is False. If is_complete is True, this can be None."
     )

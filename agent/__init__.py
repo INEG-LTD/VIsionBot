@@ -8,7 +8,7 @@ from .agent_context import AgentContext
 from .sub_agent_controller import SubAgentController
 from .sub_agent_result import SubAgentResult
 from .completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
-from .reactive_goal_determiner import ReactiveGoalDeterminer, NextAction
+from .reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
 from .agent_iteration_decision import AgentIterationDecision
 
 __all__ = [
@@ -21,7 +21,8 @@ __all__ = [
     "EnvironmentState", 
     "CompletionEvaluation", 
     "ReactiveGoalDeterminer",
-    "NextAction",
+    "ActionPlan",
+    "ActionStep",
     "AgentIterationDecision",
     "UserQuestionCallback",
 ]

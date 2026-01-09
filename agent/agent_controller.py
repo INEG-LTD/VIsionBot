@@ -11,12 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from session_tracker import BrowserState, Interaction, InteractionType
 from .task_result import TaskResult
 from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
-from agent.reactive_goal_determiner import ReactiveGoalDeterminer
+from agent.reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
 from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
-from typing import Callable
-
 # Type alias for user question callback (ask: command handler)
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
 UserQuestionCallback = Callable[[str, dict], Optional[str]]
@@ -30,6 +28,7 @@ from ai_utils import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from .mini_goal_manager import MiniGoalManager, MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
+from utils.overlay_description import describe_overlay_element, metadata_matches
 
 if TYPE_CHECKING:
     from .agent_controller import AgentController
@@ -198,6 +197,14 @@ class AgentController:
         self._sub_agent_policy_override: Optional[SubAgentPolicyLevel] = None
         self._sub_agent_policy_score: float = 0.0
         self.sub_agent_spawn_count: int = 0
+        self._current_action_plan: Optional[ActionPlan] = None
+        self._pending_action_plan_steps: List[ActionStep] = []
+        self._current_plan_reasoning: Optional[str] = None
+        self._pending_plan_scroll_attempts: Dict[int, int] = {}
+        self._plan_generated_iteration: Optional[int] = None
+        self._plan_step_counter: int = 0
+        self._last_overlay_data: Optional[List[Dict[str, Any]]] = None
+        self._current_page_info: Optional[Any] = None
         self._spawns_this_iteration = 0
         self._current_iteration = 0
         self._parallel_plan_done: bool = False
@@ -648,7 +655,20 @@ class AgentController:
                 overlay_data, _, _ = self.bot._collect_overlay_data(user_prompt, page_info)
             except Exception:
                 overlay_data = None
-            
+            else:
+                self._last_overlay_data = overlay_data
+                self._current_page_info = page_info
+                try:
+                    preview_entries = []
+                    for elem in overlay_data:
+                        desc = describe_overlay_element(elem)
+                        if desc:
+                            preview_entries.append(desc)
+                    preview_text = "; ".join(preview_entries) if preview_entries else None
+                    self.event_logger.overlay_data_snapshot(len(overlay_data), preview=preview_text)
+                except Exception:
+                    pass
+
             # 2.1. Prepare goal determiner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
             
@@ -674,6 +694,7 @@ class AgentController:
             
             # 2.3. Check for queued action first (doesn't need LLM)
             current_action: Optional[str] = None
+            plan_in_progress = bool(self._pending_action_plan_steps)
             
             if self._queued_action:
                 current_action = self._queued_action
@@ -694,9 +715,8 @@ class AgentController:
             # Store completion reasoning and evaluation for stuck detector (for next iteration)
             latest_completion_reasoning: Optional[str] = None
             latest_evaluation: Optional[CompletionEvaluation] = None
-            if current_action is None:
-                # Only run external completion checking if mode allows it
-                should_run_external_completion = self.completion_mode in ("hybrid", "external_only")
+            should_run_external_completion = self.completion_mode in ("hybrid", "external_only")
+            if current_action is None and not plan_in_progress:
 
                 if self.parallel_completion_and_action and should_run_external_completion:
                     try:
@@ -713,7 +733,7 @@ class AgentController:
                         )
                     
                     def run_next_action_determination():
-                        """Run next action determination"""
+                        """Run next action plan determination"""
                         if self.track_ineffective_actions:
                             try:
                                 # Filter out scroll actions from noise
@@ -725,17 +745,14 @@ class AgentController:
                                     self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
                             except Exception:
                                 pass
-                        action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
+                        plan = goal_determiner.determine_action_plan(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
-                        # Store reasoning for next interaction
-                        if reasoning:
-                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                        return action
+                        return plan
                     
                     def run_subagent_policy_check(completion_reasoning_ref):
                         """Run subagent policy check (will use completion_reasoning after completion check finishes)"""
@@ -817,7 +834,9 @@ class AgentController:
                             self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
                             # Task not complete, so we need the next action - wait for it
                             self.event_logger.system_debug("Determining next action based on current viewport...")
-                            current_action = next_action_future.result()
+                            plan_result = next_action_future.result()
+                            if plan_result:
+                                self._start_action_plan(plan_result, iteration)
 
                             # Wait for subagent policy check and update policy (only if enabled)
                             if subagent_policy_future:
@@ -900,18 +919,15 @@ class AgentController:
                             failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                             ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
 
-                        current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
+                        plan = goal_determiner.determine_action_plan(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
-                        # Store reasoning and overlay index for next interaction
-                        if reasoning:
-                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                        if agent_overlay_index is not None:
-                            self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
+                        if plan:
+                            self._start_action_plan(plan, iteration)
                     else:
                         # Agent-only mode: Skip external completion check, just determine next action
                         try:
@@ -922,18 +938,34 @@ class AgentController:
                         failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                         ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
 
-                        current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
+                        plan = goal_determiner.determine_action_plan(
                             environment_state,
                             screenshot=snapshot.screenshot,
                             overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
-                        # Store reasoning and overlay index for next interaction
-                        if reasoning:
-                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                        if agent_overlay_index is not None:
-                            self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
+                        if plan:
+                            self._start_action_plan(plan, iteration)
+
+            plan_step_consumed = False
+            plan_overlay_index = None
+            inserted_plan_scroll = False
+            pending_plan_step = self._peek_pending_action_plan_step()
+            if pending_plan_step and not current_action:
+                plan_step_number = self._plan_step_counter
+                plan_result_action, should_consume_step, overlay_idx, inserted_scroll = self._prepare_plan_step_action(pending_plan_step)
+                if plan_result_action:
+                    current_action = plan_result_action
+                    plan_step_consumed = should_consume_step
+                    plan_overlay_index = overlay_idx
+                    inserted_plan_scroll = inserted_scroll
+                    if self._current_plan_reasoning:
+                        self.bot.session_tracker.set_current_action_reasoning(self._current_plan_reasoning)
+                    if plan_overlay_index is not None and not inserted_plan_scroll:
+                        self.bot.session_tracker.set_current_action_overlay_index(plan_overlay_index)
+                    if should_consume_step and not inserted_scroll:
+                        self._log_pre_generated_plan_step(pending_plan_step, plan_step_number)
 
             # --- MINI GOAL INTEGRATION: Action/Historical Trigger ---
             if current_action and not current_action.startswith("mini_goal:"):
@@ -1231,6 +1263,10 @@ class AgentController:
                     if task_entry:
                         task_entry["status"] = "completed"
                     self._activate_primary_output_task("Required Wikipedia fields already captured.")
+                    # Consume the plan step so we don't loop forever on the same action
+                    if plan_step_consumed:
+                        self._pop_pending_action_plan_step()
+                        self._plan_step_counter += 1
                     time.sleep(self.iteration_delay)
                     continue
                 if self._should_skip_extraction(normalized_key):
@@ -1238,6 +1274,10 @@ class AgentController:
                         self.event_logger.system_warning(f"Extraction skipped after repeated failures: {canonical_prompt}")
                     except Exception:
                         pass
+                    # Consume the plan step so we don't loop forever
+                    if plan_step_consumed:
+                        self._pop_pending_action_plan_step()
+                        self._plan_step_counter += 1
                     time.sleep(self.iteration_delay)
                     continue
                 
@@ -1468,6 +1508,17 @@ class AgentController:
                                 except Exception:
                                     pass
                 
+                if plan_step_consumed:
+                    if success:
+                        self._pop_pending_action_plan_step()
+                        if plan_overlay_index is not None:
+                            self._pending_plan_scroll_attempts.pop(plan_overlay_index, None)
+                        self._plan_step_counter += 1
+                        if not self._pending_action_plan_steps:
+                            self._clear_action_plan()
+                    else:
+                        self._clear_action_plan()
+
                 self._record_action_outcome(
                     current_action,
                     success,
@@ -1639,12 +1690,173 @@ class AgentController:
             # This ensures we scroll when elements aren't visible
             if next_step.lower().startswith("scroll:"):
                 print("📍 Scrolling to reveal more content")
-                return next_step
-            
-            return next_step
-        
-        # Fallback: use prompt directly (Step 2 still basic for goal determination)
-        return user_prompt
+        return next_step
+
+    def _start_action_plan(self, plan: ActionPlan, iteration: int) -> None:
+        """Initialize the current plan queue."""
+        self._current_action_plan = plan
+        self._pending_action_plan_steps = list(plan.steps)
+        self._current_plan_reasoning = plan.reasoning
+        self._pending_plan_scroll_attempts.clear()
+        self._plan_generated_iteration = iteration + 1
+        self._plan_step_counter = 1
+
+    def _clear_action_plan(self) -> None:
+        """Clear any stored action plan."""
+        self._current_action_plan = None
+        self._pending_action_plan_steps.clear()
+        self._current_plan_reasoning = None
+        self._pending_plan_scroll_attempts.clear()
+        self._plan_generated_iteration = None
+        self._plan_step_counter = 0
+
+    def _peek_pending_action_plan_step(self) -> Optional[ActionStep]:
+        return self._pending_action_plan_steps[0] if self._pending_action_plan_steps else None
+
+    def _pop_pending_action_plan_step(self) -> Optional[ActionStep]:
+        if not self._pending_action_plan_steps:
+            return None
+        return self._pending_action_plan_steps.pop(0)
+
+    def _resolve_overlay_for_step(self, plan_step: ActionStep) -> tuple[Optional[int], Optional[Dict[str, Any]]]:
+        """Find the current overlay index for a plan step, using fallback matching if needed."""
+        # Try direct index lookup first
+        if plan_step.overlay_index is not None:
+            overlay = self._find_overlay_by_index(plan_step.overlay_index)
+            if overlay:
+                return plan_step.overlay_index, overlay
+
+        # Try metadata matching (handles page changes where indices shift)
+        if plan_step.overlay_metadata:
+            idx = self._find_overlay_index_by_metadata(plan_step.overlay_metadata)
+            if idx is not None:
+                self.event_logger.system_info(f"Matched overlay metadata to #{idx} after page change.")
+                return idx, self._find_overlay_by_index(idx)
+
+        # Try description matching as last resort
+        if plan_step.overlay_description:
+            idx = self._find_overlay_index_by_description(plan_step.overlay_description)
+            if idx is not None:
+                self.event_logger.system_info(f"Matched overlay description to #{idx} after page change.")
+                return idx, self._find_overlay_by_index(idx)
+
+        # Warn if step referenced an overlay that's now missing
+        if plan_step.overlay_index is not None:
+            self.event_logger.system_warning(f"⚠️ Overlay #{plan_step.overlay_index} is missing from current page.")
+
+        return None, None
+
+    def _prepare_plan_step_action(self, plan_step: ActionStep) -> tuple[Optional[str], bool, Optional[int], bool]:
+        """
+        Prepare action from plan step. Returns (action, consume_step, overlay_index, inserted_scroll).
+        """
+        overlay_index, _ = self._resolve_overlay_for_step(plan_step)
+
+        # If element is clipped, insert scroll action first
+        if overlay_index is not None and self._is_overlay_clipped(overlay_index):
+            attempts = self._pending_plan_scroll_attempts.get(overlay_index, 0) + 1
+            if attempts > 3:
+                print("⚠️ Too many scroll attempts for clipped element, clearing plan.")
+                self._clear_action_plan()
+                return None, False, None, False
+            self._pending_plan_scroll_attempts[overlay_index] = attempts
+            return self._build_scroll_action_for_overlay(overlay_index), False, None, True
+
+        return plan_step.action, True, overlay_index, False
+
+    def _is_overlay_clipped(self, overlay_index: int) -> bool:
+        """Check if an overlay element is partially or fully outside the viewport."""
+        overlay = self._find_overlay_by_index(overlay_index)
+        if not overlay or not self._current_page_info:
+            return False
+
+        bbox = overlay.get("boundingBox", {})
+        x, y = bbox.get("x", 0), bbox.get("y", 0)
+        w, h = bbox.get("width", 0), bbox.get("height", 0)
+
+        vw = self._get_page_info_dimension("width")
+        vh = self._get_page_info_dimension("height")
+        if vw is None or vh is None:
+            return False
+
+        return x < 0 or y < 0 or x + w > vw or y + h > vh
+
+    def _build_scroll_action_for_overlay(self, overlay_index: int) -> str:
+        """Determine scroll direction to bring an overlay into view."""
+        overlay = self._find_overlay_by_index(overlay_index)
+        if not overlay:
+            return "scroll: down"
+
+        y = overlay.get("boundingBox", {}).get("y", 0)
+        return "scroll: up" if y < 0 else "scroll: down"
+
+    def _log_pre_generated_plan_step(self, plan_step: ActionStep, step_number: int) -> None:
+        """Log information about a pre-generated plan step before execution."""
+        if not plan_step:
+            return
+
+        reasoning = getattr(plan_step, "reasoning", None) or self._current_plan_reasoning or ""
+        if self._plan_generated_iteration:
+            prefix = f"[Pre-generated iteration {self._plan_generated_iteration}] "
+            reasoning = f"{prefix}{reasoning}" if reasoning else prefix.strip()
+
+        details: Dict[str, Any] = {"plan_step": step_number}
+        if self._plan_generated_iteration:
+            details["pre_generated_iteration"] = self._plan_generated_iteration
+
+        try:
+            self.event_logger.action_determined(
+                action=plan_step.action,
+                reasoning=reasoning or None,
+                confidence=self._current_action_plan.confidence if self._current_action_plan else None,
+                expected_outcome=self._current_action_plan.expected_outcome if self._current_action_plan else None,
+                **details,
+            )
+        except Exception:
+            pass
+
+        if self._plan_generated_iteration:
+            try:
+                self.event_logger.system_info(
+                    f"ℹ️ Running pre-generated plan step #{step_number} (generated iteration {self._plan_generated_iteration})."
+                )
+            except Exception:
+                pass
+
+    def _find_overlay_by_index(self, overlay_index: int) -> Optional[Dict[str, Any]]:
+        if not self._last_overlay_data:
+            return None
+        for overlay in self._last_overlay_data:
+            if overlay.get("index") == overlay_index:
+                return overlay
+        return None
+
+    def _find_overlay_index_by_description(self, description: str) -> Optional[int]:
+        if not self._last_overlay_data or not description:
+            return None
+        for overlay in self._last_overlay_data:
+            if describe_overlay_element(overlay) == description:
+                return overlay.get("index")
+        return None
+
+    def _find_overlay_index_by_metadata(self, metadata: dict) -> Optional[int]:
+        if not self._last_overlay_data or not metadata:
+            return None
+        for overlay in self._last_overlay_data:
+            if metadata_matches(metadata, overlay):
+                return overlay.get("index")
+        return None
+
+    def _get_page_info_dimension(self, field: str) -> Optional[float]:
+        if not self._current_page_info:
+            return None
+        value = getattr(self._current_page_info, field, None)
+        if value is not None:
+            return float(value)
+        try:
+            return float(self._current_page_info.get(field))
+        except Exception:
+            return None
     
     def _url_matches_target(self, url: Optional[str], target: str) -> bool:
         if not url or not target:

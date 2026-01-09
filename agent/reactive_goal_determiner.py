@@ -1,11 +1,11 @@
 """
-Reactive Goal Determiner - Determines the next action based on current viewport and state.
+Reactive Goal Determiner - Determines the next viewport-aware plan based on current state.
 
-Step 2: LLM-based reactive goal determination that decides what to do RIGHT NOW
-based on what's visible in the viewport, not pre-planning.
+Step 2: LLM-based reactive goal determination that builds a sequence of actions you can execute
+before the viewport changes, relying only on what is visible.
 """
 
-from typing import Optional, List, ClassVar, Set, Union, Dict, Any
+from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 import re
 
@@ -19,184 +19,151 @@ from ai_utils import (
 )
 from utils.event_logger import get_event_logger
 from history import HistoryManager
+from utils.overlay_description import describe_overlay_element, overlay_element_metadata
 
 
-class NextAction(BaseModel):
-    """Structured LLM response for next action determination"""
-    action: str = Field(description="The specific action to take RIGHT NOW in proper command format. For CLICK commands: MUST include the element TYPE (button, link, div, input, etc.) AND be descriptive - e.g., 'click: Google Search button', 'click: first article link titled 'Introduction'', 'click: Accept all cookies button', 'click: search suggestion 'yahoo finance' link'. For TYPE commands: Use format 'type: <text> : <field>' with colon separator - e.g., 'type: John Doe : name input field', 'type: john@example.com : email input field'. For PRESS commands: MUST be brief - just the key name (e.g., 'press: Enter', 'press: Escape'). NEVER use vague terms like 'first element', 'that button', 'the field', or ambiguous text without element type for click/type commands.")
-    reasoning: str = Field(description="Why this action is appropriate given the current viewport")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this is the right next action")
-    expected_outcome: str = Field(description="What should happen after executing this action")
-    overlay_index: Optional[int] = Field(default=None, description="The overlay ID that matches the element you chose VISUALLY from the screenshot. First decide what to interact with by looking at the screenshot, then find the matching element in the reference table and provide its number (e.g., 25 for #25). Only for click, type, select, upload. Leave empty for scroll, navigate, press, or other non-element actions.")
+VALID_ACTION_COMMANDS = {
+    "click", "type", "press", "scroll", "extract", "defer", "navigate",
+    "back", "forward", "subagents", "form", "select", "upload", "datetime",
+    "stop", "open", "handle_datetime", "mini_goal", "ask", "complete",
+}
 
-    VALID_COMMANDS: ClassVar[Set[str]] = {
-        "click",
-        "type",
-        "press",
-        "scroll",
-        "extract",
-        "defer",
-        "navigate",
-        "back",
-        "forward",
-        "subagents",
-        "form",
-        "select",
-        "upload",
-        "datetime",
-        "stop",
-        "open",
-        "handle_datetime",
-        "mini_goal",
-        "ask",  # Ask user for help/clarification
-        "complete",  # Agent signals task completion
-    }
+
+def _parse_action(text: str) -> tuple[str, str]:
+    """Parse action text into (command, body). Raises ValueError if invalid."""
+    text = text.strip()
+    if not text:
+        raise ValueError("action cannot be empty")
+
+    if ":" in text:
+        cmd, body = text.split(":", 1)
+        return cmd.strip().lower(), body.strip()
+
+    # Try to parse "command args" format
+    match = re.match(r"^(\w+)\s+(.+)$", text)
+    if match:
+        cmd, body = match.groups()
+        # Handle "click on X" -> "click X"
+        if cmd.lower() == "click" and body.lower().startswith("on "):
+            body = body[3:]
+        return cmd.lower(), body.strip()
+
+    # Single word command (defer, stop, forward, back)
+    if text.isalpha():
+        return text.lower(), ""
+
+    raise ValueError("action must be 'command: target' or 'command target'")
+
+
+def _normalize_body(cmd: str, body: str) -> str:
+    """Normalize the body based on command type."""
+    if cmd == "click":
+        if not body:
+            raise ValueError("click requires a target")
+        body = body[3:].strip() if body.lower().startswith("on ") else body
+        # Add element type hint if missing
+        if not re.search(r"\b(button|link|tab|checkbox|radio|option|div|input|icon|item)\b", body, re.I):
+            if not body.lower().endswith("link"):
+                body = f"{body} link"
+        return body.strip()
+
+    if cmd == "type":
+        if not body:
+            raise ValueError("type requires text and target")
+        # Accept "text : field" or "text in/into field" format
+        if " : " in body:
+            parts = body.split(" : ", 1)
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                return re.sub(r"\s+", " ", body).strip()
+        if re.search(r"\b(in|into)\b", body, re.I):
+            return re.sub(r"\s+", " ", body).strip()
+        raise ValueError("type must use 'text : field' or 'text in field'")
+
+    if cmd == "press":
+        key = body.strip()
+        if not key or " " in key:
+            raise ValueError("press requires a single key")
+        return key
+
+    if cmd == "scroll":
+        direction = body.strip().lower()
+        if direction not in {"up", "down", "left", "right"}:
+            raise ValueError("scroll must be up, down, left, or right")
+        return direction
+
+    if cmd in {"back", "forward"}:
+        return body if body and body.isdigit() else "1"
+
+    if cmd in {"extract", "navigate", "subagents", "mini_goal", "form", "select",
+               "upload", "datetime", "open", "handle_datetime"}:
+        if not body:
+            raise ValueError(f"{cmd} requires additional detail")
+        return body
+
+    # Commands with optional body: defer, stop, complete, ask
+    return body
+
+
+class ActionStep(BaseModel):
+    """One viewport-safe action"""
+    action: str = Field(
+        description="Command to execute on the current viewport (e.g., 'click: Submit button')."
+    )
+    overlay_index: Optional[int] = Field(
+        default=None,
+        description="Overlay index from the reference table for the element referenced in this step."
+    )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Explain why this action is needed and how it advances the goal without leaving the current viewport."
+    )
+    overlay_description: Optional[str] = Field(
+        default=None,
+        description="Canonical description of the overlay element so it can be matched across iterations."
+    )
+    overlay_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Normalized metadata of the overlay element for deterministic matching."
+    )
 
     @field_validator("action", mode="before")
     @classmethod
     def _normalize_action(cls, value: str) -> str:
         if not isinstance(value, str):
             raise TypeError("action must be a string")
-        action = value.strip()
-        if not action:
-            raise ValueError("action cannot be empty")
 
-        action = cls._ensure_colon(action)
-        command, body = action.split(":", 1)
-        command = command.strip().lower()
-        body = body.strip()
+        cmd, body = _parse_action(value)
+        if cmd not in VALID_ACTION_COMMANDS:
+            raise ValueError(f"Unsupported command: '{cmd}'")
 
-        if command not in cls.VALID_COMMANDS:
-            raise ValueError(f"Unsupported action command: '{command}'")
+        body = _normalize_body(cmd, body)
+        return f"{cmd}: {body}" if body else cmd
 
-        if command == "click":
-            body = cls._normalize_click_body(body)
-            action = f"click: {body}"
-        elif command == "type":
-            body = cls._normalize_type_body(body)
-            action = f"type: {body}"
-        elif command == "press":
-            body = cls._normalize_press_body(body)
-            action = f"press: {body}"
-        elif command == "scroll":
-            body = cls._normalize_scroll_body(body)
-            action = f"scroll: {body}"
-        elif command == "extract":
-            if not body:
-                raise ValueError("extract command requires a description")
-            action = f"extract: {body}"
-        elif command == "defer":
-            action = "defer" if not body else f"defer: {body}"
-        elif command == "navigate":
-            if not body:
-                raise ValueError("navigate command requires a target URL or site")
-            action = f"navigate: {body}"
-        elif command in {"back", "forward"}:
-            if not body:
-                body = "1"
-            if not body.isdigit():
-                raise ValueError(f"{command} command requires numeric steps")
-            action = f"{command}: {body}"
-        elif command == "subagents":
-            if not body:
-                raise ValueError("subagents command requires a mode")
-            action = f"subagents: {body}"
-        elif command == "mini_goal":
-            if not body:
-                raise ValueError("mini_goal command requires an instruction")
-            action = f"mini_goal: {body}"
-        elif command in {"form", "select", "upload", "datetime", "stop", "open", "handle_select", "handle_datetime"}:
-            if not body:
-                raise ValueError(f"{command} command requires additional detail")
-            action = f"{command}: {body}"
 
-        return action
+class ActionPlan(BaseModel):
+    """A sequential plan of actions that can be executed before the viewport changes."""
+    steps: List[ActionStep] = Field(description="Actions that can be executed sequentially on the current viewport.")
+    reasoning: str = Field(description="Why this sequence of steps achieves progress right now.")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in this plan for the current viewport.")
+    expected_outcome: str = Field(description="What should happen after executing the plan.")
 
-    @staticmethod
-    def _ensure_colon(text: str) -> str:
-        if ":" in text:
-            head, tail = text.split(":", 1)
-            return f"{head.strip()}: {tail.strip()}"
-        match = re.match(r"^(?P<cmd>\w+)\s+(?P<body>.+)$", text)
-        if not match:
-            raise ValueError("action must contain a command and description")
-        cmd = match.group("cmd")
-        body = match.group("body").strip()
-        if cmd.lower() == "click" and body.lower().startswith("on "):
-            body = body[3:].strip()
-        return f"{cmd}: {body}"
-
-    @staticmethod
-    def _normalize_click_body(body: str) -> str:
-        if not body:
-            raise ValueError("click command requires a target")
-        if body.lower().startswith("on "):
-            body = body[3:].strip()
-        if not re.search(r"\b(button|link|tab|checkbox|radio|option|div|input|icon|item)\b", body, flags=re.IGNORECASE):
-            if not body.lower().endswith("link"):
-                body = f"{body} link"
-        return body.strip()
-
-    @staticmethod
-    def _normalize_type_body(body: str) -> str:
-        """
-        Validate and normalize type command body.
-
-        Accepted formats:
-        - New format: "<text> : <field>" - colon separator
-        - Legacy format: "<text> in <field>" or "<text> into <field>"
-        """
-        if not body:
-            raise ValueError("type command requires text and target")
-
-        lowered = body.lower()
-
-        # Check for new colon separator format: "text : field"
-        if " : " in body:
-            # New format with colon separator - validate and normalize
-            parts = body.split(" : ", 1)
-            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-                raise ValueError("type command with ':' separator must be 'text : field'")
-            # Already in correct format
-            return re.sub(r"\s+", " ", body).strip()
-
-        # Legacy format: Check for "in" or "into"
-        if re.search(r"\b(in|into)\b", lowered):
-            # Has "in/into" - validate field keyword present
-            if not re.search(r"\b(field|input|area|box|textbox)\b", lowered):
-                # Add "input field" after the preposition
-                body = re.sub(r"\b(in|into)\b\s*", lambda m: f"{m.group(0)}input field ", body, count=1, flags=re.IGNORECASE)
-            return re.sub(r"\s+", " ", body).strip()
-
-        # No separator found - invalid format
-        raise ValueError("type command must use format 'text : field' or 'text in field'")
-
-    @staticmethod
-    def _normalize_press_body(body: str) -> str:
-        key = body.strip()
-        if not key:
-            raise ValueError("press command requires a key")
-        if re.search(r"\s", key):
-            raise ValueError("press command should only contain a single key")
-        return key
-
-    @staticmethod
-    def _normalize_scroll_body(body: str) -> str:
-        direction = body.strip().lower()
-        allowed = {"up", "down", "left", "right"}
-        if direction not in allowed:
-            raise ValueError("scroll command must be one of: up, down, left, right")
-        return direction
+    @field_validator("steps")
+    @classmethod
+    def _validate_steps(cls, value: List[ActionStep]) -> List[ActionStep]:
+        if not value:
+            raise ValueError("Action plan must contain at least one step.")
+        return value
 
 
 class ReactiveGoalDeterminer:
     """
-    Determines the next action reactively based on:
+    Determines a viewport-safe action plan based on:
     - Current viewport (what's visible on screen)
     - Environment state (interactions, scroll position, etc.)
     - User prompt (what we're trying to achieve)
-    
-    This is reactive - it only determines ONE action to take NOW, not a sequence.
+
+    This is reactive - it determines an ordered list of actions that can be executed
+    without waiting for new UI elements to appear.
     """
     
     def __init__(
@@ -239,16 +206,16 @@ class ReactiveGoalDeterminer:
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.history_manager = history_manager
     
-    def determine_next_action(
+    def determine_action_plan(
         self,
         environment_state: EnvironmentState,
         screenshot: bytes,
         failed_actions: Optional[List[str]] = None,
         ineffective_actions: Optional[List[str]] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> Optional[ActionPlan]:
         """
-        Determine the single next action to take based on current state.
+        Determine an ordered action plan that can be executed before the viewport changes.
         
         Args:
             environment_state: Current environment state
@@ -256,14 +223,10 @@ class ReactiveGoalDeterminer:
             overlay_data: Optional list of overlay element data with descriptions.
             
         Returns:
-            Tuple of (action_command, reasoning, overlay_index):
-            - action_command: Action to take (e.g., "type: John Doe in name field") or None
-            - reasoning: Why this action was chosen (for inclusion in interaction history)
-            - overlay_index: Optional overlay number if agent provided one (e.g., 25 for #25)
+            An ActionPlan describing the steps to take, or None if no plan could be generated.
         """
         try:
-            # Generate single action directly
-            response = self._generate_single_action(
+            plan = self._generate_action_plan(
                 environment_state,
                 screenshot,
                 failed_actions or [],
@@ -271,45 +234,31 @@ class ReactiveGoalDeterminer:
                 overlay_data
             )
             
-            if not response:
-                print("⚠️ No action generated")
-                return None, None, None
+            if not plan:
+                print("⚠️ No action plan generated")
+                return None
 
-            action = response.action
-            reasoning = response.reasoning
-            overlay_index = response.overlay_index
-
-            try:
-                get_event_logger().action_determined(
-                    action=action,
-                    reasoning=response.reasoning,
-                    confidence=response.confidence,
-                    expected_outcome=response.expected_outcome
-                )
-            except Exception:
-                pass
-
-            return action, reasoning, overlay_index
+            return plan
 
         except Exception as e:
             print(f"⚠️ ReactiveGoalDeterminer error: {e}")
             import traceback
             traceback.print_exc()
-            return None, None, None
+            return None
     
-    def _generate_single_action(
+    def _generate_action_plan(
         self,
         environment_state: EnvironmentState,
         screenshot: bytes,
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None
-    ) -> Optional[NextAction]:
+    ) -> Optional[ActionPlan]:
         """
-        Generate a single action.
+        Generate an ordered action plan.
         
         Returns:
-            NextAction or None if no action can be determined
+            ActionPlan or None if no plan can be determined
         """
         try:
             system_prompt = self._build_system_prompt()
@@ -319,18 +268,47 @@ class ReactiveGoalDeterminer:
                 ineffective_actions or [],
                 overlay_data
             )
-            action = generate_model(
+            plan = generate_model(
                 prompt=user_prompt_text,
-                model_object_type=NextAction,
+                model_object_type=ActionPlan,
                 system_prompt=system_prompt,
                 image=screenshot,
                 image_detail=self.image_detail,
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
             )
-            return action
+            if plan and overlay_data:
+                overlay_desc_map = {}
+                overlay_metadata_map = {}
+                for elem in overlay_data:
+                    idx = elem.get("index")
+                    if idx is None:
+                        continue
+                    overlay_desc_map[idx] = describe_overlay_element(elem)
+                    overlay_metadata_map[idx] = overlay_element_metadata(elem)
+                for step in plan.steps:
+                    if step.overlay_index is not None:
+                        if desc := overlay_desc_map.get(step.overlay_index):
+                            step.overlay_description = desc
+                        if metadata := overlay_metadata_map.get(step.overlay_index):
+                            step.overlay_metadata = metadata
+            if plan:
+                try:
+                    steps_summary = "\n".join(
+                        f"{idx}. {step.action} (overlay {step.overlay_index or 'N'}) - {step.reasoning or 'No reasoning provided.'}"
+                        for idx, step in enumerate(plan.steps, 1)
+                    )
+                    get_event_logger().plan_generated(
+                        plan_reasoning=plan.reasoning,
+                        confidence=plan.confidence,
+                        expected_outcome=plan.expected_outcome,
+                        steps_summary=steps_summary,
+                    )
+                except Exception:
+                    pass
+            return plan
         except Exception as e:
-            print(f"⚠️ Error generating action: {e}")
+            print(f"⚠️ Error generating action plan: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -350,7 +328,7 @@ class ReactiveGoalDeterminer:
                 base_knowledge_section += f"{i}. {knowledge}\n"
         
         prompt = f"""
-You determine the NEXT SINGLE ACTION based on current viewport screenshot.
+You determine the NEXT VIEWPORT-AWARE PLAN based on the current screenshot.
 
 CRITICAL - VISUAL-FIRST DECISION MAKING:
 You MUST make decisions based on what you SEE in the screenshot, NOT based on the overlay list.
@@ -370,8 +348,7 @@ After clicking a button (especially "Apply", "Submit", "Continue"), CHECK if a m
 
 {base_knowledge_section}
 
-AGENT LOOP CHECKLIST:
-- Before choosing the next action, review your previous step: was it successful, unsuccessful, or uncertain? Use the interaction summary and history context to remember what changed.
+- Before choosing the next plan, review your previous step: was it successful, unsuccessful, or uncertain? Use the interaction summary and history context to remember what changed.
 - Note any blockers, failed actions, or missing inputs so they stay visible in future steps, and avoid repeating actions that already failed.
 - Define a precise next goal that stays aligned with the user prompt, then let that goal guide your chosen action.
 - If you still need clarification or data, frame it as an `ask:` question before attempting more actions.
@@ -392,6 +369,12 @@ Examples:
 - "ask: The location field shows 'no results' for Liverpool. What location should I use instead?"
 - "ask: I've tried selecting the date but the picker won't accept it. How should I proceed?"
 - "ask: The form requires a field I don't have data for. What should I enter?"
+
+VIEWPORT PLAN RULES:
+- Stay anchored to what you can see; do not reference elements that are not in the current screenshot.
+- When an element is partially off-screen, include a scroll step before interacting with it and treat that scroll as part of the same plan.
+- Stop the plan as soon as the next logical step would require additional viewport content (autocomplete, modal, navigation, etc.).
+- Each plan should include 3-6 steps to keep execution tight.
 
 ACTION RULES:
 1. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
@@ -490,7 +473,8 @@ DECISION MAKING:
         overlay_context = ""
         if self.include_overlays_in_agent_context:
             count = len(overlay_data) if overlay_data else 0
-            print(f"[Debug] overlay_data available: {count} elements")
+            if get_event_logger().debug_mode:
+                print(f"[Debug] overlay_data available: {count} elements")
         if overlay_data and self.include_overlays_in_agent_context:
             # Filter to only interactive/actionable elements (similar to what plan_generator does)
             # Focus on elements that are likely to be interacted with
@@ -562,7 +546,7 @@ DECISION MAKING:
         history_prefix = f"{history_block}\n\n" if history_block else ""
 
         prompt = f"""
-{history_prefix}Determine the NEXT SINGLE ACTION to take based on:
+{history_prefix}Determine a viewport-aware plan of steps that can be executed without introducing new UI elements:
 
 USER GOAL: "{self.user_prompt}"
 
@@ -590,9 +574,28 @@ the page state has likely CHANGED. Look for NEW elements like modals, forms, or 
 COMPLETION CHECK:
 Before taking another action, ask yourself: "Is the user's goal fully accomplished?"
 - If YES: Use "complete: <reasoning>" explaining what was accomplished, including what pages were filled, data validated, and key confirmations.
-- If NO: Determine the next action to progress toward the goal
+- If NO: Determine a viewport-safe plan of actions that move toward the goal without relying on yet-to-appear elements.
 
-Look at the screenshot and determine the single next action (or complete if done).
+PLAN GUIDELINES:
+- Choose a sequential plan of 3-6 steps that can all be executed without leaving the current viewport.
+- Only include actions whose targets are fully visible; if you spot a useful element that is clipped or outside the viewport, add a scroll step before interacting with it so nothing is half-hidden.
+- Each step must include its own reasoning explaining how it moves the task forward while relying only on visible UI.
+- Do NOT plan for autocomplete suggestions, dropdown entries, or modals unless they are already visible in the screenshot.
+- Plan for the full set of actions you can safely execute now (e.g., typing into a field and then pressing Enter) and stop once the next action would require new UI content (modal, suggestion list, navigation, etc.).
+
+RESPOND IN THIS JSON SHAPE:
+{{
+  "steps": [
+    {{"action": "type: john@example.com : email input field", "overlay_index": 12, "reasoning": "Enter the recipient address that is currently visible and required."}},
+    {{"action": "press: Tab", "reasoning": "Move focus to the next input that's already visible."}},
+    {{"action": "type: Testing : message textarea", "overlay_index": 15, "reasoning": "Fill the main message field that the user requested."}}
+  ],
+  "reasoning": "Explain how these steps progress toward the goal without leaving the current viewport.",
+  "confidence": 0.0-1.0,
+  "expected_outcome": "Describe what should happen after executing the plan."
+}}
+
+Each overlay_index should correspond to the element you selected visually and matched in the overlay reference table. Only include overlay_index when the step targets an element (skip it for scroll/press/defer actions).
 """
         return prompt
     

@@ -85,6 +85,7 @@ class EventType(str, Enum):
     
     # Command history
     COMMAND_HISTORY = "command_history"
+    OVERLAY_DATA = "overlay_data"
     
     # Interaction tracking
     INTERACTION_RECORDED = "interaction_recorded"
@@ -302,6 +303,35 @@ class EventLogger:
     def plan_cleared(self, reason: str, **details):
         try:
             self.emit(EventType.PLAN_CLEARED, f"Clearing cached plan ({reason})", "INFO", reason=reason, **details)
+        except Exception:
+            pass
+
+    def overlay_data_snapshot(self, count: int, preview: str = None, **details):
+        try:
+            msg = f"Overlay data captured: {count} elements"
+            if preview:
+                msg += f" ({preview})"
+            self.emit(EventType.OVERLAY_DATA, msg, "DEBUG", count=count, preview=preview, **details)
+        except Exception:
+            pass
+
+    def plan_generated(self, plan_reasoning: str, confidence: float, expected_outcome: str, steps_summary: str = "", **details):
+        try:
+            msg = f"Plan generated (confidence {confidence:.2f})"
+            if plan_reasoning:
+                msg += f": {plan_reasoning}"
+            if expected_outcome:
+                msg += f" → Expected: {expected_outcome}"
+            self.emit(
+                EventType.PLAN_GENERATED,
+                msg,
+                "INFO",
+                plan_reasoning=plan_reasoning,
+                confidence=confidence,
+                expected_outcome=expected_outcome,
+                steps_summary=steps_summary,
+                **details,
+            )
         except Exception:
             pass
     

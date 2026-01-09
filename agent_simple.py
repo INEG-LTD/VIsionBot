@@ -197,6 +197,10 @@ class ThinkingBorderManager:
             self.bot.page.evaluate("if(window.__agentThinkingBorder) window.__agentThinkingBorder.enableBlocking();")
         except Exception:
             pass
+        try:
+            self.start()
+        except Exception:
+            pass
 
     def disable_blocking(self):
         """Disable the blocking overlay to allow page interactions."""
@@ -212,6 +216,20 @@ def apply_thinking_border(bot: BrowserVisionBot):
 
     # Store manager on bot for access by agent controller
     bot._thinking_border_manager = manager
+
+    if hasattr(bot.page, "on"):
+        def _handle_frame_navigation(frame):
+            try:
+                if frame != bot.page.main_frame:
+                    return
+                manager._last_page_id = None
+                manager.start()
+            except Exception:
+                pass
+        try:
+            bot.page.on("framenavigated", _handle_frame_navigation)
+        except Exception:
+            pass
 
     from agent import AgentController
     from vision_bot import BrowserVisionBot
@@ -535,11 +553,16 @@ def create_event_callback(bot, debug_mode: bool = True):
             
             action = event.details.get('action', 'Unknown action')
             reasoning = event.details.get('reasoning', '')
-            
+            plan_step = event.details.get('plan_step')
+            pre_generated_iter = event.details.get('pre_generated_iteration')
+
             if reasoning:
                 # Convert to first person
                 first_person_reasoning = _convert_to_first_person(reasoning)
                 print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
+            if pre_generated_iter is not None:
+                plan_note = f"Pre-generated step {plan_step or '?'} from iteration {pre_generated_iter} (reusing a cached plan)."
+                print(f"    🧠 {plan_note}")
             # Format action in first person
             first_person_action = _format_action_first_person(action)
             print(f"    ⚡ {first_person_action}")
@@ -607,8 +630,8 @@ config = BotConfig(
         include_overlays_in_agent_context=True,  # Agent sees overlays and selects directly
     ),
     logging=DebugConfig(
-        debug_mode=False,  # Set to False to use callbacks only (no debug prints)
-        save_screenshots=True,
+        debug_mode=True,  # Set to False to use callbacks only (no debug prints)
+        # save_screenshots=False,
     ),
     browser=BrowserConfig(
         provider_type="local",
@@ -650,7 +673,7 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "click reject cookies if they are present, then search for 'iOS developer jobs in the UK' then press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) and application URLs from 5 job listings",
+    "click reject cookies if they are present, then search for 'iOS developer jobs in the UK' then press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) from 5 job listings",
     base_knowledge=[
         "You must press enter after typing in a search field"
     ],
