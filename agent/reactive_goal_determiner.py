@@ -370,6 +370,12 @@ After clicking a button (especially "Apply", "Submit", "Continue"), CHECK if a m
 
 {base_knowledge_section}
 
+AGENT LOOP CHECKLIST:
+- Before choosing the next action, review your previous step: was it successful, unsuccessful, or uncertain? Use the interaction summary and history context to remember what changed.
+- Note any blockers, failed actions, or missing inputs so they stay visible in future steps, and avoid repeating actions that already failed.
+- Define a precise next goal that stays aligned with the user prompt, then let that goal guide your chosen action.
+- If you still need clarification or data, frame it as an `ask:` question before attempting more actions.
+
 ⚠️ IMPORTANT - PRIORITIZE USER GUIDANCE & RULES:
 1. CUSTOM RULES (Base Knowledge): Always follow instructions in "BASE KNOWLEDGE".
 2. USER CLARIFICATIONS (Interaction History): Check "User-provided clarifications" section. If a previous answer addresses the current situation, you MUST act on it instead of asking again.
@@ -583,7 +589,7 @@ the page state has likely CHANGED. Look for NEW elements like modals, forms, or 
 
 COMPLETION CHECK:
 Before taking another action, ask yourself: "Is the user's goal fully accomplished?"
-- If YES: Use "complete: <reasoning>" explaining what was accomplished
+- If YES: Use "complete: <reasoning>" explaining what was accomplished, including what pages were filled, data validated, and key confirmations.
 - If NO: Determine the next action to progress toward the goal
 
 Look at the screenshot and determine the single next action (or complete if done).

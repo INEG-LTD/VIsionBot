@@ -638,8 +638,9 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "click reject cookies if they are present, then search for iOS developer jobs in the UK, press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) and application URLs from 5 job listings",
+    "click reject cookies if they are present, then search for 'iOS developer jobs in the UK' then press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) and application URLs from 5 job listings",
     base_knowledge=[
+        "You must press enter after typing in a search field"
     ],
     show_completion_reasoning_every_iteration=False,  # Only show when actually complete
     user_question_callback=ask_user_for_help,  # Ask user for help when stuck
