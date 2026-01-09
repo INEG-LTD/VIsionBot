@@ -579,7 +579,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gemini/gemini-2.5-flash-lite",
+        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.HIGH

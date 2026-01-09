@@ -100,7 +100,7 @@ _PROVIDERS: dict[str, ProviderConfig] = {
     ),
     "groq": ProviderConfig(
         env_vars=("GROQ_API_KEY",),
-        requires_string_content=True,
+        # requires_string_content=True,
     ),
     "anthropic": ProviderConfig(
         env_vars=("ANTHROPIC_API_KEY",),
