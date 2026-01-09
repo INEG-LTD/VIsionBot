@@ -18,6 +18,7 @@ from ai_utils import (
     get_default_agent_reasoning_level,
 )
 from utils.event_logger import get_event_logger
+from history import HistoryManager
 
 
 class NextAction(BaseModel):
@@ -209,6 +210,7 @@ class ReactiveGoalDeterminer:
         interaction_summary_limit: Optional[int] = None,
         include_overlays_in_agent_context: bool = True,
         include_visible_text_in_agent_context: bool = False,
+        history_manager: Optional[HistoryManager] = None,
     ):
         """
         Initialize the reactive goal determiner.
@@ -235,6 +237,7 @@ class ReactiveGoalDeterminer:
         self.interaction_summary_limit = interaction_summary_limit
         self.include_overlays_in_agent_context = include_overlays_in_agent_context
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
+        self.history_manager = history_manager
     
     def determine_next_action(
         self,
@@ -435,6 +438,11 @@ DECISION MAKING:
         # Cache the prompt
         self._system_prompt_cache["default"] = prompt
         return prompt
+
+    def _get_history_block(self) -> str:
+        if not self.history_manager:
+            return ""
+        return self.history_manager.history_block(limit=self.interaction_summary_limit)
     
     def _build_action_prompt(
         self, 
@@ -474,6 +482,9 @@ DECISION MAKING:
         # Format overlay information if available
         # Only include overlay context if configured to do so
         overlay_context = ""
+        if self.include_overlays_in_agent_context:
+            count = len(overlay_data) if overlay_data else 0
+            print(f"[Debug] overlay_data available: {count} elements")
         if overlay_data and self.include_overlays_in_agent_context:
             # Filter to only interactive/actionable elements (similar to what plan_generator does)
             # Focus on elements that are likely to be interacted with
@@ -541,8 +552,11 @@ DECISION MAKING:
             visible_text_context = f"- Visible Text: {state.visible_text[:300]}...\n"
 
         # Simplified user prompt - only essential context (rules/examples are in system prompt)
+        history_block = self._get_history_block()
+        history_prefix = f"{history_block}\n\n" if history_block else ""
+
         prompt = f"""
-Determine the NEXT SINGLE ACTION to take based on:
+{history_prefix}Determine the NEXT SINGLE ACTION to take based on:
 
 USER GOAL: "{self.user_prompt}"
 
@@ -683,4 +697,3 @@ Look at the screenshot and determine the single next action (or complete if done
             f"{next_line}\n"
             f"Recent history (oldest → newest):\n    {history_block}"
         )
-

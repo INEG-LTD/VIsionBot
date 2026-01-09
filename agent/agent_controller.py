@@ -643,6 +643,11 @@ class AgentController:
                 url_history=self.bot.session_tracker.url_history.copy() if self.bot.session_tracker.url_history else [],
                 url_pointer=getattr(self.bot.session_tracker, "url_pointer", None)
             )
+            try:
+                page_info = self.bot.page_utils.get_page_info()
+                overlay_data, _, _ = self.bot._collect_overlay_data(user_prompt, page_info)
+            except Exception:
+                overlay_data = getattr(self.bot, "_cached_element_data", None)
             
             # 2.1. Prepare goal determiner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
@@ -664,6 +669,7 @@ class AgentController:
                 interaction_summary_limit=self.interaction_summary_limit_action,
                 include_overlays_in_agent_context=self.include_overlays_in_agent_context,
                 include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
+                history_manager=self.bot.history_manager,
             )
             
             # 2.3. Check for queued action first (doesn't need LLM)
@@ -893,17 +899,18 @@ class AgentController:
                             failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                             ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
 
-                            current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
-                                environment_state,
-                                screenshot=snapshot.screenshot,
-                                failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                                ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
-                            )
-                            # Store reasoning and overlay index for next interaction
-                            if reasoning:
-                                self.bot.session_tracker.set_current_action_reasoning(reasoning)
-                            if agent_overlay_index is not None:
-                                self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
+                        current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
+                            environment_state,
+                            screenshot=snapshot.screenshot,
+                            overlay_data=getattr(self.bot, "_cached_element_data", None),
+                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
+                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
+                        )
+                        # Store reasoning and overlay index for next interaction
+                        if reasoning:
+                            self.bot.session_tracker.set_current_action_reasoning(reasoning)
+                        if agent_overlay_index is not None:
+                            self.bot.session_tracker.set_current_action_overlay_index(agent_overlay_index)
                     else:
                         # Agent-only mode: Skip external completion check, just determine next action
                         try:
@@ -917,6 +924,7 @@ class AgentController:
                         current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
+                            overlay_data=getattr(self.bot, "_cached_element_data", None),
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
@@ -4041,4 +4049,3 @@ Provide a plan that:
         if data:
             event.update(data)
         self.orchestration_events.append(event)
-

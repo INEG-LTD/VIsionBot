@@ -120,6 +120,12 @@ class SessionTracker:
         """Set the reasoning for the next action to be executed"""
         self._current_action_reasoning = reasoning
 
+    def get_current_action_reasoning(self) -> Optional[str]:
+        """Retrieve and clear the stored reasoning for the next action."""
+        reasoning = self._current_action_reasoning
+        self._current_action_reasoning = None
+        return reasoning
+
     def set_current_action_overlay_index(self, overlay_index: Optional[int]) -> None:
         """Set the overlay index for the next action to be executed"""
         self._current_action_overlay_index = overlay_index
@@ -323,4 +329,3 @@ class SessionTracker:
         # Keep url_history as it's useful for navigation context
         # self.url_history.clear()
         # self.url_pointer = -1
-

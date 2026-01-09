@@ -579,7 +579,7 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="gpt-5-mini",
+        agent_model="gemini/gemini-2.5-flash-lite",
         command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.HIGH
@@ -638,41 +638,8 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "search for iOS developer jobs in the UK, press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) and application URLs from 5 job listings",
+    "click reject cookies if they are present, then search for iOS developer jobs in the UK, press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple) and application URLs from 5 job listings",
     base_knowledge=[
-        # Form data (structured)
-        """Form data to use:
-        - First name: John
-        - Last name: Doe
-        - Email: john.doe@example.com
-        - Phone: 07385986448
-        - Address: 3 John Street
-        - City: Liverpool
-        - State: England
-        - Country: United Kingdom
-        - Gender: Male""",
-        
-        # Behavioral rules (concise)
-        # "For search fields: Only press Enter if NO dropdown suggestions are visible",
-        # "For file uploads: Prefer 'Upload from Device' or 'Local File' over cloud storage options",
-        # "File picker dialogs are handled automatically - do not interact with them",
-        # "Use best judgment for missing field values that align with provided data",
-        # "Don't apply via LinkedIn - use the standard form instead",
-        "Do not click the apply now button, just extract the application URLs",
-        """
-        This is what you should do when you are on the job listing page:
-        For each job listing:
-            - Click a job listing
-                - A right side bar should appear with the job listing details
-                - The side bar should have an Apply button, it might have multiple Apply buttons
-            - Extract the job title, company name and URL from the first Apply button in the side bar
-            - Close the side bar after extracting the URL
-                - If the side bar is still visible, keep attempting to close it
-            
-            If you are on the 5th job listing, you are done, otherwise:
-                - Scroll down if the other job listings are not visible
-                - Click the next job listing and repeat the process
-        """
     ],
     show_completion_reasoning_every_iteration=False,  # Only show when actually complete
     user_question_callback=ask_user_for_help,  # Ask user for help when stuck

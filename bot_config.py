@@ -261,6 +261,24 @@ class UserMessagesConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class HistoryConfig(BaseModel):
+    """Configuration for the agent history summary block."""
+
+    max_items: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum history entries to keep in the prompt"
+    )
+    summary_length: int = Field(
+        default=120,
+        ge=40,
+        description="Maximum reasoning characters shown per history entry"
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class BotConfig(BaseModel):
     """
     Main configuration object for BrowserVisionBot.
@@ -311,6 +329,10 @@ class BotConfig(BaseModel):
     user_messages: UserMessagesConfig = Field(
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
+    )
+    history: HistoryConfig = Field(
+        default_factory=HistoryConfig,
+        description="History management configuration"
     )
     
     class Config:

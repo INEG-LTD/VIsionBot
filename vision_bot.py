@@ -30,6 +30,7 @@ from models import VisionPlan, PageElements
 from models.core_models import ActionStep, ActionType, PageInfo
 from dom_snapshot import build_page_elements, capture_dom_elements
 from action_executor import ActionExecutor
+from history import HistoryManager
 from utils import PageUtils
 from action_queue import ActionQueue
 from planner.plan_generator import PlanGenerator
@@ -309,6 +310,12 @@ class BrowserVisionBot:
         self.completion_mode = config.execution.completion_mode
         self.enable_sub_agents = config.execution.enable_sub_agents
         self.dedup_mode = config.execution.dedup_mode
+
+        self.history_config = config.history
+        self.history_manager = HistoryManager(
+            max_items=self.history_config.max_items,
+            summary_length=self.history_config.summary_length,
+        )
 
         self.started = False
         
@@ -2560,6 +2567,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             and self.deduper.dedup_enabled
             and element_data
         ):
+            print(f"[Debug] element_data before dedup: {len(element_data)}")
             should_avoid, reason = self._determine_dedup_usage(goal_description)
             if should_avoid:
                 print(f"🚫 Filtering out interacted elements (reason: {reason})...")
@@ -2595,6 +2603,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     if original_elem:
                         filtered_element_data.append(original_elem.copy())
                 element_data = filtered_element_data
+            print(f"[Debug] element_data after dedup: {len(element_data)}")
 
         return element_data, screenshot, screenshot
 
@@ -2941,7 +2950,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         action_step = ActionStep(action=action_type, overlay_index=overlay_index, **filtered_kwargs)
         detected_elements = self.plan_generator.convert_indices_to_elements([action_step], element_data)
 
-        return self._execute_keyword_plan(
+        plan_success = self._execute_keyword_plan(
             action_steps=[action_step],
             reasoning=f"Selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
             target_context_guard=target_context_guard,
@@ -2949,6 +2958,41 @@ Return only the extracted text that appears in the text content above. Do not ma
             detected_elements=detected_elements,
             page_info=page_info,
             disable_vision_tag_hint=True,
+        )
+
+        self._record_history_entry(
+            goal_description=goal_description,
+            action_steps=[action_step],
+            success=plan_success,
+            overlay_index=overlay_index,
+            page_info=page_info,
+        )
+
+        return plan_success
+
+    def _record_history_entry(
+        self,
+        goal_description: str,
+        action_steps: List[ActionStep],
+        success: bool,
+        overlay_index: Optional[int],
+        page_info: Optional[PageInfo],
+    ) -> None:
+        if not hasattr(self, "history_manager") or not self.history_manager:
+            return
+        reasoning = ""
+        if hasattr(self, "session_tracker") and self.session_tracker:
+            reasoning = self.session_tracker.get_current_action_reasoning() or ""
+        url = page_info.url if page_info else ""
+        title = page_info.title if page_info else ""
+        self.history_manager.add_entry(
+            goal_description=goal_description,
+            action_steps=action_steps,
+            reasoning=reasoning,
+            success=bool(success),
+            overlay_index=overlay_index,
+            page_url=url,
+            page_title=title,
         )
 
     def _keyword_click(
