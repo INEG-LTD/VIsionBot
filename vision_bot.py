@@ -650,10 +650,7 @@ class BrowserVisionBot:
         
         # Screenshot caching for performance optimization
         self._cached_clean_screenshot = None
-        self._cached_element_data = None
         self._cached_dom_signature = None
-        # Focus system removed - no longer caching focus context
-        self._pre_dedup_element_data = []
         
         # Use self.page (which may have been provided or just initialized)
         page = self.page
@@ -921,9 +918,8 @@ class BrowserVisionBot:
             except Exception:
                 pass
             # Focus system removed - no longer needed
-            # Clear cached screenshot/element data tied to previous page
+            # Clear cached screenshot data tied to previous page
             try:
-                self._cached_element_data = None
                 self._cached_clean_screenshot = None
                 self._cached_dom_signature = None
                 self.last_dom_signature = None
@@ -2550,15 +2546,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             pass
 
         element_data = capture_dom_elements(self.page, page_info, max_elements=self.max_detailed_elements)
-        self._pre_dedup_element_data = element_data.copy() if element_data else []
-        self._cached_clean_screenshot = screenshot
-        self._cached_element_data = (
-            self._pre_dedup_element_data.copy() if hasattr(self, "_pre_dedup_element_data") else element_data.copy()
-        )
-        self._cached_dom_signature = self.last_dom_signature
-
         try:
-            self.event_logger.system_debug(f"Cached screenshot and {len(self._cached_element_data or [])} DOM elements")
+            self.event_logger.system_debug(f"Captured screenshot and {len(element_data or [])} DOM elements")
         except Exception:
             pass
 

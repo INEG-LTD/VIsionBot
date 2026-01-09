@@ -647,7 +647,7 @@ class AgentController:
                 page_info = self.bot.page_utils.get_page_info()
                 overlay_data, _, _ = self.bot._collect_overlay_data(user_prompt, page_info)
             except Exception:
-                overlay_data = getattr(self.bot, "_cached_element_data", None)
+                overlay_data = None
             
             # 2.1. Prepare goal determiner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
@@ -728,6 +728,7 @@ class AgentController:
                         action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
+                            overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
@@ -902,7 +903,7 @@ class AgentController:
                         current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
-                            overlay_data=getattr(self.bot, "_cached_element_data", None),
+                            overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
@@ -924,7 +925,7 @@ class AgentController:
                         current_action, reasoning, agent_overlay_index = goal_determiner.determine_next_action(
                             environment_state,
                             screenshot=snapshot.screenshot,
-                            overlay_data=getattr(self.bot, "_cached_element_data", None),
+                            overlay_data=overlay_data,
                             failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
                             ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else []
                         )
@@ -2969,13 +2970,6 @@ class AgentController:
 
             # Get overlay elements if available
             overlay_elements = []
-            if hasattr(self.bot, '_cached_overlay_data') and self.bot._cached_overlay_data:
-                # Simplify overlay data for comparison
-                overlay_elements = [{
-                    'tag': elem.get('tagName', ''),
-                    'text': elem.get('textContent', '')[:30],
-                    'id': elem.get('id', '')
-                } for elem in self.bot._cached_overlay_data[:50]]  # Limit overlay elements
 
             return {
                 "visible_elements": visible_elements or [],
