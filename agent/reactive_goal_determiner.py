@@ -6,7 +6,7 @@ before the viewport changes, relying only on what is visible.
 """
 
 from typing import Optional, List, Union, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
 from session_tracker import Interaction
@@ -23,9 +23,10 @@ from utils.overlay_description import describe_overlay_element, overlay_element_
 
 
 VALID_ACTION_COMMANDS = {
-    "click", "type", "press", "scroll", "extract", "defer", "navigate",
-    "back", "forward", "subagents", "form", "select", "upload", "datetime",
-    "stop", "open", "handle_datetime", "mini_goal", "ask", "complete",
+    "click", "type", "press", "scroll", "extract", "extract_url", "get_url",
+    "defer", "navigate", "back", "forward", "subagents", "form", "select",
+    "upload", "datetime", "stop", "open", "handle_datetime", "mini_goal",
+    "ask", "complete",
 }
 
 
@@ -94,8 +95,9 @@ def _normalize_body(cmd: str, body: str) -> str:
     if cmd in {"back", "forward"}:
         return body if body and body.isdigit() else "1"
 
-    if cmd in {"extract", "navigate", "subagents", "mini_goal", "form", "select",
-               "upload", "datetime", "open", "handle_datetime"}:
+    if cmd in {"extract", "extract_url", "get_url", "navigate", "subagents",
+               "mini_goal", "form", "select", "upload", "datetime", "open",
+               "handle_datetime"}:
         if not body:
             raise ValueError(f"{cmd} requires additional detail")
         return body
@@ -106,6 +108,9 @@ def _normalize_body(cmd: str, body: str) -> str:
 
 class ActionStep(BaseModel):
     """One viewport-safe action"""
+    # Allow extra attributes (like overlay_metadata) without including them in the schema
+    model_config = ConfigDict(extra='allow')
+
     action: str = Field(
         description="Command to execute on the current viewport (e.g., 'click: Submit button')."
     )
@@ -121,10 +126,21 @@ class ActionStep(BaseModel):
         default=None,
         description="Canonical description of the overlay element so it can be matched across iterations."
     )
-    overlay_metadata: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Normalized metadata of the overlay element for deterministic matching."
-    )
+    # Note: overlay_metadata is handled as an extra attribute, not a Pydantic field
+    # This prevents it from appearing in the JSON schema sent to Gemini
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Ensure overlay_metadata always exists, even if not provided
+        if not hasattr(self, 'overlay_metadata'):
+            object.__setattr__(self, 'overlay_metadata', None)
+
+    def __setattr__(self, name, value):
+        """Allow setting overlay_metadata after initialization."""
+        if name == 'overlay_metadata':
+            object.__setattr__(self, name, value)
+        else:
+            super().__setattr__(name, value)
 
     @field_validator("action", mode="before")
     @classmethod
@@ -391,12 +407,20 @@ ACTION RULES:
    - Format: "type: <text> : <field>" - Use colon to separate text from target
    - Example: "type: john@example.com : email input field" (not "type: john")
 
-3. EXTRACTION: Use "extract: <what>" when user wants data retrieved
+3. EXTRACTION - CRITICAL DISTINCTION:
+   - "extract: <what>" - Extract DATA/TEXT from page (job title, company name, price, description, etc.)
+     Example: "extract: job title and company name"
+   - "extract_url: <target>" - Extract URL/LINK from element (apply button, job link, etc.)
+     Example: "extract_url: Apply button"
+   - ⚠️ NEVER use "extract:" for URLs - ALWAYS use "extract_url:" for links/buttons
+   - If user asks for URL/link/href → use "extract_url:", NOT "extract:"
 
 4. COMMAND FORMAT:
    - Click: Must include element type (button/link/div) - "click: Submit button"
    - Type: Use colon separator - "type: John Doe : name input field"
    - Press: Just key name - "press: Enter"
+   - Extract data: "extract: job title and company"
+   - Extract URL: "extract_url: Apply button" (NOT "extract: url from apply button")
 
 5. AVOID REPEATING: Failed actions should not be repeated - ASK for help instead
 
@@ -419,6 +443,8 @@ COMMANDS:
 - press: <key> - Press single key (Enter/Escape/Tab)
 - scroll: <up|down> - Move viewport
 - extract: <what> - Extract visible data from page
+- extract_url: <target> - Get URL from element (button/link/div with href or data-url)
+- get_url: <target> - Alias for extract_url
 - navigate: <url> - Direct navigation
 - back: [n] / forward: [n] - Navigate history
 - defer: [msg|seconds] - Pause for user (captcha/manual input)
@@ -431,6 +457,8 @@ DECISION MAKING:
 - Interact with visible elements. If target not visible, use scroll commands
 - If something isn't working after 1-2 attempts, use "ask:" to get user guidance
 """
+
+        # Add sequential task counting rules for NLP-based progress tracking
         # Cache the prompt
         self._system_prompt_cache["default"] = prompt
         return prompt

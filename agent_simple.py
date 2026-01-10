@@ -630,7 +630,7 @@ config = BotConfig(
         include_overlays_in_agent_context=True,  # Agent sees overlays and selects directly
     ),
     logging=DebugConfig(
-        debug_mode=True,  # Set to False to use callbacks only (no debug prints)
+        debug_mode=False,  # Set to False to use callbacks only (no debug prints)
         # save_screenshots=False,
     ),
     browser=BrowserConfig(
@@ -663,7 +663,7 @@ setup_mini_goals(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://www.google.com/")
+bot.page.goto("https://www.google.com/search?q=ios+developer+jobs&sca_esv=325502952459ac64&sxsrf=ANbL-n73LSydD6THtFv_a1zWBUikhaJy0A:1768018647138&source=hp&ei=19Jhaf2eBvLn7_UP2uu1yQM&iflsig=AFdpzrgAAAAAaWHg50wsYj4t-7e-CQfyQQ0kVZKXd1Gn&udm=8&oq=ios+devel&gs_lp=Egdnd3Mtd2l6Iglpb3MgZGV2ZWwqAggAMg0QIxjwBRiABBgnGIoFMgcQIxjwBRgnMg0QIxjwBRiABBgnGIoFMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABEiDHlAAWJgRcAB4AJABAJgBQKABmwSqAQE5uAEDyAEA-AEBmAIJoALABMICChAjGIAEGCcYigXCAgsQABiABBixAxiDAcICERAuGIAEGLEDGNEDGIMBGMcBwgIOEC4YgAQYsQMYgwEYigXCAg4QABiABBixAxiDARiKBcICFBAuGIAEGLEDGNEDGIMBGMcBGIoFwgIIEAAYgAQYsQPCAgsQLhiABBixAxiDAZgDAJIHATmgB9FisgcBObgHwATCBwUwLjcuMsgHGYAIAA&sclient=gws-wiz&jbr=sep:0")
 
 # Setup border effect if not in debug mode
 apply_thinking_border(bot)
@@ -673,9 +673,28 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "click reject cookies if they are present, then search for 'iOS developer jobs in the UK' then press enter, then click the jobs tab and then extract the job titles (eg ios developer) and company names (eg apple)s",
+    "click reject cookies if they are present, go through 5 job listings and extract the job title (eg ios developer) and company name (eg apple) and then extract the information",
     base_knowledge=[
+        "You must click the 'Jobs' tab button before clicking a job listing"
         "You must press enter after typing in a search field"
+        "Don't click jobs you have already clicked"
+        "To extract the necessary information, you must click the job listing and then extract the job title and company name and then extract the url from the apply button"
+        "Don't click the apply button, just extract the job title, url and company name",
+        """
+        This is what you should do when you are on the job listing page:
+        For each job listing:
+            - Click a job listing
+                - A right side bar should appear with the job listing details
+                - The side bar should have an Apply button, it might have multiple Apply buttons
+            - Extract the job title (eg Doctor), company name (eg NHS) 
+            - Extract the URL from the first Apply button in the right side bar
+            - Close the side bar after extracting the URL
+                - If the side bar is still visible, keep attempting to close it
+            - If you are on the 5th job listing, you are done, otherwise:
+                - Scroll down if the other job listings are not visible
+                - Click the next job listing and repeat the process
+        """
+        
     ],
     show_completion_reasoning_every_iteration=False,  # Only show when actually complete
     user_question_callback=ask_user_for_help,  # Ask user for help when stuck

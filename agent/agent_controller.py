@@ -484,7 +484,7 @@ class AgentController:
         self._consecutive_page_changes = 0
         # Reset screenshot hash tracking
         self._last_screenshot_hash = None
-        
+
         # Phase 3: Set agent context
         if agent_context:
             self.agent_context = agent_context
@@ -1276,6 +1276,52 @@ class AgentController:
                 time.sleep(self.iteration_delay)
                 continue
 
+            # 4.5. Check if this is a URL extraction command
+            url_extraction_target = self._detect_url_extraction_need(current_action)
+
+            if url_extraction_target:
+                # Extract URL from the specified element
+                try:
+                    self.event_logger.system_info(f"Extracting URL from: {url_extraction_target}")
+                except Exception:
+                    pass
+
+                try:
+                    # Get overlay data for URL extraction
+                    overlay_data = snapshot.overlay_data if snapshot else None
+
+                    url = self._extract_url_from_element(url_extraction_target, overlay_data)
+
+                    if url:
+                        # Append to notebook
+                        self.notebook.append({
+                            "timestamp": time.time(),
+                            "prompt": f"URL from {url_extraction_target}",
+                            "data": {"url": url, "element": url_extraction_target},
+                            "url": snapshot.url if snapshot else None,
+                        })
+                        try:
+                            self.event_logger.system_info(f"✓ Extracted URL: {url}")
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.event_logger.system_warning(f"Could not extract URL from '{url_extraction_target}'")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    try:
+                        self.event_logger.system_warning(f"URL extraction failed: {str(e)}")
+                    except Exception:
+                        pass
+
+                # Consume plan step and continue
+                if plan_step_consumed:
+                    self._pop_pending_action_plan_step()
+                    self._plan_step_counter += 1
+                time.sleep(self.iteration_delay)
+                continue
+
             # 4.1. Handle internal control commands (e.g., policy overrides)
             if self._handle_internal_command(current_action, user_prompt):
                 time.sleep(self.iteration_delay)
@@ -1567,32 +1613,33 @@ class AgentController:
         return snapshot
     
     def _determine_next_action(
-        self, 
-        user_prompt: str, 
+        self,
+        user_prompt: str,
         snapshot: BrowserState,
         completion_evaluation: Optional[CompletionEvaluation] = None
     ) -> Optional[str]:
         """
         Determine what action needs to be done next.
-        
+
         Step 2: Enhanced with state awareness - can use completion evaluation hints.
         Later steps will do full LLM-based reactive goal determination.
-        
+
         Args:
             user_prompt: Original user request
             snapshot: Current browser state (viewport snapshot)
             completion_evaluation: Optional completion evaluation with remaining_steps hints
-            
+
         Returns:
             Specific action description (e.g., "type: John Doe in name field")
             or None if cannot determine
         """
         # Step 2: Use completion evaluation hints if available
+        next_step = None
         if completion_evaluation and completion_evaluation.remaining_steps:
             # Use the first remaining step as the next action
             next_step = completion_evaluation.remaining_steps[0]
             print(f"🎯 Using suggested next step: {next_step}")
-            
+
             # Special handling: if the step suggests scrolling, prioritize it
             # This ensures we scroll when elements aren't visible
             if next_step.lower().startswith("scroll:"):
@@ -1917,23 +1964,35 @@ class AgentController:
     def _detect_extraction_need(self, current_action: Optional[str], user_prompt: str) -> Optional[str]:
         """
         Detect if extraction is needed from current action ONLY.
-        
+
         We should only extract if the current action explicitly indicates extraction.
         Do NOT extract based on user prompt if the action is something else (like click).
-        
+        Do NOT handle URL extraction here - use extract_url command instead.
+
         Args:
             current_action: The current action command (e.g., "extract: product price")
             user_prompt: The original user prompt (not used for detection, only for context)
-        
+
         Returns:
             Extraction prompt if extraction is needed, None otherwise
         """
         if not current_action:
             return None
-        
+
+        action_lower = current_action.lower()
+
+        # If this is a URL extraction request, reject it - use extract_url instead
+        url_keywords = ["url", "link", "href", "apply button", "application link", "job link"]
+        if any(keyword in action_lower for keyword in url_keywords):
+            return None  # This should use extract_url command, not regular extract
+
         # Check for explicit "extract:" command
         if current_action.startswith("extract:"):
-            return current_action.replace("extract:", "").strip()
+            extraction_text = current_action.replace("extract:", "").strip()
+            # Double-check it's not a URL extraction
+            if any(keyword in extraction_text.lower() for keyword in url_keywords):
+                return None
+            return extraction_text
         
         # Check if current action indicates extraction (even if not explicitly "extract:")
         action_lower = current_action.lower()
@@ -1979,6 +2038,98 @@ class AgentController:
                     return match.group(1).strip()
         
         # Don't fall back to checking user prompt - only use current_action
+        return None
+
+    def _detect_url_extraction_need(self, current_action: Optional[str]) -> Optional[str]:
+        """
+        Detect if URL extraction is needed from current action.
+
+        Args:
+            current_action: The current action command (e.g., "extract_url: Apply button")
+
+        Returns:
+            Target element description if URL extraction is needed, None otherwise
+        """
+        if not current_action:
+            return None
+
+        action_lower = current_action.lower()
+
+        # Check for explicit "extract_url:" or "get_url:" commands
+        if action_lower.startswith("extract_url:"):
+            return current_action[12:].strip()  # Remove "extract_url:" prefix
+        if action_lower.startswith("get_url:"):
+            return current_action[8:].strip()  # Remove "get_url:" prefix
+
+        return None
+
+    def _extract_url_from_element(self, target_description: str, overlay_data: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+        """
+        Extract URL from an element based on target description.
+
+        Args:
+            target_description: Description of the element (e.g., "Apply button", "job listing link")
+            overlay_data: Current overlay data with element information
+
+        Returns:
+            Extracted URL if found, None otherwise
+        """
+        if not overlay_data:
+            self.event_logger.system_warning("No overlay data available for URL extraction")
+            return None
+
+        target_lower = target_description.lower()
+
+        # Try to find matching element in overlay data
+        best_match = None
+        best_score = 0
+
+        for elem in overlay_data:
+            # Get element text and attributes
+            text = (elem.get("text") or elem.get("textContent") or "").lower()
+            aria = (elem.get("ariaLabel") or elem.get("aria_label") or "").lower()
+            role = (elem.get("role") or "").lower()
+            tag = (elem.get("tagName") or "").lower()
+            placeholder = (elem.get("placeholder") or "").lower()
+
+            # Build searchable content
+            searchable = f"{text} {aria} {role} {tag} {placeholder}"
+
+            # Simple scoring: count matching words
+            target_words = set(target_lower.split())
+            searchable_words = set(searchable.split())
+            matching_words = target_words.intersection(searchable_words)
+            score = len(matching_words)
+
+            if score > best_score:
+                best_score = score
+                best_match = elem
+
+        if not best_match or best_score == 0:
+            self.event_logger.system_warning(f"Could not find element matching '{target_description}'")
+            return None
+
+        # Try to extract URL from the element
+        # Check common URL attributes
+        url = (
+            best_match.get("href") or
+            best_match.get("data-href") or
+            best_match.get("data-url") or
+            best_match.get("data-link") or
+            best_match.get("url")
+        )
+
+        if url:
+            # Convert relative URLs to absolute if needed
+            if url.startswith("/") and not url.startswith("//"):
+                current_url = self.bot.page.url
+                from urllib.parse import urljoin
+                url = urljoin(current_url, url)
+            return url
+
+        # If no URL found in attributes, log warning
+        elem_desc = describe_overlay_element(best_match)
+        self.event_logger.system_warning(f"Element found ({elem_desc}) but no URL attribute available")
         return None
 
     @staticmethod

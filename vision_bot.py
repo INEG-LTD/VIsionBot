@@ -1744,6 +1744,107 @@ class BrowserVisionBot:
             raise RuntimeError("No agent is currently running. Call execute_task() first.")
         return self.agent_controller.is_paused()
 
+    def _enrich_extracted_data_with_urls(self, extracted_data: Any, overlay_data: Optional[List[Dict[str, Any]]]) -> Any:
+        """
+        Enrich extracted data with URLs from overlay elements when matches are found.
+
+        Args:
+            extracted_data: The extracted data (dict with items list, or list directly)
+            overlay_data: Current page overlay data
+
+        Returns:
+            Enriched data with URLs added where matches are found
+        """
+        if not overlay_data:
+            return extracted_data
+
+        from urllib.parse import urljoin
+
+        def find_url_for_text(text: str) -> Optional[str]:
+            """Find URL in overlay elements that match the given text."""
+            if not text or not isinstance(text, str):
+                return None
+
+            text_lower = text.lower().strip()
+            best_match = None
+            best_score = 0
+
+            for elem in overlay_data:
+                # Get element text and attributes
+                elem_text = (elem.get("text") or elem.get("textContent") or "").lower().strip()
+                aria = (elem.get("ariaLabel") or elem.get("aria_label") or "").lower().strip()
+
+                # Try exact match first
+                if elem_text == text_lower or aria == text_lower:
+                    # Check for URL in this element
+                    url = (
+                        elem.get("href") or
+                        elem.get("data-href") or
+                        elem.get("data-url") or
+                        elem.get("data-link") or
+                        elem.get("url")
+                    )
+                    if url:
+                        # Convert relative URLs to absolute
+                        if url.startswith("/") and not url.startswith("//"):
+                            url = urljoin(self.page.url, url)
+                        return url
+
+                # Fallback to partial match with scoring
+                if elem_text or aria:
+                    searchable = f"{elem_text} {aria}"
+                    # Simple word-based scoring
+                    text_words = set(text_lower.split())
+                    elem_words = set(searchable.split())
+                    matching_words = text_words.intersection(elem_words)
+                    score = len(matching_words)
+
+                    if score > best_score and score >= min(2, len(text_words)):  # Need at least 2 matching words
+                        best_score = score
+                        best_match = elem
+
+            # Use best partial match if no exact match found
+            if best_match:
+                url = (
+                    best_match.get("href") or
+                    best_match.get("data-href") or
+                    best_match.get("data-url") or
+                    best_match.get("data-link") or
+                    best_match.get("url")
+                )
+                if url:
+                    if url.startswith("/") and not url.startswith("//"):
+                        url = urljoin(self.page.url, url)
+                    return url
+
+            return None
+
+        def enrich_item(item: Any) -> Any:
+            """Recursively enrich an item with URLs."""
+            if isinstance(item, dict):
+                # Try to find a URL for this item
+                # Look for text fields that might match overlay elements
+                text_fields = ["title", "name", "text", "label", "heading", "description"]
+                item_text = None
+                for field in text_fields:
+                    if field in item and isinstance(item[field], str):
+                        item_text = item[field]
+                        break
+
+                if item_text and "url" not in item:  # Don't override existing URLs
+                    url = find_url_for_text(item_text)
+                    if url:
+                        item["url"] = url
+
+                # Recursively process nested dicts
+                return {k: enrich_item(v) for k, v in item.items()}
+            elif isinstance(item, list):
+                return [enrich_item(i) for i in item]
+            else:
+                return item
+
+        return enrich_item(extracted_data)
+
     def extract(
         self,
         prompt: str,
@@ -1910,7 +2011,18 @@ class BrowserVisionBot:
                 metadata=metadata,
                 error=error
             )
-        
+
+        # Capture overlay data for URL enrichment
+        overlay_data = None
+        try:
+            # Get overlay data from page (contains href and other URL attributes)
+            from overlay.core import get_overlay_snapshot
+            overlay_snapshot = get_overlay_snapshot(self.page)
+            overlay_data = overlay_snapshot.get("elements", []) if overlay_snapshot else None
+        except Exception:
+            # Overlay data is optional - continue without it
+            pass
+
         # Capture screenshot based on scope
         try:
             if scope == "full_page":
@@ -1946,13 +2058,17 @@ class BrowserVisionBot:
             visible_text = re.sub(r'\n{3,}', '\n\n', visible_text.strip())
         
         # Build extraction prompt for LLM with full page text for grounding
+        url_hint = ""
+        if overlay_data:
+            url_hint = "\nNOTE: URLs will be automatically added to extracted items where available. You don't need to extract URLs manually."
+
         extraction_prompt = f"""
 Extract the following information from this webpage screenshot:
 {prompt}
 
 Current page context:
 - URL: {self.page.url}
-- Title: {self.page.title()}
+- Title: {self.page.title()}{url_hint}
 
 FULL PAGE TEXT CONTENT (use this to verify your extraction):
 {visible_text if visible_text else "(No text content found on page)"}
@@ -1963,6 +2079,7 @@ IMPORTANT INSTRUCTIONS:
 3. Do NOT make up or infer data that is not present in the text content
 4. If the requested information is not found in the text content, return an empty object {{}} or indicate "not available"
 5. Cross-reference your visual extraction with the text content to ensure accuracy
+6. Focus on extracting text content (titles, names, descriptions) - URLs will be added automatically
 """
         
         # Try extraction with retries
@@ -2105,7 +2222,14 @@ Return only the extracted text that appears in the text content above. Do not ma
                             "_confidence": result.confidence,
                             "_reasoning": result.reasoning
                         }
-                    
+
+                    # Enrich with URLs from overlay data
+                    try:
+                        final_data = self._enrich_extracted_data_with_urls(final_data, overlay_data)
+                    except Exception as e:
+                        # URL enrichment is optional - continue without it
+                        print(f"⚠️ URL enrichment failed: {e}")
+
                     # Record extraction in interaction history
                     self.session_tracker.record_interaction(
                         IT.EXTRACT,
