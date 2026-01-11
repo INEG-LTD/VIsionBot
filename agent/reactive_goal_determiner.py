@@ -194,10 +194,11 @@ class ReactiveGoalDeterminer:
         include_overlays_in_agent_context: bool = True,
         include_visible_text_in_agent_context: bool = False,
         history_manager: Optional[HistoryManager] = None,
+        max_actions_per_plan: int = 6,
     ):
         """
         Initialize the reactive goal determiner.
-        
+
         Args:
             user_prompt: The user's high-level goal
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
@@ -206,6 +207,7 @@ class ReactiveGoalDeterminer:
                          Default: "low" for better performance.
             interaction_summary_limit: Max interactions to include in the prompt.
                                        None means include all interactions. Default: None.
+            max_actions_per_plan: Maximum number of actions to generate in a single plan. Default: 6.
         """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -221,6 +223,7 @@ class ReactiveGoalDeterminer:
         self.include_overlays_in_agent_context = include_overlays_in_agent_context
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.history_manager = history_manager
+        self.max_actions_per_plan = max_actions_per_plan
     
     def determine_action_plan(
         self,
@@ -252,7 +255,7 @@ class ReactiveGoalDeterminer:
                 overlay_data,
                 notebook or []
             )
-            
+
             if not plan:
                 print("⚠️ No action plan generated")
                 return None
@@ -395,7 +398,7 @@ VIEWPORT PLAN RULES:
 - Stay anchored to what you can see; do not reference elements that are not in the current screenshot.
 - When an element is partially off-screen, include a scroll step before interacting with it and treat that scroll as part of the same plan.
 - Stop the plan as soon as the next logical step would require additional viewport content (autocomplete, modal, navigation, etc.).
-- Each plan should include 3-6 steps to keep execution tight.
+- Each plan should include up to {self.max_actions_per_plan} steps to keep execution focused.
 
 ACTION RULES:
 1. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
@@ -458,7 +461,6 @@ DECISION MAKING:
 - If something isn't working after 1-2 attempts, use "ask:" to get user guidance
 """
 
-        # Add sequential task counting rules for NLP-based progress tracking
         # Cache the prompt
         self._system_prompt_cache["default"] = prompt
         return prompt
@@ -617,7 +619,7 @@ COMPLETION CHECK (DO THIS FIRST):
 - NEVER extract the same data twice - check the notebook first!
 
 PLAN GUIDELINES:
-- Choose a sequential plan of 3-6 steps that can all be executed without leaving the current viewport.
+- Choose a sequential plan of up to {self.max_actions_per_plan} steps that can all be executed without leaving the current viewport.
 - Only include actions whose targets are fully visible; if you spot a useful element that is clipped or outside the viewport, add a scroll step before interacting with it so nothing is half-hidden.
 - Each step must include its own reasoning explaining how it moves the task forward while relying only on visible UI.
 - Do NOT plan for autocomplete suggestions, dropdown entries, or modals unless they are already visible in the screenshot.

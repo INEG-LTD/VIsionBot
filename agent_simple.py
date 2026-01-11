@@ -550,7 +550,7 @@ def create_event_callback(bot, debug_mode: bool = True):
         elif event.event_type == EventType.ACTION_DETERMINED:
             # Stop spinner
             _stop_spinner()
-            
+
             action = event.details.get('action', 'Unknown action')
             reasoning = event.details.get('reasoning', '')
             plan_step = event.details.get('plan_step')
@@ -620,7 +620,8 @@ config = BotConfig(
         reasoning_level=ReasoningLevel.HIGH
     ),
     execution=ExecutionConfig(
-        max_attempts=30
+        max_attempts=30,
+        max_actions_per_plan=1
     ),
     elements=ElementConfig(
         overlay_mode="all",
@@ -630,7 +631,7 @@ config = BotConfig(
         include_overlays_in_agent_context=True,  # Agent sees overlays and selects directly
     ),
     logging=DebugConfig(
-        debug_mode=False,  # Set to False to use callbacks only (no debug prints)
+        debug_mode=True,  # Set to False to use callbacks only (no debug prints)
         # save_screenshots=False,
     ),
     browser=BrowserConfig(

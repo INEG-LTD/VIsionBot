@@ -328,6 +328,7 @@ class SubAgentController:
     def _create_agent_controller(self) -> "AgentController":
         base_knowledge = self._get_base_knowledge()
         parallel_completion_and_action = getattr(self.main_bot, "parallel_completion_and_action", True)
+        max_actions_per_plan = getattr(self.main_bot, "max_actions_per_plan", 6)
         if self._controller_factory:
             try:
                 return self._controller_factory(
@@ -335,7 +336,8 @@ class SubAgentController:
                     base_knowledge=base_knowledge,
                     track_ineffective_actions=self.track_ineffective_actions,
                     allow_partial_completion=self.allow_partial_completion,
-                    parallel_completion_and_action=parallel_completion_and_action
+                    parallel_completion_and_action=parallel_completion_and_action,
+                    max_actions_per_plan=max_actions_per_plan
                 )
             except TypeError:
                 try:
@@ -357,7 +359,8 @@ class SubAgentController:
             track_ineffective_actions=self.track_ineffective_actions,
             base_knowledge=base_knowledge,
             allow_partial_completion=self.allow_partial_completion,
-            parallel_completion_and_action=parallel_completion_and_action
+            parallel_completion_and_action=parallel_completion_and_action,
+            max_actions_per_plan=max_actions_per_plan
         )
 
     def _get_base_knowledge(self) -> Optional[List[str]]:

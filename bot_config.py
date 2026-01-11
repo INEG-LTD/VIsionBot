@@ -88,6 +88,12 @@ class ExecutionConfig(BaseModel):
         default=False,
         description="Enable sub-agent spawning for parallel task execution. When enabled, the agent can spawn sub-agents to handle subtasks in parallel."
     )
+    max_actions_per_plan: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="Maximum number of actions to generate in a single action plan. Default is 6. Valid range: 1-20."
+    )
 
     class Config:
         arbitrary_types_allowed = True

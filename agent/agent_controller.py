@@ -135,6 +135,8 @@ class AgentController:
         # Interaction summarization
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
+        # Max actions per plan
+        max_actions_per_plan: int = 6,
         # Image detail level for vision API
         image_detail: str = "high",
         # Screenshot saving for debugging
@@ -227,6 +229,7 @@ class AgentController:
         self.max_clarification_rounds = max_clarification_rounds
         self.interaction_summary_limit_completion = interaction_summary_limit_completion
         self.interaction_summary_limit_action = interaction_summary_limit_action
+        self.max_actions_per_plan = max_actions_per_plan
         self._user_inputs: List[Dict[str, Any]] = []
         self._temp_user_inputs: List[Dict[str, Any]] = []  # Single-use suggestions
         self._requirement_flags: Dict[str, bool] = {}
@@ -688,6 +691,7 @@ class AgentController:
                 include_overlays_in_agent_context=self.include_overlays_in_agent_context,
                 include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
                 history_manager=self.bot.history_manager,
+                max_actions_per_plan=self.max_actions_per_plan,
             )
             
             # 2.3. Check for queued action first (doesn't need LLM)
@@ -1273,6 +1277,7 @@ class AgentController:
                 if plan_step_consumed:
                     self._pop_pending_action_plan_step()
                     self._plan_step_counter += 1
+
                 time.sleep(self.iteration_delay)
                 continue
 
@@ -1319,6 +1324,7 @@ class AgentController:
                 if plan_step_consumed:
                     self._pop_pending_action_plan_step()
                     self._plan_step_counter += 1
+
                 time.sleep(self.iteration_delay)
                 continue
 
@@ -1467,6 +1473,7 @@ class AgentController:
                         if plan_overlay_index is not None:
                             self._pending_plan_scroll_attempts.pop(plan_overlay_index, None)
                         self._plan_step_counter += 1
+
                         if not self._pending_action_plan_steps:
                             self._clear_action_plan()
                     else:

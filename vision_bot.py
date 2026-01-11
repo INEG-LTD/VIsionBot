@@ -309,6 +309,7 @@ class BrowserVisionBot:
         self.parallel_completion_and_action = config.execution.parallel_completion_and_action
         self.completion_mode = config.execution.completion_mode
         self.enable_sub_agents = config.execution.enable_sub_agents
+        self.max_actions_per_plan = config.execution.max_actions_per_plan
         self.dedup_mode = config.execution.dedup_mode
 
         self.history_config = config.history
@@ -1596,6 +1597,7 @@ class BrowserVisionBot:
                 include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
                 interaction_summary_limit_completion=interaction_summary_limit_completion,
                 interaction_summary_limit_action=interaction_summary_limit_action,
+                max_actions_per_plan=self.max_actions_per_plan,
                 image_detail=self.image_detail,
                 save_screenshots=self.save_screenshots,
                 screenshot_dir=self.screenshot_dir,
