@@ -29,6 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .mini_goal_manager import MiniGoalManager, MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
 from utils.overlay_description import describe_overlay_element, metadata_matches
+from agent.task_based_execution import TaskBasedExecutionMixin
+from bot_config import SequentialTaskConfig
 
 if TYPE_CHECKING:
     from .agent_controller import AgentController
@@ -95,16 +97,21 @@ Implements agentic mode with:
 - Reactive goal determination (what to do now)
 """
 
-class AgentController:
+class AgentController(TaskBasedExecutionMixin):
     """
-    Basic reactive agent controller.
-    
+    Basic reactive agent controller with task-based execution support.
+
     Step 1 implementation: Minimal viable agent that:
     1. Observes browser state
     2. Checks simple completion criteria
     3. Generates actions using existing PlanGenerator
     4. Executes actions using existing ActionExecutor
     5. Repeats until done or max iterations
+
+    Extended with task-based execution capabilities:
+    - Task decomposition (Normal and Sequential tasks)
+    - Sequential task iteration with Bridge Planner
+    - Result tracking and accumulation
     """
     
     def __init__(
@@ -142,6 +149,9 @@ class AgentController:
         # Screenshot saving for debugging
         save_screenshots: bool = False,
         screenshot_dir: str = "agent_screenshots",
+        # Task-based execution
+        sequential_task_config: Optional[SequentialTaskConfig] = None,
+        use_task_based_execution: bool = True,
     ):
         """
         Initialize agent controller.
@@ -179,7 +189,7 @@ class AgentController:
         # Ensure event_logger is never None - create a dummy one if needed
         if self.event_logger is None:
             from utils.event_logger import EventLogger
-            self.event_logger = EventLogger(debug_mode=True)
+            self.event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False)
         self.max_iterations = 50
         self.iteration_delay = 0.5
         self.task_start_url: Optional[str] = None
@@ -304,6 +314,10 @@ class AgentController:
 
         self.mini_goal_manager = MiniGoalManager(self.bot)
         self.mini_goal_stack: List[Dict[str, Any]] = []  # Stack of active mini goals
+
+        # Initialize task-based execution system
+        self._initialize_task_system(sequential_task_config)
+        self.use_task_based_execution = use_task_based_execution
 
     def register_mini_goal(
         self,
@@ -587,8 +601,12 @@ class AgentController:
             )
             self.event_logger.agent_complete(success=False, reasoning="Page is blank")
             return result
-        
-        # Main reactive loop
+
+        # Task-based execution path
+        if self.use_task_based_execution:
+            return self._run_task_based_execution(user_prompt, agent_context)
+
+        # Main reactive loop (legacy execution path)
         for iteration in range(self.max_iterations):
             # Start iteration timer
             self.bot.execution_timer.start_iteration()
@@ -661,12 +679,21 @@ class AgentController:
                 self._current_page_info = page_info
                 try:
                     preview_entries = []
-                    for elem in overlay_data:
+                    # Limit preview to first 10 elements to reduce verbosity
+                    max_preview = 10
+                    for elem in overlay_data[:max_preview]:
                         desc = describe_overlay_element(elem)
                         if desc:
                             preview_entries.append(desc)
+                    if len(overlay_data) > max_preview:
+                        preview_entries.append(f"... and {len(overlay_data) - max_preview} more")
                     preview_text = "; ".join(preview_entries) if preview_entries else None
-                    self.event_logger.overlay_data_snapshot(len(overlay_data), preview=preview_text)
+
+                    # Only include detailed preview when debug mode is enabled
+                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+                        self.event_logger.overlay_data_snapshot(len(overlay_data), preview=preview_text)
+                    else:
+                        self.event_logger.overlay_data_snapshot(len(overlay_data))
                 except Exception:
                     pass
 

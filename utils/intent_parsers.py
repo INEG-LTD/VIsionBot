@@ -111,6 +111,11 @@ def parse_keyword_command(text: str) -> Optional[tuple[str, str, Optional[str]]]
     t = (text or "").strip()
     if not t:
         return None
+
+    # Normalize newlines to spaces (LLM sometimes generates multi-line text descriptions)
+    # This handles cases like: 'click: a tag with text "Line1\nLine2\nLine3"'
+    t = re.sub(r'\s*\n\s*', ' ', t)
+
     # Accept forms like "click: payload" or "click action: payload"
     # Allow underscores and hyphens in keywords (e.g., "defer_input", "sub-focus")
     m = re.match(r"^\s*([a-z][a-z0-9_\-]*)(?:\s+action)?\s*:\s*(.*)$", t, flags=re.IGNORECASE)

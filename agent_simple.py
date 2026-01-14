@@ -614,14 +614,15 @@ user_data_path.mkdir(parents=True, exist_ok=True)
 # Create configuration using the new BotConfig API
 config = BotConfig(
     model=ModelConfig(
-        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+        agent_model="gemini/gemini-2.5-flash-lite",
         command_model="gpt-5-mini",
         # command_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         reasoning_level=ReasoningLevel.HIGH
     ),
     execution=ExecutionConfig(
         max_attempts=30,
-        max_actions_per_plan=1
+        max_actions_per_plan=1,
+        track_ineffective_actions=False  # Disable checking for failed actions
     ),
     elements=ElementConfig(
         overlay_mode="all",
@@ -632,6 +633,7 @@ config = BotConfig(
     ),
     logging=DebugConfig(
         debug_mode=True,  # Set to False to use callbacks only (no debug prints)
+        show_overlay_candidates=False,
         # save_screenshots=False,
     ),
     browser=BrowserConfig(
@@ -664,7 +666,7 @@ setup_mini_goals(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://www.google.com/search?q=ios+developer+jobs&sca_esv=325502952459ac64&sxsrf=ANbL-n73LSydD6THtFv_a1zWBUikhaJy0A:1768018647138&source=hp&ei=19Jhaf2eBvLn7_UP2uu1yQM&iflsig=AFdpzrgAAAAAaWHg50wsYj4t-7e-CQfyQQ0kVZKXd1Gn&udm=8&oq=ios+devel&gs_lp=Egdnd3Mtd2l6Iglpb3MgZGV2ZWwqAggAMg0QIxjwBRiABBgnGIoFMgcQIxjwBRgnMg0QIxjwBRiABBgnGIoFMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABEiDHlAAWJgRcAB4AJABAJgBQKABmwSqAQE5uAEDyAEA-AEBmAIJoALABMICChAjGIAEGCcYigXCAgsQABiABBixAxiDAcICERAuGIAEGLEDGNEDGIMBGMcBwgIOEC4YgAQYsQMYgwEYigXCAg4QABiABBixAxiDARiKBcICFBAuGIAEGLEDGNEDGIMBGMcBGIoFwgIIEAAYgAQYsQPCAgsQLhiABBixAxiDAZgDAJIHATmgB9FisgcBObgHwATCBwUwLjcuMsgHGYAIAA&sclient=gws-wiz&jbr=sep:0")
+bot.page.goto("https://www.google.com/")
 
 # Setup border effect if not in debug mode
 apply_thinking_border(bot)
@@ -674,7 +676,7 @@ apply_thinking_border(bot)
 
 # Run agentic mode - now returns AgentResult with extracted data
 result = bot.execute_task(
-    "click reject cookies if they are present, go through 5 job listings and extract the job title (eg ios developer) and company name (eg apple) and then extract the information",
+    "click reject cookies if they are present, go through 5 job listings and extract the job title (eg ios developer) and company name",
     base_knowledge=[
         "You must click the 'Jobs' tab button before clicking a job listing"
         "You must press enter after typing in a search field"
@@ -705,7 +707,7 @@ result = bot.execute_task(
 if result.success:
     print(f"\n✅ Task completed! Confidence: {result.confidence:.2f}")
     print(f"Reasoning: {result.reasoning}")
-    
+
     # Access extracted data if any
     if result.extracted_data:
         print("\n📊 Extracted Data:")

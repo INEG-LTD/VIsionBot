@@ -490,15 +490,28 @@ def _extract_json_object(text: str) -> Optional[Any]:
     decoder = json.JSONDecoder()
     for candidate in candidates:
         candidate_stripped = candidate.strip()
+
+        # Remove control characters that break JSON parsing
+        # This handles cases where the LLM output has unescaped newlines, tabs, etc.
+        candidate_cleaned = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', ' ', candidate_stripped)
+
+        # Fix common JSON syntax errors
+        # Remove trailing commas before closing braces/brackets
+        candidate_cleaned = re.sub(r',(\s*[}\]])', r'\1', candidate_cleaned)
+
+        # Try to fix unescaped newlines in string values (if any remain)
+        # This is tricky, so we just try to replace literal newlines with space
+        candidate_cleaned = candidate_cleaned.replace('\n', ' ').replace('\r', ' ')
+
         try:
-            return json.loads(candidate_stripped)
+            return json.loads(candidate_cleaned)
         except Exception:
             pass
 
-        for idx, ch in enumerate(candidate_stripped):
+        for idx, ch in enumerate(candidate_cleaned):
             if ch == "{":
                 try:
-                    obj, _ = decoder.raw_decode(candidate_stripped[idx:])
+                    obj, _ = decoder.raw_decode(candidate_cleaned[idx:])
                     return obj
                 except Exception:
                     continue

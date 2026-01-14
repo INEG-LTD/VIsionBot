@@ -2,6 +2,269 @@
 
 A powerful, vision-based web automation framework that uses AI to interact with web pages like a human would. BrowserVisionBot combines computer vision, large language models (LLMs), and Playwright to create intelligent automation agents that can understand and interact with any web interface.
 
+## 📋 Recent Changes
+
+### v2.1.0 - Multi-Step Action Plan Execution Fix
+- **Fixed**: Task execution now properly runs all steps in action plans instead of only executing the first step
+- **Impact**: Action plans that include multiple sequential steps (e.g., scroll then click) now execute completely
+- **Technical**: Modified `task_based_execution.py` to loop through all steps in `ActionPlan.steps` instead of executing only `steps[0]`
+
+## 🏗️ System Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           BROWSER VISION BOT                                │
+│                           SYSTEM ARCHITECTURE                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐    ┌─────────────────┐
+│   USER REQUEST  │───▶│ TASK ORCHESTRATOR│
+│                 │    │                 │
+│ • "Extract 5    │    │ • Parse request │
+│   job listings" │    │ • Route to task │
+│ • "Click button"│    │   type          │
+└─────────────────┘    └─────────┬───────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │                         │
+            ┌───────▼──────┐          ┌──────▼──────┐
+            │ NORMAL TASK  │          │SEQUENTIAL   │
+            │              │          │ TASK        │
+            │ • Single-shot │          │             │
+            │ • "Click btn" │          │ • Multi-iter │
+            │ • "Extract"   │          │ • "Extract 5"│
+            └───────┬──────┘          └──────┬───────┘
+                    │                       │
+                    └───────────────────────┼───────────────────────────────┐
+                                            │                               │
+┌───────────────────────────────────────────▼───────────────────────────────┐│
+│                                                                           ││
+│                         BRIDGE PLANNER LEVEL                              ││
+│                       (Sequential Tasks Only)                             ││
+│                                                                           ││
+│   ┌─────────────────────────────────────────────────────────────────┐     ││
+│   │                BRIDGE PLANNER DECISIONS                       │     ││
+│   │                                                                 │     ││
+│   │  ┌─────────────────┐          ┌─────────────────┐              │     ││
+│   │  │  generate_task  │          │  end_sequence   │              │     ││
+│   │  │                 │          │                 │              │     ││
+│   │  │ • "Extract from │          │ • Target count  │              │     ││
+│   │  │   3rd listing"  │          │   reached       │              │     ││
+│   │  │ • "Process item │          │ • Error occurred│              │     ││
+│   │  │   #5"           │          │ • Stuck         │              │     ││
+│   │  └─────────┬───────┘          └─────────┬───────┘              │     ││
+│   │            │                            │                      │     ││
+│   └────────────▼────────────────────────────▼──────────────────────┘     ││
+│                                                                           ││
+└───────────────────────────────────────────────────────────────────────────┘│
+                                             │                              │
+                    ┌────────────────────────▼──────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                      REACTIVEGOALDETERMINER LEVEL                         │
+│                      (Action Planning for All Tasks)                      │
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐     │
+│   │                    ACTION PLAN GENERATION                       │     │
+│   │                                                                 │     │
+│   │  ┌─────────────────────────────────────────────────────────┐    │     │
+│   │  │                ACTION TYPES (13+)                       │    │     │
+│   │  │                                                         │    │     │
+│   │  │  • click - Click elements                               │    │     │
+│   │  │  • type - Type text into inputs                         │    │     │
+│   │  │  • scroll - Scroll page                                 │    │     │
+│   │  │  • wait - Wait for changes                             │    │     │
+│   │  │  • press - Press keys                                   │    │     │
+│   │  │  • handle_select - Dropdowns                            │    │     │
+│   │  │  • handle_upload - File uploads                        │    │     │
+│   │  │  • handle_datetime - Date/time inputs                   │    │     │
+│   │  │  • back/forward - Navigation                            │    │     │
+│   │  │  • open - Open URLs                                     │    │     │
+│   │  │  • extract - Extract structured data                    │    │     │
+│   │  │                                                         │    │     │
+│   │  │  SPECIAL COMMANDS:                                      │    │     │
+│   │  │  • complete: <reason> - Task finished                   │    │     │
+│   │  │  • ask: <question> - Need user help                     │    │     │
+│   │  └─────────────────────────────────────────────────────────┘    │     │
+│   │                                                                 │     │
+│   │  ┌─────────────────────────────────────────────────────────┐    │     │
+│   │  │           MULTI-STEP ACTION PLANS (NEW!)               │    │     │
+│   │  │                                                         │    │     │
+│   │  │  Examples:                                              │    │     │
+│   │  │  • [scroll down, click button, extract data]           │    │     │
+│   │  │  • [navigate page, wait load, fill form, submit]       │    │     │
+│   │  │  • [press tab, type text, press enter]                 │    │     │
+│   │  └─────────────────────────────────────────────────────────┘    │     │
+│   │                                                                 │     │
+│   └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                          MINI-LOOP LEVEL                                  │
+│                        (Retry Logic Layer)                               │
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐     │
+│   │                RETRY MECHANISM (Up to 9 attempts)              │     │
+│   │                                                                 │     │
+│   │  ┌─────────────────┐          ┌─────────────────┐              │     │
+│   │  │   Iteration 0   │          │   Iteration 1   │              │     │
+│   │  │                 │          │                 │              │     │
+│   │  │ • Generate Plan │          │ • Generate Plan │              │     │
+│   │  │ • Execute Steps │          │ • Execute Steps │              │     │
+│   │  │ • Check Success │          │ • Check Success │              │     │
+│   │  └─────────┬───────┘          └─────────┬───────┘              │     │
+│   │            │                            │                      │     │
+│   │            │          ┌─────────────────┼─────────────────┐    │     │
+│   │            │          │   If Plan Fails │                 │    │     │
+│   │            │          │   → Try Again   │                 │    │     │
+│   │            └─────────▶│                 │◀────────────────┘    │     │
+│   │                       └─────────────────┘                      │     │
+│   └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                       ACTION EXECUTION LEVEL                              │
+│                     (Step-by-Step Execution)                             │
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐     │
+│   │                SEQUENTIAL STEP EXECUTION                       │     │
+│   │                                                                 │     │
+│   │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐   │
+│   │  │     Step 1      │───▶│     Step 2      │───▶│     Step 3      │   │
+│   │  │                 │    │                 │    │                 │   │
+│   │  │ • Execute       │    │ • Execute       │    │ • Execute       │   │
+│   │  │ • Check Success │    │ • Check Success │    │ • Check Success │   │
+│   │  │ • Log Results   │    │ • Log Results   │    │ • Log Results   │   │
+│   │  └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘   │
+│   │            │                      │                      │           │
+│   │    ┌───────▼──────────────────────▼──────────────────────▼──────┐   │
+│   │    │                                                           │   │
+│   │    │             If Any Step Fails → Plan Fails               │   │
+│   │    │             → Try Next Mini-loop Iteration               │   │
+│   │    │                                                           │   │
+│   │    └───────────────────────────────────────────────────────────┘   │
+│   └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                        COMPLETION MECHANISMS                              │
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐     │
+│   │                                                                 │     │
+│   │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐   │
+│   │  │ AUTO-COMPLETION │    │ MANUAL COMPLETE │    │    ASK HELP     │   │
+│   │  │                 │    │                 │    │                 │   │
+│   │  │ • Pure extract  │    │ • Agent issues  │    │ • Agent stuck   │   │
+│   │  │   tasks only    │    │   complete: cmd │    │ • User guidance │   │
+│   │  │ • No clicks/    │    │ • Multi-action  │    │ • Pause & wait  │   │
+│   │  │   types/scrolls │    │   tasks         │    │ • Resume        │   │
+│   │  └─────────────────┘    └─────────────────┘    └─────────────────┘   │
+│   │                                                                 │     │
+│   └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                         EXECUTION FLOW EXAMPLES                           │
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐     │
+│   │                                                                 │     │
+│   │  PATH 1: Simple Normal Task                                     │     │
+│   │  User → Normal Task → ReactiveGoalDeterminer → Plan → Execute   │     │
+│   │                                                                 │     │
+│   │  PATH 2: Sequential Task with Retries                           │     │
+│   │  User → Sequential → Bridge Planner → Subtask → Plan Fail →     │     │
+│   │       Mini-loop Retry → New Plan → Execute → Complete           │     │
+│   │                                                                 │     │
+│   │  PATH 3: Multi-Step Action Plan (NEW!)                          │     │
+│   │  Plan: [Scroll, Click, Extract] → Execute Step1 → Step2 → Step3 │     │
+│   │                                                                 │     │
+│   └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+## 📈 Simplified Flow Diagrams
+
+### **Normal Task Flow:**
+```
+User Request
+    ↓
+Normal Task
+    ↓
+ReactiveGoalDeterminer
+    ↓
+Action Plan [Step 1, Step 2, ...]
+    ↓
+Execute All Steps Sequentially
+    ↓
+Success/Failure
+```
+
+### **Sequential Task Flow:**
+```
+User Request
+    ↓
+Sequential Task
+    ↓
+┌─ Bridge Planner ─┐
+│ Decide: generate_task? ──YES──► Subtask ─► ReactiveGoalDeterminer ─► Action Plan ─► Execute ─► Complete
+│                      │
+│                      NO
+│                      ↓
+│                 end_sequence
+└─────────────────────┘
+```
+
+### **Complete Execution Hierarchy:**
+```
+Sequential Task (Level 1)
+├── Iteration 1 (Level 2)
+│   ├── Bridge Planner Call 1 (Level 3)
+│   │   └── Subtask: "Extract from item 1"
+│   │       └── Mini-loop (Level 4)
+│   │           ├── Attempt 0: Action Plan [Step A, Step B] (Level 5)
+│   │           │   ├── Execute Step A → Success
+│   │           │   └── Execute Step B → Success → Plan Success
+│   │           └── If Plan Failed → Attempt 1: New Action Plan...
+│   └── If Subtask Failed → Bridge Planner Call 2: New Subtask...
+├── Iteration 2 (Level 2)
+│   └── [Same structure as Iteration 1]
+└── [Continue until completion condition met]
+```
+
+### **Action Plan Step Execution (NEW):**
+```
+BEFORE (Bug): Action Plan [Step 1, Step 2, Step 3] → Execute ONLY Step 1 → Done
+AFTER (Fixed): Action Plan [Step 1, Step 2, Step 3] → Execute Step 1 → Execute Step 2 → Execute Step 3 → Done
+```
+
+## 🔍 Key Components Summary
+
+| Component | Purpose | Input | Output | Retry Logic |
+|-----------|---------|-------|--------|-------------|
+| **Bridge Planner** | Manages sequential iteration | Task progress + page state | generate_task or end_sequence | Multiple calls per iteration |
+| **ReactiveGoalDeterminer** | Plans specific actions | Task instruction + page state | Action Plan (multi-step) | None (single call per subtask) |
+| **Mini-loop** | Handles action failures | Failed action plan | Alternative action plan | Up to 9 iterations |
+| **Action Executor** | Executes individual steps | Action step + page state | Success/failure | None (single attempt per step) |
+
+## 🎯 Decision Points
+
+1. **Task Type**: Normal vs Sequential → Route to different execution paths
+2. **Bridge Planner**: Continue iteration vs End sequence → Control loop progression
+3. **Action Plan**: Single step vs Multi-step → Execute all steps sequentially
+4. **Step Success**: Continue plan vs Fail plan → Mini-loop retry logic
+5. **Completion**: Auto-complete vs Manual complete vs Ask help → Different success paths
+
 ## 🌟 Key Features
 
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection

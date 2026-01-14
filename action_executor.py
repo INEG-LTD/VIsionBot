@@ -111,7 +111,7 @@ class ActionExecutor:
         # Ensure event_logger is never None - create a dummy one if needed
         if self.event_logger is None:
             from utils.event_logger import EventLogger
-            self.event_logger = EventLogger(debug_mode=True)
+            self.event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False)
         
         # Pre-action callback system
         self.pre_action_callbacks: List[Callable[[PreActionContext], None]] = []

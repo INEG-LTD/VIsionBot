@@ -195,6 +195,7 @@ class ReactiveGoalDeterminer:
         include_visible_text_in_agent_context: bool = False,
         history_manager: Optional[HistoryManager] = None,
         max_actions_per_plan: int = 6,
+        extraction_schema: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the reactive goal determiner.
@@ -208,6 +209,7 @@ class ReactiveGoalDeterminer:
             interaction_summary_limit: Max interactions to include in the prompt.
                                        None means include all interactions. Default: None.
             max_actions_per_plan: Maximum number of actions to generate in a single plan. Default: 6.
+            extraction_schema: Optional JSON schema for extraction tasks to enforce consistent field names.
         """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -224,6 +226,7 @@ class ReactiveGoalDeterminer:
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.history_manager = history_manager
         self.max_actions_per_plan = max_actions_per_plan
+        self.extraction_schema = extraction_schema
     
     def determine_action_plan(
         self,
@@ -301,6 +304,46 @@ class ReactiveGoalDeterminer:
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
             )
+
+            # Handle case where generate_model returns a string (parsing failed)
+            if isinstance(plan, str):
+                # Try to parse it ourselves
+                import json
+                import re
+
+                # Strip markdown code blocks if present
+                cleaned = plan.strip()
+                if cleaned.startswith("```"):
+                    # Remove ```json or ``` at start and ``` at end
+                    cleaned = re.sub(r'^```(?:json)?\s*\n', '', cleaned)
+                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+
+                # Remove control characters that break JSON parsing (except \t and \n for structure)
+                # This handles cases where the LLM output has null bytes or other control chars
+                cleaned = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', ' ', cleaned)
+
+                # Fix common JSON syntax errors
+                # Remove trailing commas before closing braces/brackets
+                cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+
+                # Replace literal newlines/returns with spaces
+                cleaned = cleaned.replace('\n', ' ').replace('\r', ' ')
+
+                # Parse JSON
+                try:
+                    data = json.loads(cleaned)
+                    plan = ActionPlan(**data)
+                except Exception as parse_error:
+                    print(f"⚠️ Failed to parse action plan from string: {parse_error}")
+                    # Print first 500 chars for debugging
+                    print(f"⚠️ First 500 chars of cleaned JSON: {cleaned[:500]}")
+                    return None
+
+            # Ensure plan is the correct type
+            if plan and not isinstance(plan, ActionPlan):
+                print(f"⚠️ Expected ActionPlan, got {type(plan)}")
+                return None
+
             if plan and overlay_data:
                 overlay_desc_map = {}
                 overlay_metadata_map = {}
@@ -429,15 +472,21 @@ ACTION RULES:
 
 6. DEFER: Use "defer:" when user requests manual control or captcha appears
 
-7. COMPLETION: Use "complete: <reasoning>" when you've successfully accomplished the user's goal
+7. COMPLETION: Use "complete: <reasoning>" when the task is finished
    - CRITICAL: If a NOTEBOOK section appears below, CHECK IT FIRST before planning more actions
    - If the notebook already contains the data the user asked for, use "complete:" IMMEDIATELY
    - Do NOT extract the same data twice - if it's in the notebook, the task is DONE
    - Provide clear reasoning explaining what was accomplished
    - Example: "complete: Successfully extracted 10 job listings. Data includes job titles, companies, and locations."
 
+   CONDITIONAL TASKS (tasks with "if present", "if visible", "if exists", etc.):
+   - If the condition is NOT met (element not found), use "complete:" with explanation
+   - Example: "complete: No cookie banner found, condition not met, proceeding"
+   - DO NOT return empty actions - always use "complete:" when nothing more to do
+   - The task is FINISHED when either: (1) action performed, or (2) condition not met
+
 COMMANDS:
-- complete: <reasoning> - CALL WHEN TASK FINISHED - Check notebook first! If data is there, use this
+- complete: <reasoning> - CALL WHEN TASK FINISHED - Use when: (1) goal accomplished, (2) conditional task where condition not met, or (3) nothing more to do
 - ask: <question> - ASK USER when stuck, confused, or element not working as expected
 - click: <type> <description> - Interact with element (must specify type: button/link/etc)
 - type: <text> : <field> - Enter text (use colon separator, field auto-clears first)
@@ -456,7 +505,8 @@ COMMANDS:
 - mini_goal: <instruction> - Focus on complex sub-task
 
 DECISION MAKING:
-- If user's goal is accomplished, use "complete: <reasoning>" immediately
+- If user's goal is accomplished OR condition not met (for "if" tasks), use "complete: <reasoning>" immediately
+- NEVER return empty actions - if nothing to do, use "complete:" to signal task is finished
 - Interact with visible elements. If target not visible, use scroll commands
 - If something isn't working after 1-2 attempts, use "ask:" to get user guidance
 """
@@ -601,33 +651,45 @@ NAVIGATION HISTORY:
 WHAT'S BEEN DONE (DO NOT REPEAT THESE):
 {interaction_summary}
 
-⚠️ CRITICAL: Review the list above. If your intended action matches something already done (especially clicks),
-the page state has likely CHANGED. Look for NEW elements like modals, forms, or popups that appeared as a result.
+⚠️ CRITICAL: Review the list above. DO NOT REPEAT these actions:
+- If you already clicked something, don't click it again - look for what changed
+- If you already extracted data, USE "complete:" - don't extract the same data again
+- If your intended action matches something already done, the page state has likely CHANGED
 
 {ineffective_actions_context if ineffective_actions_context else ""}
 {overlay_context if overlay_context else ""}
 {"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
 {remaining_tasks if remaining_tasks else ""}
 {self._format_notebook(notebook) if notebook else ""}
+{self._format_extraction_schema() if self.extraction_schema else ""}
 COMPLETION CHECK (DO THIS FIRST):
-1. IF there is a NOTEBOOK section above with extracted data:
-   - Compare the extracted data against the USER GOAL
-   - If the data satisfies what the user asked for → use "complete:" IMMEDIATELY
-   - Example: If user asked for "job listings" and notebook has job listings → DONE
-2. ONLY if the notebook is empty OR data doesn't match the goal:
-   - Plan the next actions to achieve the goal
-- NEVER extract the same data twice - check the notebook first!
+1. Review the USER GOAL shown above - this is YOUR specific task to accomplish right now
+2. IF you've accomplished the USER GOAL → use "complete:" IMMEDIATELY
+   - Example: Goal is "Extract job title from 2nd listing" and you just extracted it → DONE, use complete:
+   - Example: Goal is "Click listing and extract title" and you did both → DONE, use complete:
+3. IF there is a NOTEBOOK section showing this goal is already satisfied → use "complete:"
+   - Example: Goal asks for specific data and notebook already has it → DONE
+4. ONLY if goal is not accomplished yet → plan next actions to achieve it
+- CRITICAL: After completing an extraction, use "complete:" - don't extract again!
+- NEVER extract the same data twice - check interaction history and notebook first!
 
 PLAN GUIDELINES:
 - Choose a sequential plan of up to {self.max_actions_per_plan} steps that can all be executed without leaving the current viewport.
-- Only include actions whose targets are fully visible; if you spot a useful element that is clipped or outside the viewport, add a scroll step before interacting with it so nothing is half-hidden.
 - Each step must include its own reasoning explaining how it moves the task forward while relying only on visible UI.
 - Do NOT plan for autocomplete suggestions, dropdown entries, or modals unless they are already visible in the screenshot.
 - Plan for the full set of actions you can safely execute now (e.g., typing into a field and then pressing Enter) and stop once the next action would require new UI content (modal, suggestion list, navigation, etc.).
 
+CRITICAL - CLIPPED ELEMENTS:
+- ALWAYS check if your target element is FULLY visible in the screenshot
+- If element is partially visible (clipped at top/bottom/edges), you MUST scroll first
+- NEVER interact with clipped elements - always reveal them fully first
+- Example BAD: click: 5th job listing (when bottom half is cut off in screenshot)
+- Example GOOD: Step 1: scroll: down, Step 2: click: 5th job listing (after fully visible)
+- If element is not visible at all, scroll to bring it into view before interacting
+
 RESPOND IN THIS JSON SHAPE:
 
-For COMPLETION (when notebook has the requested data or goal is achieved):
+For COMPLETION (when notebook has data, goal achieved, OR conditional task where condition not met):
 {{
   "steps": [
     {{"action": "complete: Successfully extracted 10 job listings including titles, companies, and locations.", "reasoning": "The notebook contains the job data the user requested. Task is done."}}
@@ -635,6 +697,16 @@ For COMPLETION (when notebook has the requested data or goal is achieved):
   "reasoning": "The notebook already contains the extracted job listings. No further actions needed.",
   "confidence": 0.95,
   "expected_outcome": "Task complete. User has the requested data."
+}}
+
+For CONDITIONAL TASK COMPLETION (when element "if present" is not found):
+{{
+  "steps": [
+    {{"action": "complete: No cookie banner found on page. Conditional task complete.", "reasoning": "The task was to click cookie banner 'if present'. Since no banner exists, the condition is not met and the task is complete."}}
+  ],
+  "reasoning": "Searched for cookie banner but none exists. Conditional task satisfied.",
+  "confidence": 0.95,
+  "expected_outcome": "Task complete. Condition was not met as expected for optional task."
 }}
 
 For ACTIONS (when more work is needed):
@@ -697,6 +769,43 @@ overlay_index is only needed when targeting a visible element. Skip it for compl
             "  - If YES: Use 'complete: Successfully extracted [X items/data]. Summary: [brief description]'",
             "  - If NO: Explain what's missing and plan next action",
             "  - DO NOT extract the same data again!",
+            "=" * 60,
+            ""
+        ])
+
+        return "\n".join(lines)
+
+    def _format_extraction_schema(self) -> str:
+        """Format extraction schema for inclusion in the prompt."""
+        if not self.extraction_schema:
+            return ""
+
+        import json
+
+        # Get required fields
+        required_fields = self.extraction_schema.get("required", [])
+        properties = self.extraction_schema.get("properties", {})
+
+        lines = [
+            "",
+            "=" * 60,
+            "📋 EXTRACTION SCHEMA - USE THESE EXACT FIELD NAMES:",
+            "=" * 60,
+        ]
+
+        for field in required_fields:
+            field_info = properties.get(field, {})
+            description = field_info.get("description", "")
+            lines.append(f"  • {field}: {description}")
+
+        lines.extend([
+            "",
+            "⚠️ CRITICAL: When extracting data, use these EXACT field names.",
+            "   Example CORRECT extraction:",
+            f"   {json.dumps({field: '...' for field in required_fields[:3]}, indent=6)}",
+            "",
+            "   Example WRONG extraction (inconsistent field names):",
+            "   {\"title\": \"...\", \"company_name\": \"...\"}  ❌ Wrong! Use the field names above.",
             "=" * 60,
             ""
         ])

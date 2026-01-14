@@ -311,6 +311,7 @@ class BrowserVisionBot:
         self.enable_sub_agents = config.execution.enable_sub_agents
         self.max_actions_per_plan = config.execution.max_actions_per_plan
         self.dedup_mode = config.execution.dedup_mode
+        self.track_ineffective_actions = config.execution.track_ineffective_actions
 
         self.history_config = config.history
         self.history_manager = HistoryManager(
@@ -393,6 +394,7 @@ class BrowserVisionBot:
         
         # Extract debug configuration
         _debug_mode = config.logging.debug_mode
+        _show_overlay_candidates = config.logging.show_overlay_candidates
         self.save_screenshots = config.logging.save_screenshots
         self.screenshot_dir = config.logging.screenshot_dir
 
@@ -409,7 +411,7 @@ class BrowserVisionBot:
         # This MUST never fail - use SafeLogger as ultimate fallback
         try:
             if event_logger is None:
-                event_logger = EventLogger(debug_mode=_debug_mode)
+                event_logger = EventLogger(debug_mode=_debug_mode, show_overlay_candidates=_show_overlay_candidates)
             self.event_logger = event_logger
             try:
                 set_event_logger(event_logger)  # Set as global
@@ -418,7 +420,7 @@ class BrowserVisionBot:
         except Exception:
             # Fallback: create a minimal logger if initialization fails
             try:
-                self.event_logger = EventLogger(debug_mode=True)
+                self.event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False)
                 try:
                     set_event_logger(self.event_logger)
                 except Exception:
@@ -1410,7 +1412,7 @@ class BrowserVisionBot:
         self,
         user_prompt: str,
         max_iterations: int = 50,
-        track_ineffective_actions: bool = True,
+        track_ineffective_actions: Optional[bool] = None,
         base_knowledge: Optional[List[str]] = None,
         allow_partial_completion: bool = False,
         check_ineffective_actions: Optional[bool] = None,
@@ -1574,6 +1576,10 @@ class BrowserVisionBot:
             return context.cached_result
         
         try:
+            # Use config default if not explicitly provided
+            if track_ineffective_actions is None:
+                track_ineffective_actions = self.track_ineffective_actions
+
             if check_ineffective_actions is not None:
                 track_ineffective_actions = check_ineffective_actions
             
@@ -2702,8 +2708,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             and self.deduper.dedup_enabled
             and element_data
         ):
-            if self.config.logging.debug_mode:
-                print(f"[Debug] element_data before dedup: {len(element_data)}")
             should_avoid, reason = self._determine_dedup_usage(goal_description)
             if should_avoid:
                 print(f"🚫 Filtering out interacted elements (reason: {reason})...")
@@ -2739,8 +2743,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                     if original_elem:
                         filtered_element_data.append(original_elem.copy())
                 element_data = filtered_element_data
-            if self.config.logging.debug_mode:
-                print(f"[Debug] element_data after dedup: {len(element_data)}")
 
         return element_data, screenshot, screenshot
 

@@ -123,15 +123,17 @@ class EventLogger:
     In normal mode: only calls callbacks (no prints)
     """
     
-    def __init__(self, debug_mode: bool = True):
+    def __init__(self, debug_mode: bool = True, show_overlay_candidates: bool = False):
         try:
             self.debug_mode = debug_mode
+            self.show_overlay_candidates = show_overlay_candidates
             self._callbacks: List[Callable[[BotEvent], None]] = []
             self._event_history: List[BotEvent] = []
             self._max_history = 1000
         except Exception:
             # If even initialization fails, set minimal defaults
             self.debug_mode = True
+            self.show_overlay_candidates = False
             self._callbacks = []
             self._event_history = []
             self._max_history = 1000
@@ -483,6 +485,8 @@ class EventLogger:
     
     def plan_overlay_candidates(self, candidates: List[str], **details):
         try:
+            if not self.show_overlay_candidates:
+                return
             msg = "Candidate overlays for LLM selection:"
             for candidate in candidates:
                 msg += f"\n  • {candidate}"
@@ -529,7 +533,7 @@ def get_event_logger() -> EventLogger:
     """Get the global event logger instance"""
     global _global_event_logger
     if _global_event_logger is None:
-        _global_event_logger = EventLogger(debug_mode=True)  # Default to debug for backward compatibility
+        _global_event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False)  # Default to debug for backward compatibility
     return _global_event_logger
 
 def set_event_logger(logger: EventLogger) -> None:
