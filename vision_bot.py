@@ -44,6 +44,7 @@ from utils.intent_parsers import (
 )
 from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
+from utils.debug_print import dprint, PrintMode, set_print_mode
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from utils.event_logger import EventLogger, set_event_logger
 from action_ledger import ActionLedger
@@ -397,6 +398,7 @@ class BrowserVisionBot:
         _show_overlay_candidates = config.logging.show_overlay_candidates
         self.save_screenshots = config.logging.save_screenshots
         self.screenshot_dir = config.logging.screenshot_dir
+        set_print_mode(PrintMode.DEBUG if _debug_mode else PrintMode.NORMAL)
 
         # Initialize event logger early (before any methods that might use it)
         # Create a safe logger that never fails
@@ -755,7 +757,7 @@ class BrowserVisionBot:
             )
             return result.success if result else False
         except Exception as e:
-            print(f"    ⚠️ Error executing auto-converted action '{action_command}': {e}")
+            dprint(f"    ⚠️ Error executing auto-converted action '{action_command}': {e}")
             return False
 
     def end(self) -> None:
@@ -1171,9 +1173,9 @@ class BrowserVisionBot:
             >>> bot.page.goto("https://example.com")
             >>> result = bot.act("click: login button")
             >>> if result.success:
-            ...     print(f"Success: {result.message}")
-            ...     print(f"Confidence: {result.confidence}")
-            ...     print(f"Attempts: {result.metadata.get('attempts')}")
+            ...     dprint(f"Success: {result.message}")
+            ...     dprint(f"Confidence: {result.confidence}")
+            ...     dprint(f"Attempts: {result.metadata.get('attempts')}")
         """
         # Parameter validation
         if not goal_description or not goal_description.strip():
@@ -1376,8 +1378,8 @@ class BrowserVisionBot:
             duration_ms = (time.time() - start_time) * 1000
             duration = time.time() - start_time
             self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
-            print(f"❌ Could not parse command: {goal_description}")
-            print("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
+            dprint(f"❌ Could not parse command: {goal_description}")
+            dprint("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
             self.action_ledger.complete_action(action_id, success=False, error_message="Could not parse goal as keyword action. Must use keyword format (click:, type:, etc.)")
             self.execution_timer.end_action()
             return _create_result(
@@ -1404,9 +1406,9 @@ class BrowserVisionBot:
                 try:
                     executed_count = self.process_queue()
                     if executed_count > 0:
-                        print(f"🔄 Auto-processed {executed_count} queued actions")
+                        dprint(f"🔄 Auto-processed {executed_count} queued actions")
                 except Exception as e:
-                    print(f"⚠️ Error processing action queue: {e}")
+                    dprint(f"⚠️ Error processing action queue: {e}")
 
     def execute_task(
         self,
@@ -1474,19 +1476,19 @@ class BrowserVisionBot:
             bot.page.goto("https://example.com")
             result = bot.execute_task("search for python tutorials")
             if result.success:
-                print("Task completed!")
+                dprint("Task completed!")
             
             # With extraction
             result = bot.execute_task(
                 "navigate to amazon.com, search for 'laptop', extract the first product name and price"
             )
             if result.success:
-                print(f"Product: {result.extracted_data.get('first product name')}")
-                print(f"Price: {result.extracted_data.get('price')}")
+                dprint(f"Product: {result.extracted_data.get('first product name')}")
+                dprint(f"Price: {result.extracted_data.get('price')}")
             
             # Access extracted data
             for prompt, data in result.extracted_data.items():
-                print(f"{prompt}: {data}")
+                dprint(f"{prompt}: {data}")
         """
         # Parameter validation
         if not user_prompt or not user_prompt.strip():
@@ -1745,7 +1747,7 @@ class BrowserVisionBot:
         
         Example:
             >>> if bot.is_agent_paused():
-            ...     print("Agent is paused, waiting for resume...")
+            ...     dprint("Agent is paused, waiting for resume...")
             ...     bot.resume_agent()
         """
         if not self.agent_controller:
@@ -1902,7 +1904,7 @@ class BrowserVisionBot:
             >>> result = bot.extract("Get page title", output_format="text", return_result=True)
             >>> if result.success:
             ...     title = result.data  # The extracted text
-            ...     print(f"Confidence: {result.confidence}")
+            ...     dprint(f"Confidence: {result.confidence}")
         """
         # Parameter validation
         if not prompt or not prompt.strip():
@@ -2146,7 +2148,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                         from ai_utils import _manual_parse_structured_output
                         manual_result = _manual_parse_structured_output(str(result), ExtractionResult)
                         if manual_result and isinstance(manual_result, ExtractionResult):
-                            print("✅ Successfully parsed extraction result using manual parser")
+                            dprint("✅ Successfully parsed extraction result using manual parser")
                             result = manual_result
                         else:
                             # Parsing failed completely
@@ -2158,7 +2160,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     
                     # Warn if confidence is low (but above threshold)
                     if result.confidence < 0.8:
-                        print(f"⚠️ Low extraction confidence ({result.confidence:.2f}). Verify extracted data matches what's actually on the page.")
+                        dprint(f"⚠️ Low extraction confidence ({result.confidence:.2f}). Verify extracted data matches what's actually on the page.")
                     
                     # Parse the JSON string
                     import json
@@ -2212,11 +2214,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                             validate_value(extracted_dict, "")
 
                         if validation_warnings:
-                            print("⚠️ Validation warnings - some extracted values may not exist on page:")
+                            dprint("⚠️ Validation warnings - some extracted values may not exist on page:")
                             for warning in validation_warnings[:5]:  # Show first 5 warnings
-                                print(f"   - {warning}")
+                                dprint(f"   - {warning}")
                             if len(validation_warnings) > 5:
-                                print(f"   ... and {len(validation_warnings) - 5} more warnings")
+                                dprint(f"   ... and {len(validation_warnings) - 5} more warnings")
 
                     # Wrap result with metadata (handle both dict and list)
                     if isinstance(extracted_dict, dict):
@@ -2236,7 +2238,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                         final_data = self._enrich_extracted_data_with_urls(final_data, overlay_data)
                     except Exception as e:
                         # URL enrichment is optional - continue without it
-                        print(f"⚠️ URL enrichment failed: {e}")
+                        dprint(f"⚠️ URL enrichment failed: {e}")
 
                     # Record extraction in interaction history
                     self.session_tracker.record_interaction(
@@ -2293,7 +2295,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     error_msg = f"Type error during extraction: {e}. This may indicate a malformed response from the model."
                 
                 if attempt < max_retries:
-                    print(f"[Extract] Attempt {attempt + 1} failed: {error_msg}, retrying...")
+                    dprint(f"[Extract] Attempt {attempt + 1} failed: {error_msg}, retrying...")
                     time.sleep(0.5)
                 else:
                     # Record failed extraction in interaction history
@@ -2378,7 +2380,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 )
                 results.append(result)
             except Exception as e:
-                print(f"[ExtractBatch] Failed to extract '{prompt}': {e}")
+                dprint(f"[ExtractBatch] Failed to extract '{prompt}': {e}")
                 # Return None or empty dict for failed extractions
                 if output_format == "text":
                     results.append("")
@@ -2440,7 +2442,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         self._check_termination()
         
         if not self.started:
-            print("❌ Bot not started")
+            dprint("❌ Bot not started")
             return
         
         self.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
@@ -2517,7 +2519,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         try:
             if not prompts:
                 self.logger.log_error("No prompts provided for register_prompts", "register_prompts() called with empty prompts")
-                print("❌ No prompts provided for register_prompts")
+                dprint("❌ No prompts provided for register_prompts")
                 return False
             
             # Store the goals for later reference
@@ -2548,17 +2550,17 @@ Return only the extracted text that appears in the text content above. Do not ma
                 LogCategory.SYSTEM,
                 f"Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}){extra_summary}",
             )
-            print(f"📋 Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}){extra_summary}")
+            dprint(f"📋 Registered {len(prompts)} commands with ref ID: {ref_id} (mode={mode}){extra_summary}")
             
             # Show what was registered
             for i, prompt in enumerate(prompts, 1):
-                print(f"   {i}. {prompt}")
+                dprint(f"   {i}. {prompt}")
             
             return True
             
         except Exception as e:
             self.logger.log_error(f"Error in register_prompts: {e}", "register_prompts() execution", {"ref_id": ref_id})
-            print(f"❌ Error in register_prompts: {e}")
+            dprint(f"❌ Error in register_prompts: {e}")
             return False
 
     def register_mini_goal(
@@ -2666,10 +2668,10 @@ Return only the extracted text that appears in the text content above. Do not ma
         """Construct a single-step plan that opens the requested URL."""
         url = (goal.navigation_intent or "").strip()
         if not url:
-            print("❌ Navigation goal missing URL; cannot create OPEN plan")
+            dprint("❌ Navigation goal missing URL; cannot create OPEN plan")
             return None
 
-        print(f"[PlanGen] Building OPEN plan for navigation goal: {url}")
+        dprint(f"[PlanGen] Building OPEN plan for navigation goal: {url}")
         return VisionPlan(
             detected_elements=PageElements(elements=[]),
             action_steps=[ActionStep(action=ActionType.OPEN, url=url)],
@@ -2710,7 +2712,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         ):
             should_avoid, reason = self._determine_dedup_usage(goal_description)
             if should_avoid:
-                print(f"🚫 Filtering out interacted elements (reason: {reason})...")
+                dprint(f"🚫 Filtering out interacted elements (reason: {reason})...")
                 elements_for_dedup: List[Dict[str, Any]] = []
                 for elem in element_data:
                     elements_for_dedup.append(
@@ -2731,7 +2733,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                     )
 
                 filtered_elements = self.deduper.filter_interacted_elements(elements_for_dedup, "click")
-                print(
+                dprint(
                     f"🔢 Found {len(filtered_elements)} elements after deduplication "
                     f"(removed {len(elements_for_dedup) - len(filtered_elements)} duplicates)"
                 )
@@ -2960,7 +2962,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         try:
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print("[KeywordCommand] Executing plan via action_executor")
+                dprint("[KeywordCommand] Executing plan via action_executor")
             success = self.action_executor.execute_plan(
                 plan,
                 page_info,
@@ -3000,7 +3002,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         filtered_kwargs = {k: v for k, v in action_kwargs.items() if v is not None}
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
-                print(f"[KeywordCommand] Retry attempt {attempt}/{max_attempts} for element selection")
+                dprint(f"[KeywordCommand] Retry attempt {attempt}/{max_attempts} for element selection")
                 # Small delay before retry to allow page to stabilize
                 time.sleep(0.5)
             
@@ -3008,9 +3010,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             element_data, screenshot, _ = self._collect_overlay_data(goal_description, page_info)
             if not element_data:
                 if attempt < max_attempts:
-                    print(f"⚠️ No interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
+                    dprint(f"⚠️ No interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
                     continue
-                print("❌ No interactive elements detected after all retries")
+                dprint("❌ No interactive elements detected after all retries")
                 return False
 
             # ==================================================================================
@@ -3037,7 +3039,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 selection_model = None
                 if attempt > 1 and self.element_selection_fallback_model:
                     selection_model = self.element_selection_fallback_model
-                    print(f"[KeywordCommand] Using fallback model: {selection_model}")
+                    dprint(f"[KeywordCommand] Using fallback model: {selection_model}")
 
                 try:
                     self.event_logger.overlay_selection(f"Requesting element selection from LLM (attempt {attempt}/{max_attempts})")
@@ -3058,9 +3060,9 @@ Return only the extracted text that appears in the text content above. Do not ma
 
             if selection is None:
                 if attempt < max_attempts:
-                    print(f"⚠️ Element selection failed (attempt {attempt}/{max_attempts}), retrying...")
+                    dprint(f"⚠️ Element selection failed (attempt {attempt}/{max_attempts}), retrying...")
                     continue
-                print("❌ Element selection failed after all retries")
+                dprint("❌ Element selection failed after all retries")
                 return False
 
             overlay_index = selection
@@ -3072,9 +3074,9 @@ Return only the extracted text that appears in the text content above. Do not ma
             matching_data = next((elem for elem in element_data if elem.get("index") == overlay_index), None)
             if not matching_data:
                 if attempt < max_attempts:
-                    print(f"⚠️ Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
+                    dprint(f"⚠️ Selected overlay #{overlay_index} missing in element data (attempt {attempt}/{max_attempts}), retrying...")
                     continue
-                print(f"[KeywordCommand] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
+                dprint(f"[KeywordCommand] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
                 return False
             
             # Record exact DOM coordinates for reliable clicking
@@ -3196,7 +3198,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_hint_raw = intent.target_text or helper or intent.helper_text
         target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ TYPE command missing target hint – falling back")
+            dprint("ℹ️ TYPE command missing target hint – falling back")
             return None
 
         request_instruction = self._normalize_hint(goal_description)
@@ -3234,7 +3236,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_hint_raw = intent.target_text or helper or intent.helper_text
         target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ SELECT command missing target hint – falling back")
+            dprint("ℹ️ SELECT command missing target hint – falling back")
             return None
 
         request_instruction = self._normalize_hint(goal_description)
@@ -3276,7 +3278,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_hint_raw = intent.target_text or helper or intent.helper_text or intent.value
         target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ UPLOAD command missing target hint – falling back")
+            dprint("ℹ️ UPLOAD command missing target hint – falling back")
             return None
 
         request_instruction = self._normalize_hint(goal_description)
@@ -3314,7 +3316,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         target_hint_raw = intent.target_text or helper or intent.helper_text
         target_hint = self._normalize_hint(target_hint_raw)
         if not target_hint:
-            print("ℹ️ DATETIME command missing target hint – falling back")
+            dprint("ℹ️ DATETIME command missing target hint – falling back")
             return None
 
         request_instruction = self._normalize_hint(goal_description)
@@ -3392,7 +3394,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         if not key:
             key = (payload or helper or "").strip()
         if not key:
-            print("ℹ️ PRESS command missing key – falling back")
+            dprint("ℹ️ PRESS command missing key – falling back")
             return None
 
         return self._execute_keyword_plan(
@@ -3451,8 +3453,8 @@ Return only the extracted text that appears in the text content above. Do not ma
         
         # If no agent is running, just log and return success
         if not self.agent_controller:
-            print(f"ℹ️  Defer command received: {message}")
-            print("   (No agent is currently running, so nothing to pause)")
+            dprint(f"ℹ️  Defer command received: {message}")
+            dprint("   (No agent is currently running, so nothing to pause)")
             return True
         
         # Record defer action in interaction history (before pausing)
@@ -3482,24 +3484,24 @@ Return only the extracted text that appears in the text content above. Do not ma
                     try:
                         if self.agent_controller and self.agent_controller.is_paused():
                             self.resume_agent()
-                            print(f"▶️  Auto-resumed after {auto_resume_seconds} seconds")
+                            dprint(f"▶️  Auto-resumed after {auto_resume_seconds} seconds")
                             # Set resume reason - will be recorded in main thread
                             resume_reason = f"Defer auto-resumed after {auto_resume_seconds} seconds"
                     except Exception as e:
-                        print(f"⚠️  Error during auto-resume: {e}")
+                        dprint(f"⚠️  Error during auto-resume: {e}")
                 
                 timer = threading.Timer(auto_resume_seconds, auto_resume)
                 timer.daemon = True
                 timer.start()
-                print(f"⏸️  Paused: {message} (will auto-resume in {auto_resume_seconds} seconds)")
+                dprint(f"⏸️  Paused: {message} (will auto-resume in {auto_resume_seconds} seconds)")
                 
                 # For timed pauses, wait on the pause event (timer will resume)
                 if self.agent_controller:
                     self.agent_controller._pause_event.wait()
             else:
                 # For indefinite pauses, wait for user to press Enter
-                print(f"⏸️  Paused: {message}")
-                print("   (Press Enter or call bot.resume_agent() to continue)")
+                dprint(f"⏸️  Paused: {message}")
+                dprint("   (Press Enter or call bot.resume_agent() to continue)")
                 
                 # Start a thread to listen for Enter key press
                 def wait_for_enter():
@@ -3509,14 +3511,14 @@ Return only the extracted text that appears in the text content above. Do not ma
                         # Resume the agent when Enter is pressed
                         if self.agent_controller and self.agent_controller.is_paused():
                             self.resume_agent()
-                            print("▶️  Resumed by user")
+                            dprint("▶️  Resumed by user")
                             # Set resume reason - will be recorded in main thread
                             resume_reason = "Defer resumed by user - control returned to agent"
                     except (EOFError, KeyboardInterrupt):
                         # If input stream is unavailable, just resume
                         if self.agent_controller and self.agent_controller.is_paused():
                             self.resume_agent()
-                            print("▶️  Resumed (input unavailable)")
+                            dprint("▶️  Resumed (input unavailable)")
                             # Set resume reason - will be recorded in main thread
                             resume_reason = "Defer resumed (input unavailable)"
                 
@@ -3540,11 +3542,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                     )
                 except Exception as e:
                     # If recording fails, log but don't break the defer flow
-                    print(f"⚠️  Could not record defer resume: {e}")
+                    dprint(f"⚠️  Could not record defer resume: {e}")
             
             return True
         except Exception as e:
-            print(f"⚠️  Error pausing agent: {e}")
+            dprint(f"⚠️  Error pausing agent: {e}")
             return False
 
     def _keyword_back(
@@ -3586,7 +3588,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     ) -> Optional[bool]:
         url = self._extract_url(payload) or self._extract_url(helper) or self._extract_url(goal_description)
         if not url:
-            print("ℹ️ NAVIGATE command missing URL – falling back")
+            dprint("ℹ️ NAVIGATE command missing URL – falling back")
             return None
 
         return self._execute_keyword_plan(
@@ -3680,7 +3682,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 if hasattr(self, 'deduper') and self.deduper:
                     self.deduper.set_dedup_enabled(True)
                 self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication enabled")
-                print("🧹 Deduplication enabled")
+                dprint("🧹 Deduplication enabled")
                 return True
             
             # Check for dedup: disable
@@ -3689,13 +3691,13 @@ Return only the extracted text that appears in the text content above. Do not ma
                 if hasattr(self, 'deduper') and self.deduper:
                     self.deduper.set_dedup_enabled(False)
                 self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication disabled")
-                print("🧹 Deduplication disabled")
+                dprint("🧹 Deduplication disabled")
                 return True
             
             return None  # Not a dedup command
             
         except Exception as e:
-            print(f"⚠️ Error handling dedup commands: {e}")
+            dprint(f"⚠️ Error handling dedup commands: {e}")
             return False
     
     def _handle_ref_commands(self, goal_description: str) -> Optional[bool]:
@@ -3716,11 +3718,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                 ref_id = goal_description[4:].strip()
                 
                 if not ref_id:
-                    print("❌ No ref ID provided after 'ref:'")
+                    dprint("❌ No ref ID provided after 'ref:'")
                     return False
                 
                 if ref_id not in self.command_refs:
-                    print(f"❌ Ref ID '{ref_id}' not found in stored commands")
+                    dprint(f"❌ Ref ID '{ref_id}' not found in stored commands")
                     return False
                 
                 ref_entry = self.command_refs[ref_id]
@@ -3734,18 +3736,18 @@ Return only the extracted text that appears in the text content above. Do not ma
                 stored_action_id = ref_entry.get("action_id")  # Get the original action ID
 
                 if not stored_prompts:
-                    print(f"⚠️ Ref ID '{ref_id}' has no stored commands")
+                    dprint(f"⚠️ Ref ID '{ref_id}' has no stored commands")
                     return True
 
                 summary_mode = 'ALL' if all_must_be_true else 'ANY'
-                print(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode})")
+                dprint(f"🔄 Executing {len(stored_prompts)} stored commands for ref ID: {ref_id} (mode={summary_mode})")
                 results: List[bool] = []
 
                 # Use the stored command ID as the parent, fallback to current if not available
                 ref_action_id = stored_action_id or self.action_ledger.get_current_action_id()
                 
                 for i, prompt in enumerate(stored_prompts, 1):
-                    print(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
+                    dprint(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
                     
                     # Generate a child action ID
                     child_action_id = f"{ref_action_id}_action{i}" if ref_action_id else None
@@ -3763,28 +3765,28 @@ Return only the extracted text that appears in the text content above. Do not ma
                     )
                     results.append(success)
                     if success:
-                        print(f"   ✅ Stored command {i} succeeded")
+                        dprint(f"   ✅ Stored command {i} succeeded")
                     else:
-                        print(f"   ❌ Stored command {i} failed")
+                        dprint(f"   ❌ Stored command {i} failed")
                         
                         # If all_must_be_true is True and this command failed, abort immediately
                         if all_must_be_true:
-                            print("🛑 Aborting execution due to failure (all_must_be_true=True)")
+                            dprint("🛑 Aborting execution due to failure (all_must_be_true=True)")
                             summary_mode = "ALL must succeed"
-                            print(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → ❌ False (aborted after command {i})")
+                            dprint(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → ❌ False (aborted after command {i})")
                             return False
 
                 # If we get here, either all_must_be_true=False or all commands succeeded
                 final_result = all(results) if all_must_be_true else any(results)
                 summary_mode = "ALL must succeed" if all_must_be_true else "ANY success suffices"
-                print(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → {'✅ True' if final_result else '❌ False'}")
+                dprint(f"📊 Ref '{ref_id}' evaluation ({summary_mode}) → {'✅ True' if final_result else '❌ False'}")
                 return final_result
             
             return None  # Not a ref command
             
         except Exception as e:
             traceback.print_exc()
-            print(f"⚠️ Error handling ref commands: {e}")
+            dprint(f"⚠️ Error handling ref commands: {e}")
             return False
     
     def _filter_elements_by_focus(self, element_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -3812,7 +3814,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             metadata: Optional metadata dict
         """
         self.action_queue.enqueue(action, action_id, priority, metadata)
-        print(f"📋 Queued action: {action} [Priority: {priority}]")
+        dprint(f"📋 Queued action: {action} [Priority: {priority}]")
     
     def process_queue(self) -> int:
         """
@@ -3827,7 +3829,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         while not self.action_queue.is_empty():
             queued_action = self.action_queue.dequeue()
             if queued_action:
-                print(f"🔄 Processing queued action: {queued_action.action}")
+                dprint(f"🔄 Processing queued action: {queued_action.action}")
                 try:
                     action_result = self.act(
                         queued_action.action,
@@ -3836,16 +3838,16 @@ Return only the extracted text that appears in the text content above. Do not ma
                     success = action_result.success
                     if success:
                         executed += 1
-                        print(f"   ✅ Queued action succeeded: {queued_action.action}")
+                        dprint(f"   ✅ Queued action succeeded: {queued_action.action}")
                     else:
                         failed += 1
-                        print(f"   ❌ Queued action failed: {queued_action.action}")
+                        dprint(f"   ❌ Queued action failed: {queued_action.action}")
                 except Exception as e:
                     failed += 1
-                    print(f"   ❌ Queued action error: {e}")
+                    dprint(f"   ❌ Queued action error: {e}")
         
         if failed > 0:
-            print(f"⚠️ {failed} queued actions failed")
+            dprint(f"⚠️ {failed} queued actions failed")
         
         return executed
 

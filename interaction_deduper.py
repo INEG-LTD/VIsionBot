@@ -10,6 +10,7 @@ import time
 import re
 from collections import OrderedDict
 from typing import List, Dict, Any, Optional, Set
+from utils.debug_print import dprint, PrintMode
 
 
 class InteractionDeduper:
@@ -142,12 +143,12 @@ class InteractionDeduper:
             signature = self._generate_element_signature(element, action_key)
             if signature and signature in self.interacted_elements:
                 filtered_count += 1
-                print(f"🚫 Filtered out interacted element for action '{action_key}': {element.get('text', '')[:30]}...")
+                dprint(f"🚫 Filtered out interacted element for action '{action_key}': {element.get('text', '')[:30]}...")
             else:
                 filtered.append(element)
         
         if filtered_count > 0:
-            print(f"🧹 Filtered out {filtered_count} previously interacted elements")
+            dprint(f"🧹 Filtered out {filtered_count} previously interacted elements")
         
         return filtered
 
@@ -177,7 +178,7 @@ class InteractionDeduper:
             text = self._extract_visible_text(element)
             if text and text in dedup_texts:
                 duplicates.append({'index': idx, 'text': text})
-                print(f"🚫 Duplicate text match for index {idx}: '{text}'")
+                dprint(f"🚫 Duplicate text match for index {idx}: '{text}'")
                 continue
 
             filtered.append(idx)
@@ -195,18 +196,18 @@ class InteractionDeduper:
 
         # Note: This would need to be passed to the focus manager if we want to track failures
         # For now, we'll just log it
-        print(f"📝 Recorded duplicate selection failure for intent: {intent}")
+        dprint(f"📝 Recorded duplicate selection failure for intent: {intent}")
 
     def mark_element_as_interacted(self, element: Dict[str, Any], interaction_type: str = "click") -> None:
         """Mark an element as interacted with for deduplication"""
 
         if not element:
-            print("❌ No element to mark as interacted with")
+            dprint("❌ No element to mark as interacted with")
             return
 
         signature = self._generate_element_signature(element, interaction_type)
         if not signature:
-            print("❌ No signature for element")
+            dprint("❌ No signature for element")
             return None
 
         element_snapshot = {
@@ -251,7 +252,7 @@ class InteractionDeduper:
     def clear_interacted_elements(self) -> None:
         """Clear all interacted elements from dedup tracking"""
         self.interacted_elements.clear()
-        print("🧹 Cleared all interacted elements from dedup tracking")
+        dprint("🧹 Cleared all interacted elements from dedup tracking")
 
     def get_interacted_elements_count(self) -> int:
         """Get count of currently tracked interacted elements"""
@@ -295,7 +296,7 @@ class InteractionDeduper:
         """Enable or disable deduplication"""
         self.dedup_enabled = enabled
         status = "enabled" if enabled else "disabled"
-        print(f"🧹 Deduplication {status}")
+        dprint(f"🧹 Deduplication {status}")
 
     def set_action_keyword(self, action_keyword: str) -> None:
         """Set the current action keyword for deduplication context"""

@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, str(project_root))
 
 from browser_vision_bot import BrowserVisionBot
+from utils.debug_print import dprint, PrintMode
 
 def test_long_text_typing():
     """Test typing long text into a textarea"""
@@ -57,53 +58,53 @@ def test_long_text_typing():
         # Test text - same length as the ElevenLabs example
         long_text = "I am excited by ElevenLabs' mission to advance voice AI and make high-quality, natural-sounding speech accessible to creators and users. I would love to apply my iOS experience to help bring these capabilities to mobile platforms in an intuitive, reliable app."
 
-        print(f"Testing typing of long text ({len(long_text)} characters):")
-        print(f"Text: {long_text[:100]}...")
+        dprint(f"Testing typing of long text ({len(long_text)} characters):")
+        dprint(f"Text: {long_text[:100]}...")
 
-        print(f"About to call bot.act() with text length: {len(long_text)}")
+        dprint(f"About to call bot.act() with text length: {len(long_text)}")
 
         # Use act() to type into the textarea
         result = bot.act(f"type: {long_text} in textarea")
 
         if result.success:
-            print("✅ Typing action succeeded")
+            dprint("✅ Typing action succeeded")
 
             # First, let's try to get the textarea value using JavaScript directly
             try:
                 textarea_value = bot.page.evaluate("document.getElementById('test-textarea').value")
-                print(f"Direct JavaScript extraction ({len(textarea_value)} chars): {textarea_value[:100]}...")
+                dprint(f"Direct JavaScript extraction ({len(textarea_value)} chars): {textarea_value[:100]}...")
             except Exception as e:
-                print(f"JavaScript extraction failed: {e}")
+                dprint(f"JavaScript extraction failed: {e}")
 
             # Verify what was actually typed by extracting the textarea value
             extract_result = bot.extract("Get the text from the textarea", output_format="text")
             if extract_result.success:
                 typed_text = extract_result.data.strip()
-                print(f"Extracted text ({len(typed_text)} chars): {typed_text[:100]}...")
+                dprint(f"Extracted text ({len(typed_text)} chars): {typed_text[:100]}...")
 
                 # Normalize whitespace for comparison (extract may add line breaks)
                 normalized_typed = ' '.join(typed_text.split())
                 normalized_expected = ' '.join(long_text.split())
 
                 if normalized_typed == normalized_expected:
-                    print("✅ SUCCESS: Full text was typed correctly!")
+                    dprint("✅ SUCCESS: Full text was typed correctly!")
                     return True
                 else:
-                    print("❌ FAILURE: Text was truncated or modified")
-                    print(f"Expected length: {len(long_text)}")
-                    print(f"Got length: {len(typed_text)}")
-                    print(f"Expected (normalized): {normalized_expected}")
-                    print(f"Got (normalized): {normalized_typed}")
+                    dprint("❌ FAILURE: Text was truncated or modified")
+                    dprint(f"Expected length: {len(long_text)}")
+                    dprint(f"Got length: {len(typed_text)}")
+                    dprint(f"Expected (normalized): {normalized_expected}")
+                    dprint(f"Got (normalized): {normalized_typed}")
                     return False
             else:
-                print("❌ Could not extract text from textarea")
+                dprint("❌ Could not extract text from textarea")
                 return False
         else:
-            print(f"❌ Typing action failed: {result.message}")
+            dprint(f"❌ Typing action failed: {result.message}")
             return False
 
     except Exception as e:
-        print(f"❌ Test failed with exception: {e}")
+        dprint(f"❌ Test failed with exception: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -121,10 +122,10 @@ def test_long_text_typing():
             pass
 
 if __name__ == "__main__":
-    print("Running typing integration test...")
+    dprint("Running typing integration test...")
     success = test_long_text_typing()
     if success:
-        print("\n🎉 Test PASSED - typing works correctly!")
+        dprint("\n🎉 Test PASSED - typing works correctly!")
     else:
-        print("\n💥 Test FAILED - typing issue still exists!")
+        dprint("\n💥 Test FAILED - typing issue still exists!")
     sys.exit(0 if success else 1)

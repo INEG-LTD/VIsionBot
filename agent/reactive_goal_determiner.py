@@ -18,6 +18,7 @@ from ai_utils import (
     get_default_agent_reasoning_level,
 )
 from utils.event_logger import get_event_logger
+from utils.debug_print import dprint, PrintMode
 from history import HistoryManager
 from utils.overlay_description import describe_overlay_element, overlay_element_metadata
 
@@ -260,13 +261,13 @@ class ReactiveGoalDeterminer:
             )
 
             if not plan:
-                print("⚠️ No action plan generated")
+                dprint("⚠️ No action plan generated")
                 return None
 
             return plan
 
         except Exception as e:
-            print(f"⚠️ ReactiveGoalDeterminer error: {e}")
+            dprint(f"⚠️ ReactiveGoalDeterminer error: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -334,14 +335,14 @@ class ReactiveGoalDeterminer:
                     data = json.loads(cleaned)
                     plan = ActionPlan(**data)
                 except Exception as parse_error:
-                    print(f"⚠️ Failed to parse action plan from string: {parse_error}")
+                    dprint(f"⚠️ Failed to parse action plan from string: {parse_error}")
                     # Print first 500 chars for debugging
-                    print(f"⚠️ First 500 chars of cleaned JSON: {cleaned[:500]}")
+                    dprint(f"⚠️ First 500 chars of cleaned JSON: {cleaned[:500]}")
                     return None
 
             # Ensure plan is the correct type
             if plan and not isinstance(plan, ActionPlan):
-                print(f"⚠️ Expected ActionPlan, got {type(plan)}")
+                dprint(f"⚠️ Expected ActionPlan, got {type(plan)}")
                 return None
 
             if plan and overlay_data:
@@ -375,7 +376,7 @@ class ReactiveGoalDeterminer:
                     pass
             return plan
         except Exception as e:
-            print(f"⚠️ Error generating action plan: {e}")
+            dprint(f"⚠️ Error generating action plan: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -562,7 +563,7 @@ DECISION MAKING:
         if self.include_overlays_in_agent_context:
             count = len(overlay_data) if overlay_data else 0
             if get_event_logger().debug_mode:
-                print(f"[Debug] overlay_data available: {count} elements")
+                dprint(f"[Debug] overlay_data available: {count} elements")
         if overlay_data and self.include_overlays_in_agent_context:
             # Filter to only interactive/actionable elements (similar to what plan_generator does)
             # Focus on elements that are likely to be interacted with

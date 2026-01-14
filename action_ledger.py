@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 from enum import Enum
 from pathlib import Path
+from utils.debug_print import dprint, PrintMode
 
 
 class ActionStatus(str, Enum):
@@ -270,14 +271,14 @@ class ActionLedger:
         """
         if self._logger_integration is None:
             self._logger_integration = LedgerLoggerIntegration(self, bot_logger)
-            print("✅ Action ledger logger integration enabled")
+            dprint("✅ Action ledger logger integration enabled")
     
     def disable_logger_integration(self) -> None:
         """Disable logger integration"""
         if self._logger_integration:
             self._logger_integration.uninstall()
             self._logger_integration = None
-            print("✅ Action ledger logger integration disabled")
+            dprint("✅ Action ledger logger integration disabled")
     
     def __len__(self) -> int:
         return len(self.records)
@@ -326,7 +327,7 @@ class ActionLedger:
         with open(path, 'w') as f:
             json.dump(data, f, indent=2)
         
-        print(f"💾 Saved action ledger to {filepath}")
+        dprint(f"💾 Saved action ledger to {filepath}")
     
     def load_from_file(self, filepath: str) -> None:
         """
@@ -362,7 +363,7 @@ class ActionLedger:
             )
             self.records[record_id] = record
         
-        print(f"📂 Loaded action ledger from {filepath} ({len(self.records)} actions)")
+        dprint(f"📂 Loaded action ledger from {filepath} ({len(self.records)} actions)")
     
     def export_summary(self, filepath: str) -> None:
         """
@@ -421,7 +422,7 @@ class ActionLedger:
         with open(path, 'w') as f:
             f.write("\n".join(lines))
         
-        print(f"📄 Exported summary to {filepath}")
+        dprint(f"📄 Exported summary to {filepath}")
     
     # =========================================================================
     # Comparison Methods
@@ -541,55 +542,55 @@ class LedgerComparison:
     
     def print_summary(self) -> None:
         """Print a human-readable summary of the comparison"""
-        print("\n" + "=" * 80)
-        print("LEDGER COMPARISON SUMMARY")
-        print("=" * 80)
+        dprint("\n" + "=" * 80)
+        dprint("LEDGER COMPARISON SUMMARY")
+        dprint("=" * 80)
         
         if self.added_actions:
-            print(f"\n➕ Added Actions ({len(self.added_actions)}):")
+            dprint(f"\n➕ Added Actions ({len(self.added_actions)}):")
             for action in self.added_actions[:5]:  # Show first 5
-                print(f"   + {action.goal}")
+                dprint(f"   + {action.goal}")
             if len(self.added_actions) > 5:
-                print(f"   ... and {len(self.added_actions) - 5} more")
+                dprint(f"   ... and {len(self.added_actions) - 5} more")
         
         if self.removed_actions:
-            print(f"\n➖ Removed Actions ({len(self.removed_actions)}):")
+            dprint(f"\n➖ Removed Actions ({len(self.removed_actions)}):")
             for action in self.removed_actions[:5]:
-                print(f"   - {action.goal}")
+                dprint(f"   - {action.goal}")
             if len(self.removed_actions) > 5:
-                print(f"   ... and {len(self.removed_actions) - 5} more")
+                dprint(f"   ... and {len(self.removed_actions) - 5} more")
         
         if self.status_changes:
-            print(f"\n🔄 Status Changes ({len(self.status_changes)}):")
+            dprint(f"\n🔄 Status Changes ({len(self.status_changes)}):")
             for change in self.status_changes[:5]:
-                print(f"   {change['old_status']} → {change['new_status']}: {change['goal']}")
+                dprint(f"   {change['old_status']} → {change['new_status']}: {change['goal']}")
             if len(self.status_changes) > 5:
-                print(f"   ... and {len(self.status_changes) - 5} more")
+                dprint(f"   ... and {len(self.status_changes) - 5} more")
         
         if self.slower_actions:
-            print(f"\n🐌 Slower Actions ({len(self.slower_actions)}):")
+            dprint(f"\n🐌 Slower Actions ({len(self.slower_actions)}):")
             for action in sorted(self.slower_actions, key=lambda x: x['diff_percent'], reverse=True)[:5]:
-                print(f"   +{action['diff_percent']:.1f}% ({action['old_duration']:.2f}s → {action['new_duration']:.2f}s): {action['goal'][:60]}")
+                dprint(f"   +{action['diff_percent']:.1f}% ({action['old_duration']:.2f}s → {action['new_duration']:.2f}s): {action['goal'][:60]}")
         
         if self.faster_actions:
-            print(f"\n⚡ Faster Actions ({len(self.faster_actions)}):")
+            dprint(f"\n⚡ Faster Actions ({len(self.faster_actions)}):")
             for action in sorted(self.faster_actions, key=lambda x: x['diff_percent'])[:5]:
-                print(f"   {action['diff_percent']:.1f}% ({action['old_duration']:.2f}s → {action['new_duration']:.2f}s): {action['goal'][:60]}")
+                dprint(f"   {action['diff_percent']:.1f}% ({action['old_duration']:.2f}s → {action['new_duration']:.2f}s): {action['goal'][:60]}")
         
         if self.error_changes:
-            print(f"\n⚠️ Error Changes ({len(self.error_changes)}):")
+            dprint(f"\n⚠️ Error Changes ({len(self.error_changes)}):")
             for change in self.error_changes[:5]:
-                print(f"   {change['goal'][:60]}")
-                print(f"     Old: {change['old_error']}")
-                print(f"     New: {change['new_error']}")
+                dprint(f"   {change['goal'][:60]}")
+                dprint(f"     Old: {change['old_error']}")
+                dprint(f"     New: {change['new_error']}")
         
         if self.stats_diff:
-            print(f"\n📊 Overall Stats:")
-            print(f"   Total Actions: {self.stats_diff.get('total_actions', 0):+d}")
-            print(f"   Total Duration: {self.stats_diff.get('total_duration', 0):+.2f}s")
-            print(f"   Avg Duration: {self.stats_diff.get('avg_duration', 0):+.3f}s")
+            dprint(f"\n📊 Overall Stats:")
+            dprint(f"   Total Actions: {self.stats_diff.get('total_actions', 0):+d}")
+            dprint(f"   Total Duration: {self.stats_diff.get('total_duration', 0):+.2f}s")
+            dprint(f"   Avg Duration: {self.stats_diff.get('avg_duration', 0):+.3f}s")
         
-        print("=" * 80 + "\n")
+        dprint("=" * 80 + "\n")
 
 
 # =============================================================================
@@ -696,4 +697,3 @@ class LedgerLoggerIntegration:
         self.ledger.register_action = self._original_register
         self.ledger.start_action = self._original_start
         self.ledger.complete_action = self._original_complete
-

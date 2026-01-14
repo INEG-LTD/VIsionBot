@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import re
 
+from utils.debug_print import dprint, PrintMode
+
 from utils.semantic_targets import (
     SemanticTarget,
     build_semantic_target,
@@ -488,11 +490,11 @@ def resolve_overlays(
     resolution = _sort_and_select(scored)
     if resolution.best_index is not None:
         details = [f"#{idx}:{score:.2f}" for idx, score in resolution.scored[:5]]
-        print(
+        dprint(
             f"[VisionResolver][{mode}] best={resolution.best_index} score={resolution.top_score:.2f} candidates={' '.join(details)}"
         )
     else:
-        print(
+        dprint(
             f"[VisionResolver][{mode}] no confident match. top_candidates={[(idx, round(score, 2)) for idx, score in resolution.scored[:5]]}"
         )
     return resolution

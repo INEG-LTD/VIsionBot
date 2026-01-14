@@ -8,6 +8,7 @@ from playwright.sync_api import Page
 from models import ActionStep, PageElements, PageInfo
 from utils import SelectorUtils
 from vision_utils import validate_and_clamp_coordinates, get_gemini_box_2d_center_pixels
+from utils.debug_print import dprint, PrintMode
 
 
 class UploadHandler:
@@ -35,14 +36,14 @@ class UploadHandler:
         debug_mode = event_logger and event_logger.debug_mode
         
         if debug_mode:
-            print("  Handling upload field")
-            print(f"    Debug: overlay_index = {step.overlay_index}")
-            print(f"    Debug: elements count = {len(elements.elements)}")
-            print(f"    Debug: step coordinates = ({step.x}, {step.y})")
+            dprint("  Handling upload field")
+            dprint(f"    Debug: overlay_index = {step.overlay_index}")
+            dprint(f"    Debug: elements count = {len(elements.elements)}")
+            dprint(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
         if step.overlay_index is None:
             if debug_mode:
-                print("    ❌ No overlay index provided")
+                dprint("    ❌ No overlay index provided")
             raise ValueError("No overlay index provided for upload field")
         
         # Find element by overlay_number instead of array index
@@ -55,8 +56,8 @@ class UploadHandler:
         if element is None:
             available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
             if debug_mode:
-                print(f"    ❌ No element found with overlay number {step.overlay_index}")
-                print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+                dprint(f"    ❌ No element found with overlay number {step.overlay_index}")
+                dprint(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
             raise ValueError(f"No element found with overlay number {step.overlay_index} for upload field")
         target_description = element.description or element.element_label or element.element_type
 
@@ -69,7 +70,7 @@ class UploadHandler:
         selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
         if selector:
             if debug_mode:
-                print(f"    Vision selector resolved for '{target_description}': {selector}")
+                dprint(f"    Vision selector resolved for '{target_description}': {selector}")
         else:
             raise ValueError("Could not resolve upload field selector")
 
@@ -79,14 +80,14 @@ class UploadHandler:
         if missing_or_manual:
             if debug_mode:
                 if step.upload_file_path:
-                    print(f"    Provided upload path not found '{step.upload_file_path}'. Falling back to manual picker.")
+                    dprint(f"    Provided upload path not found '{step.upload_file_path}'. Falling back to manual picker.")
                 else:
-                    print("    No file path provided. Clicking upload control and waiting for user to select a file...")
+                    dprint("    No file path provided. Clicking upload control and waiting for user to select a file...")
             try:
                 # Click the control to open the file picker
                 self.page.mouse.click(x, y)
             except Exception as click_err:
-                print(f"    ❌ Could not click upload control: {click_err}")
+                dprint(f"    ❌ Could not click upload control: {click_err}")
                 raise
 
             # Pause until the user confirms they've selected a file.
@@ -94,7 +95,7 @@ class UploadHandler:
             message = "    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue..."
             if self.user_messages_config and hasattr(self.user_messages_config, 'file_upload_prompt'):
                 message = self.user_messages_config.file_upload_prompt
-            print(message)
+            dprint(message)
             try:
                 input()
             except (EOFError, KeyboardInterrupt):
@@ -102,26 +103,26 @@ class UploadHandler:
                 interrupted_message = "    ⚠️ Input unavailable or interrupted; continuing without confirmation."
                 if self.user_messages_config and hasattr(self.user_messages_config, 'file_upload_interrupted'):
                     interrupted_message = self.user_messages_config.file_upload_interrupted
-                print(interrupted_message)
+                dprint(interrupted_message)
             return
 
         try:
             self.page.set_input_files(selector, step.upload_file_path)
             if debug_mode:
-                print(f"    ✅ Set file '{step.upload_file_path}' on upload field")
+                dprint(f"    ✅ Set file '{step.upload_file_path}' on upload field")
             return
         except Exception as err:
             if debug_mode:
-                print(f"    ⚠️ Upload via selector failed ({err}), searching for hidden file input")
+                dprint(f"    ⚠️ Upload via selector failed ({err}), searching for hidden file input")
             fallback_selector = self._locate_hidden_file_input(selector, x, y)
             if fallback_selector:
                 try:
                     self.page.set_input_files(fallback_selector, step.upload_file_path)
                     if debug_mode:
-                        print(f"    ✅ Set file '{step.upload_file_path}' using fallback selector {fallback_selector}")
+                        dprint(f"    ✅ Set file '{step.upload_file_path}' using fallback selector {fallback_selector}")
                     return
                 except Exception as inner_err:
-                    print(f"    ❌ Fallback upload also failed: {inner_err}")
+                    dprint(f"    ❌ Fallback upload also failed: {inner_err}")
             raise
     
     def _get_click_coordinates(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> tuple:
@@ -180,7 +181,7 @@ class UploadHandler:
             from utils.event_logger import get_event_logger
             event_logger = get_event_logger()
             if event_logger and event_logger.debug_mode:
-                print(f"    ⚠️ Error inspecting upload element at ({x}, {y}): {err}")
+                dprint(f"    ⚠️ Error inspecting upload element at ({x}, {y}): {err}")
             return {}
 
     def _locate_hidden_file_input(self, selector: Optional[str], x: Optional[int], y: Optional[int]) -> Optional[str]:
@@ -257,5 +258,5 @@ class UploadHandler:
             from utils.event_logger import get_event_logger
             event_logger = get_event_logger()
             if event_logger and event_logger.debug_mode:
-                print(f"    ⚠️ Failed to locate hidden file input: {err}")
+                dprint(f"    ⚠️ Failed to locate hidden file input: {err}")
             return None

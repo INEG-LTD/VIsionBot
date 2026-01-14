@@ -15,6 +15,7 @@ from ai_utils import (
     ReasoningLevel,
     get_default_agent_reasoning_level,
 )
+from utils.debug_print import dprint, PrintMode
 
 
 class TabAction(str, Enum):
@@ -169,7 +170,7 @@ class TabDecisionEngine:
             return decision
             
         except Exception as e:
-            print(f"⚠️ Error making tab decision: {e}")
+            dprint(f"⚠️ Error making tab decision: {e}")
             # Fallback: continue on current tab
             return TabDecision(
                 action=TabAction.CONTINUE,
@@ -308,4 +309,3 @@ CRITICAL RULES:
         ])
         
         return "\n".join(prompt_parts)
-

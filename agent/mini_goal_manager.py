@@ -3,6 +3,7 @@ import re
 from enum import Enum
 from typing import List, Dict, Optional, Any, Callable, TYPE_CHECKING
 from pydantic import BaseModel
+from utils.debug_print import dprint, PrintMode
 
 if TYPE_CHECKING:
     from vision_bot import BrowserVisionBot
@@ -30,7 +31,7 @@ class MiniGoalTrigger(BaseModel):
         act_target = parts[1].strip() if len(parts) > 1 else ""
 
         if debug:
-            print(f"🔍 Checking trigger match for action: '{action}' against trigger (type={self.action_type}, regex={self.target_regex})")
+            dprint(f"🔍 Checking trigger match for action: '{action}' against trigger (type={self.action_type}, regex={self.target_regex})")
         if self.action_type and self.action_type.lower() != act_type:
             return False
         
@@ -38,7 +39,7 @@ class MiniGoalTrigger(BaseModel):
             return False
             
         if debug:
-            print(f"🎯 TRIGGER MATCHED! action='{action}'")
+            dprint(f"🎯 TRIGGER MATCHED! action='{action}'")
         return True
 
     def matches_observation(self, visible_text: str) -> bool:
@@ -151,7 +152,7 @@ class MiniGoalManager:
         )
         
         if debug_mode:
-            print(f"🔍 find_matching_goal: registry_size={len(self.registry)}, action='{action}', text_len={len(visible_text) if visible_text else 0}")
+            dprint(f"🔍 find_matching_goal: registry_size={len(self.registry)}, action='{action}', text_len={len(visible_text) if visible_text else 0}")
         for entry in self.registry:
             trigger = entry["trigger"]
             if action and trigger.matches_action(action, debug=debug_mode):
@@ -164,19 +165,19 @@ class MiniGoalManager:
         """Execute a scripted mini goal"""
         handler = entry["handler"]
         if not handler:
-            print("⚠️ Scripted mini goal triggered but no handler provided")
+            dprint("⚠️ Scripted mini goal triggered but no handler provided")
             return
 
         context = MiniGoalScriptContext(self.bot, controller, action_step, action)
-        print("🎭 Executing Scripted Mini Goal...")
+        dprint("🎭 Executing Scripted Mini Goal...")
         handler(context)
-        print("✅ Scripted Mini Goal finished")
+        dprint("✅ Scripted Mini Goal finished")
 
     def execute_autonomous(self, entry: Dict[str, Any], controller: AgentController, action: str) -> TaskResult:
         """Execute an autonomous mini goal using a sub-agent loop"""
         instruction = entry.get("instruction_override") or f"Complete the following interaction: {action}"
         
-        print(f"🤖 Starting Autonomous Mini Goal: {instruction}")
+        dprint(f"🤖 Starting Autonomous Mini Goal: {instruction}")
         
         # Use existing SubAgentController if available, or create a temporary one
         if not controller.sub_agent_controller:

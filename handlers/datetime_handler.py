@@ -9,6 +9,7 @@ from models import ActionStep, PageElements, PageInfo  # DetectedElement not use
 from utils import SelectorUtils
 from vision_utils import validate_and_clamp_coordinates
 from session_tracker import InteractionType
+from utils.debug_print import dprint, PrintMode
 
 
 class DateTimeHandler:
@@ -30,12 +31,12 @@ class DateTimeHandler:
 
     def handle_datetime_field(self, step: ActionStep, elements: PageElements, page_info: PageInfo) -> None:
         """Execute datetime field interaction using direct fill() with coordinates"""
-        print("  Handling datetime field with direct fill()")
+        dprint("  Handling datetime field with direct fill()")
         
         # Debug information
-        print(f"    Debug: overlay_index = {step.overlay_index}")
-        print(f"    Debug: elements count = {len(elements.elements)}")
-        print(f"    Debug: step coordinates = ({step.x}, {step.y})")
+        dprint(f"    Debug: overlay_index = {step.overlay_index}")
+        dprint(f"    Debug: elements count = {len(elements.elements)}")
+        dprint(f"    Debug: step coordinates = ({step.x}, {step.y})")
         
         element_selector = None
         detected_element = None
@@ -50,7 +51,7 @@ class DateTimeHandler:
         # Get coordinates from the action step or element
         if step.x is not None and step.y is not None:
             x, y = int(step.x), int(step.y)
-            print(f"    Using coordinates from step: ({x}, {y})")
+            dprint(f"    Using coordinates from step: ({x}, {y})")
         elif step.overlay_index is not None and detected_element is not None:
             # Get coordinates from element
             from vision_utils import get_gemini_box_2d_center_pixels
@@ -59,13 +60,13 @@ class DateTimeHandler:
                 x, y = get_gemini_box_2d_center_pixels(
                     element.box_2d, page_info.width, page_info.height
                 )
-                print(f"    Using coordinates from element {step.overlay_index}: ({x}, {y})")
+                dprint(f"    Using coordinates from element {step.overlay_index}: ({x}, {y})")
             else:
                 raise ValueError("Could not determine coordinates for datetime field")
         else:
             available_overlays = [str(e.overlay_number) for e in elements.elements if e.overlay_number is not None]
-            print(f"    ❌ No element found with overlay number {step.overlay_index}")
-            print(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
+            dprint(f"    ❌ No element found with overlay number {step.overlay_index}")
+            dprint(f"    Available overlay numbers: {', '.join(available_overlays) if available_overlays else 'none'}")
             raise ValueError(f"No element found with overlay number {step.overlay_index} for datetime field")
         
         # Validate and clamp coordinates
@@ -88,24 +89,24 @@ class DateTimeHandler:
                 )
                 if isinstance(center, dict) and 'x' in center and 'y' in center:
                     x, y = int(center['x']), int(center['y'])
-                    print(f"    Refined coordinates from selector: ({x}, {y})")
+                    dprint(f"    Refined coordinates from selector: ({x}, {y})")
             except Exception:
                 pass
             
-            print(f"    Found element selector: {element_selector}")
+            dprint(f"    Found element selector: {element_selector}")
             
             # Detect the input type and format the value appropriately
             formatted_value = self._format_datetime_value(target_date, element_selector)
-            print(f"    Filling with formatted value: {formatted_value}")
+            dprint(f"    Filling with formatted value: {formatted_value}")
             
             # Try to fill the field directly
             success = False
             try:
                 self.page.fill(element_selector, formatted_value)
-                print(f"    ✅ Successfully filled datetime field with: '{formatted_value}'")
+                dprint(f"    ✅ Successfully filled datetime field with: '{formatted_value}'")
                 success = True
             except Exception as e:
-                print(f"    Fill failed, using fallback click+type: {e}")
+                dprint(f"    Fill failed, using fallback click+type: {e}")
                 # Fallback to click and type
                 self.page.mouse.click(x, y)
                 import time
@@ -121,7 +122,7 @@ class DateTimeHandler:
             
             # Verify the final value
             final_value = self.selector_utils.get_field_value_by_selector(element_selector)
-            print(f"    ✅ Datetime field updated. Final value: '{final_value}'")
+            dprint(f"    ✅ Datetime field updated. Final value: '{final_value}'")
             
             # Record the interaction with goal monitor
             if self.session_tracker:
@@ -134,7 +135,7 @@ class DateTimeHandler:
                 )
             
         except Exception as e:
-            print(f"    ❌ Datetime handling failed: {e}")
+            dprint(f"    ❌ Datetime handling failed: {e}")
             raise
 
     def _format_datetime_value(self, target_value: str, element_selector: str) -> str:
@@ -158,11 +159,11 @@ class DateTimeHandler:
             
             element_info = self.page.evaluate(js_code)
             if not element_info:
-                print("    ⚠️ Could not get element info, using original value")
+                dprint("    ⚠️ Could not get element info, using original value")
                 return target_value
             
             input_type = element_info.get('type', '').lower()
-            print(f"    📋 Element type: {input_type}")
+            dprint(f"    📋 Element type: {input_type}")
             
             # Extract time components from target value
             # Handle different input formats
@@ -228,5 +229,5 @@ class DateTimeHandler:
                     return target_value
                     
         except Exception as e:
-            print(f"    ⚠️ Error formatting datetime value: {e}")
+            dprint(f"    ⚠️ Error formatting datetime value: {e}")
             return target_value

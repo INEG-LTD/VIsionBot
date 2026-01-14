@@ -8,6 +8,7 @@ for lazy loading of options and closest match finding.
 import time
 import difflib
 from typing import List, Optional, Dict, Any
+from utils.debug_print import dprint, PrintMode
 from playwright.sync_api import Page, ElementHandle
 
 
@@ -71,7 +72,7 @@ def select_option(
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Attempt {attempt + 1} failed: {error_msg}")
+            dprint(f"Attempt {attempt + 1} failed: {error_msg}")
 
             # For universal selection, we don't track failed selectors the same way
             # since we're not trying specific selectors but rather finding elements dynamically
@@ -614,14 +615,14 @@ def _find_dropdown_trigger(
     failed_selectors = failed_selectors or []
 
     # Strategy 1: Use programmatic element discovery with context
-    print("🔍 Finding dropdown trigger element...")
+    dprint("🔍 Finding dropdown trigger element...")
     trigger_selector = _find_trigger_programmatically(page, field_placeholder, option_text, clicked_element_info, failed_selectors)
 
     if trigger_selector:
         return trigger_selector
 
     # Strategy 2: Fallback to LLM-based element finding
-    print("🤖 Using LLM to find dropdown trigger...")
+    dprint("🤖 Using LLM to find dropdown trigger...")
     trigger_selector = _find_trigger_with_llm(html_content, field_placeholder, option_text, failed_selectors)
 
     return trigger_selector
@@ -674,7 +675,7 @@ def _find_trigger_programmatically(
                                         try:
                                             test_elements = page.locator(f"#{elem_id}").all()
                                             if len(test_elements) >= 1:
-                                                print(f"✅ Found trigger element with keyword '{keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
+                                                dprint(f"✅ Found trigger element with keyword '{keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
                                                 return f"#{elem_id}"
                                         except Exception:
                                             continue
@@ -713,7 +714,7 @@ def _find_trigger_programmatically(
                         try:
                             test_elements = page.locator(f"#{element_id}").all()
                             if len(test_elements) >= 1:
-                                print(f"✅ Found trigger element with pattern '{selector_pattern}': ID '{element_id}' matches {len(test_elements)} element(s)")
+                                dprint(f"✅ Found trigger element with pattern '{selector_pattern}': ID '{element_id}' matches {len(test_elements)} element(s)")
                                 return f"#{element_id}"
                         except Exception:
                             continue
@@ -722,7 +723,7 @@ def _find_trigger_programmatically(
         except Exception:
             continue
 
-    print("❌ No suitable trigger element found programmatically")
+    dprint("❌ No suitable trigger element found programmatically")
     return None
 
 
@@ -775,7 +776,7 @@ Return only a valid CSS selector (like '#element-id', '.class-name', '[attribute
         return trigger_selector if trigger_selector else None
 
     except Exception as e:
-        print(f"⚠️ Failed to find trigger with LLM: {e}")
+        dprint(f"⚠️ Failed to find trigger with LLM: {e}")
         return None
 
 
@@ -816,7 +817,7 @@ Do not include any explanation or additional text.
         return selector if selector else None
 
     except Exception as e:
-        print(f"Error getting selector from HTML: {e}")
+        dprint(f"Error getting selector from HTML: {e}")
         return None
 
 
@@ -830,7 +831,7 @@ def _get_alternative_selector_from_llm(
     """Find an alternative selector by programmatically searching for dropdown elements."""
     try:
         # Try programmatic approaches first
-        print("🔍 Trying programmatic element discovery...")
+        dprint("🔍 Trying programmatic element discovery...")
 
         # Strategy 1: Find all select elements and try them
         try:
@@ -861,14 +862,14 @@ def _get_alternative_selector_from_llm(
                             try:
                                 elements = page.locator(selector).all()
                                 if len(elements) >= 1:
-                                    print(f"✅ Found select element with selector '{selector}' matches {len(elements)} element(s)")
+                                    dprint(f"✅ Found select element with selector '{selector}' matches {len(elements)} element(s)")
                                     return selector
                             except Exception:
                                 continue
                 except Exception:
                     continue
         except Exception as e:
-            print(f"⚠️ Error searching select elements: {e}")
+            dprint(f"⚠️ Error searching select elements: {e}")
 
         # Strategy 2: Find combobox/listbox elements
         try:
@@ -904,7 +905,7 @@ def _get_alternative_selector_from_llm(
                                     try:
                                         test_elements = page.locator(selector).all()
                                         if len(test_elements) >= 1:
-                                            print(f"✅ Found combobox element with selector '{selector}' matches {len(test_elements)} element(s)")
+                                            dprint(f"✅ Found combobox element with selector '{selector}' matches {len(test_elements)} element(s)")
                                             return selector
                                     except Exception:
                                         continue
@@ -913,7 +914,7 @@ def _get_alternative_selector_from_llm(
                 except Exception:
                     continue
         except Exception as e:
-            print(f"⚠️ Error searching combobox elements: {e}")
+            dprint(f"⚠️ Error searching combobox elements: {e}")
 
         # Strategy 3: Look for elements containing country/region related text
         try:
@@ -944,7 +945,7 @@ def _get_alternative_selector_from_llm(
                                         if (tag_name in ["select", "input", "button", "div"] or
                                             role in ["combobox", "listbox"] or
                                             aria_expanded is not None):
-                                            print(f"✅ Found element with {indicator} indicator: '{pattern}' matches {len(elements)} element(s)")
+                                            dprint(f"✅ Found element with {indicator} indicator: '{pattern}' matches {len(elements)} element(s)")
                                             return pattern
                                     except Exception:
                                         continue
@@ -953,12 +954,12 @@ def _get_alternative_selector_from_llm(
                 except Exception:
                     continue
         except Exception as e:
-            print(f"⚠️ Error searching for country indicators: {e}")
+            dprint(f"⚠️ Error searching for country indicators: {e}")
 
         # Strategy 4: If we have clicked element info, look for related elements
         if clicked_element_info:
             try:
-                print("🎯 Using clicked element context for targeted search...")
+                dprint("🎯 Using clicked element context for targeted search...")
                 clicked_text = clicked_element_info.get("text", "").lower()
                 keywords = clicked_element_info.get("keywords", [])
 
@@ -995,7 +996,7 @@ def _get_alternative_selector_from_llm(
                                                     try:
                                                         test_elements = page.locator(f"#{elem_id}").all()
                                                         if len(test_elements) >= 1:
-                                                            print(f"✅ Found element with keyword '{keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
+                                                            dprint(f"✅ Found element with keyword '{keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
                                                             return f"#{elem_id}"
                                                     except Exception:
                                                         continue
@@ -1005,7 +1006,7 @@ def _get_alternative_selector_from_llm(
                                                     try:
                                                         test_elements = page.locator(f"[name='{elem_name}']").all()
                                                         if len(test_elements) >= 1:
-                                                            print(f"✅ Found element with keyword '{keyword}': name '{elem_name}' matches {len(test_elements)} element(s)")
+                                                            dprint(f"✅ Found element with keyword '{keyword}': name '{elem_name}' matches {len(test_elements)} element(s)")
                                                             return f"[name='{elem_name}']"
                                                     except Exception:
                                                         continue
@@ -1041,7 +1042,7 @@ def _get_alternative_selector_from_llm(
                                                         try:
                                                             test_elements = page.locator(f"#{elem_id}").all()
                                                             if len(test_elements) >= 1:
-                                                                print(f"✅ Found broad match for '{broad_keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
+                                                                dprint(f"✅ Found broad match for '{broad_keyword}': ID '{elem_id}' matches {len(test_elements)} element(s)")
                                                                 return f"#{elem_id}"
                                                         except Exception:
                                                             continue
@@ -1051,13 +1052,13 @@ def _get_alternative_selector_from_llm(
                                 continue
 
             except Exception as e:
-                print(f"⚠️ Error in context-aware search: {e}")
+                dprint(f"⚠️ Error in context-aware search: {e}")
 
-        print("❌ All programmatic approaches failed to find a suitable element")
+        dprint("❌ All programmatic approaches failed to find a suitable element")
         return None
 
     except Exception as e:
-        print(f"⚠️ Failed to get alternative selector: {e}")
+        dprint(f"⚠️ Failed to get alternative selector: {e}")
 
     return None
 
@@ -1131,25 +1132,25 @@ def _universal_dropdown_select(
     3. Select the closest match to the desired option
     """
     try:
-        print(f"🎯 Using universal dropdown selection for trigger: '{trigger_selector}'")
+        dprint(f"🎯 Using universal dropdown selection for trigger: '{trigger_selector}'")
 
         # Click the trigger element to open the dropdown
-        print("🖱️ Clicking trigger element...")
+        dprint("🖱️ Clicking trigger element...")
         trigger_element = page.locator(trigger_selector).first
         trigger_element.click()
 
         # Wait for dropdown options to appear
-        print("📋 Waiting for dropdown options...")
+        dprint("📋 Waiting for dropdown options...")
         time.sleep(1.0)  # Give time for options to load
 
         # Find all potential option elements using various strategies
         option_elements = _find_dropdown_options(page, trigger_selector)
 
         if not option_elements:
-            print("❌ No dropdown options found")
+            dprint("❌ No dropdown options found")
             return False
 
-        print(f"📋 Found {len(option_elements)} potential options")
+        dprint(f"📋 Found {len(option_elements)} potential options")
 
         # Extract text from each option
         options_data = []
@@ -1176,30 +1177,30 @@ def _universal_dropdown_select(
                 continue
 
         if not options_data:
-            print("❌ No valid option texts found")
+            dprint("❌ No valid option texts found")
             return False
 
         # Find the best matching option
         best_match = _find_best_option_match(options_data, option_text)
 
         if not best_match:
-            print(f"❌ No good match found for '{option_text}'")
+            dprint(f"❌ No good match found for '{option_text}'")
             return False
 
-        print(f"🎯 Best match: '{best_match['text']}' (score: {best_match.get('score', 'N/A')})")
+        dprint(f"🎯 Best match: '{best_match['text']}' (score: {best_match.get('score', 'N/A')})")
 
         # Click the selected option
-        print("🖱️ Clicking selected option...")
+        dprint("🖱️ Clicking selected option...")
         best_match['element'].click()
 
         # Wait a moment for the selection to take effect
         time.sleep(0.5)
 
-        print("✅ Successfully completed universal dropdown selection!")
+        dprint("✅ Successfully completed universal dropdown selection!")
         return True
 
     except Exception as e:
-        print(f"❌ Universal dropdown selection failed: {e}")
+        dprint(f"❌ Universal dropdown selection failed: {e}")
         return False
 
 

@@ -18,6 +18,7 @@ from vision_utils import get_gemini_box_2d_center_pixels
 from session_tracker import SessionTracker, InteractionType
 from interaction_deduper import InteractionDeduper
 from action_ledger import ActionLedger
+from utils.debug_print import dprint, PrintMode
 
 
 class ScrollReason(Enum):
@@ -229,7 +230,7 @@ class ActionExecutor:
         Example:
             def my_callback(ctx: PreActionContext):
                 if ctx.action_type == ActionType.CLICK:
-                    print(f"About to click at {ctx.coordinates}")
+                    dprint(f"About to click at {ctx.coordinates}")
                     # Run custom pre-action logic
             
             executor.register_pre_action_callback(my_callback)
@@ -275,7 +276,7 @@ class ActionExecutor:
         Example:
             def my_callback(ctx: PostActionContext):
                 if ctx.success and ctx.action_type == ActionType.CLICK:
-                    print(f"Clicked at {ctx.coordinates}")
+                    dprint(f"Clicked at {ctx.coordinates}")
                     # Run custom action: ctx.page.mouse.click(100, 100)
             
             executor.register_post_action_callback(my_callback)
@@ -573,12 +574,12 @@ class ActionExecutor:
                 elif step.action == ActionType.STOP:
                     step_success = self._execute_stop(step)
                 else:
-                    print(f"⚠️ Unknown action type: {step.action}")
+                    dprint(f"⚠️ Unknown action type: {step.action}")
                     continue
                 
                 # Check if step failed (e.g., due to retry request)
                 if not step_success:
-                    print(f"❌ Step {i+1} failed - aborting plan execution")
+                    dprint(f"❌ Step {i+1} failed - aborting plan execution")
                     return False
                 
                 # Goal checking removed - keyword goals handle completion directly
@@ -587,7 +588,7 @@ class ActionExecutor:
                 time.sleep(0.5)
                 
             except Exception as e:
-                print(f"❌ Error executing step {i+1}: {e}")
+                dprint(f"❌ Error executing step {i+1}: {e}")
                 self.last_failure_reason = f"Error executing step {i+1}: {e}"
                 return False
         
@@ -603,7 +604,7 @@ class ActionExecutor:
     ) -> None:
         reason = decision.reason or "Context guard validation failed"
         self.last_failure_reason = reason
-        print(
+        dprint(
             f"🛑 Context guard blocked step {step_index + 1} ({step.action}). Reason: {reason}"
         )
         try:
@@ -792,7 +793,7 @@ class ActionExecutor:
         except Exception as e:
             success = False
             error_msg = str(e)
-            print(f"  ❌ Forward navigation failed: {e}")
+            dprint(f"  ❌ Forward navigation failed: {e}")
         
         # Get URL after navigation
         after_url = before_url  # Default to before_url if navigation failed
@@ -834,7 +835,7 @@ class ActionExecutor:
                     break
             
             if not target_found:
-                print(f"❌ Target element {step.overlay_index} is not in focus context - goal failed")
+                dprint(f"❌ Target element {step.overlay_index} is not in focus context - goal failed")
                 return False
         
         x, y = self._get_click_coordinates(step, elements, page_info)
@@ -899,10 +900,10 @@ class ActionExecutor:
         except Exception as e:
             error_msg = str(e)
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"  ⚠️ Mouse click failed ({e})")
+                dprint(f"  ⚠️ Mouse click failed ({e})")
 
         if not success:
-            print(f"  ❌ Click failed: {error_msg}")
+            dprint(f"  ❌ Click failed: {error_msg}")
         
         # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
         self.session_tracker.record_interaction(
@@ -962,13 +963,13 @@ class ActionExecutor:
             if cleared:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print(f"  ✅ Cleared field using JavaScript")
+                    dprint(f"  ✅ Cleared field using JavaScript")
                 time.sleep(0.1)
                 return
         except Exception as e:
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+                dprint(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
         
         # Fallback: click, select all, delete
         try:
@@ -980,11 +981,11 @@ class ActionExecutor:
             time.sleep(0.1)
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+                dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
         except Exception as e:
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"  ⚠️ Keyboard clear failed: {e}")
+                dprint(f"  ⚠️ Keyboard clear failed: {e}")
 
     def _execute_type(
         self,
@@ -997,7 +998,7 @@ class ActionExecutor:
     ) -> bool:
         """Execute a type action"""
         if not step.text_to_type:
-            print("⚠️ No text specified for TYPE action")
+            dprint("⚠️ No text specified for TYPE action")
             return False
 
         # Get coordinates for the element to type into
@@ -1085,7 +1086,7 @@ class ActionExecutor:
                 except Exception as e:
                     # Only show in debug mode
                     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        print(f"  ⚠️ fill() method failed, falling back to keyboard: {e}")
+                        dprint(f"  ⚠️ fill() method failed, falling back to keyboard: {e}")
                     element_selector = None
             
             # Fallback to keyboard method if fill() didn't work
@@ -1104,7 +1105,7 @@ class ActionExecutor:
         except Exception as e:
             success = False
             error_msg = str(e)
-            print(f"  ❌ Typing failed: {e}")
+            dprint(f"  ❌ Typing failed: {e}")
         
         # Record type interaction with goal monitor (pass explicit before_state since typing already happened)
         self.session_tracker.record_interaction(
@@ -1167,7 +1168,7 @@ class ActionExecutor:
             
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
+                dprint(f"Page height: {page_info.doc_height}, Page width: {page_info.doc_width}")
             
             # Goal system removed - ScrollGoal interpretation removed
             # Scroll interpretation no longer available
@@ -1175,7 +1176,7 @@ class ActionExecutor:
             if interpretation:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
+                    dprint(f"[ActionExecutor] ScrollGoal interpreted '{scroll_goal.user_request}' as target position ({interpretation.target_x}, {interpretation.target_y}) {interpretation.direction} ({interpretation.axis})")
                 return interpretation
             
             return None
@@ -1183,7 +1184,7 @@ class ActionExecutor:
         except Exception as e:
             # Only show in debug mode
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"[ActionExecutor] Error getting interpreted scroll position: {e}")
+                dprint(f"[ActionExecutor] Error getting interpreted scroll position: {e}")
             return None
 
     def _execute_scroll(self, step: ActionStep) -> bool:
@@ -1208,7 +1209,7 @@ class ActionExecutor:
             axis = interpreted_scroll.axis
             direction = interpreted_scroll.direction
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+                dprint(f"[ActionExecutor] Using interpreted scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         else:
             if direction == "down":
                 target_x = current_scroll_x
@@ -1225,7 +1226,7 @@ class ActionExecutor:
                 target_y = current_scroll_y
                 axis = "horizontal"
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
+                dprint(f"[ActionExecutor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
         target_x = int(target_x)
         target_y = int(target_y)
 
@@ -1256,7 +1257,7 @@ class ActionExecutor:
             return False
 
         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            print(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
+            dprint(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
 
         before_state = self.session_tracker._capture_current_state()
         success = False
@@ -1265,7 +1266,7 @@ class ActionExecutor:
             scroll_amount_y = target_y - current_scroll_y
             scroll_amount_x = target_x - current_scroll_x
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"🔍 [ActionExecutor] Attempting to scroll {direction} by ({scroll_amount_x}, {scroll_amount_y})px")
+                dprint(f"🔍 [ActionExecutor] Attempting to scroll {direction} by ({scroll_amount_x}, {scroll_amount_y})px")
             self.page.evaluate(f"window.scrollBy({scroll_amount_x}, {scroll_amount_y})")
             if self.page_utils:
                 actual_scroll_y = int(self.page.evaluate("window.pageYOffset || window.scrollY") or 0)
@@ -1276,7 +1277,7 @@ class ActionExecutor:
         except Exception as exc:
             error_msg = str(exc)
             success = False
-            print(f"  ❌ Scroll failed: {exc}")
+            dprint(f"  ❌ Scroll failed: {exc}")
 
         self.session_tracker.record_interaction(
             InteractionType.SCROLL,
@@ -1314,14 +1315,14 @@ class ActionExecutor:
         wait_time = step.wait_time_ms or 500
         # Only show in debug mode
         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            print(f"  Waiting {wait_time}ms")
+            dprint(f"  Waiting {wait_time}ms")
         time.sleep(wait_time / 1000)
         return True
 
     def _execute_press(self, step: ActionStep) -> bool:
         """Execute a key press action"""
         if not step.keys_to_press:
-            print("⚠️ No keys specified for PRESS action")
+            dprint("⚠️ No keys specified for PRESS action")
             return False
         
         try:
@@ -1373,7 +1374,7 @@ class ActionExecutor:
         except Exception as e:
             success = False
             error_msg = str(e)
-            print(f"  ❌ Key press failed: {e}")
+            dprint(f"  ❌ Key press failed: {e}")
         
         # Record actual interaction with goal monitor (pass explicit before_state since press already happened)
         self.session_tracker.record_interaction(
@@ -1606,13 +1607,13 @@ class ActionExecutor:
     
     def _execute_stop(self, step: ActionStep) -> bool:
         """Execute a stop action - returns True to indicate successful stop"""
-        print("🛑 STOP action executed - terminating automation")
+        dprint("🛑 STOP action executed - terminating automation")
         return True
 
     def _mark_element_as_interacted(self, step: ActionStep, elements: PageElements, interaction_type: str) -> None:
         """Mark an element as interacted with for deduplication"""
         if not self.deduper:
-            print("❌ No deduper to mark element as interacted with")
+            dprint("❌ No deduper to mark element as interacted with")
             return
         
         # Find the target element
@@ -1675,7 +1676,7 @@ class ActionExecutor:
             # This is expected when overlay_index references an element not in detected_elements
             # We use fallback tracking with coordinates instead
             if step.overlay_index is not None:
-                print(f"ℹ️ Overlay index {step.overlay_index} not in detected_elements, using fallback tracking")
+                dprint(f"ℹ️ Overlay index {step.overlay_index} not in detected_elements, using fallback tracking")
 
     def _execute_open(
         self,
@@ -1686,7 +1687,7 @@ class ActionExecutor:
         """Open a URL directly in the current tab and record navigation."""
         url = (step.url or "").strip()
         if not url:
-            print("❌ OPEN action missing URL")
+            dprint("❌ OPEN action missing URL")
             self.session_tracker.record_interaction(
                 InteractionType.NAVIGATION,
                 navigation_url="",
@@ -1709,7 +1710,7 @@ class ActionExecutor:
             return False
 
         if confirm_before_interaction:
-            print("ℹ️ Confirmation requested for OPEN action, skipping visual confirmation (no overlay)")
+            dprint("ℹ️ Confirmation requested for OPEN action, skipping visual confirmation (no overlay)")
 
         success = True
         error_message = None
@@ -1718,7 +1719,7 @@ class ActionExecutor:
         except Exception as e:
             success = False
             error_message = str(e)
-            print(f"  ❌ Open navigation failed: {e}")
+            dprint(f"  ❌ Open navigation failed: {e}")
 
         self.session_tracker.record_interaction(
             InteractionType.NAVIGATION,
@@ -1748,7 +1749,7 @@ class ActionExecutor:
         except Exception as e:
             success = False
             error_msg = str(e)
-            print(f"  ❌ Back navigation failed: {e}")
+            dprint(f"  ❌ Back navigation failed: {e}")
         
         # Get URL after navigation
         after_url = before_url  # Default to before_url if navigation failed

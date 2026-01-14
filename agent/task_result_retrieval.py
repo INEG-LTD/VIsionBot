@@ -11,6 +11,7 @@ import re
 from models.task_models import TaskList, NormalTask, SequentialTask, TaskType
 from ai_utils import generate_model
 from pydantic import BaseModel, Field
+from utils.debug_print import dprint, PrintMode
 
 
 class TaskMatchResult(BaseModel):
@@ -248,7 +249,7 @@ Which task(s) best match this query? Return up to {top_k} matches."""
 
         except Exception as e:
             # LLM matching failed, return empty
-            print(f"⚠️ LLM-based task matching failed: {e}")
+            dprint(f"⚠️ LLM-based task matching failed: {e}")
             return []
 
     def _extract_keywords(self, text: str) -> set:

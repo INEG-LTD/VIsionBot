@@ -6,6 +6,8 @@ Phase 3: Sub-Agent Infrastructure
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, Callable
 import time
 
+from utils.debug_print import dprint, PrintMode
+
 from .task_result import TaskResult
 
 from .agent_context import AgentContext
@@ -69,19 +71,19 @@ class SubAgentController:
             Sub-agent ID if spawned successfully, None otherwise
         """
         if not self.main_bot.tab_manager:
-            print("⚠️ Cannot spawn sub-agent: TabManager not available")
+            dprint("⚠️ Cannot spawn sub-agent: TabManager not available")
             return None
         
         # Get tab info
         tab_info = self.main_bot.tab_manager.get_tab_info(tab_id)
         if not tab_info:
-            print(f"⚠️ Cannot spawn sub-agent: Tab {tab_id} not found")
+            dprint(f"⚠️ Cannot spawn sub-agent: Tab {tab_id} not found")
             return None
         
         # Check if tab already has an agent
         existing_agent = self._get_agent_for_tab(tab_id)
         if existing_agent:
-            print(f"⚠️ Tab {tab_id} already has agent {existing_agent.agent_id}")
+            dprint(f"⚠️ Tab {tab_id} already has agent {existing_agent.agent_id}")
             return existing_agent.agent_id
         
         # Create sub-agent context
@@ -95,9 +97,9 @@ class SubAgentController:
         # Store sub-agent
         self.sub_agents[sub_agent_context.agent_id] = sub_agent_context
         
-        print(f"🤖 Spawning sub-agent: {sub_agent_context.agent_id}")
-        print(f"   Tab: {tab_id} ({tab_info.purpose})")
-        print(f"   Instruction: {instruction}")
+        dprint(f"🤖 Spawning sub-agent: {sub_agent_context.agent_id}")
+        dprint(f"   Tab: {tab_id} ({tab_info.purpose})")
+        dprint(f"   Instruction: {instruction}")
         
         # Create AgentController for sub-agent
         sub_controller = self._create_agent_controller()
@@ -149,7 +151,7 @@ class SubAgentController:
             }
         
         # Switch to sub-agent's tab
-        print(f"🔀 Switching to sub-agent's tab: {sub_agent_context.tab_id}")
+        dprint(f"🔀 Switching to sub-agent's tab: {sub_agent_context.tab_id}")
         
         # First switch in TabManager
         if not self.main_bot.tab_manager.switch_to_tab(sub_agent_context.tab_id):
@@ -175,19 +177,19 @@ class SubAgentController:
             session_tracker_page = getattr(self.main_bot.session_tracker, "page", None) if getattr(self.main_bot, "session_tracker", None) else None
             session_tracker_url = session_tracker_page.url if session_tracker_page else "no page"
             
-            print(f"   ✅ Switched to tab")
-            print(f"      Page URL: {page_url}")
-            print(f"      Bot.page URL: {bot_url}")
-            print(f"      SessionTracker.page URL: {session_tracker_url}")
+            dprint(f"   ✅ Switched to tab")
+            dprint(f"      Page URL: {page_url}")
+            dprint(f"      Bot.page URL: {bot_url}")
+            dprint(f"      SessionTracker.page URL: {session_tracker_url}")
         except Exception as e:
-            print(f"   ⚠️ Error verifying page switch: {e}")
+            dprint(f"   ⚠️ Error verifying page switch: {e}")
         
         # Mark as running
         sub_agent_context.mark_running()
         
         try:
             # Execute sub-agent's task
-            print(f"▶️ Executing sub-agent {sub_agent_id}: {sub_agent_context.instruction}")
+            dprint(f"▶️ Executing sub-agent {sub_agent_id}: {sub_agent_context.instruction}")
             start_time = time.time()
             goal_result = sub_controller.run_execute_task(
                 sub_agent_context.instruction,
@@ -219,15 +221,15 @@ class SubAgentController:
             )
             self._record_result(sub_agent_context, result)
             
-            print(f"✅ Sub-agent {sub_agent_id} completed")
-            print(f"   Status: {result.status}")
-            print(f"   Confidence: {result.confidence:.2f}")
+            dprint(f"✅ Sub-agent {sub_agent_id} completed")
+            dprint(f"   Status: {result.status}")
+            dprint(f"   Confidence: {result.confidence:.2f}")
             
             return result.to_dict()
             
         except Exception as e:
             error_msg = str(e)
-            print(f"❌ Sub-agent {sub_agent_id} failed: {error_msg}")
+            dprint(f"❌ Sub-agent {sub_agent_id} failed: {error_msg}")
             end_time = time.time()
             failure_result = SubAgentResult(
                 agent_id=sub_agent_id,
@@ -296,7 +298,7 @@ class SubAgentController:
             del self.sub_agents[agent_id]
         
         if completed:
-            print(f"🧹 Cleaned up {len(completed)} completed sub-agent(s)")
+            dprint(f"🧹 Cleaned up {len(completed)} completed sub-agent(s)")
         
         return len(completed)
 
@@ -379,4 +381,3 @@ class SubAgentController:
         if helper_rule not in base_list:
             base_list.append(helper_rule)
         return base_list
-
