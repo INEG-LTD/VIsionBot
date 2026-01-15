@@ -34,6 +34,14 @@ class PageSection(str, Enum):
     FOOTER = "footer"
 
 
+class NotebookEntryType(str, Enum):
+    """Types of entries stored in the agent notebook."""
+    NORMAL_TASK_RESULT = "normal_task_result"
+    SEQUENTIAL_TASK_RESULT = "sequential_task_result"
+    EXTRACTION = "extraction"
+    URL_EXTRACTION = "url_extraction"
+
+
 class DetectedElement(BaseModel):
     """A UI element detected in the screenshot"""
     element_label: Optional[str] = Field(default=None, description="The label of the element")

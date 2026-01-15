@@ -27,7 +27,7 @@ except ImportError:
 
 from agent.mini_goal_manager import MiniGoalMode, MiniGoalScriptContext, MiniGoalTrigger
 from models import VisionPlan, PageElements
-from models.core_models import ActionStep, ActionType, PageInfo
+from models.core_models import ActionStep, ActionType, PageInfo, NotebookEntryType
 from dom_snapshot import build_page_elements, capture_dom_elements
 from action_executor import ActionExecutor
 from history import HistoryManager
@@ -42,7 +42,6 @@ from utils.intent_parsers import (
     parse_action_intent,
     parse_keyword_command,
 )
-from interaction_deduper import InteractionDeduper
 from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.debug_print import dprint, PrintMode, set_print_mode
 from utils.semantic_targets import SemanticTarget, build_semantic_target
@@ -311,7 +310,6 @@ class BrowserVisionBot:
         self.completion_mode = config.execution.completion_mode
         self.enable_sub_agents = config.execution.enable_sub_agents
         self.max_actions_per_plan = config.execution.max_actions_per_plan
-        self.dedup_mode = config.execution.dedup_mode
         self.track_ineffective_actions = config.execution.track_ineffective_actions
 
         self.history_config = config.history
@@ -431,8 +429,6 @@ class BrowserVisionBot:
                 # Ultimate fallback - safe logger that does nothing
                 self.event_logger = SafeLogger()
 
-        # Deduplication history settings (-1 = unlimited)
-        self.dedup_history_quantity: int = config.execution.dedup_history_quantity
 
         # Semantic resolution helpers (used internally for element matching)
         self._semantic_target_cache: Dict[str, Optional[SemanticTarget]] = {}
@@ -693,23 +689,15 @@ class BrowserVisionBot:
             include_textless_overlays=False,
         )
         
-        # Initialize deduplication system
-        self.deduper = InteractionDeduper()
-        try:
-            self.deduper.set_interaction_history_limit(self.dedup_history_quantity)
-        except Exception:
-            pass
-        
         # Initialize action ledger for tracking action execution
         self.action_ledger: ActionLedger = ActionLedger()
         
-        # Initialize action executor with deduper and action ledger
+        # Initialize action executor with action ledger
         # Pass a callback so action executor can execute actions through bot infrastructure
         self.action_executor: ActionExecutor = ActionExecutor(
             page, 
             self.session_tracker, 
             self.page_utils, 
-            self.deduper, 
             self.action_ledger,
             execute_action_callback=self._execute_action_via_bot,
             user_messages_config=self.config.user_messages if self.config else None
@@ -1641,9 +1629,21 @@ class BrowserVisionBot:
             # Convert notebook list to extracted_data dict for backwards compatibility
             extracted_data = {}
             for entry in controller.notebook:
-                prompt = entry.get("prompt", "unknown")
+                entry_type = entry.get("type")
+                if entry_type == NotebookEntryType.NORMAL_TASK_RESULT:
+                    continue
+                prompt = entry.get("prompt") or entry.get("description") or entry.get("task_id") or "unknown"
+                if entry.get("iteration") is not None:
+                    prompt = f"{prompt}#{entry.get('iteration')}"
                 data = entry.get("data")
-                extracted_data[prompt] = data
+                if prompt in extracted_data:
+                    existing = extracted_data[prompt]
+                    if isinstance(existing, list):
+                        existing.append(data)
+                    else:
+                        extracted_data[prompt] = [existing, data]
+                else:
+                    extracted_data[prompt] = data
 
             # Create result
             result = AgentResult(task_result, extracted_data)
@@ -2610,60 +2610,6 @@ Return only the extracted text that appears in the text content above. Do not ma
         self._semantic_target_cache[key] = target
         return target
 
-    def _determine_dedup_usage(self, goal_description: str) -> Tuple[bool, str]:
-        """Decide whether duplicate interactions should be avoided for this prompt."""
-
-        desc_lower = (goal_description or "").lower()
-        keyword_triggers = [
-            "no duplicate",
-            "avoid duplicate",
-            "avoid repeats",
-            "no repeats",
-            "unique",
-            "fresh",
-            "unseen",
-            "next link",
-            "different link",
-            "dedup",
-        ]
-        explicit_request = any(trigger in desc_lower for trigger in keyword_triggers)
-
-        if self.dedup_mode == "on":
-            return True, "dedup_mode:on"
-        if self.dedup_mode == "off":
-            return False, "dedup_mode:off"
-        if explicit_request:
-            return True, "prompt_keywords"
-        return False, "no_request"
-
-    def _build_dedup_prompt_context(self, goal_description: str) -> Optional[Dict[str, Any]]:
-        """Build deduplication context for plan prompts when duplicates must be avoided."""
-
-        should_avoid, reason = self._determine_dedup_usage(goal_description)
-        if not should_avoid:
-            return None
-
-        deduper = getattr(self, 'deduper', None)
-        if not deduper or not hasattr(deduper, 'get_interacted_element_history'):
-            return None
-
-        limit = self.dedup_history_quantity
-        history_limit = None if limit is None or limit < 0 else limit
-        try:
-            history = deduper.get_interacted_element_history(history_limit)
-        except Exception:
-            return None
-
-        if not history:
-            return None
-
-        return {
-            "avoid_duplicates": True,
-            "quantity": limit if limit is not None else -1,
-            "entries": history,
-            "reason": reason,
-        }
-
     def _build_navigation_plan(self, goal: Any) -> Optional[VisionPlan]:
         """Construct a single-step plan that opens the requested URL."""
         url = (goal.navigation_intent or "").strip()
@@ -2704,47 +2650,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             self.event_logger.system_debug(f"Captured screenshot and {len(element_data or [])} DOM elements")
         except Exception:
             pass
-
-        if (
-            self.deduper
-            and self.deduper.dedup_enabled
-            and element_data
-        ):
-            should_avoid, reason = self._determine_dedup_usage(goal_description)
-            if should_avoid:
-                dprint(f"🚫 Filtering out interacted elements (reason: {reason})...")
-                elements_for_dedup: List[Dict[str, Any]] = []
-                for elem in element_data:
-                    elements_for_dedup.append(
-                        {
-                            "tagName": elem.get("tagName", ""),
-                            "text": elem.get("text", elem.get("textContent", "")),
-                            "textContent": elem.get("description", ""),
-                            "element_type": elem.get("tagName", ""),
-                            "href": elem.get("href", ""),
-                            "ariaLabel": elem.get("ariaLabel", ""),
-                            "aria_label": elem.get("ariaLabel", ""),
-                            "id": elem.get("id", ""),
-                            "role": elem.get("role", ""),
-                            "overlayIndex": elem.get("index"),
-                            "box2d": elem.get("normalizedCoords"),
-                            "normalizedCoords": elem.get("normalizedCoords"),
-                        }
-                    )
-
-                filtered_elements = self.deduper.filter_interacted_elements(elements_for_dedup, "click")
-                dprint(
-                    f"🔢 Found {len(filtered_elements)} elements after deduplication "
-                    f"(removed {len(elements_for_dedup) - len(filtered_elements)} duplicates)"
-                )
-
-                filtered_element_data: List[Dict[str, Any]] = []
-                for elem in filtered_elements:
-                    overlay_idx = elem.get("overlayIndex")
-                    original_elem = next((e for e in element_data if e.get("index") == overlay_idx), None)
-                    if original_elem:
-                        filtered_element_data.append(original_elem.copy())
-                element_data = filtered_element_data
 
         return element_data, screenshot, screenshot
 
@@ -3648,7 +3553,6 @@ Return only the extracted text that appears in the text content above. Do not ma
 
  
     # -------------------- Public memory helpers (general) --------------------
-    # Memory store methods removed - deduplication now handled by focus manager
 
     def _add_to_command_history(self, command: str) -> None:
         """Add a command to the history, maintaining max size"""
@@ -3662,43 +3566,6 @@ Return only the extracted text that appears in the text content above. Do not ma
             except Exception:
                 pass
     
-    
-    def _handle_dedup_commands(self, goal_description: str) -> Optional[bool]:
-        """
-        Handle dedup enable/disable commands.
-        
-        Args:
-            goal_description: The goal description to check for dedup commands
-        
-        Returns:
-            bool: True if command was handled successfully, False if failed, None if not a dedup command
-        """
-        try:
-            goal_lower = goal_description.lower().strip()
-            
-            # Check for dedup: enable
-            if goal_lower in ["dedup: enable", "dedup:enabled"]:
-                self.dedup_mode = "on"
-                if hasattr(self, 'deduper') and self.deduper:
-                    self.deduper.set_dedup_enabled(True)
-                self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication enabled")
-                dprint("🧹 Deduplication enabled")
-                return True
-            
-            # Check for dedup: disable
-            elif goal_lower in ["dedup: disable", "dedup:disabled"]:
-                self.dedup_mode = "off"
-                if hasattr(self, 'deduper') and self.deduper:
-                    self.deduper.set_dedup_enabled(False)
-                self.logger.log(LogLevel.INFO, LogCategory.SYSTEM, "Deduplication disabled")
-                dprint("🧹 Deduplication disabled")
-                return True
-            
-            return None  # Not a dedup command
-            
-        except Exception as e:
-            dprint(f"⚠️ Error handling dedup commands: {e}")
-            return False
     
     def _handle_ref_commands(self, goal_description: str) -> Optional[bool]:
         """

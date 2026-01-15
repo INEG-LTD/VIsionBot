@@ -118,11 +118,6 @@ class DummyContextGuard:
         return Decision()
 
 
-class DummyInteractionDeduper:
-    def __init__(self):
-        pass
-
-
 class DummyActionLedger:
     def complete_action(self, **kwargs):
         pass
@@ -146,7 +141,6 @@ def stub_dependencies(monkeypatch):
     monkeypatch.setattr(action_executor, "UploadHandler", DummyUploadHandler)
     monkeypatch.setattr(action_executor, "SelectorUtils", DummySelectorUtils)
     monkeypatch.setattr(action_executor, "ContextGuard", DummyContextGuard)
-    monkeypatch.setattr(action_executor, "InteractionDeduper", DummyInteractionDeduper)
     monkeypatch.setattr(action_executor, "ActionLedger", DummyActionLedger)
     monkeypatch.setattr("utils.event_logger.get_event_logger", lambda: DummyEventLogger())
 

@@ -16,7 +16,6 @@ from utils.page_utils import PageUtils
 from utils.context_guard import ContextGuard, GuardDecision
 from vision_utils import get_gemini_box_2d_center_pixels
 from session_tracker import SessionTracker, InteractionType
-from interaction_deduper import InteractionDeduper
 from action_ledger import ActionLedger
 from utils.debug_print import dprint, PrintMode
 
@@ -63,11 +62,10 @@ class PostActionContext:
 class ActionExecutor:
     """Executes automation actions"""
     
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, deduper: InteractionDeduper=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils
-        self.deduper = deduper or InteractionDeduper()
         self.action_ledger = action_ledger or ActionLedger()
         self.execute_action_callback = execute_action_callback  # Callback to execute actions through bot infrastructure
         self.last_failure_reason: Optional[str] = None
@@ -914,10 +912,6 @@ class ActionExecutor:
             error_message=error_msg
         )
         
-        # Mark element as interacted for deduplication
-        if success:
-            self._mark_element_as_interacted(step, elements, "click")
-        
         # Trigger post-action hooks
         self._trigger_post_action_hooks(
             action_type=ActionType.CLICK,
@@ -1117,17 +1111,10 @@ class ActionExecutor:
             error_message=error_msg
         )
         
-        # Mark element as interacted for deduplication
         try:
             self.event_logger.system_debug(f"Success: {success}")
         except Exception:
             pass
-        if success:
-            try:
-                self.event_logger.system_debug(f"Marking element as interacted for deduplication: {step.overlay_index}")
-            except Exception:
-                pass
-            self._mark_element_as_interacted(step, elements, "type")
         
         # Trigger post-action hooks
         self._trigger_post_action_hooks(
@@ -1609,74 +1596,6 @@ class ActionExecutor:
         """Execute a stop action - returns True to indicate successful stop"""
         dprint("🛑 STOP action executed - terminating automation")
         return True
-
-    def _mark_element_as_interacted(self, step: ActionStep, elements: PageElements, interaction_type: str) -> None:
-        """Mark an element as interacted with for deduplication"""
-        if not self.deduper:
-            dprint("❌ No deduper to mark element as interacted with")
-            return
-        
-        # Find the target element
-        recorded_interaction = False
-
-        if step.overlay_index is not None and elements and getattr(elements, 'elements', None):
-            for element in elements.elements:
-                if getattr(element, 'overlay_number', None) == step.overlay_index:
-                    # Convert element to dict format expected by focus manager
-                    description = getattr(element, 'description', None)
-                    label = getattr(element, 'element_label', None)
-                    element_dict = {
-                        'tagName': getattr(element, 'element_type', '') or '',
-                        'text': description or label or '',
-                        'textContent': description or label or '',
-                        'description': description or '',
-                        'element_type': getattr(element, 'element_type', ''),
-                        'href': getattr(element, 'href', ''),
-                        'ariaLabel': getattr(element, 'aria_label', ''),
-                        'aria_label': getattr(element, 'aria_label', ''),
-                        'id': getattr(element, 'id', ''),
-                        'role': getattr(element, 'role', '') or getattr(element, 'element_type', ''),
-                        'overlayIndex': getattr(element, 'overlay_number', None) or step.overlay_index,
-                        'box2d': getattr(element, 'box_2d', None),
-                        'normalizedCoords': getattr(element, 'box_2d', None),
-                    }
-                    self.deduper.mark_element_as_interacted(element_dict, interaction_type)
-                    recorded_interaction = True
-                    break
-
-        if not recorded_interaction:
-            action_value = ''
-            if getattr(step, 'action', None):
-                try:
-                    action_value = step.action.value  # Enum value (e.g., 'click')
-                except Exception:
-                    action_value = str(step.action)
-            text_value = step.text_to_type or action_value
-            rect_data = None
-            if step.x is not None and step.y is not None:
-                rect_data = {
-                    'x': step.x,
-                    'y': step.y,
-                    'width': 0,
-                    'height': 0,
-                }
-            fallback_dict = {
-                'tagName': '',
-                'text': text_value,
-                'textContent': text_value,
-                'description': text_value,
-                'element_type': action_value,
-                'overlayIndex': step.overlay_index,
-                'box2d': None,
-                'normalizedCoords': None,
-                'role': action_value,
-                'rect': rect_data,
-            }
-            self.deduper.mark_element_as_interacted(fallback_dict, interaction_type)
-            # This is expected when overlay_index references an element not in detected_elements
-            # We use fallback tracking with coordinates instead
-            if step.overlay_index is not None:
-                dprint(f"ℹ️ Overlay index {step.overlay_index} not in detected_elements, using fallback tracking")
 
     def _execute_open(
         self,

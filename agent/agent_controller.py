@@ -6,11 +6,11 @@ from enum import Enum
 import re
 import hashlib
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor
 
 from session_tracker import BrowserState, Interaction, InteractionType
+from models.core_models import NotebookEntryType
 from .task_result import TaskResult
-from agent.completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
+from agent.completion_contract import EnvironmentState, CompletionEvaluation
 from agent.reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
 from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
@@ -92,8 +92,8 @@ class SubAgentPolicyLevel(Enum):
 Agent Controller - Step 2: LLM-Based Completion + Reactive Goal Determination
 
 Implements agentic mode with:
-- Reactive loop: observe → check completion (LLM) → determine goal → act → repeat
-- LLM-based completion evaluation (CompletionContract)
+- Reactive loop: observe → determine goal → act → repeat
+- Completion is signaled by the agent via complete: commands
 - EnvironmentState for full context
 - Reactive goal determination (what to do now)
 """
@@ -164,11 +164,7 @@ class AgentController(TaskBasedExecutionMixin):
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
                            Example: ["just press enter after you've typed a search term into a search field"]
             allow_partial_completion: If True, allow partial completion of tasks.
-            parallel_completion_and_action: If True, run completion check and next action determination in parallel
-                                            for faster feedback. Default: True.
-                                            Note: Set to False primarily for debugging purposes, as sequential execution
-                                            makes it easier to trace the execution flow and understand which LLM call
-                                            is running at any given time.
+            parallel_completion_and_action: Legacy flag (no effect when completion is agent-signaled).
             act_enable_target_context_guard: If True, allow the agent to use target_context_guard parameter in act() calls.
                                             This parameter enables contextual element filtering. Default: True.
             act_enable_modifier: If True, allow the agent to use modifier parameter in act() calls.
@@ -559,18 +555,6 @@ class AgentController(TaskBasedExecutionMixin):
         if self.base_knowledge:
             self.bot.session_tracker.set_base_knowledge(self.base_knowledge)
         
-        # Create completion contract (Step 2: LLM-based)
-        completion_contract = CompletionContract(
-            user_prompt,
-            allow_partial_completion=self.allow_partial_completion,
-            show_task_completion_reason=self.show_completion_reasoning_every_iteration,
-            strict_mode=self.strict_mode,
-            model_name=self.agent_model_name,
-            reasoning_level=self.agent_reasoning_level,
-            interaction_summary_limit=self.interaction_summary_limit_completion,
-            include_visible_text_in_agent_context=self.include_visible_text_in_agent_context,
-        )
-        
         if not self.bot.started:
             self.event_logger.system_error("Bot not started. Call bot.start() first.")
             self._log_event("agent_complete", status="failed", reason="bot_not_started")
@@ -739,247 +723,34 @@ class AgentController(TaskBasedExecutionMixin):
                 self._queued_action = None
                 self._queued_action_reason = None
             
-            # 2.4. Run completion check and next action determination
-            # (only if we don't have a queued action)
+            # 2.4. Determine next action plan (completion is signaled by the agent via complete:)
             policy_updated_in_parallel = False
-            # Store completion reasoning and evaluation for stuck detector (for next iteration)
             latest_completion_reasoning: Optional[str] = None
-            latest_evaluation: Optional[CompletionEvaluation] = None
-            should_run_external_completion = self.completion_mode in ("hybrid", "external_only")
             if current_action is None and not plan_in_progress:
-
-                if self.parallel_completion_and_action and should_run_external_completion:
+                if self.track_ineffective_actions:
                     try:
-                        self.event_logger.system_debug("Running completion check, next action determination, and subagent policy check in parallel...")
-                    except Exception:
-                        pass
-                    
-                    def run_completion_check():
-                        """Run completion evaluation"""
-                        return completion_contract.evaluate(
-                            environment_state,
-                            screenshot=snapshot.screenshot,
-                            user_prompt=active_user_prompt
-                        )
-                    
-                    def run_next_action_determination():
-                        """Run next action plan determination"""
-                        if self.track_ineffective_actions:
-                            try:
-                                # Filter out scroll actions from noise
-                                failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
-                                ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
-                                if failed_non_scroll:
-                                    self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(failed_non_scroll)}")
-                                if ineffective_non_scroll:
-                                    self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
-                            except Exception:
-                                pass
-                        plan = goal_determiner.determine_action_plan(
-                            environment_state,
-                            screenshot=snapshot.screenshot,
-                            overlay_data=overlay_data,
-                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
-                            notebook=self.notebook
-                        )
-                        return plan
-                    
-                    def run_subagent_policy_check(completion_reasoning_ref):
-                        """Run subagent policy check (will use completion_reasoning after completion check finishes)"""
-                        # Wait for completion_reasoning to be available
-                        completion_reasoning = completion_reasoning_ref[0] if completion_reasoning_ref else None
-                        return self._compute_sub_agent_policy(
-                            user_prompt=user_prompt,
-                            completion_reasoning=completion_reasoning or ""
-                        )
-                    
-                    # Execute all three in parallel
-                    # Use a list to share completion_reasoning between threads
-                    completion_reasoning_ref = [None]
-                    
-                    with ThreadPoolExecutor(max_workers=3) as executor:
-                        completion_future = executor.submit(run_completion_check)
-                        next_action_future = executor.submit(run_next_action_determination)
-                        
-                        # Wait for completion check first (we need to know if we're done)
-                        is_complete, completion_reasoning, evaluation = completion_future.result()
-                        completion_reasoning_ref[0] = completion_reasoning  # Share with subagent policy check
-                        latest_completion_reasoning = completion_reasoning
-                        latest_evaluation = evaluation
-
-                        # Start subagent policy check now that we have completion_reasoning (only if enabled)
-                        subagent_policy_future = None
-                        if self.enable_sub_agents:
-                            subagent_policy_future = executor.submit(run_subagent_policy_check, completion_reasoning_ref)
-
-                        if is_complete:
-                            self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
-                            
-                            # --- MINI GOAL INTEGRATION: Pop stack if complete ---
-                            if self.mini_goal_stack:
-                                self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
-                                self.mini_goal_stack.pop()
-                                # Wait for subagent policy check (optional finish)
-                                if subagent_policy_future:
-                                    try: subagent_policy_future.result(timeout=1)
-                                    except Exception: pass
-                                
-                                time.sleep(self.iteration_delay)
-                                continue # NEXT ITERATION of main loop
-                            # ----------------------------------------------------
-                            
-                            evidence_dict: Dict[str, Any] = {}
-                            if evaluation.evidence:
-                                try:
-                                    import json
-                                    evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
-                                except Exception:
-                                    evidence_dict = {"evidence": evaluation.evidence}
-                            
-                            evidence_dict = self._build_evidence(evidence_dict)
-                            self._log_event(
-                                "agent_complete",
-                                status="achieved",
-                                confidence=evaluation.confidence,
-                                reasoning=completion_reasoning,
-                            )
-                            # End task timer and log summary
-                            self.bot.execution_timer.end_task()
-                            self.bot.execution_timer.log_summary(self.event_logger)
-                            # Wait for subagent policy check to complete (for logging)
-                            if subagent_policy_future:
-                                try:
-                                    subagent_policy_future.result(timeout=5)
-                                except Exception:
-                                    pass  # Ignore timeout, task is complete anyway
-                            # Next action result will be ignored (task is complete)
-                            self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                            return TaskResult(
-                                success=True,
-                                confidence=evaluation.confidence,
-                                reasoning=completion_reasoning,
-                                evidence=evidence_dict
-                            )
-                        else:
-                            self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
-                            # Task not complete, so we need the next action - wait for it
-                            self.event_logger.system_debug("Determining next action based on current viewport...")
-                            plan_result = next_action_future.result()
-                            if plan_result:
-                                self._start_action_plan(plan_result, iteration)
-
-                            # Wait for subagent policy check and update policy (only if enabled)
-                            if subagent_policy_future:
-                                try:
-                                    new_level, new_score, new_rationale = subagent_policy_future.result()
-
-                                    # Check for changes before updating
-                                    level_changed = new_level != self.sub_agent_policy_level
-                                    score_changed = abs(new_score - self._sub_agent_policy_score) >= 0.1
-                                    rationale_changed = new_rationale != self.sub_agent_policy_rationale
-
-                                    # Update policy
-                                    self.sub_agent_policy_level = new_level
-                                    self._sub_agent_policy_score = new_score
-                                    self.sub_agent_policy_rationale = new_rationale
-
-                                    if level_changed or score_changed or rationale_changed:
-                                        try:
-                                            self.event_logger.sub_agent_policy(
-                                                policy=self._policy_display_name(new_level),
-                                                score=new_score,
-                                                reason=new_rationale
-                                            )
-                                        except Exception:
-                                            pass
-                                        self._log_event(
-                                            "sub_agent_policy_update",
-                                            policy=new_level.value,
-                                            score=new_score,
-                                            rationale=new_rationale,
-                                            override=self._sub_agent_policy_override.value if self._sub_agent_policy_override else None
-                                        )
-                                    policy_updated_in_parallel = True
-                                except Exception as e:
-                                    dprint(f"⚠️ Subagent policy check failed: {e}")
-                                    # Fallback: update policy sequentially
-                                    self._update_sub_agent_policy(
-                                        user_prompt=user_prompt,
-                                        completion_reasoning=latest_completion_reasoning
-                                    )
-                                    policy_updated_in_parallel = True
-                else:
-                    # Sequential execution (parallel disabled) OR agent-only mode
-                    if should_run_external_completion:
-                        # Run external completion check
-                        dprint("🔄 Running completion check...")
-                        latest_evaluation = completion_contract.evaluate(
-                            environment_state,
-                            screenshot=snapshot.screenshot,
-                            user_prompt=active_user_prompt
-                        )
-                        latest_completion_reasoning = latest_evaluation.reasoning if latest_evaluation else None
-                        is_complete = latest_evaluation.is_complete if latest_evaluation else False
-
-                        if is_complete:
-                            self.event_logger.completion_check(
-                                is_complete=True,
-                                reasoning=latest_completion_reasoning,
-                                confidence=latest_evaluation.confidence,
-                                evidence=latest_evaluation.evidence
-                            )
-
-                            # --- MINI GOAL INTEGRATION: Pop stack if complete ---
-                            if self.mini_goal_stack:
-                                self.event_logger.system_info(f"🎯 Mini Goal Achieved: {active_user_prompt}")
-                                self.mini_goal_stack.pop()
-                                # Restart iteration to check main goal or next mini-goal
-                                time.sleep(self.iteration_delay)
-                                continue
-                            # --------------------------------------------------
-
-                            current_action = "stop"
-                        else:
-                            if latest_evaluation:
-                                self.event_logger.completion_check(is_complete=False, reasoning=latest_completion_reasoning)
-
-                            # Task not complete, determine next action
-                            self.event_logger.system_debug("Determining next action based on current viewport...")
-
-                            failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
-                            ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
-
-                        plan = goal_determiner.determine_action_plan(
-                            environment_state,
-                            screenshot=snapshot.screenshot,
-                            overlay_data=overlay_data,
-                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
-                            notebook=self.notebook
-                        )
-                        if plan:
-                            self._start_action_plan(plan, iteration)
-                    else:
-                        # Agent-only mode: Skip external completion check, just determine next action
-                        try:
-                            self.event_logger.system_debug("Agent-only mode: Determining next action (no external completion check)...")
-                        except Exception:
-                            pass
-
                         failed_non_scroll = [a for a in self.failed_actions if not a.lower().startswith("scroll:")]
                         ineffective_non_scroll = [a for a in self.ineffective_actions if not a.lower().startswith("scroll:")]
+                        if failed_non_scroll:
+                            self.event_logger.system_warning(f"Previously failed actions (failed + no change): {', '.join(failed_non_scroll)}")
+                        if ineffective_non_scroll:
+                            self.event_logger.system_warning(f"Previously ineffective actions (succeeded but no change): {', '.join(ineffective_non_scroll)}")
+                    except Exception:
+                        pass
+                else:
+                    failed_non_scroll = []
+                    ineffective_non_scroll = []
 
-                        plan = goal_determiner.determine_action_plan(
-                            environment_state,
-                            screenshot=snapshot.screenshot,
-                            overlay_data=overlay_data,
-                            failed_actions=failed_non_scroll if self.track_ineffective_actions else [],
-                            ineffective_actions=ineffective_non_scroll if self.track_ineffective_actions else [],
-                            notebook=self.notebook
-                        )
-                        if plan:
-                            self._start_action_plan(plan, iteration)
+                plan = goal_determiner.determine_action_plan(
+                    environment_state,
+                    screenshot=snapshot.screenshot,
+                    overlay_data=overlay_data,
+                    failed_actions=failed_non_scroll,
+                    ineffective_actions=ineffective_non_scroll,
+                    notebook=self.notebook
+                )
+                if plan:
+                    self._start_action_plan(plan, iteration)
 
             plan_step_consumed = False
             plan_overlay_index = None
@@ -1079,58 +850,13 @@ class AgentController(TaskBasedExecutionMixin):
                  self.mini_goal_stack.pop()
                  time.sleep(self.iteration_delay)
                  continue
-            else:
-                # We have a queued action - only check completion if mode allows external checks
-                if should_run_external_completion:
-                    self.event_logger.system_debug("Running completion check (next action already queued)...")
-                    is_complete, completion_reasoning, evaluation = completion_contract.evaluate(
-                        environment_state,
-                        screenshot=snapshot.screenshot,
-                        user_prompt=active_user_prompt
-                    )
-                    latest_completion_reasoning = completion_reasoning
-                    latest_evaluation = evaluation
-
-                    if is_complete:
-                        self.event_logger.completion_check(is_complete=True, reasoning=completion_reasoning, confidence=evaluation.confidence, evidence=evaluation.evidence)
-                        evidence_dict: Dict[str, Any] = {}
-                        if evaluation.evidence:
-                            try:
-                                import json
-                                evidence_dict = json.loads(evaluation.evidence) if isinstance(evaluation.evidence, str) else evaluation.evidence
-                            except Exception:
-                                evidence_dict = {"evidence": evaluation.evidence}
-
-                        evidence_dict = self._build_evidence(evidence_dict)
-                        self._log_event(
-                            "agent_complete",
-                            status="achieved",
-                            confidence=evaluation.confidence,
-                            reasoning=completion_reasoning,
-                        )
-                        # End task timer and log summary
-                        self.bot.execution_timer.end_task()
-                        self.bot.execution_timer.log_summary(self.event_logger)
-                        self.event_logger.agent_complete(success=True, reasoning=completion_reasoning, confidence=evaluation.confidence)
-                        return TaskResult(
-                            success=True,
-                            confidence=evaluation.confidence,
-                            reasoning=completion_reasoning,
-                            evidence=evidence_dict
-                        )
-                    else:
-                        self.event_logger.completion_check(is_complete=False, reasoning=completion_reasoning)
-                else:
-                    # Agent-only mode: Skip external completion check for queued actions
-                    self.event_logger.system_debug("Agent-only mode: Skipping external completion check (action already queued)...")
-            
             # Update adaptive sub-agent utilization policy (only if not already done in parallel path)
             # In parallel path, policy is updated after next_action_future.result()
             # In sequential/queued paths, update it here
             if not policy_updated_in_parallel:
                 self._update_sub_agent_policy(
                     user_prompt=user_prompt,
-                    completion_reasoning=latest_completion_reasoning
+                    completion_reasoning=latest_completion_reasoning or ""
                 )
             
             if (
@@ -1284,6 +1010,7 @@ class AgentController(TaskBasedExecutionMixin):
                             "prompt": extraction_prompt,
                             "data": result.data,
                             "url": snapshot.url if snapshot else None,
+                            "type": NotebookEntryType.EXTRACTION,
                         })
                         try:
                             self.event_logger.extraction_success(extraction_prompt, result=result)
@@ -1332,6 +1059,7 @@ class AgentController(TaskBasedExecutionMixin):
                             "prompt": f"URL from {url_extraction_target}",
                             "data": {"url": url, "element": url_extraction_target},
                             "url": snapshot.url if snapshot else None,
+                            "type": NotebookEntryType.URL_EXTRACTION,
                         })
                         try:
                             self.event_logger.system_info(f"✓ Extracted URL: {url}")

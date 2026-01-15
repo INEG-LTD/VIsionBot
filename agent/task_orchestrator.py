@@ -6,7 +6,8 @@ and breaks them down into ordered sequences of Normal and Sequential tasks.
 """
 
 from utils.debug_print import dprint, PrintMode
-from typing import Optional, Dict, Any, Callable, Tuple
+from typing import List, Optional, Dict, Any, Callable, Tuple
+import re
 import uuid
 
 from models.task_models import (
@@ -442,8 +443,31 @@ Rules:
 
 Now analyze the task goal above and respond with ONLY the JSON list, nothing else."""
 
+        def _normalize_field_name(raw: str) -> Optional[str]:
+            value = (raw or "").strip().lower()
+            if not value:
+                return None
+            # Normalize punctuation and whitespace to snake_case.
+            value = re.sub(r"[^a-z0-9]+", " ", value)
+            value = re.sub(r"\s+", " ", value).strip()
+            if not value:
+                return None
+            return value.replace(" ", "_")
+
+        def _heuristic_fields(text: str) -> List[str]:
+            # Strip leading verb phrases and trailing context ("from ...", "on ...").
+            cleaned = re.sub(r"^(extract|get|collect|gather|scrape|retrieve)\s+", "", text.strip(), flags=re.I)
+            cleaned = re.split(r"\bfrom\b|\bon\b|\bin\b|\bwithin\b|\bfor\b", cleaned, maxsplit=1, flags=re.I)[0]
+            cleaned = cleaned.replace("&", " and ")
+            parts = re.split(r",|\band\b|\bplus\b", cleaned, flags=re.I)
+            fields: List[str] = []
+            for part in parts:
+                field = _normalize_field_name(part)
+                if field:
+                    fields.append(field)
+            return [f for f in fields if f]
+
         try:
-            # Use haiku for fast, cheap inference
             response = generate_model(
                 prompt=prompt,
                 system_prompt="You extract structured field names from task descriptions. Respond only with valid JSON.",
@@ -461,15 +485,16 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                 response_text = "\n".join(json_lines)
 
             fields = json.loads(response_text)
-
-            if not isinstance(fields, list) or not fields:
-                return None
-
-            # Validate all fields are strings
-            normalized_fields = [str(f).strip() for f in fields if f]
-
+            normalized_fields = []
+            if isinstance(fields, list):
+                for field in fields:
+                    normalized = _normalize_field_name(str(field))
+                    if normalized:
+                        normalized_fields.append(normalized)
             if not normalized_fields:
-                return None
+                normalized_fields = _heuristic_fields(goal)
+                if not normalized_fields:
+                    return None
 
             # Generate simple JSON schema
             return {
@@ -482,7 +507,17 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
             }
 
         except Exception as e:
-            # If LLM fails, return None (no schema)
+            # If LLM fails, try heuristic extraction before giving up.
+            fields = _heuristic_fields(goal)
+            if fields:
+                return {
+                    "type": "object",
+                    "required": fields,
+                    "properties": {
+                        field: {"type": "string", "description": f"The {field.replace('_', ' ')}"}
+                        for field in fields
+                    }
+                }
             dprint(f"[Warning] Failed to infer extraction schema: {e}")
             return None
 

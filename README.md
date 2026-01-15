@@ -570,8 +570,7 @@ config = BotConfig(
     # Execution Behavior
     execution=ExecutionConfig(
         max_attempts=10,
-        parallel_completion_and_action=True,
-        dedup_mode="auto"
+        parallel_completion_and_action=True
     ),
 
     # Plan Caching
@@ -620,9 +619,7 @@ config = BotConfig.minimal()
 
 #### ExecutionConfig
 - `max_attempts`: Maximum number of attempts for task completion (default: 10)
-- `parallel_completion_and_action`: Run completion check and next action in parallel (default: True)
-- `dedup_mode`: Deduplication mode: "auto", "on", or "off" (default: "auto")
-- `dedup_history_quantity`: Number of interactions to track for dedup (-1 = unlimited)
+- `parallel_completion_and_action`: Reserved for legacy completion checks (no effect with agent-signaled completion)
 
 #### ElementConfig
 - `overlay_mode`: Overlay drawing mode (`"interactive"` default, `"all"` includes every visible element)
@@ -1233,25 +1230,6 @@ config = BotConfig(
 # Screenshots saved to error_screenshots/ directory
 ```
 
-### Interaction Deduplication
-
-Prevent repeating the same actions:
-
-```python
-# Deduplication is automatically enabled
-# Control via config:
-config = BotConfig(
-    execution=ExecutionConfig(
-        dedup_mode="auto",  # "auto", "on", or "off"
-        dedup_history_quantity=-1  # -1 = unlimited
-    )
-)
-
-# Manually enable/disable
-bot.act("dedup: on")
-bot.act("dedup: off")
-```
-
 ## Creating Custom Conditions
 
 > **Note**: The conditional goal system has been removed. The bot now uses keyword-based goal execution only. Use direct keyword goals like `click:`, `type:`, `press:`, etc. For complex workflows, use agentic mode which handles conditionals automatically.
@@ -1497,7 +1475,6 @@ browser-vision-bot/
 ├── browser_provider.py       # Browser management
 ├── action_ledger.py         # Action tracking
 ├── action_queue.py           # Action queuing
-├── interaction_deduper.py    # Deduplication
 ├── middleware.py             # Middleware system
 ├── error_handling.py         # Error handling
 ├── vision_utils.py           # Vision utilities

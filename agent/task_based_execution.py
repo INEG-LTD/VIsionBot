@@ -22,6 +22,7 @@ from agent.bridge_planner import BridgePlanner
 from agent.completion_contract import EnvironmentState
 from bot_config import SequentialTaskConfig
 from action_result import ActionResult
+from models.core_models import NotebookEntryType
 from agent.task_result_retrieval import TaskResultRetriever, TaskResultAccessor
 from pydantic import BaseModel, Field, create_model
 
@@ -402,6 +403,9 @@ class TaskBasedExecutionMixin:
         expected_fields = schema.get("required", [])
 
         # Handle different data formats
+        if isinstance(extracted_data, BaseModel):
+            extracted_data = extracted_data.model_dump()
+
         if isinstance(extracted_data, dict):
             # Single extraction - filter out metadata fields (start with _)
             actual_fields = [k for k in extracted_data.keys() if not k.startswith('_')]
@@ -444,11 +448,14 @@ class TaskBasedExecutionMixin:
         """Run an extraction step using the inferred schema model."""
         prompt = action.split(":", 1)[1].strip() if ":" in action else action
         model_schema = self._get_schema_model(schema)
-        return self.bot.extract(
+        result = self.bot.extract(
             prompt=prompt,
             output_format="structured",
             model_schema=model_schema,
         )
+        if result.success and isinstance(result.data, BaseModel):
+            result.data = result.data.model_dump()
+        return result
 
     def _get_schema_model(self, schema: Dict[str, Any]) -> Type[BaseModel]:
         """Return (or create) a Pydantic model that enforces the extraction schema."""
@@ -567,7 +574,7 @@ Use the results above to complete your task."""
                     "task_id": task.task_id,
                     "description": task.description,
                     "data": task.result["data"],
-                    "type": "normal_task_result"
+                    "type": NotebookEntryType.NORMAL_TASK_RESULT
                 })
                 try:
                     self.event_logger.system_debug(
@@ -843,10 +850,19 @@ Use the results above to complete your task."""
         )
 
         # Convert TaskResult to ActionResult
+        extracted_data = None
+        evidence = result.evidence if hasattr(result, "evidence") else None
+        if isinstance(evidence, dict) and "extracted_data" in evidence:
+            extracted_data = evidence.get("extracted_data")
+        action_data = extracted_data if extracted_data is not None else evidence
+        metadata = {}
+        if extracted_data is not None:
+            metadata["task_evidence"] = evidence
         return ActionResult(
             success=result.success,
             message=result.reasoning,
-            data=result.evidence if hasattr(result, "evidence") else {},
+            data=action_data,
+            metadata=metadata,
             error=result.reasoning if not result.success else None,
         )
 
@@ -889,6 +905,8 @@ Use the results above to complete your task."""
                 )
             except Exception:
                 pass
+
+            last_extracted_data = None
 
             # Capture current state
             try:
@@ -1080,11 +1098,26 @@ Use the results above to complete your task."""
                         except Exception:
                             pass
 
+                    if extraction_schema and last_extracted_data is None:
+                        return TaskResult(
+                            success=False,
+                            confidence=0.0,
+                            reasoning="Received complete: without completing extraction for this iteration",
+                            evidence={
+                                "iterations": iteration + 1,
+                                "actions_tried": iteration + 1,
+                            },
+                        )
+
                     return TaskResult(
                         success=True,
                         confidence=1.0,
                         reasoning=completion_reasoning,
-                        evidence={"iterations": iteration + 1, "actions_tried": iteration + 1},
+                        evidence={
+                            "iterations": iteration + 1,
+                            "actions_tried": iteration + 1,
+                            "extracted_data": last_extracted_data,
+                        },
                     )
 
                 # Check for ask: command (agent asking for help when stuck)
@@ -1187,6 +1220,12 @@ Use the results above to complete your task."""
                     # Auto-complete for PURE extraction tasks (Option C: Multi-Action Detection)
                     # Only auto-complete if the task instruction contains ONLY extraction verbs
                     if result.success and current_action.lower().startswith("extract:"):
+                        last_extracted_data = result.data if hasattr(result, "data") else None
+                        try:
+                            extraction_prompt = current_action.split(":", 1)[1].strip()
+                            self.event_logger.extraction_success(extraction_prompt, result=result.data)
+                        except Exception:
+                            pass
                         # Validate extraction against schema if available
                         if extraction_schema and hasattr(result, 'data') and result.data:
                             validation_result = self._validate_extraction_schema(
@@ -1321,6 +1360,17 @@ Use the results above to complete your task."""
         # Add result to task results
         sequential_task.results.append(result.data)
 
+        # Add sequential iteration result to notebook for downstream access
+        if hasattr(self, "notebook") and self.notebook is not None and result.data is not None:
+            self.notebook.append({
+                "source": "sequential_task",
+                "task_id": sequential_task.task_id,
+                "description": sequential_task.description,
+                "iteration": iteration_idx,
+                "data": result.data,
+                "type": NotebookEntryType.SEQUENTIAL_TASK_RESULT
+            })
+
         # Log success
         try:
             # Check if we have actions_tried info from mini-loop (in result.data from ActionResult)
@@ -1337,6 +1387,14 @@ Use the results above to complete your task."""
                 self.event_logger.system_info(f"ℹ️ ✓ Iteration {iteration_idx} successful after {attempts} attempt(s)")
         except Exception:
             pass
+
+        if sequential_task.extraction_schema and isinstance(result.data, dict):
+            try:
+                self.event_logger.system_info(
+                    f"📊 Extracted data (iteration {iteration_idx}): {result.data}"
+                )
+            except Exception:
+                pass
 
     def _record_iteration_failure(
         self,
