@@ -24,7 +24,7 @@ from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode, MiniGoalScrip
 from utils.select_option_utils import SelectOptionError
 import random
 from prompt_toolkit import HTML, print_formatted_text as print
-
+from utils.debug_print import dprint, PrintMode
 
 def type_text_sequentially(page, text: str, delay: int = None):
     """
@@ -40,7 +40,7 @@ def type_text_sequentially(page, text: str, delay: int = None):
 
     # Type text sequentially using keyboard.type with delay
     page.keyboard.type(text, delay=delay)
-    print(f"Typed text: {text}")
+    dprint(f"Typed text: {text}")
 
 # Global state for spinner
 _spinner_active = False
@@ -356,17 +356,17 @@ def setup_mini_goals(bot: BrowserVisionBot):
     
     def select_dropdown_handler(context: MiniGoalScriptContext):
         """Handle dropdown selection with intelligent option analysis"""
-        print("🎯 Running dropdown selection mini-goal...")
+        dprint("🎯 Running dropdown selection mini-goal...")
 
         try:
             # Get the current action that triggered this mini-goal
             current_action = context.action
 
             if not current_action:
-                print("❌ No current action available for dropdown selection")
+                dprint("❌ No current action available for dropdown selection")
                 return
 
-            print(f"📍 Action to execute: {current_action}")
+            dprint(f"📍 Action to execute: {current_action}")
 
             # Parse the action to understand what we need to do
             action_part = ""
@@ -374,7 +374,7 @@ def setup_mini_goals(bot: BrowserVisionBot):
             if current_action.startswith('select:'):
                 # Handle select actions: "select: Python in programming language dropdown"
                 action_part = current_action[7:].strip()  # Remove "select:" prefix
-                print(f"🎯 Need to select: '{action_part}'")
+                dprint(f"🎯 Need to select: '{action_part}'")
 
                 # remove any dropdown/combobox/select text from the action_parts
                 action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
@@ -382,7 +382,7 @@ def setup_mini_goals(bot: BrowserVisionBot):
                 # Handle click actions on dropdown elements: "click: 'Select theme...' button"
                 # Extract what was clicked and infer the selection context
                 action_part = current_action[6:].strip()  # Remove "click:" prefix
-                print(f"🎯 Clicked on: '{action_part}'")
+                dprint(f"🎯 Clicked on: '{action_part}'")
 
                 # remove any dropdown/combobox/select text from the click_description
                 action_part = action_part.replace("dropdown", "").replace("combobox", "").replace("select", "")
@@ -404,12 +404,12 @@ def setup_mini_goals(bot: BrowserVisionBot):
                 IsDropdownVisible
             )
 
-            print(f"🤖 AI Analysis: Select '{selection_info.recommended_option}'")
-            print(f"   Confidence: {selection_info.confidence}")
+            dprint(f"🤖 AI Analysis: Select '{selection_info.recommended_option}'")
+            dprint(f"   Confidence: {selection_info.confidence}")
 
             # Skip selection if confidence is too low
             if selection_info.confidence < 0.3:
-                print("⚠️ AI confidence too low, skipping selection")
+                dprint("⚠️ AI confidence too low, skipping selection")
                 return
         
             # if dropdown_visible.is_visible:
@@ -421,9 +421,9 @@ def setup_mini_goals(bot: BrowserVisionBot):
                 sleep(5)
             bot.act(f"click: {selection_info.recommended_option}")
         except SelectOptionError as e:
-            print(f"❌ Select option error: {e}")
+            dprint(f"❌ Select option error: {e}")
         except Exception as e:
-            print(f"❌ Unexpected error in dropdown handler: {e}")
+            dprint(f"❌ Unexpected error in dropdown handler: {e}")
 
     bot.register_mini_goal(
         trigger=dropdown_trigger_click,
@@ -441,7 +441,7 @@ def setup_mini_goals(bot: BrowserVisionBot):
     # Trigger when a specific error message appears
     def error_recovery_handler(context: MiniGoalScriptContext):
         """Handle error messages that appear on the page"""
-        print("🚨 Error detected, running recovery mini-goal...")
+        dprint("🚨 Error detected, running recovery mini-goal...")
 
         # Get more context about the error
         error_details = context.ask_question(
@@ -475,7 +475,7 @@ def setup_mini_goals(bot: BrowserVisionBot):
     # Handle file upload workflows
     def file_upload_handler(context: MiniGoalScriptContext):
         """Guide the user through file upload process"""
-        print("📁 File upload mini-goal activated...")
+        dprint("📁 File upload mini-goal activated...")
 
         # Check what type of files are expected
         upload_requirements = context.ask_question(
@@ -483,7 +483,7 @@ def setup_mini_goals(bot: BrowserVisionBot):
             "and any specific naming conventions or content requirements."
         )
 
-        print(f"🤖 Upload requirements: {upload_requirements}")
+        dprint(f"🤖 Upload requirements: {upload_requirements}")
 
         # Check current page state
         upload_state = context.bot.page.evaluate("""
@@ -542,7 +542,7 @@ def create_event_callback(bot, debug_mode: bool = True):
         if event.event_type == EventType.AGENT_ITERATION:
             iteration = event.details.get('iteration', '?')
             max_iterations = event.details.get('max_iterations', '?')
-            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
+            dprint(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
             # Start spinner while thinking
             _start_spinner()
         
@@ -559,13 +559,13 @@ def create_event_callback(bot, debug_mode: bool = True):
             if reasoning:
                 # Convert to first person
                 first_person_reasoning = _convert_to_first_person(reasoning)
-                print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
+                dprint(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
             if pre_generated_iter is not None:
                 plan_note = f"Pre-generated step {plan_step or '?'} from iteration {pre_generated_iter} (reusing a cached plan)."
-                print(f"    🧠 {plan_note}")
+                dprint(f"    🧠 {plan_note}")
             # Format action in first person
             first_person_action = _format_action_first_person(action)
-            print(f"    ⚡ {first_person_action}")
+            dprint(f"    ⚡ {first_person_action}")
         
         # Also show completion from agent_complete event (backup - only if COMPLETION_SUCCESS didn't fire)
         elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):
@@ -576,10 +576,10 @@ def create_event_callback(bot, debug_mode: bool = True):
             if reasoning:
                 # Convert reasoning to first person
                 first_person_reasoning = _convert_to_first_person(reasoning)
-                print("\n✅ The task has been completed!")
-                print(f"📝 Reasoning: {first_person_reasoning}")
+                dprint("\n✅ The task has been completed!")
+                dprint(f"📝 Reasoning: {first_person_reasoning}")
                 if confidence is not None:
-                    print(f"🎯 Confidence: {confidence:.2f}")
+                    dprint(f"🎯 Confidence: {confidence:.2f}")
     
     return simple_event_callback
 
@@ -595,8 +595,8 @@ def ask_user_for_help(question: str, context: dict) -> str | None:
     Returns:
         User's answer (added to base_knowledge), or None to skip
     """
-    print(f"\n❓ Agent asks: {question}")
-    print(f"   (Press Enter to skip, or type your answer)")
+    dprint(f"\n❓ Agent asks: {question}")
+    dprint(f"   (Press Enter to skip, or type your answer)")
     
     try:
         answer = input("   Your answer: ").strip()
@@ -705,15 +705,15 @@ result = bot.execute_task(
 
 # Check if task succeeded
 if result.success:
-    print(f"\n✅ Task completed! Confidence: {result.confidence:.2f}")
-    print(f"Reasoning: {result.reasoning}")
+    dprint(f"\n✅ Task completed! Confidence: {result.confidence:.2f}")
+    dprint(f"Reasoning: {result.reasoning}")
 
     # Access extracted data if any
     if result.extracted_data:
-        print("\n📊 Extracted Data:")
+        dprint("\n📊 Extracted Data:")
         for prompt, data in result.extracted_data.items():
-            print(f"  {prompt}: {data}")
+            dprint(f"  {prompt}: {data}")
 else:
-    print(f"\n❌ Task failed: {result.reasoning}")
+    dprint(f"\n❌ Task failed: {result.reasoning}")
 
 input("Press Enter to continue...")

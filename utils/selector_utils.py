@@ -3,7 +3,7 @@ Utilities for generating and working with CSS selectors.
 """
 import time
 from playwright.sync_api import Page
-
+from utils.debug_print import dprint, PrintMode
 
 class SelectorUtils:
     """Utilities for CSS selector generation and field value retrieval"""
@@ -199,23 +199,24 @@ class SelectorUtils:
             if selector:
                 try:
                     from utils.event_logger import get_event_logger
+
                     get_event_logger().system_debug(f"Found reliable selector: {selector}")
                 except Exception:
                     pass
                 return selector
             else:
-                print(f"    ⚠️ First attempt failed, trying alternative approach...")
+                dprint(f"    ⚠️ First attempt failed, trying alternative approach...")
                 # Try a simpler approach - just get any selector for the element
                 simple_selector = self._get_simple_selector(x, y)
                 if simple_selector:
-                    print(f"    ✅ Found simple selector: {simple_selector}")
+                    dprint(f"    ✅ Found simple selector: {simple_selector}")
                     return simple_selector
                 else:
-                    print(f"    ❌ Could not find any selector for element at ({x}, {y})")
+                    dprint(f"    ❌ Could not find any selector for element at ({x}, {y})")
                     return ""
             
         except Exception as e:
-            print(f"    ⚠️ Error getting element selector: {e}")
+            dprint(f"    ⚠️ Error getting element selector: {e}")
             return ""
 
     def _get_simple_selector(self, x: int, y: int) -> str:
@@ -279,7 +280,7 @@ class SelectorUtils:
             """
             return self.page.evaluate(js_code) or ""
         except Exception as e:
-            print(f"    ⚠️ Error in simple selector: {e}")
+            dprint(f"    ⚠️ Error in simple selector: {e}")
             return ""
     
     def get_field_value_by_selector(self, selector: str) -> str:
@@ -295,7 +296,7 @@ class SelectorUtils:
             value = self.page.evaluate(js_code)
             return str(value).strip()
         except Exception as e:
-            print(f"    ⚠️ Error getting field value by selector: {e}")
+            dprint(f"    ⚠️ Error getting field value by selector: {e}")
             return ''
 
     def get_field_value(self, x: int, y: int) -> str:
@@ -311,7 +312,7 @@ class SelectorUtils:
             value = self.page.evaluate(js_code)
             return str(value).strip()
         except Exception as e:
-            print(f"    ⚠️ Error getting field value: {e}")
+            dprint(f"    ⚠️ Error getting field value: {e}")
             return ''
     
     def _remove_overlays(self) -> None:

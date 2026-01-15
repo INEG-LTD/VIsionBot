@@ -18,6 +18,7 @@ from typing import Any, Optional, Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from vision_bot import BrowserVisionBot
+from utils.debug_print import dprint, PrintMode
 
 
 @dataclass
@@ -61,11 +62,11 @@ class Middleware(ABC):
     Example:
         >>> class MyMiddleware(Middleware):
         ...     def before_action(self, context):
-        ...         print(f"Starting: {context.action_type}")
+        ...         dprint(f"Starting: {context.action_type}")
         ...         return context
         ...     
         ...     def after_action(self, context, result):
-        ...         print(f"Completed: {context.action_type}")
+        ...         dprint(f"Completed: {context.action_type}")
         ...         return result
     """
     

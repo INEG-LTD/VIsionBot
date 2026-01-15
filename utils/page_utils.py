@@ -4,6 +4,7 @@ Page information and utility functions.
 from typing import TYPE_CHECKING
 from playwright.sync_api import Page
 from models import PageInfo
+from utils.debug_print import dprint, PrintMode
 
 if TYPE_CHECKING:
     from action_executor import ScrollReason
@@ -81,7 +82,7 @@ class PageUtils:
         scroll_amount = amount if direction == "down" else -amount
 
         # Debug logging
-        print(f"🔍 [PageUtils] Attempting to scroll {direction} by {amount}px (scroll_amount={scroll_amount})")
+        dprint(f"🔍 [PageUtils] Attempting to scroll {direction} by {amount}px (scroll_amount={scroll_amount})")
 
         # Try to find and scroll the foreground element
         try:
@@ -198,17 +199,17 @@ class PageUtils:
                 return false;
             }
         """, scroll_amount)
-            print(f"🔍 [PageUtils] Modal scroll result: {scrolled_modal}")
+            dprint(f"🔍 [PageUtils] Modal scroll result: {scrolled_modal}")
         except Exception as e:
-            print(f"⚠️ [PageUtils] Error during modal scroll detection: {e}")
+            dprint(f"⚠️ [PageUtils] Error during modal scroll detection: {e}")
             scrolled_modal = False
 
         # If no modal was scrolled, fall back to scrolling the main page
         if not scrolled_modal:
-            print(f"🔍 [PageUtils] Falling back to main page scroll")
+            dprint(f"🔍 [PageUtils] Falling back to main page scroll")
             self.page.evaluate(f"window.scrollBy(0, {scroll_amount})")
         else:
-            print(f"✅ [PageUtils] Successfully scrolled modal/foreground element")
+            dprint(f"✅ [PageUtils] Successfully scrolled modal/foreground element")
 
         # Update tracked scroll position
         scroll_info = self.page.evaluate("""
@@ -225,6 +226,7 @@ class PageUtils:
             action_executor.track_scroll_event(reason)
         
         import time
+
         time.sleep(0.5)
     
     def is_small_passive_scroll(self, current_scroll_y: int, current_scroll_x: int, threshold: int = 100) -> bool:

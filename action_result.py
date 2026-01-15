@@ -5,6 +5,7 @@ Provides consistent return type with success status, data, and metadata.
 """
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict
+from utils.debug_print import dprint, PrintMode
 
 
 @dataclass
@@ -26,13 +27,13 @@ class ActionResult:
     Example:
         >>> result = bot.act("Click button", return_result=True)
         >>> if result.success:
-        ...     print(f"Success: {result.message}")
-        ...     print(f"Confidence: {result.confidence}")
+        ...     dprint(f"Success: {result.message}")
+        ...     dprint(f"Confidence: {result.confidence}")
         
         >>> result = bot.extract("Get price", return_result=True)
         >>> if result.success:
         ...     price = result.data  # The extracted data
-        ...     print(f"Confidence: {result.confidence}")
+        ...     dprint(f"Confidence: {result.confidence}")
     """
     success: bool
     message: str = ""

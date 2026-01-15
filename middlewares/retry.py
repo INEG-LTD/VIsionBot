@@ -3,6 +3,7 @@
 import time
 from middleware import Middleware, ActionContext
 from typing import Any
+from utils.debug_print import dprint, PrintMode
 
 
 class RetryMiddleware(Middleware):
@@ -33,12 +34,12 @@ class RetryMiddleware(Middleware):
             # Calculate backoff time
             wait_time = self.backoff ** retries
             
-            print(f"⚠️  Retry {retries + 1}/{self.max_retries} after {wait_time:.1f}s...")
+            dprint(f"⚠️  Retry {retries + 1}/{self.max_retries} after {wait_time:.1f}s...")
             time.sleep(wait_time)
             
             # Mark for retry
             context.metadata['retries'] = retries + 1
             context.metadata['should_retry'] = True
         else:
-            print(f"❌ Max retries ({self.max_retries}) exceeded")
+            dprint(f"❌ Max retries ({self.max_retries}) exceeded")
             context.metadata['should_retry'] = False

@@ -3,6 +3,7 @@
 import time
 from middleware import Middleware, ActionContext
 from typing import Any, Dict
+from utils.debug_print import dprint, PrintMode
 
 
 class MetricsMiddleware(Middleware):
@@ -20,7 +21,7 @@ class MetricsMiddleware(Middleware):
         >>> metrics = MetricsMiddleware()
         >>> bot.use(metrics)
         >>> # ... run bot ...
-        >>> print(metrics.get_metrics())
+        >>> dprint(metrics.get_metrics())
     """
     
     def __init__(self):
@@ -79,15 +80,15 @@ class MetricsMiddleware(Middleware):
     def print_summary(self) -> None:
         """Print metrics summary."""
         metrics = self.get_metrics()
-        print("\n" + "=" * 60)
-        print("📊 METRICS SUMMARY")
-        print("=" * 60)
-        print(f"Actions: {metrics['actions']}")
-        print(f"LLM Calls: {metrics['llm_calls']}")
-        print(f"Errors: {metrics['errors']}")
-        print(f"Total Time: {metrics['total_time']:.2f}s")
-        print(f"Average Action Time: {metrics['average_action_time']:.2f}s")
-        print("=" * 60 + "\n")
+        dprint("\n" + "=" * 60)
+        dprint("📊 METRICS SUMMARY")
+        dprint("=" * 60)
+        dprint(f"Actions: {metrics['actions']}")
+        dprint(f"LLM Calls: {metrics['llm_calls']}")
+        dprint(f"Errors: {metrics['errors']}")
+        dprint(f"Total Time: {metrics['total_time']:.2f}s")
+        dprint(f"Average Action Time: {metrics['average_action_time']:.2f}s")
+        dprint("=" * 60 + "\n")
     
     def reset(self) -> None:
         """Reset all metrics."""

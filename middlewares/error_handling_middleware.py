@@ -9,7 +9,7 @@ from error_handling import (
     ErrorSeverity
 )
 from typing import Any
-
+from utils.debug_print import dprint, PrintMode
 
 class ErrorHandlingMiddleware(Middleware):
     """
@@ -38,6 +38,7 @@ class ErrorHandlingMiddleware(Middleware):
             config: ErrorHandlingConfig instance
         """
         from bot_config import ErrorHandlingConfig
+
         
         if config is None:
             config = ErrorHandlingConfig()
@@ -71,12 +72,12 @@ class ErrorHandlingMiddleware(Middleware):
         # Log error
         error_context = self.error_handler.errors[-1] if self.error_handler.errors else None
         if error_context:
-            print(f"\n❌ Error: {error_context.error_type}")
-            print(f"   Message: {error_context.message}")
+            dprint(f"\n❌ Error: {error_context.error_type}")
+            dprint(f"   Message: {error_context.message}")
             if error_context.page_url:
-                print(f"   Page: {error_context.page_url}")
+                dprint(f"   Page: {error_context.page_url}")
             if error_context.screenshot_path:
-                print(f"   Screenshot: {error_context.screenshot_path}")
+                dprint(f"   Screenshot: {error_context.screenshot_path}")
         
         # Execute recovery strategy
         if strategy == RecoveryStrategy.RETRY:
@@ -86,8 +87,8 @@ class ErrorHandlingMiddleware(Middleware):
                 # Calculate backoff delay
                 delay = self.config.retry_delay * (self.config.retry_backoff ** retries)
                 
-                print(f"   Strategy: Retry ({retries + 1}/{self.config.max_retries})")
-                print(f"   Waiting {delay:.1f}s before retry...")
+                dprint(f"   Strategy: Retry ({retries + 1}/{self.config.max_retries})")
+                dprint(f"   Waiting {delay:.1f}s before retry...")
                 
                 time.sleep(delay)
                 
@@ -95,23 +96,23 @@ class ErrorHandlingMiddleware(Middleware):
                 context.metadata['error_retries'] = retries + 1
                 context.metadata['should_retry'] = True
             else:
-                print(f"   Strategy: Max retries exceeded, aborting")
+                dprint(f"   Strategy: Max retries exceeded, aborting")
                 context.metadata['should_retry'] = False
         
         elif strategy == RecoveryStrategy.ABORT:
-            print(f"   Strategy: Abort (critical error)")
+            dprint(f"   Strategy: Abort (critical error)")
             context.metadata['should_retry'] = False
             
             if self.config.abort_on_critical:
                 raise error
         
         elif strategy == RecoveryStrategy.SKIP:
-            print(f"   Strategy: Skip action and continue")
+            dprint(f"   Strategy: Skip action and continue")
             context.metadata['should_retry'] = False
             context.should_continue = False  # Skip this action
         
         elif strategy == RecoveryStrategy.ASK_USER:
-            print(f"   Strategy: Ask user for intervention")
+            dprint(f"   Strategy: Ask user for intervention")
             try:
                 response = input("   How should we proceed? (retry/skip/abort): ").lower()
                 if response == 'retry':

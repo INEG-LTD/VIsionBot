@@ -5,6 +5,7 @@ This module provides the TaskOrchestrator class that analyzes user requests
 and breaks them down into ordered sequences of Normal and Sequential tasks.
 """
 
+from utils.debug_print import dprint, PrintMode
 from typing import Optional, Dict, Any, Callable, Tuple
 import uuid
 
@@ -137,7 +138,7 @@ class TaskOrchestrator:
                 })
             except Exception as e:
                 # If validation callback fails, just return the task list
-                print(f"⚠️ Validation callback error: {e}")
+                dprint(f"⚠️ Validation callback error: {e}")
                 return task_list
 
         # Max attempts reached
@@ -444,8 +445,8 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
         try:
             # Use haiku for fast, cheap inference
             response = generate_model(
+                prompt=prompt,
                 system_prompt="You extract structured field names from task descriptions. Respond only with valid JSON.",
-                user_prompt=prompt,
                 reasoning_level=ReasoningLevel.NONE,
             )
 
@@ -482,7 +483,7 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
 
         except Exception as e:
             # If LLM fails, return None (no schema)
-            print(f"[Warning] Failed to infer extraction schema: {e}")
+            dprint(f"[Warning] Failed to infer extraction schema: {e}")
             return None
 
     def _convert_to_task_list(self, output: TaskOrchestratorOutput) -> TaskList:
@@ -525,7 +526,7 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                         task.extraction_schema = schema
                         try:
                             fields = list(schema.get("properties", {}).keys())
-                            print(f"🔍 Inferred extraction schema for sequential task: {fields}")
+                            dprint(f"🔍 Inferred extraction schema for sequential task: {fields}")
                         except Exception:
                             pass
 

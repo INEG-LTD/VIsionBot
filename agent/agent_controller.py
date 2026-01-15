@@ -15,6 +15,7 @@ from agent.reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, A
 from agent.agent_context import AgentContext
 from agent.sub_agent_controller import SubAgentController
 from agent.sub_agent_result import SubAgentResult
+from utils.debug_print import dprint, PrintMode
 # Type alias for user question callback (ask: command handler)
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
 UserQuestionCallback = Callable[[str, dict], Optional[str]]
@@ -298,7 +299,7 @@ class AgentController(TaskBasedExecutionMixin):
                     reasoning_level=self.agent_reasoning_level,
                 )
             except Exception as e:
-                print(f"⚠️ Failed to initialize TabDecisionEngine: {e}")
+                dprint(f"⚠️ Failed to initialize TabDecisionEngine: {e}")
                 self.tab_decision_engine = None
         
         # Phase 3: Sub-agent support
@@ -450,12 +451,12 @@ class AgentController(TaskBasedExecutionMixin):
             action_desc = action_description or "next action"
         
         # Display pause information
-        print(f"\n⏸️  {message}")
+        dprint(f"\n⏸️  {message}")
         if action_desc:
-            print(f"   Waiting before: {action_desc}")
+            dprint(f"   Waiting before: {action_desc}")
         try:
             current_url = self.bot.page.url if self.bot.page else 'N/A'
-            print(f"   URL: {current_url}")
+            dprint(f"   URL: {current_url}")
         except Exception:
             pass
         
@@ -727,9 +728,9 @@ class AgentController(TaskBasedExecutionMixin):
             
             if self._queued_action:
                 current_action = self._queued_action
-                print(f"🎯 Using queued action: {current_action}")
+                dprint(f"🎯 Using queued action: {current_action}")
                 if self._queued_action_reason:
-                    print(f"   Reason: {self._queued_action_reason}")
+                    dprint(f"   Reason: {self._queued_action_reason}")
                 self._log_event(
                     "queued_action_consumed",
                     action=current_action,
@@ -901,7 +902,7 @@ class AgentController(TaskBasedExecutionMixin):
                                         )
                                     policy_updated_in_parallel = True
                                 except Exception as e:
-                                    print(f"⚠️ Subagent policy check failed: {e}")
+                                    dprint(f"⚠️ Subagent policy check failed: {e}")
                                     # Fallback: update policy sequentially
                                     self._update_sub_agent_policy(
                                         user_prompt=user_prompt,
@@ -912,7 +913,7 @@ class AgentController(TaskBasedExecutionMixin):
                     # Sequential execution (parallel disabled) OR agent-only mode
                     if should_run_external_completion:
                         # Run external completion check
-                        print("🔄 Running completion check...")
+                        dprint("🔄 Running completion check...")
                         latest_evaluation = completion_contract.evaluate(
                             environment_state,
                             screenshot=snapshot.screenshot,
@@ -1016,7 +1017,7 @@ class AgentController(TaskBasedExecutionMixin):
                     if not is_already_active:
                         triggered = self._handle_mini_goal_trigger(matching_goal, action=current_action)
                         if triggered:
-                            print(f"⚡ Action intercepted by Mini Goal: {current_action}")
+                            dprint(f"⚡ Action intercepted by Mini Goal: {current_action}")
                         # If autonomy mode, it stays on stack and we restart iteration with new prompt
                         # If scripted mode, it was executed and popped, we continue?
                         # Scripted mode counts as 1 iteration, so we should skip execution of current_action
@@ -1047,7 +1048,7 @@ class AgentController(TaskBasedExecutionMixin):
             if current_action and current_action.lower().startswith("ask:"):
                 # Block consecutive ask: commands - must act on previous answer first
                 if iteration <= self._last_ask_iteration + 1:
-                    print("⚠️ Cannot ask again - must act on previous answer first")
+                    dprint("⚠️ Cannot ask again - must act on previous answer first")
                     self._log_event(
                         "ask_command_blocked",
                         reason="consecutive_ask_blocked",
@@ -1167,11 +1168,11 @@ class AgentController(TaskBasedExecutionMixin):
                             executed = self._execute_tab_decision(tab_decision)
                             if executed:
                                 # Tab switch/close happened, continue to next iteration
-                                print("🔄 Tab action executed, continuing to next iteration...")
+                                dprint("🔄 Tab action executed, continuing to next iteration...")
                                 time.sleep(self.iteration_delay)
                                 continue
                     except Exception as e:
-                        print(f"⚠️ Error in tab decision making: {e}")
+                        dprint(f"⚠️ Error in tab decision making: {e}")
             
             # 3. Process next action (if we got one from parallel execution)
             if current_action is not None:
@@ -1183,7 +1184,7 @@ class AgentController(TaskBasedExecutionMixin):
                     and current_action.lower().startswith("click:")
                     and (current_action in self.failed_actions or current_action in self.ineffective_actions)
                 ):
-                    print(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
+                    dprint(f"⚠️ Generated action matches a failed/ineffective action, forcing None: {current_action}")
                     current_action = None
             
             # 4. Fallback if determiner fails
@@ -1191,7 +1192,7 @@ class AgentController(TaskBasedExecutionMixin):
                 current_action = self._determine_next_action(user_prompt, snapshot)
             
             if not current_action:
-                print("⚠️ Cannot determine next action")
+                dprint("⚠️ Cannot determine next action")
                 if iteration == self.max_iterations - 1:
                     self._log_event(
                         "agent_complete",
@@ -1243,7 +1244,7 @@ class AgentController(TaskBasedExecutionMixin):
                     try:
                         self.completion_callback(completion_reasoning)
                     except Exception as e:
-                        print(f"⚠️ Completion callback error: {e}")
+                        dprint(f"⚠️ Completion callback error: {e}")
 
                 # End task successfully
                 self.bot.execution_timer.end_task()
@@ -1428,7 +1429,7 @@ class AgentController(TaskBasedExecutionMixin):
                             # Successful command that changed the page - clear both failed and ineffective actions
                             if self.failed_actions or self.ineffective_actions:
                                 total = len(self.failed_actions) + len(self.ineffective_actions)
-                                print(f"   ✅ Command succeeded and changed page - clearing {total} ineffective action(s) from memory")
+                                dprint(f"   ✅ Command succeeded and changed page - clearing {total} ineffective action(s) from memory")
                                 self.failed_actions.clear()
                                 self.ineffective_actions.clear()
                                 # Reset counter since we cleared the lists
@@ -1517,7 +1518,7 @@ class AgentController(TaskBasedExecutionMixin):
                 if success:
                     # Only show in debug mode
                     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        print(f"✅ Action completed: {current_action}")
+                        dprint(f"✅ Action completed: {current_action}")
                     self._log_event(
                         "action_completed",
                         action=current_action,
@@ -1538,7 +1539,7 @@ class AgentController(TaskBasedExecutionMixin):
                     # Continue to next iteration (will try again with fresh state)
                     
             except Exception as e:
-                print(f"⚠️ Error executing action: {e}")
+                dprint(f"⚠️ Error executing action: {e}")
                 import traceback
                 traceback.print_exc()
             
@@ -1598,12 +1599,12 @@ class AgentController(TaskBasedExecutionMixin):
         try:
             if full_page:
                 snapshot.screenshot = self.bot.page.screenshot(full_page=True)
-                print("📸 Using full-page screenshot for exploration mode")
+                dprint("📸 Using full-page screenshot for exploration mode")
             else:
                 # Capture viewport screenshot (agent needs this to see what's visible)
                 snapshot.screenshot = self.bot.page.screenshot(full_page=False)
         except Exception as e:
-            print(f"⚠️ Failed to capture screenshot: {e}")
+            dprint(f"⚠️ Failed to capture screenshot: {e}")
             snapshot.screenshot = None
 
         # Save screenshot for debugging if enabled
@@ -1625,9 +1626,9 @@ class AgentController(TaskBasedExecutionMixin):
                 # Save the screenshot
                 with open(filepath, "wb") as f:
                     f.write(snapshot.screenshot)
-                print(f"📸 Saved screenshot: {filepath}")
+                dprint(f"📸 Saved screenshot: {filepath}")
             except Exception as e:
-                print(f"⚠️ Failed to save screenshot: {e}")
+                dprint(f"⚠️ Failed to save screenshot: {e}")
 
         # Compute screenshot hash for change detection
         screenshot_data = getattr(snapshot, "screenshot", None)
@@ -1672,12 +1673,12 @@ class AgentController(TaskBasedExecutionMixin):
         if completion_evaluation and completion_evaluation.remaining_steps:
             # Use the first remaining step as the next action
             next_step = completion_evaluation.remaining_steps[0]
-            print(f"🎯 Using suggested next step: {next_step}")
+            dprint(f"🎯 Using suggested next step: {next_step}")
 
             # Special handling: if the step suggests scrolling, prioritize it
             # This ensures we scroll when elements aren't visible
             if next_step.lower().startswith("scroll:"):
-                print("📍 Scrolling to reveal more content")
+                dprint("📍 Scrolling to reveal more content")
         return next_step
 
     def _start_action_plan(self, plan: ActionPlan, iteration: int) -> None:
@@ -1744,7 +1745,7 @@ class AgentController(TaskBasedExecutionMixin):
         if overlay_index is not None and self._is_overlay_clipped(overlay_index):
             attempts = self._pending_plan_scroll_attempts.get(overlay_index, 0) + 1
             if attempts > 3:
-                print("⚠️ Too many scroll attempts for clipped element, clearing plan.")
+                dprint("⚠️ Too many scroll attempts for clipped element, clearing plan.")
                 self._clear_action_plan()
                 return None, False, None, False
             self._pending_plan_scroll_attempts[overlay_index] = attempts
@@ -1897,7 +1898,7 @@ class AgentController(TaskBasedExecutionMixin):
             Potentially transformed action command
         """
         if action_command.lower().startswith("navigate:"):
-            print(f"ℹ️ Navigation command preserved: {action_command}")
+            dprint(f"ℹ️ Navigation command preserved: {action_command}")
             return action_command
         
         return action_command
@@ -1917,7 +1918,7 @@ class AgentController(TaskBasedExecutionMixin):
         if command_lower.startswith("subagents:"):
             directive = command.split(":", 1)[1].strip() if ":" in command else ""
             if not directive:
-                print("⚠️ Sub-agent override command provided without a directive. "
+                dprint("⚠️ Sub-agent override command provided without a directive. "
                       "Use one of: single, parallel, reset.")
                 self._log_event(
                     "sub_agent_policy_override_requested",
@@ -1937,9 +1938,9 @@ class AgentController(TaskBasedExecutionMixin):
                 user_prompt_excerpt=user_prompt[:120]
             )
             if handled:
-                print("🛠️ Sub-agent utilization override updated.")
+                dprint("🛠️ Sub-agent utilization override updated.")
             else:
-                print(f"⚠️ Unknown sub-agent override directive: '{directive}'. "
+                dprint(f"⚠️ Unknown sub-agent override directive: '{directive}'. "
                       "Valid options: single, parallel, aggressive, max, reset.")
             return True
         
@@ -1977,9 +1978,9 @@ class AgentController(TaskBasedExecutionMixin):
             self._sub_agent_policy_score = 0.0
             self.sub_agent_policy_rationale = "Override cleared; returning to adaptive policy (single-threaded baseline)."
             if was_overridden:
-                print("🔄 Sub-agent utilization override cleared. Adaptive policy re-enabled.")
+                dprint("🔄 Sub-agent utilization override cleared. Adaptive policy re-enabled.")
             else:
-                print("ℹ️ Sub-agent utilization is already using adaptive policy.")
+                dprint("ℹ️ Sub-agent utilization is already using adaptive policy.")
             return True
         
         if directive_normalized in override_map:
@@ -1990,7 +1991,7 @@ class AgentController(TaskBasedExecutionMixin):
             self.sub_agent_policy_rationale = (
                 f"Override active: forced to {self._policy_display_name(level)}."
             )
-            print(f"✅ Sub-agent utilization override -> {self._policy_display_name(level)}")
+            dprint(f"✅ Sub-agent utilization override -> {self._policy_display_name(level)}")
             return True
         
         return False
@@ -2364,7 +2365,7 @@ class AgentController(TaskBasedExecutionMixin):
         }
         # Store defer inputs as temporary (single-use) suggestions
         self._temp_user_inputs.append(entry)
-        print(f"📝 Captured user input from defer: {response}")
+        dprint(f"📝 Captured user input from defer: {response}")
         self._log_event(
             "defer_input_received",
             prompt=prompt,
@@ -2393,7 +2394,7 @@ class AgentController(TaskBasedExecutionMixin):
             True if user provided an answer (added to base_knowledge), False otherwise
         """
         if not self.user_question_callback:
-            print("⚠️ Agent wants to ask a question but no callback configured")
+            dprint("⚠️ Agent wants to ask a question but no callback configured")
             self._log_event(
                 "ask_command_no_callback",
                 question=question,
@@ -2433,7 +2434,7 @@ class AgentController(TaskBasedExecutionMixin):
                 self._temp_user_inputs.append(temp_guidance)
                 # Track that we just got an answer (to block consecutive asks)
                 self._last_ask_iteration = iteration
-                print(f"📝 User guidance added for next command: {answer}")
+                dprint(f"📝 User guidance added for next command: {answer}")
                 self._log_event(
                     "ask_command_answered",
                     question=question,
@@ -2442,7 +2443,7 @@ class AgentController(TaskBasedExecutionMixin):
                 )
                 return True
             else:
-                print("⏭️ User skipped the question")
+                dprint("⏭️ User skipped the question")
                 self._log_event(
                     "ask_command_skipped",
                     question=question,
@@ -2451,7 +2452,7 @@ class AgentController(TaskBasedExecutionMixin):
                 return False
                 
         except Exception as e:
-            print(f"⚠️ Error in ask callback: {e}")
+            dprint(f"⚠️ Error in ask callback: {e}")
             self._log_event(
                 "ask_command_error",
                 question=question,
@@ -2502,7 +2503,7 @@ class AgentController(TaskBasedExecutionMixin):
             details["ready_reason"] = reason
         entry["updated_at"] = time.time()
         if entry["status"] == "pending" and not already_ready:
-            print("📝 Google Docs task unlocked: extraction prerequisites satisfied.")
+            dprint("📝 Google Docs task unlocked: extraction prerequisites satisfied.")
 
     def _register_task(self, task_id: str, description: str, task_type: str) -> None:
         entry = self._task_tracker.get(task_id)
@@ -2573,7 +2574,7 @@ class AgentController(TaskBasedExecutionMixin):
         # Why: Persists user guidance until it's actually used by a successful action
         if success and not action.lower().startswith("ask:"):
             if self._temp_user_inputs:
-                # print(f"✨ Successful action '{action}' executed, clearing temporary user guidance.")
+                # dprint(f"✨ Successful action '{action}' executed, clearing temporary user guidance.")
                 self._temp_user_inputs.clear()
 
     def _update_task_blockers(self, summary: Dict[str, Any]) -> None:
@@ -2684,10 +2685,10 @@ class AgentController(TaskBasedExecutionMixin):
                 if prompt:
                     lines.append(f"- {prompt}: {response}")
                     # Also print to terminal for user verification
-                    print(f"🔹 [DEBUG] Including user guidance in prompt: {prompt} -> {response}")
+                    dprint(f"🔹 [DEBUG] Including user guidance in prompt: {prompt} -> {response}")
                 else:
                     lines.append(f"- {response}")
-                    print(f"🔹 [DEBUG] Including user guidance in prompt: {response}")
+                    dprint(f"🔹 [DEBUG] Including user guidance in prompt: {response}")
 
         if self._last_action_summary:
             summary = self._last_action_summary
@@ -2773,7 +2774,7 @@ class AgentController(TaskBasedExecutionMixin):
             )
             return decision
         except Exception as e:
-            print(f"⚠️ Failed to obtain retarget decision: {e}")
+            dprint(f"⚠️ Failed to obtain retarget decision: {e}")
             return None
     
     def _parse_action_for_act_params(
@@ -3054,35 +3055,35 @@ class AgentController(TaskBasedExecutionMixin):
                 
                 if best_match and best_score > 0:
                     target_element = best_match
-                    print(f"   🎯 Matched target element (score: {best_score}): {best_match.get('tagName', 'unknown')} - {best_match.get('name', '') or best_match.get('id', '') or best_match.get('textContent', '')[:50]}")
+                    dprint(f"   🎯 Matched target element (score: {best_score}): {best_match.get('tagName', 'unknown')} - {best_match.get('name', '') or best_match.get('id', '') or best_match.get('textContent', '')[:50]}")
             
             # If target element found, compare position
             if target_element:
                 target_y = target_element['centerY']  # Use center Y for better accuracy
                 
-                print(f"   📍 Target element found at absolute Y: {target_y}")
-                print(f"   📍 Viewport bounds: Y={viewport_top} to Y={viewport_bottom}")
+                dprint(f"   📍 Target element found at absolute Y: {target_y}")
+                dprint(f"   📍 Viewport bounds: Y={viewport_top} to Y={viewport_bottom}")
                 
                 if target_y < viewport_top:
-                    print("   ⬆️ Target is above viewport → scroll: up")
+                    dprint("   ⬆️ Target is above viewport → scroll: up")
                     return "scroll: up"
                 elif target_y > viewport_bottom:
-                    print("   ⬇️ Target is below viewport → scroll: down")
+                    dprint("   ⬇️ Target is below viewport → scroll: down")
                     return "scroll: down"
                 else:
                     # Target is in viewport - shouldn't happen in exploration mode
-                    print("   ✅ Target is in viewport (should not be in exploration mode)")
+                    dprint("   ✅ Target is in viewport (should not be in exploration mode)")
                     return "scroll: down"  # Default
             
             # Fallback: if we can't find target, use simple heuristic
-            print("   ⚠️ Target element not found, using heuristic")
+            dprint("   ⚠️ Target element not found, using heuristic")
             if current_scroll_y > 0:
                 return "scroll: up"  # Already scrolled, try up first
             else:
                 return "scroll: down"  # At top, scroll down
                 
         except Exception as e:
-            print(f"⚠️ Error determining scroll direction: {e}")
+            dprint(f"⚠️ Error determining scroll direction: {e}")
             # Final fallback
             if full_page_snapshot.scroll_y > 0:
                 return "scroll: up"
@@ -3320,7 +3321,7 @@ class AgentController(TaskBasedExecutionMixin):
             self.sub_agent_results.append(result)
             status_icon = "✅" if result.success else "⚠️"
             duration = max(0.0, result.completed_at - result.started_at)
-            print(f"{status_icon} Sub-agent [{result.agent_id}] ({result.instruction}) -> {result.status} "
+            dprint(f"{status_icon} Sub-agent [{result.agent_id}] ({result.instruction}) -> {result.status} "
                   f"(confidence={result.confidence:.2f}, duration={duration:.2f}s)")
             
             # Merge sub-agent's notebook entries into main notebook
@@ -3451,7 +3452,7 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
             return result.rewritten_prompt if result else None
             
         except Exception as e:
-            print(f"⚠️ Failed to rewrite task prompt: {e}")
+            dprint(f"⚠️ Failed to rewrite task prompt: {e}")
             return None
 
     def _build_tab_summary(self) -> List[Dict[str, Any]]:
@@ -3498,11 +3499,11 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
             ui_changes = self._detect_ui_state_changes(state_before, state_after)
             if ui_changes:
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    print(f"   🔄 Detected UI state changes: {ui_changes}")
+                    dprint(f"   🔄 Detected UI state changes: {ui_changes}")
                 return True
         except Exception as e:
             if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                print(f"   ⚠️ Error checking UI state changes: {e}")
+                dprint(f"   ⚠️ Error checking UI state changes: {e}")
 
         return False
 
@@ -3731,7 +3732,7 @@ Do NOT mention being stuck or looping. Write it as a fresh instruction."""
             )
             return result.needs_sub_agents
         except Exception as e:
-            print(f"⚠️ Failed to evaluate sub-agent policy yes/no check via LLM: {e}")
+            dprint(f"⚠️ Failed to evaluate sub-agent policy yes/no check via LLM: {e}")
             # Fallback: assume no sub-agents needed (conservative)
             return False
     
@@ -3805,7 +3806,7 @@ Respond with needs_sub_agents (true/false).
                 reasoning_level=self.agent_reasoning_level,
             )
         except Exception as e:
-            print(f"⚠️ Failed to evaluate sub-agent policy via LLM: {e}")
+            dprint(f"⚠️ Failed to evaluate sub-agent policy via LLM: {e}")
             return SubAgentPolicyLevel.SINGLE_THREADED.value, 0.0, "Fallback adaptive policy (LLM error)."
         
         return result.policy_level, result.policy_score, result.rationale
@@ -3896,7 +3897,7 @@ Provide:
         if not self.sub_agent_controller or not getattr(self.bot, "tab_manager", None):
             return
         if self.agent_context and self.agent_context.parent_agent_id and plan_label != "parallel_plan":
-            print(f"ℹ️ {plan_label}: sub-agents do not orchestrate additional helpers (task '{task.name}' skipped).")
+            dprint(f"ℹ️ {plan_label}: sub-agents do not orchestrate additional helpers (task '{task.name}' skipped).")
             return
 
         task_key = self._normalize_task_name(task.name)
@@ -3915,7 +3916,7 @@ Provide:
 
         normalized_url = self._normalize_suggested_url(task.suggested_url)
         if task.suggested_url and not normalized_url:
-            print(f"⚠️ {plan_label}: suggested URL '{task.suggested_url}' is invalid; skipping automatic navigation.")
+            dprint(f"⚠️ {plan_label}: suggested URL '{task.suggested_url}' is invalid; skipping automatic navigation.")
 
         new_tab_id = self.bot.tab_manager.open_new_tab(
             purpose=task.name,
@@ -3923,7 +3924,7 @@ Provide:
             metadata=metadata
         )
         if not new_tab_id:
-            print(f"⚠️ {plan_label}: failed to open tab for task '{task.name}'.")
+            dprint(f"⚠️ {plan_label}: failed to open tab for task '{task.name}'.")
             self._log_event(f"{plan_label}_tab_failed", task=task.dict())
             self._mark_task_failed(task_key, "Unable to open browser tab for sub-task.")
             return
@@ -3934,7 +3935,7 @@ Provide:
             metadata=metadata
         )
         if not sub_agent_id:
-            print(f"⚠️ {plan_label}: failed to spawn sub-agent for task '{task.name}'.")
+            dprint(f"⚠️ {plan_label}: failed to spawn sub-agent for task '{task.name}'.")
             self._log_event(
                 f"{plan_label}_spawn_failed",
                 task=task.dict(),
@@ -3953,7 +3954,7 @@ Provide:
             tab_id=new_tab_id,
             agent_id=sub_agent_id
         )
-        print(f"🤝 {plan_label}: running sub-agent '{task.name}' → {task.instruction}")
+        dprint(f"🤝 {plan_label}: running sub-agent '{task.name}' → {task.instruction}")
 
         result = self.sub_agent_controller.execute_sub_agent(sub_agent_id)
         self._log_event(
@@ -4004,7 +4005,7 @@ Provide:
         
         plan = self._create_parallel_plan(user_prompt)
         if not plan or not plan.sub_tasks:
-            print("⚠️ Parallel work plan could not be generated. Continuing without orchestration.")
+            dprint("⚠️ Parallel work plan could not be generated. Continuing without orchestration.")
             self._parallel_plan_done = True
             return
         
@@ -4023,11 +4024,11 @@ Provide:
             self._register_task(notes_key, self._integration_notes, "integration")
         
         if plan.integration_notes:
-            print(f"🧩 Parallel integration notes: {plan.integration_notes}")
+            dprint(f"🧩 Parallel integration notes: {plan.integration_notes}")
         if plan.main_agent_focus:
-            print(f"🧭 Main agent focus set to: {plan.main_agent_focus}")
+            dprint(f"🧭 Main agent focus set to: {plan.main_agent_focus}")
         elif self._main_agent_focus:
-            print(f"🧭 Main agent continuing focus: {self._main_agent_focus}")
+            dprint(f"🧭 Main agent continuing focus: {self._main_agent_focus}")
         
         original_tab_id = self.agent_context.tab_id if self.agent_context else None
         
@@ -4059,7 +4060,7 @@ Provide:
             )
             return plan
         except Exception as e:
-            print(f"⚠️ Failed to generate parallel work plan: {e}")
+            dprint(f"⚠️ Failed to generate parallel work plan: {e}")
             return None
     
     @staticmethod
@@ -4138,17 +4139,17 @@ Provide a plan that:
         try:
             if decision.action == TabAction.SWITCH:
                 if not decision.target_tab_id:
-                    print("⚠️ Tab decision: SWITCH but no target_tab_id provided")
+                    dprint("⚠️ Tab decision: SWITCH but no target_tab_id provided")
                     return False
                 
                 target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
                 if not target_tab:
-                    print(f"⚠️ Tab decision: SWITCH to {decision.target_tab_id} but tab not found")
+                    dprint(f"⚠️ Tab decision: SWITCH to {decision.target_tab_id} but tab not found")
                     return False
                 
-                print(f"🔀 Tab Decision: Switching to tab {decision.target_tab_id} ({target_tab.purpose})")
-                print(f"   Reasoning: {decision.reasoning}")
-                print(f"   Confidence: {decision.confidence:.2f}")
+                dprint(f"🔀 Tab Decision: Switching to tab {decision.target_tab_id} ({target_tab.purpose})")
+                dprint(f"   Reasoning: {decision.reasoning}")
+                dprint(f"   Confidence: {decision.confidence:.2f}")
                 
                 # Switch tab
                 if self.bot.tab_manager.switch_to_tab(decision.target_tab_id):
@@ -4156,22 +4157,22 @@ Provide a plan that:
                     self.bot.switch_to_page(target_tab.page)
                     return True
                 else:
-                    print(f"⚠️ Failed to switch to tab {decision.target_tab_id}")
+                    dprint(f"⚠️ Failed to switch to tab {decision.target_tab_id}")
                     return False
             
             elif decision.action == TabAction.CLOSE:
                 if not decision.target_tab_id:
-                    print("⚠️ Tab decision: CLOSE but no target_tab_id provided")
+                    dprint("⚠️ Tab decision: CLOSE but no target_tab_id provided")
                     return False
                 
                 target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
                 if not target_tab:
-                    print(f"⚠️ Tab decision: CLOSE {decision.target_tab_id} but tab not found")
+                    dprint(f"⚠️ Tab decision: CLOSE {decision.target_tab_id} but tab not found")
                     return False
                 
-                print(f"🗑️ Tab Decision: Closing tab {decision.target_tab_id} ({target_tab.purpose})")
-                print(f"   Reasoning: {decision.reasoning}")
-                print(f"   Confidence: {decision.confidence:.2f}")
+                dprint(f"🗑️ Tab Decision: Closing tab {decision.target_tab_id} ({target_tab.purpose})")
+                dprint(f"   Reasoning: {decision.reasoning}")
+                dprint(f"   Confidence: {decision.confidence:.2f}")
                 
                 # Find another tab to switch to if closing active tab
                 current_tab = self.bot.tab_manager.get_active_tab()
@@ -4191,28 +4192,28 @@ Provide a plan that:
                             self.bot.switch_to_page(new_tab.page)
                     return True
                 else:
-                    print(f"⚠️ Failed to close tab {decision.target_tab_id}")
+                    dprint(f"⚠️ Failed to close tab {decision.target_tab_id}")
                     return False
             
             elif decision.action == TabAction.CONTINUE:
                 # No action needed, just log
-                print("✅ Tab Decision: Continue on current tab")
-                print(f"   Reasoning: {decision.reasoning}")
+                dprint("✅ Tab Decision: Continue on current tab")
+                dprint(f"   Reasoning: {decision.reasoning}")
                 return False  # Don't skip iteration, just continue normally
             
             elif decision.action == TabAction.SPAWN_SUB_AGENT:
                 # Phase 3: Spawn sub-agent for another tab
                 if not decision.target_tab_id:
-                    print("⚠️ Tab decision: SPAWN_SUB_AGENT but no target_tab_id provided")
+                    dprint("⚠️ Tab decision: SPAWN_SUB_AGENT but no target_tab_id provided")
                     return False
                 
                 if not self.sub_agent_controller:
-                    print("⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
+                    dprint("⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
                     return False
                 
                 policy_allowed, policy_reason = self._can_spawn_sub_agent()
                 if not policy_allowed:
-                    print(f"🚫 Sub-agent spawn skipped ({policy_reason})")
+                    dprint(f"🚫 Sub-agent spawn skipped ({policy_reason})")
                     self._log_event(
                         "sub_agent_spawn_blocked",
                         policy=self.sub_agent_policy_level.value,
@@ -4230,7 +4231,7 @@ Provide a plan that:
                 if decision.target_tab_id:
                     target_tab = self.bot.tab_manager.get_tab_info(decision.target_tab_id)
                     if not target_tab:
-                        print(f"⚠️ Tab decision: SPAWN_SUB_AGENT for {decision.target_tab_id} but tab not found")
+                        dprint(f"⚠️ Tab decision: SPAWN_SUB_AGENT for {decision.target_tab_id} but tab not found")
                         return False
                 else:
                     purpose = decision.target_purpose or "Sub-agent task"
@@ -4246,20 +4247,20 @@ Provide a plan that:
                         metadata=metadata
                     )
                     if not new_tab_id:
-                        print("⚠️ Failed to create new tab for sub-agent.")
+                        dprint("⚠️ Failed to create new tab for sub-agent.")
                         return False
                     decision.target_tab_id = new_tab_id
                     created_new_tab = True
                     target_tab = self.bot.tab_manager.get_tab_info(new_tab_id)
                     if not target_tab:
-                        print(f"⚠️ Failed to retrieve newly created tab {new_tab_id} for sub-agent.")
+                        dprint(f"⚠️ Failed to retrieve newly created tab {new_tab_id} for sub-agent.")
                         return False
                 
-                print(f"🤖 Tab Decision: Spawning sub-agent for tab {decision.target_tab_id} ({target_tab.purpose})")
-                print(f"   Reasoning: {decision.reasoning}")
-                print(f"   Confidence: {decision.confidence:.2f}")
+                dprint(f"🤖 Tab Decision: Spawning sub-agent for tab {decision.target_tab_id} ({target_tab.purpose})")
+                dprint(f"   Reasoning: {decision.reasoning}")
+                dprint(f"   Confidence: {decision.confidence:.2f}")
                 if created_new_tab:
-                    print(f"   🆕 Created new tab {decision.target_tab_id} (URL: {target_tab.url}) for the sub-agent.")
+                    dprint(f"   🆕 Created new tab {decision.target_tab_id} (URL: {target_tab.url}) for the sub-agent.")
                 
                 # Extract instruction from reasoning or use a default
                 # The LLM should provide instruction in metadata or we derive from reasoning
@@ -4279,7 +4280,7 @@ Provide a plan that:
                 )
                 
                 if sub_agent_id:
-                    print(f"   ✅ Sub-agent spawned: {sub_agent_id}")
+                    dprint(f"   ✅ Sub-agent spawned: {sub_agent_id}")
                     self._log_event(
                         "sub_agent_spawned",
                         agent_id=sub_agent_id,
@@ -4291,7 +4292,7 @@ Provide a plan that:
                     # Execute sub-agent immediately
                     result = self.sub_agent_controller.execute_sub_agent(sub_agent_id)
                     if result.get("success"):
-                        print("   ✅ Sub-agent completed successfully")
+                        dprint("   ✅ Sub-agent completed successfully")
                         self._log_event(
                             "sub_agent_execution",
                             agent_id=sub_agent_id,
@@ -4299,7 +4300,7 @@ Provide a plan that:
                             status=result.get("status"),
                         )
                     else:
-                        print(f"   ⚠️ Sub-agent failed: {result.get('error', 'Unknown error')}")
+                        dprint(f"   ⚠️ Sub-agent failed: {result.get('error', 'Unknown error')}")
                         self._log_event(
                             "sub_agent_execution",
                             agent_id=sub_agent_id,
@@ -4320,16 +4321,17 @@ Provide a plan that:
                     
                     return True
                 else:
-                    print("   ⚠️ Failed to spawn sub-agent")
+                    dprint("   ⚠️ Failed to spawn sub-agent")
                     return False
             
             else:
-                print(f"⚠️ Unknown tab action: {decision.action}")
+                dprint(f"⚠️ Unknown tab action: {decision.action}")
                 return False
                 
         except Exception as e:
-            print(f"⚠️ Error executing tab decision: {e}")
+            dprint(f"⚠️ Error executing tab decision: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 

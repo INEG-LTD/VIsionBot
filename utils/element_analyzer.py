@@ -4,6 +4,7 @@ Element analysis utilities.
 from typing import Any, Dict
 
 from playwright.sync_api import Page
+from utils.debug_print import dprint, PrintMode
 
 
 class ElementAnalyzer:
@@ -125,6 +126,6 @@ class ElementAnalyzer:
                 {"x": x, "y": y},  # pass coordinates
             ) or {}
         except Exception as e:
-            print(f"[ElementAnalyzer] Error in analyze_element_at_coordinates: {e}")
+            dprint(f"[ElementAnalyzer] Error in analyze_element_at_coordinates: {e}")
             return {"error": "Failed to analyze element"}
 

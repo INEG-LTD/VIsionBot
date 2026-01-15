@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Optional, Sequence, Tuple, Type, Union, List
 from collections.abc import Sequence as SequenceABC
 import re
-
+from utils.debug_print import dprint, PrintMode
 from litellm import completion, completion_cost
 try:
     from litellm.exceptions import UnsupportedParamsError
@@ -544,7 +544,7 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
                     return model_object_type.model_validate({field_name: bool_value})
                 return model_object_type(**{field_name: bool_value})
             except ValidationError as exc:
-                print(f"⚠️ Simple boolean parse failed validation for {model_object_type.__name__}: {exc}")
+                dprint(f"⚠️ Simple boolean parse failed validation for {model_object_type.__name__}: {exc}")
         
         # Handle plain boolean text like "false" or "true" by inferring field name from schema
         if cleaned.lower() in ('true', 'false', 'yes', 'no'):
@@ -562,7 +562,7 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
                         return model_object_type.model_validate({field_name: bool_value})
                     return model_object_type(**{field_name: bool_value})
             except Exception as exc:
-                print(f"⚠️ Plain boolean inference failed for {model_object_type.__name__}: {exc}")
+                dprint(f"⚠️ Plain boolean inference failed for {model_object_type.__name__}: {exc}")
         
         # Generic fallback: try to extract JSON from markdown-wrapped responses
         json_obj = _extract_json_object(text)
@@ -572,10 +572,10 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
                     return model_object_type.model_validate(json_obj)
                 return model_object_type(**json_obj)
             except ValidationError as exc:
-                print(f"⚠️ Generic JSON extraction failed validation for {model_object_type.__name__}: {exc}")
+                dprint(f"⚠️ Generic JSON extraction failed validation for {model_object_type.__name__}: {exc}")
                 return None
     except Exception as exc:
-        print(f"⚠️ Manual parse helper error for {model_object_type.__name__}: {exc}")
+        dprint(f"⚠️ Manual parse helper error for {model_object_type.__name__}: {exc}")
     return None
 
 
@@ -602,9 +602,9 @@ def _manual_parse_next_action(text: str, model_object_type: Type[BaseModel]) -> 
                 return model_object_type.model_validate(json_obj)  # type: ignore[attr-defined]
             return model_object_type(**json_obj)
         except ValidationError as exc:
-            print(f"⚠️ Manual NextAction JSON parse failed validation: {exc}")
+            dprint(f"⚠️ Manual NextAction JSON parse failed validation: {exc}")
         except Exception as exc:
-            print(f"⚠️ Manual NextAction JSON parse error: {exc}")
+            dprint(f"⚠️ Manual NextAction JSON parse error: {exc}")
 
 def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
     """
@@ -621,9 +621,9 @@ def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> 
                 return model_object_type.model_validate(json_obj)
             return model_object_type(**json_obj)
         except ValidationError as exc:
-            print(f"⚠️ Manual ActionPlan JSON parse failed validation: {exc}")
+            dprint(f"⚠️ Manual ActionPlan JSON parse failed validation: {exc}")
         except Exception as exc:
-            print(f"⚠️ Manual ActionPlan JSON parse error: {exc}")
+            dprint(f"⚠️ Manual ActionPlan JSON parse error: {exc}")
 
     return None
 
@@ -681,7 +681,7 @@ def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> 
             needs_exploration=needs_exploration,
         )
     except ValidationError as exc:
-        print(f"⚠️ Manual NextAction parse failed validation: {exc}")
+        dprint(f"⚠️ Manual NextAction parse failed validation: {exc}")
         return None
 
 
@@ -720,9 +720,9 @@ def _manual_parse_completion_evaluation(text: str, model_object_type: Type[BaseM
                     return model_object_type.model_validate(json_obj)  # type: ignore[attr-defined]
                 return model_object_type(**json_obj)
             except Exception:
-                print(f"⚠️ Manual CompletionEvaluation JSON parse failed validation: {exc}")
+                dprint(f"⚠️ Manual CompletionEvaluation JSON parse failed validation: {exc}")
         except Exception as exc:
-            print(f"⚠️ Manual CompletionEvaluation JSON parse error: {exc}")
+            dprint(f"⚠️ Manual CompletionEvaluation JSON parse error: {exc}")
 
     lower = cleaned.lower()
 
@@ -796,7 +796,7 @@ def _manual_parse_completion_evaluation(text: str, model_object_type: Type[BaseM
             remaining_steps=remaining_steps,
         )
     except ValidationError as exc:
-        print(f"⚠️ Manual CompletionEvaluation parse failed validation: {exc}")
+        dprint(f"⚠️ Manual CompletionEvaluation parse failed validation: {exc}")
         return None
 
 
@@ -846,7 +846,7 @@ def _manual_parse_extraction_result(text: str, model_object_type: Type[BaseModel
                 reasoning=reasoning
             )
         except (ValidationError, ValueError) as exc:
-            print(f"⚠️ Manual ExtractionResult JSON parse failed validation: {exc}")
+            dprint(f"⚠️ Manual ExtractionResult JSON parse failed validation: {exc}")
     
     # Fallback: extract key-value pairs from prose
     pairs = {}
@@ -899,7 +899,7 @@ def _manual_parse_extraction_result(text: str, model_object_type: Type[BaseModel
             reasoning=reasoning
         )
     except ValidationError as exc:
-        print(f"⚠️ Manual ExtractionResult parse failed validation: {exc}")
+        dprint(f"⚠️ Manual ExtractionResult parse failed validation: {exc}")
         return None
 
 
@@ -957,7 +957,7 @@ def _perform_completion(
         if is_reasoning_error and "reasoning_effort" in kwargs:
             # Remove reasoning_effort and retry
             kwargs.pop("reasoning_effort", None)
-            print(f"⚠️ Model {model} doesn't support reasoning_effort, retrying without it...")
+            dprint(f"⚠️ Model {model} doesn't support reasoning_effort, retrying without it...")
             # Retry
             response = completion(**kwargs)
             # Cache this model as not supporting reasoning for future calls
@@ -969,6 +969,7 @@ def _perform_completion(
 
     try:
         from utils.event_logger import get_event_logger
+
         get_event_logger().llm_cost(
             cost_usd=cost_usd,
             input_tokens=usage['input_tokens'],
@@ -1224,13 +1225,13 @@ def generate_model_with_cost(
                     else:
                         parsed_result = model_object_type(**parsed_obj)
                 except ValidationError as exc:
-                    print(f"⚠️ Pre-parsed object validation failed for {model_object_type.__name__}: {exc}")
+                    dprint(f"⚠️ Pre-parsed object validation failed for {model_object_type.__name__}: {exc}")
                     # Fall back to manual parsing
                     manual = _manual_parse_structured_output(text, model_object_type)
                     parsed_result = manual if manual is not None else text
             # If it's a primitive type (bool, str, int, etc.), try to parse from text instead
             else:
-                print(f"⚠️ LLM returned primitive type {type(parsed_obj).__name__} instead of object for {model_object_type.__name__}")
+                dprint(f"⚠️ LLM returned primitive type {type(parsed_obj).__name__} instead of object for {model_object_type.__name__}")
                 manual = _manual_parse_structured_output(text, model_object_type)
                 parsed_result = manual if manual is not None else text
         else:
@@ -1244,21 +1245,21 @@ def generate_model_with_cost(
                     if manual is not None:
                         parsed_result = manual
                     else:
-                        print(f"⚠️ Structured output parse failed (parse_raw) for {model_object_type.__name__}: {exc}")
+                        dprint(f"⚠️ Structured output parse failed (parse_raw) for {model_object_type.__name__}: {exc}")
                         parsed_result = text
             except (ValidationError, json.JSONDecodeError) as exc:
                 manual = _manual_parse_structured_output(text, model_object_type)
                 if manual is not None:
                     parsed_result = manual
                 else:
-                    print(f"⚠️ Structured output parse failed for {model_object_type.__name__}: {exc}")
+                    dprint(f"⚠️ Structured output parse failed for {model_object_type.__name__}: {exc}")
                     parsed_result = text
             except Exception as exc:
                 manual = _manual_parse_structured_output(text, model_object_type)
                 if manual is not None:
                     parsed_result = manual
                 else:
-                    print(f"⚠️ Unexpected error parsing structured output for {model_object_type.__name__}: {exc}")
+                    dprint(f"⚠️ Unexpected error parsing structured output for {model_object_type.__name__}: {exc}")
                     parsed_result = text
 
     return parsed_result, cost_usd, usage

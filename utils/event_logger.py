@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
+from utils.debug_print import dprint, PrintMode
 
 
 class EventType(str, Enum):
@@ -177,7 +178,7 @@ class EventLogger:
             "SUCCESS": "✅"
         }
         emoji = level_emoji.get(event.level, "•")
-        print(f"{emoji} {event.message}")
+        dprint(f"{emoji} {event.message}")
         
         # Print important details
         if event.details:
@@ -186,7 +187,7 @@ class EventLogger:
                     # Only print simple types to avoid errors
                     try:
                         if isinstance(value, (str, int, float, bool)):
-                            print(f"   {key}: {value}")
+                            dprint(f"   {key}: {value}")
                     except Exception:
                         pass
     
@@ -204,7 +205,7 @@ class EventLogger:
             # Last resort: if even creating the event fails, try to print in debug mode
             if self.debug_mode:
                 try:
-                    print(f"⚠️ Event logger error: {message}")
+                    dprint(f"⚠️ Event logger error: {message}")
                 except Exception:
                     pass
     

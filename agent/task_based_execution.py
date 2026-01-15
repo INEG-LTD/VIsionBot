@@ -5,8 +5,9 @@ This module provides task-based execution capabilities that integrate with
 the existing AgentController reactive loop.
 """
 
-from typing import Optional, Dict, Any, List, Tuple, Callable, Union
+from typing import Optional, Dict, Any, List, Tuple, Callable, Union, Iterable, Type
 import time
+import hashlib
 
 from models.task_models import (
     TaskList,
@@ -22,6 +23,7 @@ from agent.completion_contract import EnvironmentState
 from bot_config import SequentialTaskConfig
 from action_result import ActionResult
 from agent.task_result_retrieval import TaskResultRetriever, TaskResultAccessor
+from pydantic import BaseModel, Field, create_model
 
 
 class TaskBasedExecutionMixin:
@@ -71,6 +73,7 @@ class TaskBasedExecutionMixin:
 
         # Result accessor (created when task_list is set)
         self.task_result_accessor: Optional[TaskResultAccessor] = None
+        self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
 
         # Flag to enable task-based execution
         self.use_task_based_execution: bool = False
@@ -436,6 +439,42 @@ class TaskBasedExecutionMixin:
             "expected_fields": expected_fields,
             "actual_fields": actual_fields,
         }
+
+    def _execute_schema_enforced_extraction(self, action: str, schema: Dict[str, Any]) -> ActionResult:
+        """Run an extraction step using the inferred schema model."""
+        prompt = action.split(":", 1)[1].strip() if ":" in action else action
+        model_schema = self._get_schema_model(schema)
+        return self.bot.extract(
+            prompt=prompt,
+            output_format="structured",
+            model_schema=model_schema,
+        )
+
+    def _get_schema_model(self, schema: Dict[str, Any]) -> Type[BaseModel]:
+        """Return (or create) a Pydantic model that enforces the extraction schema."""
+        required_fields = tuple(schema.get("required", []))
+        if not required_fields:
+            required_fields = tuple(sorted(schema.get("properties", {}).keys()))
+
+        cache_key = required_fields
+        if cache_key in self._extraction_model_cache:
+            return self._extraction_model_cache[cache_key]
+
+        properties = schema.get("properties", {})
+        field_definitions: Dict[str, tuple[type, Any]] = {}
+        for field_name in required_fields:
+            field_meta = properties.get(field_name, {})
+            description = field_meta.get("description")
+            field_definitions[field_name] = (
+                str,
+                Field(..., description=description) if description else Field(...)
+            )
+
+        hash_input = "|".join(required_fields).encode() if required_fields else b"default"
+        model_name = f"ExtractionSchema_{hashlib.sha1(hash_input).hexdigest()[:8]}"
+        model = create_model(model_name, __base__=BaseModel, **field_definitions)
+        self._extraction_model_cache[cache_key] = model
+        return model
 
     def _execute_normal_task(
         self,
@@ -1083,7 +1122,10 @@ Use the results above to complete your task."""
 
                 # Execute the action
                 try:
-                    result = self.bot.act(current_action)
+                    if current_action and current_action.lower().startswith("extract:") and extraction_schema:
+                        result = self._execute_schema_enforced_extraction(current_action, extraction_schema)
+                    else:
+                        result = self.bot.act(current_action)
 
                     # Track ineffective/failed actions
                     if not result.success:

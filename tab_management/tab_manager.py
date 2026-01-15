@@ -8,6 +8,7 @@ import uuid
 
 from .tab_info import TabInfo
 from utils.event_logger import get_event_logger
+from utils.debug_print import dprint, PrintMode
 
 
 class TabManager:
@@ -166,7 +167,7 @@ class TabManager:
             True if switch successful, False otherwise
         """
         if tab_id not in self.tabs:
-            print(f"⚠️ Tab not found: {tab_id}")
+            dprint(f"⚠️ Tab not found: {tab_id}")
             return False
         
         tab_info = self.tabs[tab_id]
@@ -175,7 +176,7 @@ class TabManager:
         try:
             tab_info.page.bring_to_front()
         except Exception as e:
-            print(f"⚠️ Could not bring tab to front: {e}")
+            dprint(f"⚠️ Could not bring tab to front: {e}")
         
         # Update tab info with current URL/title
         try:
@@ -192,7 +193,7 @@ class TabManager:
         self.active_tab_id = tab_id
         
         if old_active != tab_id:
-            print(f"🔀 Switched to tab: {tab_id} ({tab_info.purpose}) - {tab_info.url}")
+            dprint(f"🔀 Switched to tab: {tab_id} ({tab_info.purpose}) - {tab_info.url}")
         
         return True
     
@@ -212,7 +213,7 @@ class TabManager:
             True if close successful, False otherwise
         """
         if tab_id not in self.tabs:
-            print(f"⚠️ Tab not found: {tab_id}")
+            dprint(f"⚠️ Tab not found: {tab_id}")
             return False
         
         tab_info = self.tabs[tab_id]
@@ -232,13 +233,13 @@ class TabManager:
         try:
             tab_info.page.close()
         except Exception as e:
-            print(f"⚠️ Error closing page: {e}")
+            dprint(f"⚠️ Error closing page: {e}")
         
         # Remove from registry
         del self.tabs[tab_id]
         self._known_pages.discard(id(tab_info.page))
         
-        print(f"🗑️ Closed tab: {tab_id} ({tab_info.purpose})")
+        dprint(f"🗑️ Closed tab: {tab_id} ({tab_info.purpose})")
         
         return True
     
@@ -259,7 +260,7 @@ class TabManager:
         try:
             page = self.browser_context.new_page()
         except Exception as e:
-            print(f"⚠️ Failed to open new tab: {e}")
+            dprint(f"⚠️ Failed to open new tab: {e}")
             return None
         
         tab_metadata = metadata.copy() if metadata else {}
@@ -269,7 +270,7 @@ class TabManager:
             try:
                 page.goto(url)
             except Exception as e:
-                print(f"⚠️ Failed to navigate new tab {tab_id} to {url}: {e}")
+                dprint(f"⚠️ Failed to navigate new tab {tab_id} to {url}: {e}")
         
         # Switch focus to the new tab
         self.switch_to_tab(tab_id)
@@ -317,9 +318,9 @@ class TabManager:
             try:
                 self.tab_creation_listener(tab_id)
             except Exception as e:
-                print(f"⚠️ Error in tab creation listener: {e}")
+                dprint(f"⚠️ Error in tab creation listener: {e}")
         
-        print(f"🔍 Detected new tab: {tab_id} - {url}")
+        dprint(f"🔍 Detected new tab: {tab_id} - {url}")
         
         return tab_id
     
@@ -406,7 +407,7 @@ class TabManager:
                 self.active_tab_id = other_tabs[0] if other_tabs else None
         
         if orphaned:
-            print(f"🧹 Cleaned up {len(orphaned)} orphaned tab(s)")
+            dprint(f"🧹 Cleaned up {len(orphaned)} orphaned tab(s)")
         
         return len(orphaned)
 

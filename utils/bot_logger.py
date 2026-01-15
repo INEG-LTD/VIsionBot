@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
+from utils.debug_print import dprint, PrintMode
 
 
 class LogLevel(str, Enum):
@@ -94,7 +95,7 @@ Log File: {self.log_file}
             os.rename(self.log_file, backup_file)
             self._write_header()
         except Exception as e:
-            print(f"⚠️ Failed to rotate log file: {e}")
+            dprint(f"⚠️ Failed to rotate log file: {e}")
     
     def _format_entry(self, entry: LogEntry) -> str:
         """Format a log entry for output"""
@@ -139,7 +140,7 @@ Log File: {self.log_file}
             self.entries.append(entry)
             
         except Exception as e:
-            print(f"⚠️ Failed to write log entry: {e}")
+            dprint(f"⚠️ Failed to write log entry: {e}")
     
     def log(self, level: LogLevel, category: LogCategory, message: str, 
             details: Optional[Dict[str, Any]] = None, duration_ms: Optional[float] = None, 

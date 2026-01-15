@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from typing import List, Tuple, Optional
 from ai_utils import generate_text
+from utils.debug_print import dprint, PrintMode
 
 
 def parse_multiple_commands(prompt: str) -> List[str]:
@@ -168,7 +169,7 @@ def _ai_parse_commands(prompt: str) -> List[str]:
             return [prompt]  # Fallback to original prompt
             
     except Exception as e:
-        print(f"⚠️ Error in AI command parsing: {e}")
+        dprint(f"⚠️ Error in AI command parsing: {e}")
         return [prompt]  # Fallback to original prompt
 
 

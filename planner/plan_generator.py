@@ -14,6 +14,7 @@ from models.core_models import DetectedElement, PageSection, ActionStep, PageInf
 from utils.semantic_targets import SemanticTarget
 from utils.intent_parsers import parse_action_intent
 from utils.event_logger import get_event_logger
+from utils.debug_print import dprint, PrintMode
 
 
 class PlanGenerator:
@@ -298,7 +299,7 @@ class PlanGenerator:
                 model=model,
             )
         except Exception as e:
-            print(f"[PlanGen][NL] LLM selection error: {e}")
+            dprint(f"[PlanGen][NL] LLM selection error: {e}")
             return None
 
         if not raw_response:
@@ -402,9 +403,9 @@ class PlanGenerator:
                     y_min < y_max and x_min < x_max):
                     valid_elements.append(e)
                 else:
-                    print(f"[PlanGen] Filtering out element #{e.get('index')} with invalid coordinates: {coords}")
+                    dprint(f"[PlanGen] Filtering out element #{e.get('index')} with invalid coordinates: {coords}")
             else:
-                print(f"[PlanGen] Filtering out element #{e.get('index')} with missing coordinates")
+                dprint(f"[PlanGen] Filtering out element #{e.get('index')} with missing coordinates")
         
         def score_elem(e: Dict[str, Any]) -> int:
             s = 0

@@ -4,6 +4,7 @@ import hashlib
 import json
 from middleware import Middleware, ActionContext
 from typing import Any, Dict
+from utils.debug_print import dprint, PrintMode
 
 
 class CachingMiddleware(Middleware):
@@ -41,7 +42,7 @@ class CachingMiddleware(Middleware):
             self.hits += 1
             context.cached_result = self.cache[cache_key]
             context.should_continue = False  # Skip LLM call
-            print(f"💾 Cache hit (hits: {self.hits}, misses: {self.misses})")
+            dprint(f"💾 Cache hit (hits: {self.hits}, misses: {self.misses})")
         else:
             self.misses += 1
             context.metadata['cache_key'] = cache_key

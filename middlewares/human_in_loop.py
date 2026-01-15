@@ -2,6 +2,7 @@
 
 from middleware import Middleware, ActionContext
 from typing import Any, Callable, Optional
+from utils.debug_print import dprint, PrintMode
 
 
 class HumanInTheLoopMiddleware(Middleware):
@@ -61,11 +62,11 @@ class HumanInTheLoopMiddleware(Middleware):
     
     def _pause(self, message: str, context: ActionContext) -> None:
         """Pause and wait for user input."""
-        print(f"\n⏸️  {message}")
-        print(f"   Action: {context.action_type}")
-        print(f"   Page: {context.bot.page.url if context.bot.page else 'N/A'}")
+        dprint(f"\n⏸️  {message}")
+        dprint(f"   Action: {context.action_type}")
+        dprint(f"   Page: {context.bot.page.url if context.bot.page else 'N/A'}")
         
         try:
             input("   Press Enter to continue...")
         except (EOFError, KeyboardInterrupt):
-            print("\n   Continuing...")
+            dprint("\n   Continuing...")

@@ -7,7 +7,7 @@ Step 2: Evaluates task completion using LLM with full environment state.
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
-
+from utils.debug_print import dprint, PrintMode
 from session_tracker import BrowserState, Interaction, InteractionType
 from ai_utils import (
     generate_model,
@@ -158,7 +158,7 @@ class CompletionContract:
             )
             
         except Exception as e:
-            print(f"⚠️ CompletionContract evaluation error: {e}")
+            dprint(f"⚠️ CompletionContract evaluation error: {e}")
             import traceback
             traceback.print_exc()
             # Fallback: conservative - assume not complete
@@ -194,7 +194,7 @@ class CompletionContract:
             )
             return result.is_complete
         except Exception as e:
-            print(f"⚠️ Failed to evaluate completion yes/no check via LLM: {e}")
+            dprint(f"⚠️ Failed to evaluate completion yes/no check via LLM: {e}")
             # Fallback: assume not complete (conservative)
             return False
     
@@ -442,6 +442,7 @@ Has the user's request been fulfilled? What evidence supports this?
                 if interaction.success and interaction.extracted_data:
                     # Show key extracted data (limit size for prompt)
                     import json
+
                     try:
                         data_str = json.dumps(interaction.extracted_data, indent=2)[:200]
                         summary += f"\n   ✅ Successfully extracted: {data_str}..."
