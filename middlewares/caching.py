@@ -5,6 +5,7 @@ import json
 from middleware import Middleware, ActionContext
 from typing import Any, Dict
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 
 class CachingMiddleware(Middleware):
@@ -42,10 +43,12 @@ class CachingMiddleware(Middleware):
             self.hits += 1
             context.cached_result = self.cache[cache_key]
             context.should_continue = False  # Skip LLM call
+            get_event_logger().cache_hit(cache_key=cache_key)
             dprint(f"💾 Cache hit (hits: {self.hits}, misses: {self.misses})")
         else:
             self.misses += 1
             context.metadata['cache_key'] = cache_key
+            get_event_logger().cache_miss(cache_key=cache_key)
         
         return context
     
@@ -63,8 +66,10 @@ class CachingMiddleware(Middleware):
             if len(self.cache) >= self.max_cache_size:
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
+                get_event_logger().cache_evict(cache_key=oldest_key)
             
             self.cache[cache_key] = result
+            get_event_logger().cache_store(cache_key=cache_key)
         
         return result
     
@@ -91,3 +96,4 @@ class CachingMiddleware(Middleware):
         self.cache.clear()
         self.hits = 0
         self.misses = 0
+        get_event_logger().cache_clear()

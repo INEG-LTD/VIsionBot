@@ -3,6 +3,7 @@
 from middleware import Middleware, ActionContext
 from typing import Any, Callable, Optional
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 
 class HumanInTheLoopMiddleware(Middleware):
@@ -65,8 +66,11 @@ class HumanInTheLoopMiddleware(Middleware):
         dprint(f"\n⏸️  {message}")
         dprint(f"   Action: {context.action_type}")
         dprint(f"   Page: {context.bot.page.url if context.bot.page else 'N/A'}")
+        get_event_logger().human_pause(message, action_type=context.action_type)
         
         try:
             input("   Press Enter to continue...")
         except (EOFError, KeyboardInterrupt):
             dprint("\n   Continuing...")
+        finally:
+            get_event_logger().human_resume(action_type=context.action_type)

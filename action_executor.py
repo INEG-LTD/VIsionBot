@@ -413,6 +413,10 @@ class ActionExecutor:
             True if plan executed successfully, False otherwise
         """
         self.event_logger.system_info(f"Executing plan with {len(plan.action_steps)} steps")
+        try:
+            self.event_logger.plan_execute_start(len(plan.action_steps))
+        except Exception:
+            pass
 
         # Note: Only evaluate goals AFTER actions execute, not before
 
@@ -438,6 +442,14 @@ class ActionExecutor:
             
             try:
                 self.event_logger.action_step(step_number=i+1, action_type=str(step.action))
+            except Exception:
+                pass
+            try:
+                self.event_logger.action_start(
+                    action_type=str(step.action),
+                    step_number=i + 1,
+                    overlay_index=step.overlay_index,
+                )
             except Exception:
                 pass
             
@@ -575,9 +587,32 @@ class ActionExecutor:
                     dprint(f"⚠️ Unknown action type: {step.action}")
                     continue
                 
+                if step_success:
+                    try:
+                        self.event_logger.action_success(
+                            action_type=str(step.action),
+                            step_number=i + 1,
+                            overlay_index=step.overlay_index,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.event_logger.action_failure(
+                            action_type=str(step.action),
+                            error=self.last_failure_reason,
+                            step_number=i + 1,
+                            overlay_index=step.overlay_index,
+                        )
+                    except Exception:
+                        pass
                 # Check if step failed (e.g., due to retry request)
                 if not step_success:
                     dprint(f"❌ Step {i+1} failed - aborting plan execution")
+                    try:
+                        self.event_logger.plan_execute_fail(self.last_failure_reason or "step_failed")
+                    except Exception:
+                        pass
                     return False
                 
                 # Goal checking removed - keyword goals handle completion directly
@@ -588,9 +623,17 @@ class ActionExecutor:
             except Exception as e:
                 dprint(f"❌ Error executing step {i+1}: {e}")
                 self.last_failure_reason = f"Error executing step {i+1}: {e}"
+                try:
+                    self.event_logger.plan_execute_fail(self.last_failure_reason)
+                except Exception:
+                    pass
                 return False
         
         self.event_logger.system_info("Plan execution completed")
+        try:
+            self.event_logger.plan_execute_complete()
+        except Exception:
+            pass
         return True
 
     def _handle_context_guard_failure(

@@ -4,6 +4,7 @@ import time
 from middleware import Middleware, ActionContext
 from typing import Any
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 
 class RetryMiddleware(Middleware):
@@ -35,6 +36,7 @@ class RetryMiddleware(Middleware):
             wait_time = self.backoff ** retries
             
             dprint(f"⚠️  Retry {retries + 1}/{self.max_retries} after {wait_time:.1f}s...")
+            get_event_logger().retry_backoff(wait_time, retries + 1)
             time.sleep(wait_time)
             
             # Mark for retry
@@ -42,4 +44,5 @@ class RetryMiddleware(Middleware):
             context.metadata['should_retry'] = True
         else:
             dprint(f"❌ Max retries ({self.max_retries}) exceeded")
+            get_event_logger().retry_giveup("max_retries_exceeded", max_retries=self.max_retries)
             context.metadata['should_retry'] = False

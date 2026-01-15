@@ -240,6 +240,10 @@ class TabManager:
         self._known_pages.discard(id(tab_info.page))
         
         dprint(f"🗑️ Closed tab: {tab_id} ({tab_info.purpose})")
+        try:
+            get_event_logger().tab_close(tab_id=tab_id, purpose=tab_info.purpose, url=tab_info.url)
+        except Exception:
+            pass
         
         return True
     
@@ -321,6 +325,10 @@ class TabManager:
                 dprint(f"⚠️ Error in tab creation listener: {e}")
         
         dprint(f"🔍 Detected new tab: {tab_id} - {url}")
+        try:
+            get_event_logger().tab_detected(tab_id=tab_id, url=url, title=title)
+        except Exception:
+            pass
         
         return tab_id
     
@@ -410,4 +418,3 @@ class TabManager:
             dprint(f"🧹 Cleaned up {len(orphaned)} orphaned tab(s)")
         
         return len(orphaned)
-

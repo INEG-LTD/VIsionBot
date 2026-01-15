@@ -10,6 +10,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 from collections import deque
+from utils.event_logger import get_event_logger
 
 
 @dataclass
@@ -44,10 +45,12 @@ class ActionQueue:
         """
         with self._lock:
             if len(self._queue) >= self._max_size:
+                get_event_logger().queue_reject("queue_full", action_id=action_id, max_size=self._max_size)
                 raise RuntimeError(f"Action queue is full (max {self._max_size} actions)")
             
             # Check for circular dependencies (only for user-provided IDs)
             if action_id and action_id in self._queued_ids:
+                get_event_logger().queue_reject("circular_dependency", action_id=action_id)
                 raise ValueError(f"Circular dependency detected: {action_id}")
             
             # Generate action ID if not provided
@@ -75,6 +78,7 @@ class ActionQueue:
             # Only track user-provided IDs to prevent circular dependencies
             if action_id and not action_id.startswith("queued_"):
                 self._queued_ids.add(action_id)
+            get_event_logger().queue_enqueue(action_id=action_id, action=action, priority=priority)
     
     def dequeue(self) -> Optional[QueuedAction]:
         """Get next action from queue (FIFO by default, priority-based if needed)"""
@@ -82,6 +86,7 @@ class ActionQueue:
             if self._queue:
                 action = self._queue.popleft()
                 self._queued_ids.discard(action.action_id)
+                get_event_logger().queue_dequeue(action_id=action.action_id, action=action.action, priority=action.priority)
                 return action
             return None
     
@@ -95,3 +100,4 @@ class ActionQueue:
         with self._lock:
             self._queue.clear()
             self._queued_ids.clear()
+            get_event_logger().queue_clear()

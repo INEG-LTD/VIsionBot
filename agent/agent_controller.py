@@ -390,6 +390,10 @@ class AgentController(TaskBasedExecutionMixin):
             self.event_logger.system_info(f"⏸️  Agent paused: {message}")
         except Exception:
             pass
+        try:
+            self.event_logger.agent_pause(message)
+        except Exception:
+            pass
     
     def resume(self) -> None:
         """
@@ -405,6 +409,10 @@ class AgentController(TaskBasedExecutionMixin):
         if was_paused:
             try:
                 self.event_logger.system_info("▶️  Agent resumed")
+            except Exception:
+                pass
+            try:
+                self.event_logger.agent_resume()
             except Exception:
                 pass
     
@@ -557,6 +565,10 @@ class AgentController(TaskBasedExecutionMixin):
         
         if not self.bot.started:
             self.event_logger.system_error("Bot not started. Call bot.start() first.")
+            try:
+                self.event_logger.agent_error("Bot not started")
+            except Exception:
+                pass
             self._log_event("agent_complete", status="failed", reason="bot_not_started")
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
@@ -573,6 +585,10 @@ class AgentController(TaskBasedExecutionMixin):
         
         if self.bot.page.url.startswith("about:blank"):
             self.event_logger.system_error("Page is on initial blank page.")
+            try:
+                self.event_logger.agent_error("Page is blank")
+            except Exception:
+                pass
             self._log_event("agent_complete", status="failed", reason="blank_page")
             # End task timer if it was started
             if self.bot.execution_timer.task_start_time is not None:
@@ -993,6 +1009,7 @@ class AgentController(TaskBasedExecutionMixin):
             if extraction_prompt:
                 # Simple extraction: run it and append results to notebook
                 try:
+                    self.event_logger.extraction_detected(extraction_prompt)
                     self.event_logger.extraction_start(extraction_prompt)
                 except Exception:
                     pass
@@ -1255,7 +1272,10 @@ class AgentController(TaskBasedExecutionMixin):
                     )
                 else:
                     try:
-                        self.event_logger.action_failure(f"Action failed: {current_action}")
+                        self.event_logger.action_failure(
+                            action_type=current_action or "unknown",
+                            error="execution_failed",
+                        )
                     except Exception:
                         pass
                     self._log_event(

@@ -200,6 +200,9 @@ class SelectorUtils:
                 try:
                     from utils.event_logger import get_event_logger
 
+                    get_event_logger().action_refinement(
+                        f"Resolved selector from coordinates ({x}, {y}): {selector}"
+                    )
                     get_event_logger().system_debug(f"Found reliable selector: {selector}")
                 except Exception:
                     pass
@@ -210,6 +213,14 @@ class SelectorUtils:
                 simple_selector = self._get_simple_selector(x, y)
                 if simple_selector:
                     dprint(f"    ✅ Found simple selector: {simple_selector}")
+                    try:
+                        from utils.event_logger import get_event_logger
+
+                        get_event_logger().action_refinement(
+                            f"Used fallback selector from coordinates ({x}, {y}): {simple_selector}"
+                        )
+                    except Exception:
+                        pass
                     return simple_selector
                 else:
                     dprint(f"    ❌ Could not find any selector for element at ({x}, {y})")

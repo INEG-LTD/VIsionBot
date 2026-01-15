@@ -6,6 +6,7 @@ and breaks them down into ordered sequences of Normal and Sequential tasks.
 """
 
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 from typing import List, Optional, Dict, Any, Callable, Tuple
 import re
 import uuid
@@ -73,6 +74,12 @@ class TaskOrchestrator:
         context = initial_context or {}
         feedback_history = []
 
+        event_logger = get_event_logger()
+        try:
+            event_logger.task_decompose_start(user_prompt)
+        except Exception:
+            pass
+
         for attempt in range(max_validation_attempts):
             # Build prompts
             system_prompt = self._build_system_prompt()
@@ -123,12 +130,20 @@ class TaskOrchestrator:
 
             # If no validation callback, return immediately
             if validation_callback is None:
+                try:
+                    event_logger.task_decompose_complete(len(task_list.tasks))
+                except Exception:
+                    pass
                 return task_list
 
             # Call validation callback
             try:
                 approved, feedback = validation_callback(task_list)
                 if approved:
+                    try:
+                        event_logger.task_decompose_complete(len(task_list.tasks))
+                    except Exception:
+                        pass
                     return task_list
 
                 # Add feedback for next attempt
@@ -143,6 +158,10 @@ class TaskOrchestrator:
                 return task_list
 
         # Max attempts reached
+        try:
+            event_logger.task_decompose_fail("Max validation attempts reached")
+        except Exception:
+            pass
         raise ValueError(
             f"Failed to generate approved task decomposition after {max_validation_attempts} attempts"
         )
@@ -467,6 +486,11 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                     fields.append(field)
             return [f for f in fields if f]
 
+        event_logger = get_event_logger()
+        try:
+            event_logger.schema_infer_start(goal)
+        except Exception:
+            pass
         try:
             response = generate_model(
                 prompt=prompt,
@@ -497,7 +521,7 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                     return None
 
             # Generate simple JSON schema
-            return {
+            schema = {
                 "type": "object",
                 "required": normalized_fields,
                 "properties": {
@@ -505,12 +529,17 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                     for field in normalized_fields
                 }
             }
+            try:
+                event_logger.schema_infer_success(normalized_fields)
+            except Exception:
+                pass
+            return schema
 
         except Exception as e:
             # If LLM fails, try heuristic extraction before giving up.
             fields = _heuristic_fields(goal)
             if fields:
-                return {
+                schema = {
                     "type": "object",
                     "required": fields,
                     "properties": {
@@ -518,6 +547,15 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                         for field in fields
                     }
                 }
+                try:
+                    event_logger.schema_infer_success(fields)
+                except Exception:
+                    pass
+                return schema
+            try:
+                event_logger.schema_infer_fail(str(e))
+            except Exception:
+                pass
             dprint(f"[Warning] Failed to infer extraction schema: {e}")
             return None
 

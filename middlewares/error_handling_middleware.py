@@ -10,6 +10,7 @@ from error_handling import (
 )
 from typing import Any
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 class ErrorHandlingMiddleware(Middleware):
     """
@@ -89,6 +90,7 @@ class ErrorHandlingMiddleware(Middleware):
                 
                 dprint(f"   Strategy: Retry ({retries + 1}/{self.config.max_retries})")
                 dprint(f"   Waiting {delay:.1f}s before retry...")
+                get_event_logger().retry_backoff(delay, retries + 1)
                 
                 time.sleep(delay)
                 
@@ -97,10 +99,12 @@ class ErrorHandlingMiddleware(Middleware):
                 context.metadata['should_retry'] = True
             else:
                 dprint(f"   Strategy: Max retries exceeded, aborting")
+                get_event_logger().retry_giveup("max_retries_exceeded", max_retries=self.config.max_retries)
                 context.metadata['should_retry'] = False
         
         elif strategy == RecoveryStrategy.ABORT:
             dprint(f"   Strategy: Abort (critical error)")
+            get_event_logger().retry_giveup("abort_strategy", error=str(error))
             context.metadata['should_retry'] = False
             
             if self.config.abort_on_critical:
@@ -108,11 +112,13 @@ class ErrorHandlingMiddleware(Middleware):
         
         elif strategy == RecoveryStrategy.SKIP:
             dprint(f"   Strategy: Skip action and continue")
+            get_event_logger().retry_giveup("skip_strategy", error=str(error))
             context.metadata['should_retry'] = False
             context.should_continue = False  # Skip this action
         
         elif strategy == RecoveryStrategy.ASK_USER:
             dprint(f"   Strategy: Ask user for intervention")
+            get_event_logger().retry_giveup("ask_user", error=str(error))
             try:
                 response = input("   How should we proceed? (retry/skip/abort): ").lower()
                 if response == 'retry':

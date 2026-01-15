@@ -94,6 +94,96 @@ class EventType(str, Enum):
     # Action state details
     ACTION_STATE_CHANGE = "action_state_change"
 
+    # Task orchestration events
+    TASK_DECOMPOSE_START = "task_decompose_start"
+    TASK_DECOMPOSE_COMPLETE = "task_decompose_complete"
+    TASK_DECOMPOSE_FAIL = "task_decompose_fail"
+    TASK_START = "task_start"
+    TASK_COMPLETE = "task_complete"
+    TASK_FAIL = "task_fail"
+
+    # Sequential task events
+    SEQUENTIAL_START = "sequential_start"
+    SEQUENTIAL_COMPLETE = "sequential_complete"
+    SEQUENTIAL_FAIL = "sequential_fail"
+    SEQUENTIAL_ITERATION_START = "sequential_iteration_start"
+    SEQUENTIAL_ITERATION_COMPLETE = "sequential_iteration_complete"
+    SEQUENTIAL_ITERATION_FAIL = "sequential_iteration_fail"
+    SUBTASK_START = "subtask_start"
+    SUBTASK_COMPLETE = "subtask_complete"
+    SUBTASK_FAIL = "subtask_fail"
+
+    # Mini-loop events
+    MINILOOP_ITERATION_START = "miniloop_iteration_start"
+    MINILOOP_ITERATION_COMPLETE = "miniloop_iteration_complete"
+    MINILOOP_ITERATION_FAIL = "miniloop_iteration_fail"
+
+    # Plan execution events
+    PLAN_EXECUTE_START = "plan_execute_start"
+    PLAN_EXECUTE_COMPLETE = "plan_execute_complete"
+    PLAN_EXECUTE_FAIL = "plan_execute_fail"
+
+    # Schema events
+    SCHEMA_INFER_START = "schema_infer_start"
+    SCHEMA_INFER_SUCCESS = "schema_infer_success"
+    SCHEMA_INFER_FAIL = "schema_infer_fail"
+    SCHEMA_VALIDATE_FAIL = "schema_validate_fail"
+
+    # Extraction retries/empties
+    EXTRACTION_RETRY = "extraction_retry"
+    EXTRACTION_EMPTY = "extraction_empty"
+
+    # Bridge planner events
+    BRIDGE_DECISION = "bridge_decision"
+    BRIDGE_RETRY = "bridge_retry"
+    BRIDGE_END = "bridge_end"
+
+    # Tab lifecycle events
+    TAB_CLOSE = "tab_close"
+    TAB_DETECTED = "tab_detected"
+
+    # Agent lifecycle events
+    AGENT_PAUSE = "agent_pause"
+    AGENT_RESUME = "agent_resume"
+
+    # Retry/backoff events
+    RETRY_BACKOFF = "retry_backoff"
+    RETRY_GIVEUP = "retry_giveup"
+
+    # Model selection events
+    MODEL_FALLBACK = "model_fallback"
+
+    # Middleware events
+    MIDDLEWARE_BEFORE = "middleware_before"
+    MIDDLEWARE_AFTER = "middleware_after"
+    MIDDLEWARE_ERROR = "middleware_error"
+
+    # Cache events
+    CACHE_HIT = "cache_hit"
+    CACHE_MISS = "cache_miss"
+    CACHE_STORE = "cache_store"
+    CACHE_EVICT = "cache_evict"
+    CACHE_CLEAR = "cache_clear"
+
+    # Cost events
+    COST_WARNING = "cost_warning"
+    COST_LIMIT_EXCEEDED = "cost_limit_exceeded"
+
+    # Human-in-loop events
+    HUMAN_PAUSE = "human_pause"
+    HUMAN_RESUME = "human_resume"
+
+    # Context guard events
+    CONTEXT_GUARD_START = "context_guard_start"
+    CONTEXT_GUARD_DECISION = "context_guard_decision"
+    CONTEXT_GUARD_CACHE = "context_guard_cache"
+
+    # Action queue events
+    QUEUE_ENQUEUE = "queue_enqueue"
+    QUEUE_DEQUEUE = "queue_dequeue"
+    QUEUE_CLEAR = "queue_clear"
+    QUEUE_REJECT = "queue_reject"
+
 
 @dataclass
 class BotEvent:
@@ -237,6 +327,12 @@ class EventLogger:
                      success=success, reasoning=reasoning, confidence=confidence, **details)
         except Exception:
             pass
+
+    def agent_error(self, message: str, **details):
+        try:
+            self.emit(EventType.AGENT_ERROR, f"Agent error: {message}", "ERROR", message=message, **details)
+        except Exception:
+            pass
     
     def goal_start(self, goal_description: str, command_id: str = None, **details):
         try:
@@ -245,6 +341,22 @@ class EventLogger:
                 msg += f" [ID: {command_id}]"
             self.emit(EventType.GOAL_START, msg, "INFO", 
                      goal_description=goal_description, command_id=command_id, **details)
+        except Exception:
+            pass
+
+    def goal_success(self, goal_description: str, **details):
+        try:
+            msg = f"Goal completed: {goal_description}"
+            self.emit(EventType.GOAL_SUCCESS, msg, "SUCCESS", goal_description=goal_description, **details)
+        except Exception:
+            pass
+
+    def goal_failure(self, goal_description: str, error: str = None, **details):
+        try:
+            msg = f"Goal failed: {goal_description}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.GOAL_FAILURE, msg, "ERROR", goal_description=goal_description, error=error, **details)
         except Exception:
             pass
     
@@ -437,6 +549,395 @@ class EventLogger:
     def action_step(self, step_number: int, action_type: str, **details):
         try:
             self.emit(EventType.ACTION_STEP, f"Step {step_number}: {action_type}", "DEBUG", step_number=step_number, action_type=action_type, **details)
+        except Exception:
+            pass
+
+    def action_start(self, action_type: str, **details):
+        try:
+            self.emit(EventType.ACTION_START, f"Action start: {action_type}", "INFO", action_type=action_type, **details)
+        except Exception:
+            pass
+
+    def action_success(self, action_type: str, **details):
+        try:
+            self.emit(EventType.ACTION_SUCCESS, f"Action success: {action_type}", "SUCCESS", action_type=action_type, **details)
+        except Exception:
+            pass
+
+    def action_failure(self, action_type: str, error: str = None, **details):
+        try:
+            msg = f"Action failed: {action_type}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.ACTION_FAILURE, msg, "ERROR", action_type=action_type, error=error, **details)
+        except Exception:
+            pass
+
+    def task_decompose_start(self, prompt: str, **details):
+        try:
+            self.emit(EventType.TASK_DECOMPOSE_START, "Task decomposition started", "INFO", prompt=prompt, **details)
+        except Exception:
+            pass
+
+    def task_decompose_complete(self, task_count: int, **details):
+        try:
+            self.emit(EventType.TASK_DECOMPOSE_COMPLETE, f"Task decomposition complete: {task_count} tasks", "SUCCESS", task_count=task_count, **details)
+        except Exception:
+            pass
+
+    def task_decompose_fail(self, error: str, **details):
+        try:
+            self.emit(EventType.TASK_DECOMPOSE_FAIL, f"Task decomposition failed: {error}", "ERROR", error=error, **details)
+        except Exception:
+            pass
+
+    def task_start(self, task_id: str, description: str, **details):
+        try:
+            self.emit(EventType.TASK_START, f"Task start: {description}", "INFO", task_id=task_id, description=description, **details)
+        except Exception:
+            pass
+
+    def task_complete(self, task_id: str, description: str, **details):
+        try:
+            self.emit(EventType.TASK_COMPLETE, f"Task complete: {description}", "SUCCESS", task_id=task_id, description=description, **details)
+        except Exception:
+            pass
+
+    def task_fail(self, task_id: str, description: str, error: str = None, **details):
+        try:
+            msg = f"Task failed: {description}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.TASK_FAIL, msg, "ERROR", task_id=task_id, description=description, error=error, **details)
+        except Exception:
+            pass
+
+    def sequential_start(self, task_id: str, goal: str, **details):
+        try:
+            self.emit(EventType.SEQUENTIAL_START, f"Sequential task start: {goal}", "INFO", task_id=task_id, goal=goal, **details)
+        except Exception:
+            pass
+
+    def sequential_complete(self, task_id: str, goal: str, **details):
+        try:
+            self.emit(EventType.SEQUENTIAL_COMPLETE, f"Sequential task complete: {goal}", "SUCCESS", task_id=task_id, goal=goal, **details)
+        except Exception:
+            pass
+
+    def sequential_fail(self, task_id: str, goal: str, error: str = None, **details):
+        try:
+            msg = f"Sequential task failed: {goal}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.SEQUENTIAL_FAIL, msg, "ERROR", task_id=task_id, goal=goal, error=error, **details)
+        except Exception:
+            pass
+
+    def sequential_iteration_start(self, task_id: str, iteration: int, **details):
+        try:
+            self.emit(EventType.SEQUENTIAL_ITERATION_START, f"Sequential iteration start: {iteration}", "INFO", task_id=task_id, iteration=iteration, **details)
+        except Exception:
+            pass
+
+    def sequential_iteration_complete(self, task_id: str, iteration: int, **details):
+        try:
+            self.emit(EventType.SEQUENTIAL_ITERATION_COMPLETE, f"Sequential iteration complete: {iteration}", "SUCCESS", task_id=task_id, iteration=iteration, **details)
+        except Exception:
+            pass
+
+    def sequential_iteration_fail(self, task_id: str, iteration: int, error: str = None, **details):
+        try:
+            msg = f"Sequential iteration failed: {iteration}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.SEQUENTIAL_ITERATION_FAIL, msg, "ERROR", task_id=task_id, iteration=iteration, error=error, **details)
+        except Exception:
+            pass
+
+    def subtask_start(self, instruction: str, **details):
+        try:
+            self.emit(EventType.SUBTASK_START, f"Subtask start: {instruction}", "INFO", instruction=instruction, **details)
+        except Exception:
+            pass
+
+    def subtask_complete(self, instruction: str, **details):
+        try:
+            self.emit(EventType.SUBTASK_COMPLETE, f"Subtask complete: {instruction}", "SUCCESS", instruction=instruction, **details)
+        except Exception:
+            pass
+
+    def subtask_fail(self, instruction: str, error: str = None, **details):
+        try:
+            msg = f"Subtask failed: {instruction}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.SUBTASK_FAIL, msg, "ERROR", instruction=instruction, error=error, **details)
+        except Exception:
+            pass
+
+    def miniloop_iteration_start(self, task_instruction: str, iteration: int, **details):
+        try:
+            self.emit(EventType.MINILOOP_ITERATION_START, f"Mini-loop iteration start: {iteration}", "DEBUG", task_instruction=task_instruction, iteration=iteration, **details)
+        except Exception:
+            pass
+
+    def miniloop_iteration_complete(self, task_instruction: str, iteration: int, **details):
+        try:
+            self.emit(EventType.MINILOOP_ITERATION_COMPLETE, f"Mini-loop iteration complete: {iteration}", "DEBUG", task_instruction=task_instruction, iteration=iteration, **details)
+        except Exception:
+            pass
+
+    def miniloop_iteration_fail(self, task_instruction: str, iteration: int, error: str = None, **details):
+        try:
+            msg = f"Mini-loop iteration failed: {iteration}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.MINILOOP_ITERATION_FAIL, msg, "WARNING", task_instruction=task_instruction, iteration=iteration, error=error, **details)
+        except Exception:
+            pass
+
+    def plan_execute_start(self, step_count: int, **details):
+        try:
+            self.emit(EventType.PLAN_EXECUTE_START, f"Plan execution start ({step_count} steps)", "INFO", step_count=step_count, **details)
+        except Exception:
+            pass
+
+    def plan_execute_complete(self, **details):
+        try:
+            self.emit(EventType.PLAN_EXECUTE_COMPLETE, "Plan execution completed", "SUCCESS", **details)
+        except Exception:
+            pass
+
+    def plan_execute_fail(self, error: str = None, **details):
+        try:
+            msg = "Plan execution failed"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.PLAN_EXECUTE_FAIL, msg, "ERROR", error=error, **details)
+        except Exception:
+            pass
+
+    def schema_infer_start(self, goal: str, **details):
+        try:
+            self.emit(EventType.SCHEMA_INFER_START, "Schema inference started", "DEBUG", goal=goal, **details)
+        except Exception:
+            pass
+
+    def schema_infer_success(self, fields: list[str], **details):
+        try:
+            self.emit(EventType.SCHEMA_INFER_SUCCESS, f"Schema inferred: {fields}", "SUCCESS", fields=fields, **details)
+        except Exception:
+            pass
+
+    def schema_infer_fail(self, error: str, **details):
+        try:
+            self.emit(EventType.SCHEMA_INFER_FAIL, f"Schema inference failed: {error}", "ERROR", error=error, **details)
+        except Exception:
+            pass
+
+    def schema_validate_fail(self, error: str, **details):
+        try:
+            self.emit(EventType.SCHEMA_VALIDATE_FAIL, f"Schema validation failed: {error}", "WARNING", error=error, **details)
+        except Exception:
+            pass
+
+    def extraction_retry(self, prompt: str, attempt: int, **details):
+        try:
+            self.emit(EventType.EXTRACTION_RETRY, f"Extraction retry {attempt}: {prompt}", "WARNING", prompt=prompt, attempt=attempt, **details)
+        except Exception:
+            pass
+
+    def extraction_empty(self, prompt: str, **details):
+        try:
+            self.emit(EventType.EXTRACTION_EMPTY, f"Extraction empty: {prompt}", "WARNING", prompt=prompt, **details)
+        except Exception:
+            pass
+
+    def bridge_decision(self, decision: str, **details):
+        try:
+            self.emit(EventType.BRIDGE_DECISION, f"Bridge decision: {decision}", "INFO", decision=decision, **details)
+        except Exception:
+            pass
+
+    def bridge_retry(self, iteration: int, **details):
+        try:
+            self.emit(EventType.BRIDGE_RETRY, f"Bridge retry iteration {iteration}", "WARNING", iteration=iteration, **details)
+        except Exception:
+            pass
+
+    def bridge_end(self, reason: str, **details):
+        try:
+            self.emit(EventType.BRIDGE_END, f"Bridge end: {reason}", "INFO", reason=reason, **details)
+        except Exception:
+            pass
+
+    def tab_close(self, tab_id: str, **details):
+        try:
+            self.emit(EventType.TAB_CLOSE, f"Tab closed: {tab_id}", "INFO", tab_id=tab_id, **details)
+        except Exception:
+            pass
+
+    def tab_detected(self, tab_id: str, **details):
+        try:
+            self.emit(EventType.TAB_DETECTED, f"Tab detected: {tab_id}", "INFO", tab_id=tab_id, **details)
+        except Exception:
+            pass
+
+    def agent_pause(self, message: str = None, **details):
+        try:
+            msg = "Agent paused"
+            if message:
+                msg += f": {message}"
+            self.emit(EventType.AGENT_PAUSE, msg, "INFO", message=message, **details)
+        except Exception:
+            pass
+
+    def agent_resume(self, **details):
+        try:
+            self.emit(EventType.AGENT_RESUME, "Agent resumed", "INFO", **details)
+        except Exception:
+            pass
+
+    def retry_backoff(self, delay_seconds: float, attempt: int, **details):
+        try:
+            self.emit(EventType.RETRY_BACKOFF, f"Retry backoff {attempt}: {delay_seconds:.2f}s", "WARNING", delay_seconds=delay_seconds, attempt=attempt, **details)
+        except Exception:
+            pass
+
+    def retry_giveup(self, reason: str = None, **details):
+        try:
+            msg = "Retry give up"
+            if reason:
+                msg += f": {reason}"
+            self.emit(EventType.RETRY_GIVEUP, msg, "ERROR", reason=reason, **details)
+        except Exception:
+            pass
+
+    def model_fallback(self, primary: str, fallback: str, **details):
+        try:
+            self.emit(EventType.MODEL_FALLBACK, f"Model fallback: {primary} -> {fallback}", "WARNING", primary=primary, fallback=fallback, **details)
+        except Exception:
+            pass
+
+    def middleware_before(self, middleware_name: str, action_type: str = None, **details):
+        try:
+            msg = f"Middleware before: {middleware_name}"
+            self.emit(EventType.MIDDLEWARE_BEFORE, msg, "DEBUG", middleware=middleware_name, action_type=action_type, **details)
+        except Exception:
+            pass
+
+    def middleware_after(self, middleware_name: str, action_type: str = None, **details):
+        try:
+            msg = f"Middleware after: {middleware_name}"
+            self.emit(EventType.MIDDLEWARE_AFTER, msg, "DEBUG", middleware=middleware_name, action_type=action_type, **details)
+        except Exception:
+            pass
+
+    def middleware_error(self, middleware_name: str, action_type: str = None, error: str = None, **details):
+        try:
+            msg = f"Middleware error: {middleware_name}"
+            self.emit(EventType.MIDDLEWARE_ERROR, msg, "ERROR", middleware=middleware_name, action_type=action_type, error=error, **details)
+        except Exception:
+            pass
+
+    def cache_hit(self, cache_key: str = None, **details):
+        try:
+            self.emit(EventType.CACHE_HIT, "Cache hit", "DEBUG", cache_key=cache_key, **details)
+        except Exception:
+            pass
+
+    def cache_miss(self, cache_key: str = None, **details):
+        try:
+            self.emit(EventType.CACHE_MISS, "Cache miss", "DEBUG", cache_key=cache_key, **details)
+        except Exception:
+            pass
+
+    def cache_store(self, cache_key: str = None, **details):
+        try:
+            self.emit(EventType.CACHE_STORE, "Cache store", "DEBUG", cache_key=cache_key, **details)
+        except Exception:
+            pass
+
+    def cache_evict(self, cache_key: str = None, **details):
+        try:
+            self.emit(EventType.CACHE_EVICT, "Cache evict", "WARNING", cache_key=cache_key, **details)
+        except Exception:
+            pass
+
+    def cache_clear(self, **details):
+        try:
+            self.emit(EventType.CACHE_CLEAR, "Cache cleared", "INFO", **details)
+        except Exception:
+            pass
+
+    def cost_warning(self, total_cost: float, max_cost: float, **details):
+        try:
+            msg = f"Cost warning: ${total_cost:.4f} / ${max_cost:.2f}"
+            self.emit(EventType.COST_WARNING, msg, "WARNING", total_cost=total_cost, max_cost=max_cost, **details)
+        except Exception:
+            pass
+
+    def cost_limit_exceeded(self, total_cost: float, max_cost: float, **details):
+        try:
+            msg = f"Cost limit exceeded: ${total_cost:.4f} > ${max_cost:.2f}"
+            self.emit(EventType.COST_LIMIT_EXCEEDED, msg, "ERROR", total_cost=total_cost, max_cost=max_cost, **details)
+        except Exception:
+            pass
+
+    def human_pause(self, message: str, **details):
+        try:
+            self.emit(EventType.HUMAN_PAUSE, f"Human pause: {message}", "INFO", message=message, **details)
+        except Exception:
+            pass
+
+    def human_resume(self, **details):
+        try:
+            self.emit(EventType.HUMAN_RESUME, "Human resumed", "INFO", **details)
+        except Exception:
+            pass
+
+    def context_guard_start(self, guard_text: str, overlay_index: int = None, **details):
+        try:
+            self.emit(EventType.CONTEXT_GUARD_START, "Context guard start", "DEBUG", guard_text=guard_text, overlay_index=overlay_index, **details)
+        except Exception:
+            pass
+
+    def context_guard_decision(self, passed: bool, reason: str = None, cached: bool = False, **details):
+        try:
+            level = "SUCCESS" if passed else "WARNING"
+            msg = "Context guard passed" if passed else "Context guard failed"
+            self.emit(EventType.CONTEXT_GUARD_DECISION, msg, level, passed=passed, reason=reason, cached=cached, **details)
+        except Exception:
+            pass
+
+    def context_guard_cache(self, guard_text: str, overlay_index: int = None, **details):
+        try:
+            self.emit(EventType.CONTEXT_GUARD_CACHE, "Context guard cache hit", "DEBUG", guard_text=guard_text, overlay_index=overlay_index, **details)
+        except Exception:
+            pass
+
+    def queue_enqueue(self, action_id: str = None, **details):
+        try:
+            self.emit(EventType.QUEUE_ENQUEUE, "Queue enqueue", "DEBUG", action_id=action_id, **details)
+        except Exception:
+            pass
+
+    def queue_dequeue(self, action_id: str = None, **details):
+        try:
+            self.emit(EventType.QUEUE_DEQUEUE, "Queue dequeue", "DEBUG", action_id=action_id, **details)
+        except Exception:
+            pass
+
+    def queue_clear(self, **details):
+        try:
+            self.emit(EventType.QUEUE_CLEAR, "Queue cleared", "INFO", **details)
+        except Exception:
+            pass
+
+    def queue_reject(self, reason: str, action_id: str = None, **details):
+        try:
+            msg = f"Queue reject: {reason}"
+            self.emit(EventType.QUEUE_REJECT, msg, "WARNING", reason=reason, action_id=action_id, **details)
         except Exception:
             pass
     

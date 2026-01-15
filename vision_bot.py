@@ -1366,6 +1366,14 @@ class BrowserVisionBot:
             duration_ms = (time.time() - start_time) * 1000
             duration = time.time() - start_time
             self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
+            try:
+                self.event_logger.goal_failure(
+                    goal_description,
+                    error="Could not parse command as keyword action",
+                )
+                self.event_logger.command_execution_complete(goal_description=goal_description, success=False)
+            except Exception:
+                pass
             dprint(f"❌ Could not parse command: {goal_description}")
             dprint("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
             self.action_ledger.complete_action(action_id, success=False, error_message="Could not parse goal as keyword action. Must use keyword format (click:, type:, etc.)")
@@ -1654,6 +1662,10 @@ class BrowserVisionBot:
             return result
             
         except Exception as e:
+            try:
+                self.event_logger.agent_error(str(e))
+            except Exception:
+                pass
             # Execute error hooks
             self.middleware.execute_on_error(context, e)
             raise
@@ -2172,6 +2184,11 @@ Return only the extracted text that appears in the text content above. Do not ma
                     # Accept both dicts and lists as valid extracted data
                     if not isinstance(extracted_dict, (dict, list)):
                         raise ValueError(f"Expected JSON object or array, got {type(extracted_dict).__name__}")
+                    if (isinstance(extracted_dict, dict) and not extracted_dict) or (isinstance(extracted_dict, list) and len(extracted_dict) == 0):
+                        try:
+                            self.event_logger.extraction_empty(prompt)
+                        except Exception:
+                            pass
                     
                     # Validate extracted values against page text to catch hallucinations
                     if visible_text:
@@ -2296,6 +2313,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 
                 if attempt < max_retries:
                     dprint(f"[Extract] Attempt {attempt + 1} failed: {error_msg}, retrying...")
+                    try:
+                        self.event_logger.extraction_retry(prompt, attempt + 1, error=error_msg)
+                    except Exception:
+                        pass
                     time.sleep(0.5)
                 else:
                     # Record failed extraction in interaction history
@@ -2800,12 +2821,18 @@ Return only the extracted text that appears in the text content above. Do not ma
         if result:
             self.logger.log_goal_success(goal_description, duration_ms)
             try:
+                self.event_logger.goal_success(goal_description)
                 self.event_logger.command_execution_complete(goal_description=goal_description, success=True)
             except Exception:
                 pass
             self.action_ledger.complete_action(action_id, success=True)
         else:
             self.logger.log_goal_failure(goal_description, "Keyword command execution failed", duration_ms)
+            try:
+                self.event_logger.goal_failure(goal_description, error="Keyword command execution failed")
+                self.event_logger.command_execution_complete(goal_description=goal_description, success=False)
+            except Exception:
+                pass
             self.action_ledger.complete_action(
                 action_id,
                 success=False,
@@ -2945,6 +2972,10 @@ Return only the extracted text that appears in the text content above. Do not ma
                 if attempt > 1 and self.element_selection_fallback_model:
                     selection_model = self.element_selection_fallback_model
                     dprint(f"[KeywordCommand] Using fallback model: {selection_model}")
+                    try:
+                        self.event_logger.model_fallback(self.command_model, selection_model)
+                    except Exception:
+                        pass
 
                 try:
                     self.event_logger.overlay_selection(f"Requesting element selection from LLM (attempt {attempt}/{max_attempts})")

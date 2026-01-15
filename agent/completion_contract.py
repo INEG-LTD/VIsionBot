@@ -15,6 +15,7 @@ from ai_utils import (
     get_default_agent_model,
     get_default_agent_reasoning_level,
 )
+from utils.event_logger import get_event_logger
 
 
 class CompletionYesNo(BaseModel):
@@ -124,6 +125,11 @@ class CompletionContract:
             
             # If not complete and not showing reason, return early with minimal reasoning
             if not is_complete_quick and not self.show_task_completion_reason:
+                get_event_logger().completion_check(
+                    is_complete=False,
+                    reasoning="Task not complete (quick check)",
+                    confidence=0.0
+                )
                 return (
                     False,
                     "Task not complete",
@@ -151,6 +157,11 @@ class CompletionContract:
                 reasoning_level=self.reasoning_level,
             )
             
+            get_event_logger().completion_check(
+                is_complete=evaluation.is_complete,
+                reasoning=evaluation.reasoning,
+                confidence=evaluation.confidence
+            )
             return (
                 evaluation.is_complete,
                 evaluation.reasoning,
@@ -168,6 +179,11 @@ class CompletionContract:
                 reasoning=f"Evaluation error: {str(e)}",
                 evidence=str({"error": str(e)}),
                 remaining_steps=["Fix evaluation error"]
+            )
+            get_event_logger().completion_check(
+                is_complete=False,
+                reasoning=fallback_eval.reasoning,
+                confidence=fallback_eval.confidence
             )
             return False, fallback_eval.reasoning, fallback_eval
     
@@ -531,4 +547,3 @@ Has the user's request been fulfilled? What evidence supports this?
             f"Forward available: {'yes' if forward_available else 'no'}\n"
             f"Recent history (oldest → newest):\n    {history_block}"
         )
-

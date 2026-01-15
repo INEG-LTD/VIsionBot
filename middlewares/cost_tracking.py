@@ -3,6 +3,7 @@
 from middleware import Middleware, ActionContext, CostLimitExceeded
 from typing import Any
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 
 class CostTrackingMiddleware(Middleware):
@@ -39,10 +40,12 @@ class CostTrackingMiddleware(Middleware):
             # Check if we should warn
             if not self.warned and self.total_cost >= (self.max_cost * self.warn_at):
                 dprint(f"⚠️  Cost warning: ${self.total_cost:.4f} / ${self.max_cost:.2f}")
+                get_event_logger().cost_warning(self.total_cost, self.max_cost)
                 self.warned = True
             
             # Check if we exceeded limit
             if self.total_cost > self.max_cost:
+                get_event_logger().cost_limit_exceeded(self.total_cost, self.max_cost)
                 raise CostLimitExceeded(
                     f"Cost ${self.total_cost:.4f} exceeds limit of ${self.max_cost:.2f}"
                 )

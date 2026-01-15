@@ -19,6 +19,7 @@ from typing import Any, Optional, Dict, List, TYPE_CHECKING
 if TYPE_CHECKING:
     from vision_bot import BrowserVisionBot
 from utils.debug_print import dprint, PrintMode
+from utils.event_logger import get_event_logger
 
 
 @dataclass
@@ -136,6 +137,7 @@ class MiddlewareManager:
             Modified context
         """
         for middleware in self.middlewares:
+            get_event_logger().middleware_before(middleware.__class__.__name__, action_type=context.action_type)
             context = middleware.before_action(context)
             if not context.should_continue:
                 break
@@ -153,6 +155,7 @@ class MiddlewareManager:
             Modified result
         """
         for middleware in reversed(self.middlewares):
+            get_event_logger().middleware_after(middleware.__class__.__name__, action_type=context.action_type)
             result = middleware.after_action(context, result)
         return result
     
@@ -166,6 +169,11 @@ class MiddlewareManager:
         """
         for middleware in self.middlewares:
             try:
+                get_event_logger().middleware_error(
+                    middleware.__class__.__name__,
+                    action_type=context.action_type,
+                    error=str(error)
+                )
                 middleware.on_error(context, error)
             except Exception:
                 # Don't let error handlers crash

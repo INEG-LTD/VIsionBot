@@ -11,6 +11,7 @@ from utils.element_analyzer import ElementAnalyzer
 from models import ActionStep, VisionPlan, PageInfo
 from models.core_models import ActionType, DetectedElement
 from vision_utils import get_gemini_box_2d_center_pixels
+from utils.event_logger import get_event_logger
 
 
 @dataclass
@@ -57,13 +58,18 @@ class ContextGuard:
             return GuardDecision(True)
 
         overlay_index = step.overlay_index
+        get_event_logger().context_guard_start(guard_text, overlay_index=overlay_index, url=getattr(page_info, "url", ""))
         if overlay_index is None:
             reason = "No overlay index present for guarded action"
-            return GuardDecision(False, reason=reason)
+            decision = GuardDecision(False, reason=reason)
+            get_event_logger().context_guard_decision(False, reason=reason, overlay_index=overlay_index)
+            return decision
 
         cache_key = (guard_text, overlay_index, getattr(page_info, "url", ""))
         if cache_key in self._cache:
             decision = self._cache[cache_key]
+            get_event_logger().context_guard_cache(guard_text, overlay_index=overlay_index, url=getattr(page_info, "url", ""))
+            get_event_logger().context_guard_decision(decision.passed, reason=decision.reason, cached=True, overlay_index=overlay_index)
             return GuardDecision(decision.passed, reason=decision.reason, cached=True)
 
         detected = self._find_detected_element(plan, overlay_index)
@@ -71,6 +77,7 @@ class ContextGuard:
             reason = "Detected element missing for overlay"
             decision = GuardDecision(False, reason=reason)
             self._cache[cache_key] = decision
+            get_event_logger().context_guard_decision(False, reason=reason, overlay_index=overlay_index)
             return decision
 
         center_x, center_y = get_gemini_box_2d_center_pixels(
@@ -87,6 +94,7 @@ class ContextGuard:
             reason = "Failed to capture context image"
             decision = GuardDecision(False, reason=reason)
             self._cache[cache_key] = decision
+            get_event_logger().context_guard_decision(False, reason=reason, overlay_index=overlay_index)
             return decision
 
         element_info = self.element_analyzer.analyze_element_at_coordinates(center_x, center_y)
@@ -122,6 +130,7 @@ class ContextGuard:
             decision = GuardDecision(False, reason=reason)
 
         self._cache[cache_key] = decision
+        get_event_logger().context_guard_decision(decision.passed, reason=decision.reason, overlay_index=overlay_index)
         return decision
 
     @staticmethod

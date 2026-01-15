@@ -105,6 +105,10 @@ class TaskBasedExecutionMixin:
             self.event_logger.system_info("Using task-based execution")
         except Exception:
             pass
+        try:
+            self.event_logger.sequential_iteration_complete(sequential_task.task_id, iteration_idx)
+        except Exception:
+            pass
 
         # Decompose user request into tasks
         try:
@@ -207,6 +211,10 @@ class TaskBasedExecutionMixin:
             context["page_title"] = self.bot.page.title()
         except Exception:
             pass
+        try:
+            self.event_logger.sequential_iteration_fail(sequential_task.task_id, iteration_idx, error=result.error)
+        except Exception:
+            pass
 
         # Call task orchestrator
         task_list = self.task_orchestrator.decompose_user_request(
@@ -261,6 +269,14 @@ class TaskBasedExecutionMixin:
                 self.event_logger.system_info(f"Executing task {task_num}/{total_tasks}: {current_task.description}")
             except Exception:
                 pass
+            try:
+                self.event_logger.task_start(
+                    current_task.task_id,
+                    current_task.description,
+                    task_type=current_task.type.value,
+                )
+            except Exception:
+                pass
 
             # Execute based on task type
             if isinstance(current_task, NormalTask):
@@ -279,9 +295,26 @@ class TaskBasedExecutionMixin:
             if success:
                 current_task.status = TaskStatus.COMPLETED
                 current_task.completed_at = time.time()
+                try:
+                    self.event_logger.task_complete(
+                        current_task.task_id,
+                        current_task.description,
+                        task_type=current_task.type.value,
+                    )
+                except Exception:
+                    pass
             else:
                 current_task.status = TaskStatus.FAILED
                 current_task.completed_at = time.time()
+                try:
+                    self.event_logger.task_fail(
+                        current_task.task_id,
+                        current_task.description,
+                        error=current_task.error or "task_failed",
+                        task_type=current_task.type.value,
+                    )
+                except Exception:
+                    pass
 
                 # If a task fails, decide whether to continue or stop
                 # For now, we'll stop on first failure
@@ -609,6 +642,10 @@ Use the results above to complete your task."""
             self.event_logger.system_info(f"Completion condition: {task.completion_condition}")
         except Exception:
             pass
+        try:
+            self.event_logger.sequential_start(task.task_id, task.goal, target_count=task.target_count)
+        except Exception:
+            pass
 
         # Track if sequence ended due to error
         ended_with_error = False
@@ -621,6 +658,10 @@ Use the results above to complete your task."""
                 reason = self.bridge_planner._get_end_reason(task)
                 try:
                     self.event_logger.system_info(f"Sequential task ending: {reason}")
+                except Exception:
+                    pass
+                try:
+                    self.event_logger.bridge_end(reason)
                 except Exception:
                     pass
                 break
@@ -662,11 +703,19 @@ Use the results above to complete your task."""
                 self.event_logger.system_debug(f"Reasoning: {decision.reasoning}")
             except Exception:
                 pass
+            try:
+                self.event_logger.bridge_decision(decision.decision, reasoning=decision.reasoning)
+            except Exception:
+                pass
 
             # Handle decision
             if decision.decision == "end_sequence":
                 try:
                     self.event_logger.system_info(f"Bridge Planner ending sequence: {decision.completion_reason}")
+                except Exception:
+                    pass
+                try:
+                    self.event_logger.bridge_end(decision.completion_reason or "end_sequence")
                 except Exception:
                     pass
 
@@ -697,6 +746,10 @@ Use the results above to complete your task."""
                     self.event_logger.system_info(
                         f"Iteration {iteration_num}, Attempt {attempt_num}: {generated_task_instruction}"
                     )
+                except Exception:
+                    pass
+                try:
+                    self.event_logger.sequential_iteration_start(task.task_id, task.state.current_iteration)
                 except Exception:
                     pass
 
@@ -733,6 +786,10 @@ Use the results above to complete your task."""
                             )
                         except Exception:
                             pass
+                        try:
+                            self.event_logger.bridge_retry(task.state.current_iteration)
+                        except Exception:
+                            pass
                     else:
                         # Max retries reached, record failure and move to next iteration
                         self._record_iteration_failure(task, result)
@@ -767,6 +824,10 @@ Use the results above to complete your task."""
                 )
             except Exception:
                 pass
+            try:
+                self.event_logger.sequential_fail(task.task_id, task.goal, error=error_reason or "error")
+            except Exception:
+                pass
 
             # Mark task as failed and return False
             task.status = TaskStatus.FAILED
@@ -785,22 +846,50 @@ Use the results above to complete your task."""
         # Determine success based on completion strategy
         if self.sequential_task_config.completion_strategy == "strict":
             if task.target_count:
-                return task.state.total_success_count >= task.target_count
+                success = task.state.total_success_count >= task.target_count
             else:
                 # For indefinite sequences, success if we have any successes
-                return task.state.total_success_count > 0
+                success = task.state.total_success_count > 0
+            try:
+                if success:
+                    self.event_logger.sequential_complete(task.task_id, task.goal)
+                else:
+                    self.event_logger.sequential_fail(task.task_id, task.goal, error="strict_completion_failed")
+            except Exception:
+                pass
+            return success
 
         elif self.sequential_task_config.completion_strategy == "best_effort":
             # Always succeed (we did our best)
+            try:
+                self.event_logger.sequential_complete(task.task_id, task.goal)
+            except Exception:
+                pass
             return True
 
         elif self.sequential_task_config.completion_strategy == "threshold":
             total = task.state.total_success_count + task.state.total_failure_count
             if total == 0:
+                try:
+                    self.event_logger.sequential_fail(task.task_id, task.goal, error="threshold_no_iterations")
+                except Exception:
+                    pass
                 return False
             success_rate = task.state.total_success_count / total
-            return success_rate >= self.sequential_task_config.success_threshold
+            success = success_rate >= self.sequential_task_config.success_threshold
+            try:
+                if success:
+                    self.event_logger.sequential_complete(task.task_id, task.goal)
+                else:
+                    self.event_logger.sequential_fail(task.task_id, task.goal, error="threshold_completion_failed")
+            except Exception:
+                pass
+            return success
 
+        try:
+            self.event_logger.sequential_fail(task.task_id, task.goal, error="completion_strategy_failed")
+        except Exception:
+            pass
         return False
 
     def _execute_generated_subtask(
@@ -842,12 +931,23 @@ Use the results above to complete your task."""
             current_iter.tasks_attempted.append(task_instruction)
 
         # Execute using mini reactive loop
+        try:
+            self.event_logger.subtask_start(task_instruction)
+        except Exception:
+            pass
         result = self._run_reactive_loop_for_task(
             task_instruction=task_instruction,
             original_prompt=sequential_task.goal,
             max_iterations=10,  # Limit iterations per subtask
             extraction_schema=getattr(sequential_task, 'extraction_schema', None),
         )
+        try:
+            if result.success:
+                self.event_logger.subtask_complete(task_instruction)
+            else:
+                self.event_logger.subtask_fail(task_instruction, error=result.reasoning)
+        except Exception:
+            pass
 
         # Convert TaskResult to ActionResult
         extracted_data = None
@@ -903,6 +1003,10 @@ Use the results above to complete your task."""
                 self.event_logger.system_debug(
                     f"[Mini-loop] Starting iteration {iteration}/{max_iterations-1} for task: '{task_instruction}' (optional={is_opt})"
                 )
+            except Exception:
+                pass
+            try:
+                self.event_logger.miniloop_iteration_start(task_instruction, iteration)
             except Exception:
                 pass
 
@@ -1054,6 +1158,10 @@ Use the results above to complete your task."""
                         )
                     except Exception:
                         pass
+                    try:
+                        self.event_logger.miniloop_iteration_complete(task_instruction, iteration)
+                    except Exception:
+                        pass
 
                     return TaskResult(
                         success=True,
@@ -1068,6 +1176,10 @@ Use the results above to complete your task."""
                         f"❌ No actions determined on first iteration. Agent should have used 'complete:' or provided action. "
                         f"Reasoning: {agent_reasoning[:100]}"
                     )
+                except Exception:
+                    pass
+                try:
+                    self.event_logger.miniloop_iteration_fail(task_instruction, iteration, error="no_action")
                 except Exception:
                     pass
 
@@ -1099,6 +1211,10 @@ Use the results above to complete your task."""
                             pass
 
                     if extraction_schema and last_extracted_data is None:
+                        try:
+                            self.event_logger.miniloop_iteration_fail(task_instruction, iteration, error="complete_without_extraction")
+                        except Exception:
+                            pass
                         return TaskResult(
                             success=False,
                             confidence=0.0,
@@ -1109,6 +1225,10 @@ Use the results above to complete your task."""
                             },
                         )
 
+                    try:
+                        self.event_logger.miniloop_iteration_complete(task_instruction, iteration)
+                    except Exception:
+                        pass
                     return TaskResult(
                         success=True,
                         confidence=1.0,
@@ -1130,6 +1250,10 @@ Use the results above to complete your task."""
 
                     # For now, return failure to indicate human intervention needed
                     # In the future, this could pause and wait for user input
+                    try:
+                        self.event_logger.miniloop_iteration_fail(task_instruction, iteration, error="ask_command")
+                    except Exception:
+                        pass
                     return TaskResult(
                         success=False,
                         confidence=0.0,
@@ -1155,7 +1279,15 @@ Use the results above to complete your task."""
 
                 # Execute the action
                 try:
-                    if current_action and current_action.lower().startswith("extract:") and extraction_schema:
+                    is_extract_action = current_action and current_action.lower().startswith("extract:")
+                    if is_extract_action:
+                        try:
+                            extraction_prompt = current_action.split(":", 1)[1].strip()
+                            self.event_logger.extraction_detected(extraction_prompt)
+                            self.event_logger.extraction_start(extraction_prompt)
+                        except Exception:
+                            pass
+                    if is_extract_action and extraction_schema:
                         result = self._execute_schema_enforced_extraction(current_action, extraction_schema)
                     else:
                         result = self.bot.act(current_action)
@@ -1322,6 +1454,10 @@ Use the results above to complete your task."""
             # Continue to next mini-loop iteration to get a new plan
 
         # Max iterations reached without completion
+        try:
+            self.event_logger.miniloop_iteration_fail(task_instruction, max_iterations - 1, error="max_iterations")
+        except Exception:
+            pass
         return TaskResult(
             success=False,
             confidence=0.0,
