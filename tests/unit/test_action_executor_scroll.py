@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.core_models import ActionStep, ActionType, PageInfo
-from action_executor import ActionExecutor
-from session_tracker import BrowserState, InteractionType
+from models.models import ActionStep, ActionType, PageInfo
+from core.executor import Executor
+from core.session import BrowserState, InteractionType
 
 
 class FakePage:
@@ -136,7 +136,7 @@ class DummyEventLogger:
 
 @pytest.fixture(autouse=True)
 def stub_dependencies(monkeypatch):
-    import action_executor
+    import core.executor as action_executor
 
     monkeypatch.setattr(action_executor, "UploadHandler", DummyUploadHandler)
     monkeypatch.setattr(action_executor, "SelectorUtils", DummySelectorUtils)
@@ -149,7 +149,7 @@ def stub_dependencies(monkeypatch):
 
 def build_executor(fake_page: FakePage, session_tracker: DummySessionTracker):
     page_utils = DummyPageUtils(fake_page)
-    return ActionExecutor(
+    return Executor(
         page=fake_page,
         session_tracker=session_tracker,
         page_utils=page_utils,

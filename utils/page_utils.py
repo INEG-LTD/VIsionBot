@@ -7,7 +7,7 @@ from models import PageInfo
 from utils.debug_print import dprint, PrintMode
 
 if TYPE_CHECKING:
-    from action_executor import ScrollReason
+    from core.executor import ScrollReason
 
 
 class PageUtils:
@@ -77,7 +77,7 @@ class PageUtils:
             direction: Direction to scroll ("down", "up")
             amount: Amount to scroll in pixels
             reason: Reason for scrolling (ScrollReason enum value)
-            action_executor: Optional ActionExecutor to track scroll events
+            action_executor: Optional Executor to track scroll events
         """
         scroll_amount = amount if direction == "down" else -amount
 

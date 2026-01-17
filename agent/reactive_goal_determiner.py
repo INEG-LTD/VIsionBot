@@ -9,9 +9,9 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
-from session_tracker import Interaction
-from agent.completion_contract import EnvironmentState
-from ai_utils import (
+from core.session import Interaction
+from agent.agent_context import EnvironmentState
+from lib.ai import (
     generate_model,
     ReasoningLevel,
     get_default_agent_model,
@@ -19,7 +19,7 @@ from ai_utils import (
 )
 from utils.event_logger import get_event_logger
 from utils.debug_print import dprint, PrintMode
-from history import HistoryManager
+from core.history import HistoryManager
 from utils.overlay_description import describe_overlay_element, overlay_element_metadata
 
 

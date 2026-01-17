@@ -1,17 +1,17 @@
 """
-Public package surface for BrowserVisionBot.
+Public package surface for Browser.
 
 This module re-exports the primary classes and helpers so consumers can simply:
 
-    from browser_vision_bot import BrowserVisionBot, BotConfig
+    from browser_vision_bot import Browser, Config
 """
 
 # Main bot
-from vision_bot import BrowserVisionBot
+from core.browser import Browser
 
 # Configuration
-from bot_config import (
-    BotConfig,
+from core.config import (
+    Config,
     ModelConfig,
     ExecutionConfig,
     CacheConfig,
@@ -20,7 +20,7 @@ from bot_config import (
 )
 
 # Browser provider
-from browser_provider import (
+from browser.provider import (
     BrowserProvider,
     LocalPlaywrightProvider,
     create_browser_provider,
@@ -28,11 +28,11 @@ from browser_provider import (
 )
 
 # Results
-from action_result import ActionResult
-from agent.agent_result import AgentResult
+from execution.result import ActionResult
+from agent.results import MissionResult
 
 # Errors
-from error_handling import (
+from lib.errors import (
     BotError,
     NetworkError,
     ElementNotFoundError,
@@ -57,19 +57,19 @@ from error_handling import (
 )
 
 # Utilities
-from ai_utils import ReasoningLevel
-from middleware import MiddlewareManager, ActionContext, Middleware
-from action_ledger import ActionLedger, ActionStatus, ActionRecord
-from action_queue import ActionQueue
+from lib.ai import ReasoningLevel
+from middleware.base import MiddlewareManager, ActionContext, Middleware
+from execution.ledger import ActionLedger, ActionStatus, ActionRecord
+from execution.queue import ActionQueue
 from utils.event_logger import EventLogger, set_event_logger
 
 __version__ = "0.1.1"
 
 __all__ = [
     # Main bot
-    "BrowserVisionBot",
+    "Browser",
     # Configuration
-    "BotConfig",
+    "Config",
     "ModelConfig",
     "ExecutionConfig",
     "CacheConfig",
@@ -82,7 +82,7 @@ __all__ = [
     "BrowserConfig",
     # Results
     "ActionResult",
-    "AgentResult",
+    "MissionResult",
     # Errors
     "BotError",
     "NetworkError",

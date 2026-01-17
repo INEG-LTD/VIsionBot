@@ -4,7 +4,7 @@ Integration tests for task system end-to-end flows.
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from models.task_models import (
+from models.models import (
     TaskList,
     NormalTask,
     SequentialTask,
@@ -12,8 +12,8 @@ from models.task_models import (
     TaskType,
     IterationResult,
 )
-from bot_config import SequentialTaskConfig
-from agent.task_result_retrieval import TaskResultRetriever, TaskResultAccessor
+from core.config import SequentialTaskConfig
+from agent.subagent.retrieval import TaskResultRetriever, TaskResultAccessor
 
 
 class TestEndToEndSequentialExecution:
@@ -21,7 +21,7 @@ class TestEndToEndSequentialExecution:
 
     def test_successful_sequential_completion(self, sample_sequential_task, default_sequential_config):
         """Test successful completion of sequential task"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         task = sample_sequential_task
         planner = BridgePlanner(config=default_sequential_config)
@@ -52,7 +52,7 @@ class TestEndToEndSequentialExecution:
 
     def test_sequential_with_retries(self, sample_sequential_task, default_sequential_config):
         """Test sequential task with retry attempts"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         task = sample_sequential_task
         planner = BridgePlanner(config=default_sequential_config)
@@ -89,7 +89,7 @@ class TestEndToEndSequentialExecution:
 
     def test_sequential_partial_completion(self, sample_sequential_task, default_sequential_config):
         """Test sequential task with partial success"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         task = sample_sequential_task
         planner = BridgePlanner(config=default_sequential_config)
@@ -250,7 +250,7 @@ class TestCompletionStrategyScenarios:
 
     def test_strict_strategy_scenario(self):
         """Test strict completion strategy in realistic scenario"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         config = SequentialTaskConfig(
             completion_strategy="strict",
@@ -283,7 +283,7 @@ class TestCompletionStrategyScenarios:
 
     def test_threshold_strategy_scenario(self):
         """Test threshold completion strategy"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         config = SequentialTaskConfig(
             completion_strategy="threshold",
@@ -321,7 +321,7 @@ class TestErrorRecoveryScenarios:
 
     def test_max_retries_then_continue(self):
         """Test that task continues after max retries exhausted"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         config = SequentialTaskConfig(
             max_attempts_per_iteration=3,
@@ -360,7 +360,7 @@ class TestErrorRecoveryScenarios:
 
     def test_fail_fast_on_error(self):
         """Test fail fast behavior on error"""
-        from agent.bridge_planner import BridgePlanner
+        from agent.planning.bridge import BridgePlanner
 
         config = SequentialTaskConfig(
             max_attempts_per_iteration=3,

@@ -6,9 +6,9 @@ from pydantic import BaseModel
 from utils.debug_print import dprint, PrintMode
 
 if TYPE_CHECKING:
-    from vision_bot import BrowserVisionBot
-    from agent.agent_controller import AgentController
-    from agent.task_result import TaskResult
+    from core.browser import Browser
+    from agent.agent_controller import Agent
+    from agent.results import TaskResult
 
 class MiniGoalMode(Enum):
     AUTONOMY = "autonomy"
@@ -50,7 +50,7 @@ class MiniGoalTrigger(BaseModel):
 
 class MiniGoalScriptContext:
     """Context passed to scripted mini goal handlers"""
-    def __init__(self, bot: BrowserVisionBot, controller: AgentController, action_step: Optional[Any] = None, action: Optional[str] = None):
+    def __init__(self, bot: Browser, controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
         self.bot = bot
         self.controller = controller
         self.action_step = action_step
@@ -58,7 +58,7 @@ class MiniGoalScriptContext:
 
     def ask_question(self, query: str) -> str:
         """Uses the agent's current context to answer a question via LLM"""
-        from ai_utils import generate_text
+        from lib.ai import generate_text
 
         # Capture current viewport state for context
         snapshot = self.controller._capture_snapshot(full_page=False)
@@ -87,7 +87,7 @@ class MiniGoalScriptContext:
 
     def ask_question_structured(self, query: str, model_class: type) -> Any:
         """Uses the agent's current context to answer a question via LLM and return structured data"""
-        from ai_utils import generate_model
+        from lib.ai import generate_model
         from pydantic import BaseModel
 
         if not issubclass(model_class, BaseModel):
@@ -122,7 +122,7 @@ class MiniGoalScriptContext:
 class MiniGoalManager:
     """Manages the registration and execution of mini goals"""
     
-    def __init__(self, bot: BrowserVisionBot):
+    def __init__(self, bot: Browser):
         self.bot = bot
         self.registry: List[Dict[str, Any]] = []
         self.recursion_limit = 3
@@ -161,7 +161,7 @@ class MiniGoalManager:
                 return entry
         return None
 
-    def execute_scripted(self, entry: Dict[str, Any], controller: AgentController, action_step: Optional[Any] = None, action: Optional[str] = None):
+    def execute_scripted(self, entry: Dict[str, Any], controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
         """Execute a scripted mini goal"""
         handler = entry["handler"]
         if not handler:
@@ -173,16 +173,16 @@ class MiniGoalManager:
         handler(context)
         dprint("✅ Scripted Mini Goal finished")
 
-    def execute_autonomous(self, entry: Dict[str, Any], controller: AgentController, action: str) -> TaskResult:
+    def execute_autonomous(self, entry: Dict[str, Any], controller: Agent, action: str) -> TaskResult:
         """Execute an autonomous mini goal using a sub-agent loop"""
         instruction = entry.get("instruction_override") or f"Complete the following interaction: {action}"
         
         dprint(f"🤖 Starting Autonomous Mini Goal: {instruction}")
         
-        # Use existing SubAgentController if available, or create a temporary one
+        # Use existing SubAgent if available, or create a temporary one
         if not controller.sub_agent_controller:
-            from agent.sub_agent_controller import SubAgentController
-            controller.sub_agent_controller = SubAgentController(
+            from agent.subagent.controller import SubAgent
+            controller.sub_agent_controller = SubAgent(
                 self.bot,
                 controller.agent_context,
                 controller_factory=controller._spawn_child_controller,
@@ -198,14 +198,14 @@ class MiniGoalManager:
         )
         
         if not sub_agent_id:
-            from agent.task_result import TaskResult
+            from agent.results import TaskResult
             return TaskResult(success=False, reasoning="Failed to spawn sub-agent for mini goal")
 
         # Execute the sub-agent
-        # Note: We should ideally pass a flag to block navigation, but we'll implement that in AgentController
+        # Note: We should ideally pass a flag to block navigation, but we'll implement that in Agent
         result_dict = controller.sub_agent_controller.execute_sub_agent(sub_agent_id)
         
-        from agent.task_result import TaskResult
+        from agent.results import TaskResult
         return TaskResult(
             success=result_dict.get("success", False),
             reasoning=result_dict.get("reasoning", ""),

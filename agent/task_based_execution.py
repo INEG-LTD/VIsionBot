@@ -1,15 +1,15 @@
 """
-Task-Based Execution Extension for AgentController.
+Task-Based Execution Extension for Agent.
 
 This module provides task-based execution capabilities that integrate with
-the existing AgentController reactive loop.
+the existing Agent reactive loop.
 """
 
 from typing import Optional, Dict, Any, List, Tuple, Callable, Union, Iterable, Type
 import time
 import hashlib
 
-from models.task_models import (
+from models.models import (
     TaskList,
     NormalTask,
     SequentialTask,
@@ -17,19 +17,19 @@ from models.task_models import (
     TaskType,
     IterationResult,
 )
-from agent.task_orchestrator import TaskOrchestrator
-from agent.bridge_planner import BridgePlanner
-from agent.completion_contract import EnvironmentState
-from bot_config import SequentialTaskConfig
-from action_result import ActionResult
-from models.core_models import NotebookEntryType
-from agent.task_result_retrieval import TaskResultRetriever, TaskResultAccessor
+from agent.planning.orchestrator import TaskOrchestrator
+from agent.planning.bridge import BridgePlanner
+from agent.agent_context import EnvironmentState
+from core.config import SequentialTaskConfig
+from execution.result import ActionResult
+from models.models import NotebookEntryType
+from agent.subagent.retrieval import TaskResultRetriever, TaskResultAccessor
 from pydantic import BaseModel, Field, create_model
 
 
 class TaskBasedExecutionMixin:
     """
-    Mixin class that adds task-based execution capabilities to AgentController.
+    Mixin class that adds task-based execution capabilities to Agent.
 
     This mixin provides:
     - Task orchestration (decomposing user requests into tasks)

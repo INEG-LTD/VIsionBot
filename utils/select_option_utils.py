@@ -739,7 +739,7 @@ def _find_trigger_with_llm(
     failed_selectors = failed_selectors or []
 
     try:
-        from ai_utils import generate_text
+        from lib.ai import generate_text
 
         # Truncate HTML content if too long
         truncated_html = html_content[:10000] + "..." if len(html_content) > 10000 else html_content
@@ -787,7 +787,7 @@ def _get_selector_from_html_and_placeholder(
 ) -> Optional[str]:
     """Get a CSS selector for a select field using HTML content and field description."""
     try:
-        from ai_utils import generate_text
+        from lib.ai import generate_text
 
         # Truncate HTML content if too long (keep first 10k chars, should be enough for most pages)
         truncated_html = html_content[:10000] + "..." if len(html_content) > 10000 else html_content

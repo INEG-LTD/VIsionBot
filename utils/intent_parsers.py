@@ -1,5 +1,5 @@
 """
-Intent parsing helpers extracted from BrowserVisionBot.
+Intent parsing helpers extracted from Browser.
 """
 from __future__ import annotations
 

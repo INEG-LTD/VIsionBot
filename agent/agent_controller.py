@@ -7,20 +7,20 @@ import re
 import hashlib
 from urllib.parse import urlparse
 
-from session_tracker import BrowserState, Interaction, InteractionType
-from models.core_models import NotebookEntryType
+from core.session import BrowserState, Interaction, InteractionType
+from models.models import NotebookEntryType
 from .task_result import TaskResult
-from agent.completion_contract import EnvironmentState, CompletionEvaluation
+from agent.agent_context import EnvironmentState, CompletionEvaluation
 from agent.reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
 from agent.agent_context import AgentContext
-from agent.sub_agent_controller import SubAgentController
-from agent.sub_agent_result import SubAgentResult
+from agent.subagent.controller import SubAgent
+from agent.results import SubAgentResult
 from utils.debug_print import dprint, PrintMode
 # Type alias for user question callback (ask: command handler)
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
 UserQuestionCallback = Callable[[str, dict], Optional[str]]
-from tab_management import TabDecisionEngine, TabAction
-from ai_utils import (
+from browser.tabs import TabDecisionEngine, TabAction
+from lib.ai import (
     generate_model,
     ReasoningLevel,
     get_default_agent_model,
@@ -31,11 +31,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from .mini_goal_manager import MiniGoalManager, MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
 from utils.overlay_description import describe_overlay_element, metadata_matches
 from agent.task_based_execution import TaskBasedExecutionMixin
-from bot_config import SequentialTaskConfig
+from core.config import SequentialTaskConfig
 
 if TYPE_CHECKING:
-    from .agent_controller import AgentController
-    from vision_bot import BrowserVisionBot
+    from .agent_controller import Agent
+    from core.browser import Browser
 
 _REQUIREMENT_KEYWORD_MAP = {
     "lede": ["lede", "introduction", "intro", "opening paragraph"],
@@ -98,7 +98,7 @@ Implements agentic mode with:
 - Reactive goal determination (what to do now)
 """
 
-class AgentController(TaskBasedExecutionMixin):
+class Agent(TaskBasedExecutionMixin):
     """
     Basic reactive agent controller with task-based execution support.
 
@@ -106,7 +106,7 @@ class AgentController(TaskBasedExecutionMixin):
     1. Observes browser state
     2. Checks simple completion criteria
     3. Generates actions using existing PlanGenerator
-    4. Executes actions using existing ActionExecutor
+    4. Executes actions using existing Executor
     5. Repeats until done or max iterations
 
     Extended with task-based execution capabilities:
@@ -158,7 +158,7 @@ class AgentController(TaskBasedExecutionMixin):
         Initialize agent controller.
         
         Args:
-            bot: BrowserVisionBot instance to control
+            bot: Browser instance to control
             track_ineffective_actions: If True, track and avoid repeating actions that didn't yield page changes.
                                        Default: True (recommended for better performance)
             base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
@@ -300,7 +300,7 @@ class AgentController(TaskBasedExecutionMixin):
         
         # Phase 3: Sub-agent support
         self.agent_context: Optional[AgentContext] = None
-        self.sub_agent_controller: Optional[SubAgentController] = None
+        self.sub_agent_controller: Optional[SubAgent] = None
         
         # Pause functionality: Allows pausing agent execution between actions
         self._paused = False
@@ -513,7 +513,7 @@ class AgentController(TaskBasedExecutionMixin):
             # Initialize sub-agent controller if this is main agent
             if agent_context.parent_agent_id is None:
                 if not self.sub_agent_controller:
-                    self.sub_agent_controller = SubAgentController(
+                    self.sub_agent_controller = SubAgent(
                         self.bot,
                         agent_context,
                         controller_factory=self._spawn_child_controller,
@@ -530,7 +530,7 @@ class AgentController(TaskBasedExecutionMixin):
                         instruction=user_prompt
                     )
                     if not self.sub_agent_controller:
-                        self.sub_agent_controller = SubAgentController(
+                        self.sub_agent_controller = SubAgent(
                             self.bot,
                             self.agent_context,
                             controller_factory=self._spawn_child_controller,
@@ -3042,13 +3042,13 @@ class AgentController(TaskBasedExecutionMixin):
         base_knowledge: Optional[List[str]] = None,
         track_ineffective_actions: Optional[bool] = None,
         allow_partial_completion: Optional[bool] = None
-    ) -> "AgentController":
+    ) -> "Agent":
         """
-        Factory method passed to SubAgentController to ensure sub-agents inherit configuration.
+        Factory method passed to SubAgent to ensure sub-agents inherit configuration.
         """
         track = self.detect_ineffective_actions if track_ineffective_actions is None else track_ineffective_actions
         partial = self.allow_partial_completion if allow_partial_completion is None else allow_partial_completion
-        return AgentController(
+        return Agent(
             bot=bot,
             track_ineffective_actions=track,
             base_knowledge=base_knowledge,
@@ -3956,7 +3956,7 @@ Provide a plan that:
                     return False
                 
                 if not self.sub_agent_controller:
-                    dprint("⚠️ Cannot spawn sub-agent: SubAgentController not initialized")
+                    dprint("⚠️ Cannot spawn sub-agent: SubAgent not initialized")
                     return False
                 
                 policy_allowed, policy_reason = self._can_spawn_sub_agent()

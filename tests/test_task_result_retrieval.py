@@ -3,13 +3,13 @@ Unit tests for task result retrieval system.
 """
 
 import pytest
-from models.task_models import (
+from models.models import (
     TaskList,
     NormalTask,
     SequentialTask,
     TaskStatus,
 )
-from agent.task_result_retrieval import (
+from agent.subagent.retrieval import (
     TaskResultRetriever,
     TaskResultAccessor,
     TaskMatchResult,

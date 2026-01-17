@@ -4,14 +4,14 @@ Pytest configuration and shared fixtures for task system tests.
 
 import pytest
 from unittest.mock import Mock, MagicMock
-from models.task_models import (
+from models.models import (
     TaskList,
     NormalTask,
     SequentialTask,
     TaskStatus,
     IterationResult,
 )
-from bot_config import SequentialTaskConfig
+from core.config import SequentialTaskConfig
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ def threshold_sequential_config():
 @pytest.fixture
 def mock_environment_state():
     """Create mock environment state"""
-    from agent.completion_contract import EnvironmentState
+    from agent.agent_context import EnvironmentState
 
     mock_state = Mock(spec=EnvironmentState)
     mock_state.current_url = "https://example.com"

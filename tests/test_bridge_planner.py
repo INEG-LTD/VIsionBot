@@ -4,14 +4,14 @@ Unit tests for Bridge Planner.
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from models.task_models import (
+from models.models import (
     SequentialTask,
     SequentialState,
     IterationResult,
     BridgePlannerDecision,
 )
-from bot_config import SequentialTaskConfig
-from agent.bridge_planner import BridgePlanner
+from core.config import SequentialTaskConfig
+from agent.planning.bridge import BridgePlanner
 
 
 class TestBridgePlannerRetryLogic:

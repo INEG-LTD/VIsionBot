@@ -1,5 +1,5 @@
 """
-Simple, robust event-driven logging system for BrowserVisionBot.
+Simple, robust event-driven logging system for Browser.
 
 Design principles:
 - Non-blocking: logging errors never break the bot

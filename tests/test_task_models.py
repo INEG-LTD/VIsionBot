@@ -4,7 +4,7 @@ Unit tests for task models.
 
 import pytest
 import time
-from models.task_models import (
+from models.models import (
     TaskType,
     TaskStatus,
     BaseTask,

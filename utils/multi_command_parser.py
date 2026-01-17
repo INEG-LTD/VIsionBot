@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 from typing import List, Tuple, Optional
-from ai_utils import generate_text
+from lib.ai import generate_text
 from utils.debug_print import dprint, PrintMode
 
 

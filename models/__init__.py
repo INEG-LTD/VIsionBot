@@ -1,7 +1,7 @@
 """
 Data models for the Vision Bot automation system.
 """
-from .core_models import (
+from .models import (
     ActionType,
     PageSection,
     DetectedElement,
@@ -9,18 +9,34 @@ from .core_models import (
     ActionStep,
     VisionPlan,
     Goal,
-    PageInfo
+    PageInfo,
+    ActionIntent,
+    Task,
+    Sequence,
+    MissionPlan,
+    TaskType,
+    TaskStatus,
+    TurnResult,
+    SequenceDecision,
+    MissionPlannerOutput,
 )
-from .intent_models import ActionIntent
 
 __all__ = [
     "ActionType",
-    "PageSection", 
+    "PageSection",
     "DetectedElement",
     "PageElements",
     "ActionStep",
     "VisionPlan",
     "Goal",
     "PageInfo",
-    "ActionIntent"
+    "ActionIntent",
+    "Task",
+    "Sequence",
+    "MissionPlan",
+    "TaskType",
+    "TaskStatus",
+    "TurnResult",
+    "SequenceDecision",
+    "MissionPlannerOutput",
 ]

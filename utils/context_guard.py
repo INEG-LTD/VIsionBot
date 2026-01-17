@@ -6,11 +6,11 @@ from typing import Dict, Optional, Tuple
 
 from playwright.sync_api import Page
 
-from ai_utils import answer_question_with_vision
+from lib.ai import answer_question_with_vision
 from utils.element_analyzer import ElementAnalyzer
 from models import ActionStep, VisionPlan, PageInfo
-from models.core_models import ActionType, DetectedElement
-from vision_utils import get_gemini_box_2d_center_pixels
+from models.models import ActionType, DetectedElement
+from vision.utils import get_gemini_box_2d_center_pixels
 from utils.event_logger import get_event_logger
 
 

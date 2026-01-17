@@ -2,27 +2,23 @@
 Agentic mode components for reactive web automation.
 """
 
-from .agent_controller import AgentController, UserQuestionCallback
-from .agent_result import AgentResult
-from .agent_context import AgentContext
-from .sub_agent_controller import SubAgentController
-from .sub_agent_result import SubAgentResult
-from .completion_contract import CompletionContract, EnvironmentState, CompletionEvaluation
+from .agent_controller import Agent, UserQuestionCallback
+from .results import MissionResult, TaskResult, SubAgentResult, TurnDecision
+from .agent_context import AgentContext, EnvironmentState
+from .sub_agent_controller import SubAgent
 from .reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
-from .agent_iteration_decision import AgentIterationDecision
 
 __all__ = [
-    "AgentController",
-    "AgentResult",
-    "AgentContext",
-    "SubAgentController",
+    "Agent",
+    "MissionResult",
+    "TaskResult",
     "SubAgentResult",
-    "CompletionContract", 
-    "EnvironmentState", 
-    "CompletionEvaluation", 
+    "TurnDecision",
+    "AgentContext",
+    "EnvironmentState",
+    "SubAgent",
     "ReactiveGoalDeterminer",
     "ActionPlan",
     "ActionStep",
-    "AgentIterationDecision",
     "UserQuestionCallback",
 ]

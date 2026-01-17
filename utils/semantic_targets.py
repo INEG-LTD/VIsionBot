@@ -131,7 +131,7 @@ def _extract_role(tokens: Sequence[str]) -> Optional[str]:
 
 def _call_semantic_model(description: str) -> Optional[_InterpretationModel]:
     try:
-        from ai_utils import generate_model  # Lazy import to avoid cycles
+        from lib.ai import generate_model  # Lazy import to avoid cycles
     except Exception:
         return None
 
