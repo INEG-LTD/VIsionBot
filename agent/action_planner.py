@@ -229,6 +229,42 @@ class ActionPlanner:
         self.history_manager = history_manager
         self.max_actions_per_plan = max_actions_per_plan
         self.extraction_schema = extraction_schema
+
+    def _infer_extraction_prompt(self) -> Optional[str]:
+        if not self.extraction_schema:
+            return None
+
+        keys = list(self.extraction_schema.keys())
+        if keys:
+            return " and ".join(keys)
+
+        return None
+
+    def _apply_extraction_fallback(self, plan: Optional[ActionPlan]) -> Optional[ActionPlan]:
+        prompt = self._infer_extraction_prompt()
+        if not prompt:
+            return plan
+
+        if plan is None:
+            return ActionPlan(
+                steps=[ActionStep(action=f"extract: {prompt}")],
+                reasoning="Fallback extraction step generated from task instruction.",
+                confidence=0.5,
+                expected_outcome="Extract requested data.",
+            )
+
+        if any(step.action.lower().startswith("extract:") for step in plan.steps):
+            return plan
+
+        if all(step.action.lower().startswith("complete:") for step in plan.steps):
+            return ActionPlan(
+                steps=[ActionStep(action=f"extract: {prompt}")],
+                reasoning="Fallback extraction step generated from task instruction.",
+                confidence=0.5,
+                expected_outcome="Extract requested data.",
+            )
+
+        return plan
     
     def determine_action_plan(
         self,
@@ -263,9 +299,9 @@ class ActionPlanner:
 
             if not plan:
                 dprint("⚠️ No action plan generated")
-                return None
+                return self._apply_extraction_fallback(None)
 
-            return plan
+            return self._apply_extraction_fallback(plan)
 
         except Exception as e:
             dprint(f"⚠️ ActionPlanner error: {e}")
@@ -337,9 +373,11 @@ class ActionPlanner:
                     plan = ActionPlan(**data)
                 except Exception as parse_error:
                     dprint(f"⚠️ Failed to parse action plan from string: {parse_error}")
-                    # Print first 500 chars for debugging
                     dprint(f"⚠️ First 500 chars of cleaned JSON: {cleaned[:500]}")
-                    return None
+                    from lib.ai import _manual_parse_structured_output
+                    plan = _manual_parse_structured_output(cleaned, ActionPlan)
+                    if plan is None:
+                        return None
 
             # Ensure plan is the correct type
             if plan and not isinstance(plan, ActionPlan):
@@ -480,6 +518,8 @@ ACTION RULES:
    - Do NOT extract the same data twice - if it's in the notebook, the task is DONE
    - Provide clear reasoning explaining what was accomplished
    - Example: "complete: Successfully extracted 10 job listings. Data includes job titles, companies, and locations."
+   - If an EXTRACTION SCHEMA is shown and the notebook does NOT contain that data yet, you MUST include an "extract:" step before using "complete:"
+   - Do NOT return "complete:" by itself for extraction tasks that still need data
 
    CONDITIONAL TASKS (tasks with "if present", "if visible", "if exists", etc.):
    - If the condition is NOT met (element not found), use "complete:" with explanation
@@ -664,6 +704,7 @@ WHAT'S BEEN DONE (DO NOT REPEAT THESE):
 {remaining_tasks if remaining_tasks else ""}
 {self._format_notebook(notebook) if notebook else ""}
 {self._format_extraction_schema() if self.extraction_schema else ""}
+{self._format_extraction_requirement() if self.extraction_schema else ""}
 COMPLETION CHECK (DO THIS FIRST):
 1. Review the USER GOAL shown above - this is YOUR specific task to accomplish right now
 2. IF you've accomplished the USER GOAL → use "complete:" IMMEDIATELY
@@ -723,8 +764,31 @@ For ACTIONS (when more work is needed):
 }}
 
 overlay_index is only needed when targeting a visible element. Skip it for complete/press/scroll/defer actions.
+
+CRITICAL OUTPUT FORMAT:
+- Return a SINGLE valid JSON object (no markdown, no extra text, no multiple objects).
+- Do NOT include trailing commentary before or after the JSON.
 """
         return prompt
+
+    def _format_extraction_requirement(self) -> str:
+        """Add a hard rule when extraction schema is present."""
+        if not self.extraction_schema:
+            return ""
+
+        required_fields = self.extraction_schema.get("required", [])
+        if required_fields:
+            fields = ", ".join(required_fields)
+        else:
+            fields = ", ".join(self.extraction_schema.keys())
+
+        return (
+            "\n"
+            "⚠️ EXTRACTION REQUIRED:\n"
+            f"- You must extract these fields before completing: {fields}\n"
+            "- If the notebook does NOT already contain these fields, your plan MUST include an \"extract:\" step.\n"
+            "- Do NOT return only \"complete:\" when extraction is still missing.\n"
+        )
     
     def _format_notebook(self, notebook: Union[Notebook, List[Dict[str, Any]]]) -> str:
         """Format notebook entries for inclusion in the prompt."""

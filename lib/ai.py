@@ -625,63 +625,35 @@ def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> 
         except Exception as exc:
             dprint(f"⚠️ Manual ActionPlan JSON parse error: {exc}")
 
-    return None
+    actions: List[str] = []
+    for match in re.finditer(r"\"action\"\s*:\s*\"([^\"]+)\"", cleaned):
+        actions.append(match.group(1).strip())
 
-    # Try explicit key-value extraction first.
-    pairs = {}
-    for key in ("action", "reasoning", "confidence", "expected outcome", "expected_outcome", "needs exploration", "needs_exploration"):
-        match = re.search(rf"{key}\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE)
-        if match:
-            pairs[key.lower().replace(" ", "_")] = match.group(1).strip(" \n\r\t\"'")
-
-    action = pairs.get("action")
-    if not action:
-        # Fallback: grab the first command-like phrase (click:, type:, scroll:, press:, wait:, open:, back:, forward:, stop:)
-        cmd_match = re.search(
-            r"\b(click|type|scroll|press|wait|open|back|forward|stop|handle_select|upload|handle_datetime)\s*:?\s*[^\n\.]+",
-            cleaned,
+    if not actions:
+        action_pattern = re.compile(
+            r"\b(click|type|scroll|press|wait|open|back|forward|stop|extract|select|upload|datetime|ask)\s*:\s*([^\n\r]+)",
             flags=re.IGNORECASE,
         )
-        if cmd_match:
-            action = cmd_match.group(0).strip(" .")
-    if not action:
+        for line in cleaned.splitlines():
+            match = action_pattern.search(line)
+            if match:
+                cmd = match.group(1).lower()
+                body = match.group(2).strip().rstrip(" .")
+                actions.append(f"{cmd}: {body}" if body else cmd)
+
+    if not actions:
         return None
 
-    reasoning = pairs.get("reasoning") or cleaned
-
-    confidence_str = pairs.get("confidence")
-    confidence = 0.5
-    if confidence_str:
-        try:
-            confidence = float(confidence_str)
-        except ValueError:
-            pass
-    confidence = max(0.0, min(confidence, 1.0))
-
-    expected_outcome = pairs.get("expected_outcome") or pairs.get("expected outcome") or ""
-    if not expected_outcome:
-        # Try to infer expectation from prose after "so that"/"to"
-        outcome_match = re.search(r"(?:so that|to)\s+([^\.]+)", cleaned, flags=re.IGNORECASE)
-        if outcome_match:
-            expected_outcome = outcome_match.group(1).strip()
-    if not expected_outcome:
-        expected_outcome = reasoning
-
-    needs_exploration_raw = pairs.get("needs_exploration") or pairs.get("needs exploration") or ""
-    needs_exploration = needs_exploration_raw.lower() in {"yes", "true", "1"} if needs_exploration_raw else False
-    if not needs_exploration and "explor" in reasoning.lower():
-        needs_exploration = True
-
+    steps = [{"action": action} for action in actions]
     try:
         return model_object_type(
-            action=action.strip(),
-            reasoning=reasoning.strip(),
-            confidence=confidence,
-            expected_outcome=expected_outcome.strip(),
-            needs_exploration=needs_exploration,
+            steps=steps,
+            reasoning="Parsed from unstructured output.",
+            confidence=0.5,
+            expected_outcome="",
         )
     except ValidationError as exc:
-        dprint(f"⚠️ Manual NextAction parse failed validation: {exc}")
+        dprint(f"⚠️ Manual ActionPlan parse failed validation: {exc}")
         return None
 
 

@@ -573,7 +573,7 @@ bot.page.goto("https://www.google.com/search?q=ios+developer+jobs&sca_esv=325502
 
 apply_thinking_border(bot)
 result = bot.execute_mission(
-    "click reject cookies if they are present, go through 2 job listings and extract the job title (eg ios developer) and company name",
+    "click reject cookies if they are present, get the job title (eg ios developer) and company name from the third job listing",
     base_knowledge=[
         "You must click the 'Jobs' tab button before clicking a job listing"
         "You must press enter after typing in a search field"
