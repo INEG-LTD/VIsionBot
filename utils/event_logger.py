@@ -30,10 +30,10 @@ class EventType(str, Enum):
     ACTION_COORDINATES = "action_coordinates"  # Coordinate selection
     ACTION_REFINEMENT = "action_refinement"  # Element refinement
     
-    # Goal events
-    GOAL_START = "goal_start"
-    GOAL_SUCCESS = "goal_success"
-    GOAL_FAILURE = "goal_failure"
+    # Command events
+    COMMAND_START = "command_start"
+    COMMAND_SUCCESS = "command_success"
+    COMMAND_FAILURE = "command_failure"
     
     # System events
     SYSTEM_INFO = "system_info"
@@ -334,29 +334,29 @@ class EventLogger:
         except Exception:
             pass
     
-    def goal_start(self, goal_description: str, command_id: str = None, **details):
+    def command_start(self, command: str, command_id: str = None, **details):
         try:
-            msg = f"Starting goal: {goal_description}"
+            msg = f"Starting command: {command}"
             if command_id:
                 msg += f" [ID: {command_id}]"
-            self.emit(EventType.GOAL_START, msg, "INFO", 
-                     goal_description=goal_description, command_id=command_id, **details)
+            self.emit(EventType.COMMAND_START, msg, "INFO",
+                     command=command, command_id=command_id, **details)
         except Exception:
             pass
 
-    def goal_success(self, goal_description: str, **details):
+    def command_success(self, command: str, **details):
         try:
-            msg = f"Goal completed: {goal_description}"
-            self.emit(EventType.GOAL_SUCCESS, msg, "SUCCESS", goal_description=goal_description, **details)
+            msg = f"Command completed: {command}"
+            self.emit(EventType.COMMAND_SUCCESS, msg, "SUCCESS", command=command, **details)
         except Exception:
             pass
 
-    def goal_failure(self, goal_description: str, error: str = None, **details):
+    def command_failure(self, command: str, error: str = None, **details):
         try:
-            msg = f"Goal failed: {goal_description}"
+            msg = f"Command failed: {command}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.GOAL_FAILURE, msg, "ERROR", goal_description=goal_description, error=error, **details)
+            self.emit(EventType.COMMAND_FAILURE, msg, "ERROR", command=command, error=error, **details)
         except Exception:
             pass
     
@@ -408,10 +408,10 @@ class EventLogger:
         except Exception:
             pass
     
-    def plan_cached(self, goal_description: str, **details):
+    def plan_cached(self, command: str, **details):
         try:
-            self.emit(EventType.PLAN_CACHED, f"Cached plan for goal '{goal_description}'", "INFO", 
-                     goal_description=goal_description, **details)
+            self.emit(EventType.PLAN_CACHED, f"Cached plan for command '{command}'", "INFO",
+                     command=command, **details)
         except Exception:
             pass
     
@@ -971,11 +971,11 @@ class EventLogger:
         except Exception:
             pass
     
-    def command_execution_complete(self, goal_description: str, success: bool = True, **details):
+    def command_execution_complete(self, command: str, success: bool = True, **details):
         try:
-            msg = f"Command execution completed: {goal_description}"
+            msg = f"Command execution completed: {command}"
             level = "SUCCESS" if success else "ERROR"
-            self.emit(EventType.COMMAND_EXECUTION_COMPLETE, msg, level, goal_description=goal_description, success=success, **details)
+            self.emit(EventType.COMMAND_EXECUTION_COMPLETE, msg, level, command=command, success=success, **details)
         except Exception:
             pass
     

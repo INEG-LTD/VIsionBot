@@ -11,7 +11,7 @@ from models.models import ActionStep
 class HistoryEntry:
     """Single recorded step in the agent's history."""
     step_number: int
-    goal_description: str
+    command: str
     action_steps: List[ActionStep]
     reasoning: str
     success: bool
@@ -25,7 +25,7 @@ class HistoryEntry:
         action_text = ", ".join(
             f"{step.action.value}#{step.overlay_index or 'N'}" for step in self.action_steps if step.action
         )
-        action_text = action_text or self.goal_description
+        action_text = action_text or self.command
         reasoning = (self.reasoning or "").replace("\n", " ").strip()
         if len(reasoning) > max_reasoning:
             reasoning = reasoning[:max_reasoning].rstrip() + "…"
@@ -44,7 +44,7 @@ class HistoryManager:
 
     def add_entry(
         self,
-        goal_description: str,
+        command: str,
         action_steps: List[ActionStep],
         reasoning: str,
         success: bool,
@@ -54,7 +54,7 @@ class HistoryManager:
     ) -> None:
         entry = HistoryEntry(
             step_number=self._next_step,
-            goal_description=goal_description,
+            command=command,
             action_steps=action_steps,
             reasoning=reasoning or "",
             success=success,

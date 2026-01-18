@@ -1115,7 +1115,7 @@ class Agent(TaskBasedExecutionMixin):
             # Log parameters being passed to act()
             try:
                 params = {
-                    'goal_description': act_params['goal_description'],
+                    'command': act_params['command'],
                     'additional_context': act_params['additional_context'],
                     'target_context_guard': str(act_params['target_context_guard']) if act_params['target_context_guard'] else None,
                     'max_attempts': 5,
@@ -1139,7 +1139,7 @@ class Agent(TaskBasedExecutionMixin):
             # This leverages all the existing infrastructure (goal creation, plan generation, etc.)
             try:
                 action_result = self.bot.act(
-                    goal_description=act_params["goal_description"],
+                    command=act_params["command"],
                     additional_context=act_params["additional_context"],
                     target_context_guard=act_params["target_context_guard"],
                     max_attempts=5,  # Allow 5 attempts per action for better reliability
@@ -2549,7 +2549,7 @@ class Agent(TaskBasedExecutionMixin):
         from utils.intent_parsers import ORDINAL_WORDS
         
         params = {
-            "goal_description": action_command,
+            "command": action_command,
             "additional_context": "",
             "target_context_guard": None,
             "modifier": None,

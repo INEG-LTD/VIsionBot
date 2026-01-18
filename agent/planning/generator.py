@@ -90,7 +90,7 @@ class PlanGenerator:
 
     def _build_goal_context_block(
         self,
-        goal_description: str,
+        command: str,
         active_goal: Optional[Any],
         page_info: PageInfo,
         page: Any,
@@ -101,8 +101,8 @@ class PlanGenerator:
 
         lines: List[str] = []
         lines.append("ACTIVE GOAL DESCRIPTIONS:")
-        if goal_description:
-            lines.append(f"- Primary request: {goal_description}")
+        if command:
+            lines.append(f"- Primary request: {command}")
 
         if active_goal:
             desc = getattr(active_goal, "description", "") or "(no description)"

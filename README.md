@@ -729,7 +729,7 @@ Terminate the bot and prevent any subsequent operations.
 bot.end()
 ```
 
-##### `act(goal_description, **kwargs) -> ActionResult`
+##### `act(command, **kwargs) -> ActionResult`
 
 Execute a single action based on natural language description.
 
@@ -743,14 +743,14 @@ else:
     print(f"Failed: {result.message}")
     print(f"Error: {result.error}")
 
-# Other keyword goals:
+# Other keyword commands:
 # bot.act("type: username in username field")
 # bot.act("scroll: down")
 # bot.act("press: Enter")
 ```
 
 **Parameters:**
-- `goal_description` (str): Goal description in keyword format (required, cannot be empty). Must use keyword format: "click: button name", "type: text in field", "scroll: down", etc.
+- `command` (str): Command description in keyword format (required, cannot be empty). Must use keyword format: "click: button name", "type: text in field", "scroll: down", etc.
 - `additional_context` (str, optional): Extra context for the action
 - `target_context_guard` (str, optional): Guard condition for actions
 - `skip_post_guard_refinement` (bool, optional): Skip refinement after guard checks (default: True)
@@ -764,7 +764,7 @@ else:
 **Raises:**
 - `BotTerminatedError`: If bot has been terminated
 - `BotNotStartedError`: If bot is not started
-- `ValidationError`: If `goal_description` is empty or `max_attempts` < 1
+- `ValidationError`: If `command` is empty or `max_attempts` < 1
 
 ##### `extract(prompt, **kwargs) -> ActionResult`
 

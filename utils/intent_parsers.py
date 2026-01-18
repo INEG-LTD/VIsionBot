@@ -9,16 +9,16 @@ from typing import Dict, Optional
 from models import ActionIntent
 
 
-def parse_while_statement(goal_description: str) -> tuple[Optional[str], Optional[str]]:
+def parse_while_statement(command: str) -> tuple[Optional[str], Optional[str]]:
     """Parse a simple while-style instruction.
 
     Supports forms like:
     - "while CONDITION: ACTION"
     - "do ACTION until CONDITION"
     - "ACTION until CONDITION"
-    Returns (condition_text, loop_goal_description).
+    Returns (condition_text, loop_command_description).
     """
-    text = (goal_description or "").strip()
+    text = (command or "").strip()
     if not text:
         return None, None
 
@@ -35,29 +35,29 @@ def parse_while_statement(goal_description: str) -> tuple[Optional[str], Optiona
     return None, None
 
 
-def extract_click_target(goal_description: str) -> Optional[str]:
-    """Extract a human-friendly click target description from a goal description."""
-    goal_lower = (goal_description or "").lower().strip()
+def extract_click_target(command: str) -> Optional[str]:
+    """Extract a human-friendly click target description from a command."""
+    command_lower = (command or "").lower().strip()
     # Patterns like: click the 'submit' button, click 'OK', click login, close modal, select X, choose X
-    m = re.search(r"click(?:\s+the)?\s+'([^']+)'", goal_lower)
+    m = re.search(r"click(?:\s+the)?\s+'([^']+)'", command_lower)
     if m:
         return m.group(1)
-    m = re.search(r"click(?:\s+the)?\s+\"([^\"]+)\"", goal_lower)
+    m = re.search(r"click(?:\s+the)?\s+\"([^\"]+)\"", command_lower)
     if m:
         return m.group(1)
-    m = re.search(r"click(?:\s+the)?\s+([\w\s\-]+?)(?:\s+button|\s+link|\s+icon)?$", goal_lower)
+    m = re.search(r"click(?:\s+the)?\s+([\w\s\-]+?)(?:\s+button|\s+link|\s+icon)?$", command_lower)
     if m:
         return m.group(1).strip()
     # close/choose/select variants
-    m = re.search(r"(?:close|select|choose)\s+(?:the\s+)?([\w\s\-]+)$", goal_lower)
+    m = re.search(r"(?:close|select|choose)\s+(?:the\s+)?([\w\s\-]+)$", command_lower)
     if m:
         return m.group(1).strip()
     return None
 
 
-def extract_press_target(goal_description: str) -> Optional[str]:
+def extract_press_target(command: str) -> Optional[str]:
     """Extract a key or key-combo from a description like 'press enter' or 'press ctrl+c'."""
-    txt = (goal_description or "").lower()
+    txt = (command or "").lower()
     # Simple keys
     simple_keys = [
         "enter", "return", "tab", "escape", "esc", "space", "backspace",
@@ -78,7 +78,7 @@ def extract_press_target(goal_description: str) -> Optional[str]:
     return None
 
 
-def extract_navigation_intent(goal_description: str) -> Optional[str]:
+def extract_navigation_intent(command: str) -> Optional[str]:
     """Extract a navigation intent phrase from text: e.g., 'go to pricing' -> 'pricing'."""
     patterns = [
         r"go to (?:the )?(.+)",
@@ -86,9 +86,9 @@ def extract_navigation_intent(goal_description: str) -> Optional[str]:
         r"open (?:the )?(.+)",
         r"visit (?:the )?(.+)",
     ]
-    goal_lower = (goal_description or "").lower().strip()
+    command_lower = (command or "").lower().strip()
     for pat in patterns:
-        m = re.search(pat, goal_lower)
+        m = re.search(pat, command_lower)
         if m:
             intent = m.group(1).strip()
             # Normalize trailing descriptors like "page", "section"

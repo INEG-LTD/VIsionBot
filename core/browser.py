@@ -93,11 +93,11 @@ class ExecutionTimer:
         self.task_start_time: Optional[float] = None
         self.task_end_time: Optional[float] = None
         self.iterations: List[Dict[str, float]] = []  # List of {start, end} dicts
-        self.actions: List[Dict[str, Any]] = []  # List of {action_id, goal, start, end} dicts
+        self.actions: List[Dict[str, Any]] = []  # List of {action_id, command, start, end} dicts
         self.current_iteration_start: Optional[float] = None
         self.current_action_id: Optional[str] = None
         self.current_action_start: Optional[float] = None
-        self._current_goal_text: str = ""
+        self._current_command_text: str = ""
     
     def start_task(self) -> None:
         """Start tracking task execution"""
@@ -130,27 +130,27 @@ class ExecutionTimer:
             })
             self.current_iteration_start = None
     
-    def start_action(self, action_id: str, goal: str) -> None:
+    def start_action(self, action_id: str, command: str) -> None:
         """Start tracking an action"""
         # End previous action if still active
         if self.current_action_start is not None:
             self.end_action()
         self.current_action_id = action_id
         self.current_action_start = time.time()
-        self._current_goal_text = goal
+        self._current_command_text = command
     
     def end_action(self) -> None:
         """End current action tracking"""
         if self.current_action_start is not None and self.current_action_id is not None:
             self.actions.append({
                 "action_id": self.current_action_id,
-                "goal": getattr(self, "_current_goal_text", ""),
+                "command": getattr(self, "_current_command_text", ""),
                 "start": self.current_action_start,
                 "end": time.time()
             })
             self.current_action_id = None
             self.current_action_start = None
-            self._current_goal_text = ""
+            self._current_command_text = ""
     
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of all timings"""
@@ -182,7 +182,7 @@ class ExecutionTimer:
             duration = action_data["end"] - action_data["start"]
             summary["actions"].append({
                 "action_id": action_data["action_id"],
-                "goal": action_data.get("goal", ""),
+                "command": action_data.get("command", ""),
                 "duration_seconds": round(duration, 2),
                 "duration_formatted": self._format_duration(duration)
             })
@@ -240,8 +240,8 @@ class ExecutionTimer:
                 sorted_actions = sorted(summary["actions"], key=lambda x: x["duration_seconds"], reverse=True)
                 log_func("\n   Top 5 slowest actions:")
                 for i, action in enumerate(sorted_actions[:5], 1):
-                    goal_text = action["goal"][:50] + "..." if len(action.get("goal", "")) > 50 else action.get("goal", "")
-                    log_func(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {goal_text}")
+                    command_text = action["command"][:50] + "..." if len(action.get("command", "")) > 50 else action.get("command", "")
+                    log_func(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {command_text}")
             
             log_func("="*60 + "\n")
         except Exception:
@@ -490,7 +490,7 @@ class Browser:
     def _store_plan_in_cache(
         self,
         *,
-        goal_description: str,
+        command: str,
         dom_signature: str,
         page_info: PageInfo,
         plan: VisionPlan,
@@ -503,12 +503,12 @@ class Browser:
             return
         if not plan or not getattr(plan, "action_steps", None):
             return
-        description_key = (goal_description or "").strip()
+        description_key = (command or "").strip()
         context_key = (additional_context or "").strip()
         guard_key = (target_context_guard or "").strip()
         short_sig = dom_signature[:8] if dom_signature else "none"
         self._plan_cache_entry = {
-            "goal": description_key,
+            "command": description_key,
             "dom_signature": dom_signature,
             "page_url": page_info.url,
             "timestamp": time.time(),
@@ -519,14 +519,14 @@ class Browser:
             "target_context_guard": guard_key,
         }
         try:
-            self.event_logger.plan_cached(goal_description=description_key, signature=short_sig)
+            self.event_logger.plan_cached(command=description_key, signature=short_sig)
         except Exception:
             pass
 
     def _get_cached_plan(
         self,
         *,
-        goal_description: str,
+        command: str,
         dom_signature: str,
         page_info: PageInfo,
         additional_context: str,
@@ -542,10 +542,10 @@ class Browser:
         if self.plan_cache_ttl > 0 and (time.time() - entry["timestamp"]) > self.plan_cache_ttl:
             self._invalidate_plan_cache("expired")
             return None
-        description_key = (goal_description or "").strip()
+        description_key = (command or "").strip()
         context_key = (additional_context or "").strip()
         guard_key = (target_context_guard or "").strip()
-        if entry["goal"] != description_key:
+        if entry["command"] != description_key:
             return None
         if entry["dom_signature"] != dom_signature:
             return None
@@ -726,7 +726,7 @@ class Browser:
         """
         try:
             result = self.act(
-                goal_description=action_command,
+                command=action_command,
                 additional_context="",
                 target_context_guard=None,
                 max_attempts=3,  # Fewer attempts for auto-converted actions
@@ -1104,7 +1104,7 @@ class Browser:
 
     def act(
         self,
-        goal_description: str,
+        command: str,
         additional_context: str = "",
         target_context_guard: Optional[str] = None,
         skip_post_guard_refinement: bool = True,
@@ -1115,13 +1115,13 @@ class Browser:
         **kwargs
     ) -> ActionResult:
         """
-        Main method to achieve a goal using vision-based automation
+        Main method to execute a command using vision-based automation
         
         This method executes a single action based on natural language description.
         Validates inputs and bot state before execution.
         
         Args:
-            goal_description: The goal to achieve (must use keyword format: "click: button", "type: text", etc.)
+            command: The command to execute (must use keyword format: "click: button", "type: text", etc.)
             additional_context: Extra context to help with planning
             target_context_guard: Guard condition for actions
             skip_post_guard_refinement: Skip refinement after guard checks
@@ -1136,7 +1136,7 @@ class Browser:
         Raises:
             BotTerminatedError: If bot has been terminated
             BotNotStartedError: If bot is not started
-            ValidationError: If goal_description is empty or invalid
+            ValidationError: If command is empty or invalid
             
         Example:
             >>> bot.start()
@@ -1148,13 +1148,13 @@ class Browser:
             ...     dprint(f"Attempts: {result.metadata.get('attempts')}")
         """
         # Parameter validation
-        if not goal_description or not goal_description.strip():
+        if not command or not command.strip():
             raise ValidationError(
-                "goal_description cannot be empty or whitespace",
+                "command cannot be empty or whitespace",
                 context=ErrorContext(
                     error_type="ValidationError",
-                    message="goal_description cannot be empty or whitespace",
-                    action_data={"goal_description": goal_description}
+                    message="command cannot be empty or whitespace",
+                    action_data={"command": command}
                 )
             )
         
@@ -1178,7 +1178,7 @@ class Browser:
                     error_type="BotNotStartedError",
                     message="Bot not started. Call bot.start() first.",
                     page_url=page_url,
-                    action_data={"goal_description": goal_description}
+                    action_data={"command": command}
                 )
             )
         
@@ -1189,7 +1189,7 @@ class Browser:
                           data: Optional[Any] = None) -> ActionResult:
             """Create ActionResult with metadata"""
             metadata = {
-                "goal_description": goal_description,
+                "command": command,
                 "action_id": action_id,
             }
             if duration is not None:
@@ -1248,17 +1248,17 @@ class Browser:
                 action_id = str(uuid.uuid4())[:8]
             
             # Start action timer
-            self.execution_timer.start_action(action_id, goal_description)
+            self.execution_timer.start_action(action_id, command)
             
-            # Log goal start
-            self.logger.log_goal_start(goal_description)
-            self.event_logger.goal_start(goal_description, action_id=action_id)
+            # Log command start
+            self.logger.log_command_start(command)
+            self.event_logger.command_start(command, action_id=action_id)
             
             # Add action to history
-            self._add_to_command_history(goal_description)
+            self._add_to_command_history(command)
             
             # Check for ref actions
-            ref_result = self._handle_ref_commands(goal_description)
+            ref_result = self._handle_ref_commands(command)
             if ref_result is not None:
                 self.execution_timer.end_action()
                 duration = time.time() - start_time
@@ -1271,8 +1271,8 @@ class Browser:
                 )
             
             # Check for extract actions
-            if goal_description.strip().lower().startswith("extract:"):
-                extraction_prompt = goal_description.replace("extract:", "").strip()
+            if command.strip().lower().startswith("extract:"):
+                extraction_prompt = command.replace("extract:", "").strip()
                 self.event_logger.extraction_start(extraction_prompt)
                 
                 # Perform extraction (now always returns ActionResult)
@@ -1310,12 +1310,12 @@ class Browser:
                     )
 
             # Reset DOM signature for new action - don't check against previous action's signature
-            # This ensures the first attempt of a new goal doesn't get blocked by DOM signature checks
+            # This ensures the first attempt of a new command doesn't get blocked by DOM signature checks
             self.last_dom_signature = None
 
-            # Only keyword goals are supported (click:, type:, etc.)
+            # Only keyword commands are supported (click:, type:, etc.)
             keyword_command_result = self._execute_keyword_command(
-                goal_description=goal_description,
+                command=command,
                 additional_context=additional_context,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
@@ -1341,16 +1341,16 @@ class Browser:
             # If keyword execution can't handle it, fail with clear error message
             duration_ms = (time.time() - start_time) * 1000
             duration = time.time() - start_time
-            self.logger.log_goal_failure(goal_description, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
+            self.logger.log_command_failure(command, "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms)
             try:
-                self.event_logger.goal_failure(
-                    goal_description,
+                self.event_logger.command_failure(
+                    command,
                     error="Could not parse command as keyword action",
                 )
-                self.event_logger.command_execution_complete(goal_description=goal_description, success=False)
+                self.event_logger.command_execution_complete(command=command, success=False)
             except Exception:
                 pass
-            dprint(f"❌ Could not parse command: {goal_description}")
+            dprint(f"❌ Could not parse command: {command}")
             dprint("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
             self.execution_timer.end_action()
             return _create_result(
@@ -2490,7 +2490,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             skip_post_guard_refinement: Whether to skip post-plan guard refinement when executing stored prompts
             confirm_before_interaction: Whether to require confirmation before each stored interaction
             max_attempts: Override bot's max_attempts for each command in this ref (None = use bot default)
-            max_retries: Override goal's max_retries for each command in this ref (None = use goal default)
+            max_retries: Override command's max_retries for each command in this ref (None = use command default)
             
         Returns:
             True if commands were registered successfully, False otherwise
@@ -2508,7 +2508,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 dprint("❌ No prompts provided for register_prompts")
                 return False
             
-            # Store the goals for later reference
+            # Store the commands for later reference
             self.command_refs[ref_id] = {
                 "prompts": prompts.copy(),
                 "all_must_be_true": bool(all_must_be_true),
@@ -2613,7 +2613,7 @@ Return only the extracted text that appears in the text content above. Do not ma
 
     def _collect_overlay_data(
         self,
-        goal_description: str,
+        command: str,
         page_info: PageInfo,
     ) -> tuple[List[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
         """Capture DOM element metadata and screenshots for element selection."""
@@ -2652,7 +2652,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     
     def _execute_keyword_command(
         self,
-        goal_description: str,
+        command: str,
         additional_context: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
@@ -2661,7 +2661,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         """Attempt to execute the action using keyword-based execution. Returns None to fall back."""
-        parsed = parse_keyword_command(goal_description)
+        parsed = parse_keyword_command(command)
         if not parsed:
             return None
         keyword, payload, helper = parsed
@@ -2669,7 +2669,7 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         if keyword == "click":
             result = self._keyword_click(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 additional_context=additional_context,
@@ -2679,7 +2679,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "type":
             result = self._keyword_type(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 additional_context=additional_context,
@@ -2689,7 +2689,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "select":
             result = self._keyword_select(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 additional_context=additional_context,
@@ -2699,7 +2699,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "upload":
             result = self._keyword_upload(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 additional_context=additional_context,
@@ -2709,7 +2709,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "datetime":
             result = self._keyword_datetime(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 additional_context=additional_context,
@@ -2719,7 +2719,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "scroll":
             result = self._keyword_scroll(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 target_context_guard=target_context_guard,
@@ -2727,7 +2727,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "wait":
             result = self._keyword_wait(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 target_context_guard=target_context_guard,
@@ -2735,7 +2735,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "press":
             result = self._keyword_press(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 target_context_guard=target_context_guard,
@@ -2743,25 +2743,25 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "stop":
             result = self._keyword_stop(
-                goal_description=goal_description,
+                command=command,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "back":
             result = self._keyword_back(
-                goal_description=goal_description,
+                command=command,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "forward":
             result = self._keyword_forward(
-                goal_description=goal_description,
+                command=command,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
             )
         elif keyword == "navigate":
             result = self._keyword_open(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 helper=helper,
                 target_context_guard=target_context_guard,
@@ -2769,7 +2769,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             )
         elif keyword == "defer":
             result = self._keyword_defer(
-                goal_description=goal_description,
+                command=command,
                 payload=payload,
                 target_context_guard=target_context_guard,
                 confirm_before_interaction=confirm_before_interaction,
@@ -2784,17 +2784,17 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         duration_ms = (time.time() - start_time) * 1000
         if result:
-            self.logger.log_goal_success(goal_description, duration_ms)
+            self.logger.log_command_success(command, duration_ms)
             try:
-                self.event_logger.goal_success(goal_description)
-                self.event_logger.command_execution_complete(goal_description=goal_description, success=True)
+                self.event_logger.command_success(command)
+                self.event_logger.command_execution_complete(command=command, success=True)
             except Exception:
                 pass
         else:
-            self.logger.log_goal_failure(goal_description, "Keyword command execution failed", duration_ms)
+            self.logger.log_command_failure(command, "Keyword command execution failed", duration_ms)
             try:
-                self.event_logger.goal_failure(goal_description, error="Keyword command execution failed")
-                self.event_logger.command_execution_complete(goal_description=goal_description, success=False)
+                self.event_logger.command_failure(command, error="Keyword command execution failed")
+                self.event_logger.command_execution_complete(command=command, success=False)
             except Exception:
                 pass
         self._invalidate_plan_cache("keyword command execution")
@@ -2874,7 +2874,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_overlay_action(
         self,
         *,
-        goal_description: str,
+        command: str,
         selection_instruction: str,
         target_hint: str,
         action_type: ActionType,
@@ -2884,7 +2884,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
         max_attempts = self.element_selection_retry_attempts
-        instruction = selection_instruction or goal_description
+        instruction = selection_instruction or command
         
         page_info = None
         element_data = None
@@ -2898,7 +2898,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 time.sleep(0.5)
             
             page_info = self.page_utils.get_page_info()
-            element_data, screenshot, _ = self._collect_overlay_data(goal_description, page_info)
+            element_data, screenshot, _ = self._collect_overlay_data(command, page_info)
             if not element_data:
                 if attempt < max_attempts:
                     dprint(f"⚠️ No interactive elements detected (attempt {attempt}/{max_attempts}), retrying...")
@@ -2988,7 +2988,7 @@ Return only the extracted text that appears in the text content above. Do not ma
 
         plan_success = self._execute_keyword_plan(
             action_steps=[action_step],
-            reasoning=f"Selected overlay #{overlay_index} for '{target_hint or goal_description}'.",
+            reasoning=f"Selected overlay #{overlay_index} for '{target_hint or command}'.",
             target_context_guard=target_context_guard,
             confirm_before_interaction=confirm_before_interaction,
             detected_elements=detected_elements,
@@ -2997,7 +2997,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         )
 
         self._record_history_entry(
-            goal_description=goal_description,
+            command=command,
             action_steps=[action_step],
             success=plan_success,
             overlay_index=overlay_index,
@@ -3008,7 +3008,7 @@ Return only the extracted text that appears in the text content above. Do not ma
 
     def _record_history_entry(
         self,
-        goal_description: str,
+        command: str,
         action_steps: List[ActionStep],
         success: bool,
         overlay_index: Optional[int],
@@ -3022,7 +3022,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         url = page_info.url if page_info else ""
         title = page_info.title if page_info else ""
         self.history_manager.add_entry(
-            goal_description=goal_description,
+            command=command,
             action_steps=action_steps,
             reasoning=reasoning,
             success=bool(success),
@@ -3034,7 +3034,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_click(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         additional_context: str,
@@ -3048,14 +3048,14 @@ Return only the extracted text that appears in the text content above. Do not ma
             if helper:
                 target_hint_raw = f"{target_hint_raw} {helper}".strip()
         if not target_hint_raw:
-            extracted = extract_click_target(goal_description)
+            extracted = extract_click_target(command)
             if extracted:
                 target_hint_raw = extracted
 
         target_hint = self._normalize_hint(target_hint_raw)
-        request_instruction = self._normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(command)
         try:
-            self.event_logger.command_execution_start(instruction=goal_description, target_hint=target_hint)
+            self.event_logger.command_execution_start(instruction=command, target_hint=target_hint)
         except Exception:
             pass
 
@@ -3065,7 +3065,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         )
 
         return self._keyword_overlay_action(
-            goal_description=goal_description,
+            command=command,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.CLICK,
@@ -3078,7 +3078,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_type(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         additional_context: str,
@@ -3086,7 +3086,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
-        intent = parse_action_intent(goal_description)
+        intent = parse_action_intent(command)
         if not intent or intent.action != "type" or not intent.value:
             return None
 
@@ -3096,14 +3096,14 @@ Return only the extracted text that appears in the text content above. Do not ma
             dprint("ℹ️ TYPE command missing target hint – falling back")
             return None
 
-        request_instruction = self._normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(command)
         selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
         return self._keyword_overlay_action(
-            goal_description=goal_description,
+            command=command,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.TYPE,
@@ -3116,7 +3116,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_select(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         additional_context: str,
@@ -3124,7 +3124,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
-        intent = parse_action_intent(goal_description)
+        intent = parse_action_intent(command)
         if not intent or intent.action != "select" or not intent.value:
             return None
 
@@ -3134,7 +3134,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             dprint("ℹ️ SELECT command missing target hint – falling back")
             return None
 
-        request_instruction = self._normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(command)
         option_detail = intent.value[:40] + ("…" if len(intent.value or "") > 40 else "")
         selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
@@ -3143,7 +3143,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         )
 
         return self._keyword_overlay_action(
-            goal_description=goal_description,
+            command=command,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.HANDLE_SELECT,
@@ -3156,7 +3156,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_upload(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         additional_context: str,
@@ -3164,7 +3164,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
-        intent = parse_action_intent(goal_description)
+        intent = parse_action_intent(command)
         if not intent or intent.action != "upload":
             return None
 
@@ -3176,14 +3176,14 @@ Return only the extracted text that appears in the text content above. Do not ma
             dprint("ℹ️ UPLOAD command missing target hint – falling back")
             return None
 
-        request_instruction = self._normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(command)
         selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
         return self._keyword_overlay_action(
-            goal_description=goal_description,
+            command=command,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.HANDLE_UPLOAD,
@@ -3196,7 +3196,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_datetime(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         additional_context: str,
@@ -3204,7 +3204,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         confirm_before_interaction: bool,
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[bool]:
-        intent = parse_action_intent(goal_description)
+        intent = parse_action_intent(command)
         if not intent or intent.action != "datetime" or not intent.value:
             return None
 
@@ -3214,14 +3214,14 @@ Return only the extracted text that appears in the text content above. Do not ma
             dprint("ℹ️ DATETIME command missing target hint – falling back")
             return None
 
-        request_instruction = self._normalize_hint(goal_description)
+        request_instruction = self._normalize_hint(command)
         selection_instruction = self._compose_selection_instruction(
             request_instruction=request_instruction,
             target_hint=target_hint,
         )
 
         return self._keyword_overlay_action(
-            goal_description=goal_description,
+            command=command,
             selection_instruction=selection_instruction,
             target_hint=target_hint,
             action_type=ActionType.HANDLE_DATETIME,
@@ -3234,13 +3234,13 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_scroll(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        text = " ".join(filter(None, [payload, helper, goal_description])).lower()
+        text = " ".join(filter(None, [payload, helper, command])).lower()
         direction = "down"
         if any(term in text for term in ["up", "top", "page up"]):
             direction = "up"
@@ -3261,13 +3261,13 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_wait(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        text = " ".join(filter(None, [payload, helper, goal_description]))
+        text = " ".join(filter(None, [payload, helper, command]))
         duration_ms = self._parse_duration_ms(text)
         return self._execute_keyword_plan(
             action_steps=[ActionStep(action=ActionType.WAIT, wait_time_ms=duration_ms)],
@@ -3279,13 +3279,13 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_press(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        key = extract_press_target(goal_description)
+        key = extract_press_target(command)
         if not key:
             key = (payload or helper or "").strip()
         if not key:
@@ -3302,7 +3302,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_stop(
         self,
         *,
-        goal_description: str,
+        command: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
@@ -3316,7 +3316,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_defer(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
@@ -3353,8 +3353,8 @@ Return only the extracted text that appears in the text content above. Do not ma
             return True
         
         # Record defer action in interaction history (before pausing)
-        # Extract reasoning from goal_description if available
-        reasoning = goal_description if goal_description != f"defer: {payload}" else message
+        # Extract reasoning from command if available
+        reasoning = command if command != f"defer: {payload}" else message
         
         # Record the defer action start
         if hasattr(self, 'session_tracker') and self.session_tracker:
@@ -3447,7 +3447,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_back(
         self,
         *,
-        goal_description: str,
+        command: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
@@ -3461,7 +3461,7 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_forward(
         self,
         *,
-        goal_description: str,
+        command: str,
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
@@ -3475,13 +3475,13 @@ Return only the extracted text that appears in the text content above. Do not ma
     def _keyword_open(
         self,
         *,
-        goal_description: str,
+        command: str,
         payload: str,
         helper: Optional[str],
         target_context_guard: Optional[str],
         confirm_before_interaction: bool,
     ) -> Optional[bool]:
-        url = self._extract_url(payload) or self._extract_url(helper) or self._extract_url(goal_description)
+        url = self._extract_url(payload) or self._extract_url(helper) or self._extract_url(command)
         if not url:
             dprint("ℹ️ NAVIGATE command missing URL – falling back")
             return None
@@ -3557,22 +3557,22 @@ Return only the extracted text that appears in the text content above. Do not ma
                 pass
     
     
-    def _handle_ref_commands(self, goal_description: str) -> Optional[bool]:
+    def _handle_ref_commands(self, command: str) -> Optional[bool]:
         """
         Handle ref commands that execute stored multi-commands.
         
         Args:
-            goal_description: The goal description to check for ref commands
+            command: The goal description to check for ref commands
         
         Returns:
             bool: True if command was handled successfully, False if failed, None if not a ref command
         """
         try:
-            goal_lower = goal_description.lower().strip()
+            goal_lower = command.lower().strip()
             
             # Check for ref: refID pattern
             if goal_lower.startswith("ref:"):
-                ref_id = goal_description[4:].strip()
+                ref_id = command[4:].strip()
                 
                 if not ref_id:
                     dprint("❌ No ref ID provided after 'ref:'")

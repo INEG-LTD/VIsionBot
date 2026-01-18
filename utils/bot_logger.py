@@ -2,7 +2,7 @@
 Bot Logger - Comprehensive logging system for the automation bot.
 
 This module provides structured logging for all bot activities including:
-- Goal execution and evaluation
+- Command execution and evaluation
 - Action execution (clicks, scrolls, etc.)
 - Error handling
 - Performance metrics
@@ -28,7 +28,7 @@ class LogLevel(str, Enum):
 
 class LogCategory(str, Enum):
     """Categories for different types of bot activities"""
-    GOAL = "GOAL"
+    COMMAND = "COMMAND"
     ACTION = "ACTION"
     NAVIGATION = "NAVIGATION"
     CONDITION = "CONDITION"
@@ -158,23 +158,23 @@ Log File: {self.log_file}
         
         self._write_entry(entry)
     
-    def log_goal_start(self, goal_description: str, goal_type: str = None):
-        """Log the start of a goal execution"""
-        details = {"goal_description": goal_description}
-        if goal_type:
-            details["goal_type"] = goal_type
+    def log_command_start(self, command: str, command_type: str = None):
+        """Log the start of a command execution"""
+        details = {"command": command}
+        if command_type:
+            details["command_type"] = command_type
         
-        self.log(LogLevel.INFO, LogCategory.GOAL, f"Starting goal: {goal_description}", details)
+        self.log(LogLevel.INFO, LogCategory.COMMAND, f"Starting command: {command}", details)
     
-    def log_goal_success(self, goal_description: str, duration_ms: float, details: Dict[str, Any] = None):
-        """Log successful goal completion"""
-        self.log(LogLevel.SUCCESS, LogCategory.GOAL, f"Goal completed: {goal_description}", 
+    def log_command_success(self, command: str, duration_ms: float, details: Dict[str, Any] = None):
+        """Log successful command completion"""
+        self.log(LogLevel.SUCCESS, LogCategory.COMMAND, f"Command completed: {command}", 
                 details, duration_ms, success=True)
     
-    def log_goal_failure(self, goal_description: str, error: str, duration_ms: float = None):
-        """Log goal failure"""
+    def log_command_failure(self, command: str, error: str, duration_ms: float = None):
+        """Log command failure"""
         details = {"error": error}
-        self.log(LogLevel.ERROR, LogCategory.GOAL, f"Goal failed: {goal_description}", 
+        self.log(LogLevel.ERROR, LogCategory.COMMAND, f"Command failed: {command}", 
                 details, duration_ms, success=False)
     
     def log_action(self, action_type: str, target: str, success: bool, duration_ms: float = None, details: Dict[str, Any] = None):
