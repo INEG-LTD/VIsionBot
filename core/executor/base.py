@@ -15,7 +15,6 @@ from unittest.mock import Mock
 from utils.page_utils import PageUtils
 from utils.context_guard import ContextGuard, GuardDecision
 from core.session import SessionTracker, InteractionType
-from execution.ledger import ActionLedger
 from utils.debug_print import dprint, PrintMode
 
 
@@ -61,11 +60,10 @@ class PostActionContext:
 class Executor:
     """Executes automation actions"""
 
-    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, action_ledger: ActionLedger=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
+    def __init__(self, page: Page, session_tracker: SessionTracker, page_utils:PageUtils=None, preferred_click_method: str = "programmatic", execute_action_callback: Optional[Callable[[str], bool]] = None, user_messages_config=None):
         self.page = page
         self.session_tracker = session_tracker
         self.page_utils = page_utils
-        self.action_ledger = action_ledger or ActionLedger()
         self.execute_action_callback = execute_action_callback  # Callback to execute actions through bot infrastructure
         self.last_failure_reason: Optional[str] = None
         self.user_messages_config = user_messages_config  # Store user messages config

@@ -32,7 +32,6 @@ from browser.dom import build_page_elements, capture_dom_elements
 from core.executor import Executor
 from core.history import HistoryManager
 from utils import PageUtils
-from execution.queue import ActionQueue
 from agent.planning.generator import PlanGenerator
 from core.session import SessionTracker, InteractionType
 # Removed goal imports - goals system no longer used
@@ -46,7 +45,6 @@ from utils.bot_logger import get_logger, LogLevel, LogCategory
 from utils.debug_print import dprint, PrintMode, set_print_mode
 from utils.semantic_targets import SemanticTarget, build_semantic_target
 from utils.event_logger import EventLogger, set_event_logger
-from execution.ledger import ActionLedger
 from lib.ai import (
     ReasoningLevel,
     set_default_model,
@@ -380,11 +378,6 @@ class Browser:
         # Mini goals registry (will be passed to Agent)
         self.mini_goals: List[Dict[str, Any]] = []
 
-        # Action queue system for deferred actions
-        self.action_queue = ActionQueue()
-        self._auto_process_queue = True  # Auto-process queue after each act()
-
-
         # Bot termination state
         self.terminated = False
 
@@ -689,16 +682,12 @@ class Browser:
             include_textless_overlays=False,
         )
         
-        # Initialize action ledger for tracking action execution
-        self.action_ledger: ActionLedger = ActionLedger()
-        
-        # Initialize action executor with action ledger
+        # Initialize action executor
         # Pass a callback so action executor can execute actions through bot infrastructure
         self.action_executor: Executor = Executor(
-            page, 
-            self.session_tracker, 
-            self.page_utils, 
-            self.action_ledger,
+            page,
+            self.session_tracker,
+            self.page_utils,
             execute_action_callback=self._execute_action_via_bot,
             user_messages_config=self.config.user_messages if self.config else None
         )
@@ -1064,13 +1053,9 @@ class Browser:
         try:
             # Register parent action if we have an action_id
             parent_cmd_id = None
+            parent_action_id = None
             if hasattr(self, '_auto_on_load_action_id') and self._auto_on_load_action_id:
-                parent_action_id = self.action_ledger.register_action(
-                    goal=f"on_new_page_load: {len(self._auto_on_load_actions)} actions",
-                    action_id=self._auto_on_load_action_id,
-                    metadata={"source": "on_new_page_load", "url": current_url}
-                )
-                self.action_ledger.start_action(parent_action_id)
+                parent_action_id = self._auto_on_load_action_id
             
             for i, prompt in enumerate(self._auto_on_load_actions, 1):
                 try:
@@ -1101,9 +1086,6 @@ class Browser:
                     except Exception:
                         pass
             
-            # Complete parent action
-            if parent_cmd_id:
-                self.action_ledger.complete_action(parent_action_id, success=True)
         finally:
             self._auto_on_load_running = False
 
@@ -1260,13 +1242,10 @@ class Browser:
                     duration=duration
                 )
             
-            # Register action in ledger
-            action_id = self.action_ledger.register_action(
-                goal=goal_description,
-                action_id=action_id,
-                metadata={"source": "act", "mode": "keyword"}
-            )
-            self.action_ledger.start_action(action_id)
+            # Generate action ID if not provided
+            if action_id is None:
+                import uuid
+                action_id = str(uuid.uuid4())[:8]
             
             # Start action timer
             self.execution_timer.start_action(action_id, goal_description)
@@ -1281,7 +1260,6 @@ class Browser:
             # Check for ref actions
             ref_result = self._handle_ref_commands(goal_description)
             if ref_result is not None:
-                self.action_ledger.complete_action(action_id, success=ref_result)
                 self.execution_timer.end_action()
                 duration = time.time() - start_time
                 return _create_result(
@@ -1308,7 +1286,6 @@ class Browser:
                     # Extract the actual data from ActionResult for logging
                     extracted_data = extract_result.data
                     self.event_logger.extraction_success(extraction_prompt, result=extracted_data)
-                    self.action_ledger.complete_action(action_id, success=True)
                     self.execution_timer.end_action()
                     duration = time.time() - start_time
                     return _create_result(
@@ -1321,7 +1298,6 @@ class Browser:
                     )
                 else:
                     self.event_logger.extraction_failure(extraction_prompt, error=extract_result.error or extract_result.message)
-                    self.action_ledger.complete_action(action_id, success=False)
                     self.execution_timer.end_action()
                     duration = time.time() - start_time
                     return _create_result(
@@ -1376,7 +1352,6 @@ class Browser:
                 pass
             dprint(f"❌ Could not parse command: {goal_description}")
             dprint("   Hint: Use keyword format like 'click: button name', 'type: text in field', 'scroll: down', etc.")
-            self.action_ledger.complete_action(action_id, success=False, error_message="Could not parse goal as keyword action. Must use keyword format (click:, type:, etc.)")
             self.execution_timer.end_action()
             return _create_result(
                 False,
@@ -1397,14 +1372,6 @@ class Browser:
             except Exception:
                 pass
             
-            # Process queued actions if auto-processing is enabled
-            if self._auto_process_queue and not self.action_queue.is_empty():
-                try:
-                    executed_count = self.process_queue()
-                    if executed_count > 0:
-                        dprint(f"🔄 Auto-processed {executed_count} queued actions")
-                except Exception as e:
-                    dprint(f"⚠️ Error processing action queue: {e}")
 
     def execute_mission(
         self,
@@ -2530,13 +2497,11 @@ Return only the extracted text that appears in the text content above. Do not ma
         """
         self._check_termination()
         
-        # Register the ref in action ledger
-        action_id = self.action_ledger.register_action(
-            goal=f"register_prompts: {ref_id}",
-            action_id=action_id,
-            metadata={"source": "register_prompts", "ref_id": ref_id, "prompt_count": len(prompts)}
-        )
-        
+        # Generate action ID if not provided
+        if action_id is None:
+            import uuid
+            action_id = str(uuid.uuid4())[:8]
+
         try:
             if not prompts:
                 self.logger.log_error("No prompts provided for register_prompts", "register_prompts() called with empty prompts")
@@ -2825,7 +2790,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 self.event_logger.command_execution_complete(goal_description=goal_description, success=True)
             except Exception:
                 pass
-            self.action_ledger.complete_action(action_id, success=True)
         else:
             self.logger.log_goal_failure(goal_description, "Keyword command execution failed", duration_ms)
             try:
@@ -2833,11 +2797,6 @@ Return only the extracted text that appears in the text content above. Do not ma
                 self.event_logger.command_execution_complete(goal_description=goal_description, success=False)
             except Exception:
                 pass
-            self.action_ledger.complete_action(
-                action_id,
-                success=False,
-                error_message="Keyword action execution failed",
-            )
         self._invalidate_plan_cache("keyword command execution")
         return result
 
@@ -3642,7 +3601,7 @@ Return only the extracted text that appears in the text content above. Do not ma
                 results: List[bool] = []
 
                 # Use the stored command ID as the parent, fallback to current if not available
-                ref_action_id = stored_action_id or self.action_ledger.get_current_action_id()
+                ref_action_id = stored_action_id
                 
                 for i, prompt in enumerate(stored_prompts, 1):
                     dprint(f"▶️ Executing stored command {i}/{len(stored_prompts)}: {prompt}")
@@ -3699,55 +3658,6 @@ Return only the extracted text that appears in the text content above. Do not ma
         """
         # Focus system removed - returns all elements
         return element_data
-
-    def queue_action(self, action: str, action_id: Optional[str] = None, 
-                    priority: int = 0, metadata: Dict[str, Any] = None) -> None:
-        """
-        Queue an action for later execution.
-        
-        Args:
-            action: The action to execute (e.g., "click: button")
-            action_id: Optional action ID for tracking
-            priority: Priority level (higher = executed first)
-            metadata: Optional metadata dict
-        """
-        self.action_queue.enqueue(action, action_id, priority, metadata)
-        dprint(f"📋 Queued action: {action} [Priority: {priority}]")
-    
-    def process_queue(self) -> int:
-        """
-        Process all queued actions, returns count of executed actions.
-        
-        Returns:
-            int: Number of actions successfully executed
-        """
-        executed = 0
-        failed = 0
-        
-        while not self.action_queue.is_empty():
-            queued_action = self.action_queue.dequeue()
-            if queued_action:
-                dprint(f"🔄 Processing queued action: {queued_action.action}")
-                try:
-                    action_result = self.act(
-                        queued_action.action,
-                        action_id=queued_action.action_id
-                    )
-                    success = action_result.success
-                    if success:
-                        executed += 1
-                        dprint(f"   ✅ Queued action succeeded: {queued_action.action}")
-                    else:
-                        failed += 1
-                        dprint(f"   ❌ Queued action failed: {queued_action.action}")
-                except Exception as e:
-                    failed += 1
-                    dprint(f"   ❌ Queued action error: {e}")
-        
-        if failed > 0:
-            dprint(f"⚠️ {failed} queued actions failed")
-        
-        return executed
 
     # ==================== Convenience Methods ====================
 

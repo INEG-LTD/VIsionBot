@@ -101,9 +101,9 @@ def trigger_pre_action_hooks(
     if not executor.pre_action_callbacks:
         return
 
-    # Get current action context
-    action_id = executor.action_ledger.get_current_action_id()
-    action_lineage = executor.action_ledger.get_lineage(action_id) if action_id else None
+    # Action ID and lineage tracking removed (was ActionLedger)
+    action_id = None
+    action_lineage = None
 
     context = PreActionContext(
         action_type=action_type,
@@ -141,11 +141,8 @@ def trigger_post_action_hooks(
     if not executor.post_action_callbacks:
         return
 
-    # Get current action context
-    # Use provided action_id or fall back to execution stack
-    if action_id is None:
-        action_id = executor.action_ledger.get_current_action_id()
-    action_lineage = executor.action_ledger.get_lineage(action_id) if action_id else None
+    # Action lineage tracking removed (was ActionLedger)
+    action_lineage = None
 
     # Determine scroll information
     # For scroll actions, always mark as occurred with USER_ACTION reason
