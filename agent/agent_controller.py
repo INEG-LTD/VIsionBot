@@ -9,12 +9,13 @@ from urllib.parse import urlparse
 
 from core.session import BrowserState, Interaction, InteractionType
 from models.models import NotebookEntryType
-from .task_result import TaskResult
-from agent.agent_context import EnvironmentState, CompletionEvaluation
+from agent.results import TaskResult
+from agent.agent_context import EnvironmentState
 from agent.action_planner import ActionPlanner, ActionPlan, ActionStep
 from agent.agent_context import AgentContext
 from agent.subagent.controller import SubAgent
 from agent.results import SubAgentResult
+from agent.notebook import Notebook
 from utils.debug_print import dprint, PrintMode
 # Type alias for user question callback (ask: command handler)
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
@@ -198,7 +199,7 @@ class Agent(TaskBasedExecutionMixin):
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
         self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
         self._consecutive_page_changes: int = 0  # Track consecutive page state changes for phase-out
-        self.notebook: List[Dict[str, Any]] = []  # Append-only notebook for extracted data
+        self.notebook: Notebook = Notebook()
         self.sub_agent_results: List[SubAgentResult] = []  # Store completed sub-agent results
         self.orchestration_events: List[Dict[str, Any]] = []  # Track orchestration events for reporting
         self.sub_agent_policy_level: SubAgentPolicyLevel = SubAgentPolicyLevel.SINGLE_THREADED
@@ -245,7 +246,7 @@ class Agent(TaskBasedExecutionMixin):
         self._last_action_summary: Optional[Dict[str, Any]] = None
         self._current_task_prompt: Optional[str] = None  # Rewritten prompt when stuck
         self._last_completion_reasoning: Optional[str] = None  # Store for stuck detection at start of next iteration
-        self._last_completion_evaluation: Optional[CompletionEvaluation] = None
+        self._last_completion_evaluation: Optional[Dict[str, Any]] = None
         self._last_screenshot_hash: Optional[str] = None  # Store screenshot hash for phase-out tracking
 
         # Store user question callback for ask: command
@@ -1023,14 +1024,11 @@ class Agent(TaskBasedExecutionMixin):
                         scope="viewport"
                     )
                     if result.success:
-                        # Append to notebook
-                        self.notebook.append({
-                            "timestamp": time.time(),
-                            "prompt": extraction_prompt,
-                            "data": result.data,
-                            "url": snapshot.url if snapshot else None,
-                            "type": NotebookEntryType.EXTRACTION,
-                        })
+                        self.notebook.add_extraction(
+                            prompt=extraction_prompt,
+                            data=result.data,
+                            url=snapshot.url if snapshot else None,
+                        )
                         try:
                             self.event_logger.extraction_success(extraction_prompt, result=result)
                         except Exception:
@@ -1072,14 +1070,11 @@ class Agent(TaskBasedExecutionMixin):
                     url = self._extract_url_from_element(url_extraction_target, overlay_data)
 
                     if url:
-                        # Append to notebook
-                        self.notebook.append({
-                            "timestamp": time.time(),
-                            "prompt": f"URL from {url_extraction_target}",
-                            "data": {"url": url, "element": url_extraction_target},
-                            "url": snapshot.url if snapshot else None,
-                            "type": NotebookEntryType.URL_EXTRACTION,
-                        })
+                        self.notebook.add_url_extraction(
+                            element=url_extraction_target,
+                            url=url,
+                            context_url=snapshot.url if snapshot else None,
+                        )
                         try:
                             self.event_logger.system_info(f"✓ Extracted URL: {url}")
                         except Exception:
@@ -1401,7 +1396,7 @@ class Agent(TaskBasedExecutionMixin):
         self,
         user_prompt: str,
         snapshot: BrowserState,
-        completion_evaluation: Optional[CompletionEvaluation] = None
+        completion_evaluation: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """
         Determine what action needs to be done next.
@@ -1412,7 +1407,7 @@ class Agent(TaskBasedExecutionMixin):
         Args:
             user_prompt: Original user request
             snapshot: Current browser state (viewport snapshot)
-            completion_evaluation: Optional completion evaluation with remaining_steps hints
+        completion_evaluation: Optional completion evaluation with remaining_steps hints
 
         Returns:
             Specific action description (e.g., "type: John Doe in name field")
@@ -3094,7 +3089,11 @@ class Agent(TaskBasedExecutionMixin):
         if base:
             evidence.update(base)
         if self.notebook and "notebook" not in evidence:
-            evidence["notebook"] = list(self.notebook)
+            evidence["notebook"] = (
+                self.notebook.to_list()
+                if hasattr(self.notebook, "to_list")
+                else list(self.notebook)
+            )
         if self.sub_agent_results:
             evidence["sub_agents"] = [result.to_dict() for result in self.sub_agent_results]
         orchestration = {

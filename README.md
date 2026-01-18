@@ -915,6 +915,7 @@ if result.success:
 **Returns:** `AgentResult` object with:
 - `success`: Whether the task completed successfully
 - `extracted_data`: Dictionary of extracted data (key: extraction prompt, value: extracted result)
+  - Backed by the agent Notebook (`agent.notebook.Notebook`) during execution
 - `reasoning`: Explanation of the result
 - `confidence`: Confidence score (0.0-1.0)
 - `sub_agent_results`: Results from sub-agents if any

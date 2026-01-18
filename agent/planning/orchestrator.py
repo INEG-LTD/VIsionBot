@@ -12,11 +12,11 @@ import re
 import uuid
 
 from models.models import (
-    TaskList,
-    NormalTask,
-    SequentialTask,
+    MissionPlan,
+    Task,
+    Sequence,
     TaskType,
-    TaskOrchestratorOutput,
+    MissionPlannerOutput,
 )
 from lib.ai import (
     generate_model,
@@ -51,11 +51,11 @@ class TaskOrchestrator:
         self,
         user_prompt: str,
         initial_context: Optional[Dict[str, Any]] = None,
-        validation_callback: Optional[Callable[[TaskList], Tuple[bool, str]]] = None,
+        validation_callback: Optional[Callable[[MissionPlan], Tuple[bool, str]]] = None,
         max_validation_attempts: int = 3,
-    ) -> TaskList:
+    ) -> MissionPlan:
         """
-        Analyzes user request and generates a TaskList with Normal and Sequential tasks.
+        Analyzes user request and generates a MissionPlan with Normal and Sequential tasks.
 
         Args:
             user_prompt: The user's original request
@@ -66,7 +66,7 @@ class TaskOrchestrator:
             max_validation_attempts: Maximum regeneration attempts if validation fails
 
         Returns:
-            TaskList with ordered tasks
+            MissionPlan with ordered tasks
 
         Raises:
             ValueError: If unable to generate valid task decomposition after max attempts
@@ -93,7 +93,7 @@ class TaskOrchestrator:
             try:
                 output = generate_model(
                     prompt=user_prompt_text,
-                    model_object_type=TaskOrchestratorOutput,
+                    model_object_type=MissionPlannerOutput,
                     system_prompt=system_prompt,
                     model=self.model_name,
                     reasoning_level=self.reasoning_level,
@@ -114,18 +114,18 @@ class TaskOrchestrator:
 
                     # Parse JSON
                     data = json.loads(cleaned)
-                    output = TaskOrchestratorOutput(**data)
+                    output = MissionPlannerOutput(**data)
 
                 # Ensure output is the correct type
-                if not isinstance(output, TaskOrchestratorOutput):
-                    raise ValueError(f"Expected TaskOrchestratorOutput, got {type(output)}")
+                if not isinstance(output, MissionPlannerOutput):
+                    raise ValueError(f"Expected MissionPlannerOutput, got {type(output)}")
 
             except Exception as e:
                 if attempt == max_validation_attempts - 1:
                     raise ValueError(f"Failed to generate task decomposition: {e}") from e
                 continue
 
-            # Convert output to TaskList with proper task IDs
+            # Convert output to MissionPlan with proper task IDs
             task_list = self._convert_to_task_list(output)
 
             # If no validation callback, return immediately
@@ -559,17 +559,17 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
             dprint(f"[Warning] Failed to infer extraction schema: {e}")
             return None
 
-    def _convert_to_task_list(self, output: TaskOrchestratorOutput) -> TaskList:
+    def _convert_to_task_list(self, output: MissionPlannerOutput) -> MissionPlan:
         """
-        Converts TaskOrchestratorOutput to TaskList with proper task IDs.
+        Converts MissionPlannerOutput to MissionPlan with proper task IDs.
 
         Args:
             output: The orchestrator output with task definitions
 
         Returns:
-            TaskList with tasks that have unique IDs
+            MissionPlan with tasks that have unique IDs
         """
-        from models.models import SequentialState
+        from models.models import SequenceState
 
         tasks_with_ids = []
 
@@ -579,14 +579,14 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
                 task.task_id = f"task_{uuid.uuid4().hex[:8]}"
 
             if task.type == TaskType.NORMAL:
-                # It's already a NormalTask
+                # It's already a Task
                 tasks_with_ids.append(task)
             elif task.type == TaskType.SEQUENTIAL:
-                # It's already a SequentialTask
+                # It's already a Sequence
 
                 # IMPORTANT: Ensure state is initialized (LLM might return state=None)
                 if task.state is None:
-                    task.state = SequentialState()
+                    task.state = SequenceState()
 
                 # Ensure results list is initialized
                 if task.results is None:
@@ -605,4 +605,4 @@ Now analyze the task goal above and respond with ONLY the JSON list, nothing els
 
                 tasks_with_ids.append(task)
 
-        return TaskList(tasks=tasks_with_ids)
+        return MissionPlan(tasks=tasks_with_ids)

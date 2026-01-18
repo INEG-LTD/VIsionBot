@@ -10,12 +10,12 @@ import time
 import hashlib
 
 from models.models import (
-    TaskList,
-    NormalTask,
-    SequentialTask,
+    MissionPlan,
+    Task,
+    Sequence,
     TaskStatus,
     TaskType,
-    IterationResult,
+    TurnResult,
 )
 from agent.planning.orchestrator import TaskOrchestrator
 from agent.planning.sequence_planner import SequencePlanner
@@ -24,6 +24,7 @@ from core.config import SequentialTaskConfig
 from execution.result import ActionResult
 from models.models import NotebookEntryType
 from agent.subagent.retrieval import TaskResultRetriever, TaskResultAccessor
+from agent.results import TaskResult
 from pydantic import BaseModel, Field, create_model
 
 
@@ -70,7 +71,7 @@ class TaskBasedExecutionMixin:
         )
 
         # Current task list (set during execution)
-        self.task_list: Optional[TaskList] = None
+        self.task_list: Optional[MissionPlan] = None
 
         # Result accessor (created when task_list is set)
         self.task_result_accessor: Optional[TaskResultAccessor] = None
@@ -99,17 +100,10 @@ class TaskBasedExecutionMixin:
         Returns:
             TaskResult indicating success or failure
         """
-        from .task_result import TaskResult
-
         try:
             self.event_logger.system_info("Using task-based execution")
         except Exception:
             pass
-        try:
-            self.event_logger.sequential_iteration_complete(sequential_task.task_id, iteration_idx)
-        except Exception:
-            pass
-
         # Decompose user request into tasks
         try:
             task_list = self._decompose_user_request_into_tasks(
@@ -191,10 +185,10 @@ class TaskBasedExecutionMixin:
         self,
         user_prompt: str,
         initial_context: Optional[Dict[str, Any]] = None,
-        validation_callback: Optional[Callable[[TaskList], Tuple[bool, str]]] = None,
-    ) -> TaskList:
+        validation_callback: Optional[Callable[[MissionPlan], Tuple[bool, str]]] = None,
+    ) -> MissionPlan:
         """
-        Decompose user request into a TaskList.
+        Decompose user request into a MissionPlan.
 
         Args:
             user_prompt: User's request
@@ -202,17 +196,13 @@ class TaskBasedExecutionMixin:
             validation_callback: Optional callback for user validation
 
         Returns:
-            TaskList with Normal and Sequential tasks
+            MissionPlan with Normal and Sequential tasks
         """
         # Build initial context
         context = initial_context or {}
         try:
             context["url"] = self.bot.page.url
             context["page_title"] = self.bot.page.title()
-        except Exception:
-            pass
-        try:
-            self.event_logger.sequential_iteration_fail(sequential_task.task_id, iteration_idx, error=result.error)
         except Exception:
             pass
 
@@ -237,7 +227,7 @@ class TaskBasedExecutionMixin:
 
     def _execute_task_list(
         self,
-        task_list: TaskList,
+        task_list: MissionPlan,
         user_prompt: str,
     ) -> bool:
         """
@@ -279,9 +269,9 @@ class TaskBasedExecutionMixin:
                 pass
 
             # Execute based on task type
-            if isinstance(current_task, NormalTask):
+            if isinstance(current_task, Task):
                 success = self._execute_normal_task(current_task, user_prompt)
-            elif isinstance(current_task, SequentialTask):
+            elif isinstance(current_task, Sequence):
                 success = self._execute_sequential_task(current_task, user_prompt)
             else:
                 # Unknown task type
@@ -332,7 +322,7 @@ class TaskBasedExecutionMixin:
 
     def _prepare_task_context(
         self,
-        task: Union[NormalTask, SequentialTask],
+        task: Union[Task, Sequence],
     ) -> Optional[Dict[str, Any]]:
         """
         Prepare context for task execution, including access to previous task results.
@@ -518,7 +508,7 @@ class TaskBasedExecutionMixin:
 
     def _execute_normal_task(
         self,
-        task: NormalTask,
+        task: Task,
         user_prompt: str,
     ) -> bool:
         """
@@ -602,13 +592,13 @@ Use the results above to complete your task."""
         if result.success and task.result.get("data"):
             # Add to notebook so next tasks can reference this task's results
             if hasattr(self, "notebook") and self.notebook is not None:
-                self.notebook.append({
-                    "source": "task",
-                    "task_id": task.task_id,
-                    "description": task.description,
-                    "data": task.result["data"],
-                    "type": NotebookEntryType.NORMAL_TASK_RESULT
-                })
+                self.notebook.add_task_result(
+                    source="task",
+                    task_id=task.task_id,
+                    description=task.description,
+                    data=task.result["data"],
+                    entry_type=NotebookEntryType.NORMAL_TASK_RESULT,
+                )
                 try:
                     self.event_logger.system_debug(
                         f"Added task results to notebook: {task.description}"
@@ -620,7 +610,7 @@ Use the results above to complete your task."""
 
     def _execute_sequential_task(
         self,
-        task: SequentialTask,
+        task: Sequence,
         user_prompt: str,
     ) -> bool:
         """
@@ -741,15 +731,15 @@ Use the results above to complete your task."""
                 task.current_subtask = generated_task_instruction
 
                 try:
-                    iteration_num = task.state.current_iteration
-                    attempt_num = task.state.iteration_attempts + 1
+                    iteration_num = task.state.current_turn
+                    attempt_num = task.state.turn_attempts + 1
                     self.event_logger.system_info(
-                        f"Iteration {iteration_num}, Attempt {attempt_num}: {generated_task_instruction}"
+                        f"Turn {iteration_num}, Attempt {attempt_num}: {generated_task_instruction}"
                     )
                 except Exception:
                     pass
                 try:
-                    self.event_logger.sequential_iteration_start(task.task_id, task.state.current_iteration)
+                    self.event_logger.sequential_iteration_start(task.task_id, task.state.current_turn)
                 except Exception:
                     pass
 
@@ -768,26 +758,26 @@ Use the results above to complete your task."""
                     self._record_iteration_success(task, result)
 
                     # Move to next iteration
-                    task.state.current_iteration += 1
-                    task.state.iteration_attempts = 0
+                    task.state.current_turn += 1
+                    task.state.turn_attempts = 0
                 else:
                     # Task failed, increment attempt counter
-                    task.state.iteration_attempts += 1
+                    task.state.turn_attempts += 1
 
                     # Check if we should retry
                     if self.sequence_planner.should_retry_iteration(task, result.error):
                         try:
-                            remaining = self.sequential_task_config.max_attempts_per_iteration - task.state.iteration_attempts
+                            remaining = self.sequential_task_config.max_attempts_per_iteration - task.state.turn_attempts
                             self.event_logger.system_warning(
-                                f"🔄 Iteration {task.state.current_iteration}, Attempt {task.state.iteration_attempts} failed: {result.error}"
+                                f"🔄 Turn {task.state.current_turn}, Attempt {task.state.turn_attempts} failed: {result.error}"
                             )
                             self.event_logger.system_info(
-                                f"   Retrying iteration {task.state.current_iteration}... ({remaining} attempts remaining)"
+                                f"   Retrying turn {task.state.current_turn}... ({remaining} attempts remaining)"
                             )
                         except Exception:
                             pass
                         try:
-                            self.event_logger.sequence_retry(task.state.current_iteration)
+                            self.event_logger.sequence_retry(task.state.current_turn)
                         except Exception:
                             pass
                     else:
@@ -796,17 +786,17 @@ Use the results above to complete your task."""
 
                         try:
                             self.event_logger.system_error(
-                                f"Iteration {task.state.current_iteration} failed after {task.state.iteration_attempts} attempts"
+                                f"Turn {task.state.current_turn} failed after {task.state.turn_attempts} attempts"
                             )
                         except Exception:
                             pass
 
                         # Move to next iteration
-                        task.state.current_iteration += 1
-                        task.state.iteration_attempts = 0
+                        task.state.current_turn += 1
+                        task.state.turn_attempts = 0
 
             # Safety check: prevent infinite loops
-            if task.state.current_iteration >= self.sequential_task_config.max_total_iterations:
+            if task.state.current_turn >= self.sequential_task_config.max_total_iterations:
                 try:
                     self.event_logger.system_warning("Maximum iteration limit reached, ending sequential task")
                 except Exception:
@@ -838,7 +828,7 @@ Use the results above to complete your task."""
             self.event_logger.system_info(
                 f"Sequential task complete: {task.state.total_success_count} successes, "
                 f"{task.state.total_failure_count} failures out of "
-                f"{task.state.current_iteration} iterations"
+                f"{task.state.current_turn} iterations"
             )
         except Exception:
             pass
@@ -895,7 +885,7 @@ Use the results above to complete your task."""
     def _execute_generated_subtask(
         self,
         task_instruction: str,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         environment_state: EnvironmentState,
         screenshot: bytes,
         overlay_data: Optional[List[Dict[str, Any]]],
@@ -917,12 +907,12 @@ Use the results above to complete your task."""
             ActionResult indicating success/failure
         """
         # Track this task attempt
-        iteration_idx = sequential_task.state.current_iteration
+        iteration_idx = sequential_task.state.current_turn
 
         # Find or create current iteration tracking
         current_iter = None
-        for ir in sequential_task.state.completed_iterations:
-            if ir.iteration == iteration_idx and ir.status == "in_progress":
+        for ir in sequential_task.state.completed_turns:
+            if ir.turn == iteration_idx and ir.status == "in_progress":
                 current_iter = ir
                 break
 
@@ -972,7 +962,7 @@ Use the results above to complete your task."""
         original_prompt: str,
         max_iterations: int = 20,
         extraction_schema: Optional[Dict[str, Any]] = None,
-    ) -> "TaskResult":
+    ):
         """
         Run a mini reactive loop for a specific task instruction.
 
@@ -986,7 +976,6 @@ Use the results above to complete your task."""
         Returns:
             TaskResult indicating success/failure
         """
-        from .task_result import TaskResult
         from agent.action_planner import ActionPlanner
 
         # Track task-specific failed/ineffective actions
@@ -1067,7 +1056,7 @@ Use the results above to complete your task."""
                     failed_actions=task_failed_actions,
                     ineffective_actions=task_ineffective_actions,
                     overlay_data=overlay_data,
-                    notebook=self.notebook if hasattr(self, "notebook") else [],
+                    notebook=self.notebook if hasattr(self, "notebook") else None,
                 )
                 # Debug logging
                 try:
@@ -1467,7 +1456,7 @@ Use the results above to complete your task."""
 
     def _record_iteration_success(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         result: ActionResult,
     ) -> None:
         """
@@ -1477,12 +1466,12 @@ Use the results above to complete your task."""
             sequential_task: The sequential task
             result: The successful action result
         """
-        iteration_idx = sequential_task.state.current_iteration
-        attempts = sequential_task.state.iteration_attempts + 1
+        turn_idx = sequential_task.state.current_turn
+        attempts = sequential_task.state.turn_attempts + 1
 
         # Create iteration result
-        iter_result = IterationResult(
-            iteration=iteration_idx,
+        iter_result = TurnResult(
+            turn=turn_idx,
             status="success",
             attempts=attempts,
             result=result.data,
@@ -1490,7 +1479,7 @@ Use the results above to complete your task."""
         )
 
         # Add to completed iterations
-        sequential_task.state.completed_iterations.append(iter_result)
+        sequential_task.state.completed_turns.append(iter_result)
         sequential_task.state.total_success_count += 1
 
         # Add result to task results
@@ -1498,14 +1487,14 @@ Use the results above to complete your task."""
 
         # Add sequential iteration result to notebook for downstream access
         if hasattr(self, "notebook") and self.notebook is not None and result.data is not None:
-            self.notebook.append({
-                "source": "sequential_task",
-                "task_id": sequential_task.task_id,
-                "description": sequential_task.description,
-                "iteration": iteration_idx,
-                "data": result.data,
-                "type": NotebookEntryType.SEQUENTIAL_TASK_RESULT
-            })
+            self.notebook.add_task_result(
+                source="sequential_task",
+                task_id=sequential_task.task_id,
+                description=sequential_task.description,
+                data=result.data,
+                entry_type=NotebookEntryType.SEQUENTIAL_TASK_RESULT,
+                iteration=turn_idx,
+            )
 
         # Log success
         try:
@@ -1516,25 +1505,25 @@ Use the results above to complete your task."""
 
             if actions_tried and actions_tried > 1:
                 self.event_logger.system_info(
-                    f"ℹ️ ✓ Iteration {iteration_idx} successful after {attempts} attempt(s) "
+                    f"ℹ️ ✓ Turn {turn_idx} successful after {attempts} attempt(s) "
                     f"({actions_tried} actions tried in mini-loop)"
                 )
             else:
-                self.event_logger.system_info(f"ℹ️ ✓ Iteration {iteration_idx} successful after {attempts} attempt(s)")
+                self.event_logger.system_info(f"ℹ️ ✓ Turn {turn_idx} successful after {attempts} attempt(s)")
         except Exception:
             pass
 
         if sequential_task.extraction_schema and isinstance(result.data, dict):
             try:
                 self.event_logger.system_info(
-                    f"📊 Extracted data (iteration {iteration_idx}): {result.data}"
+                    f"📊 Extracted data (turn {turn_idx}): {result.data}"
                 )
             except Exception:
                 pass
 
     def _record_iteration_failure(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         result: ActionResult,
     ) -> None:
         """
@@ -1544,12 +1533,12 @@ Use the results above to complete your task."""
             sequential_task: The sequential task
             result: The failed action result
         """
-        iteration_idx = sequential_task.state.current_iteration
-        attempts = sequential_task.state.iteration_attempts
+        turn_idx = sequential_task.state.current_turn
+        attempts = sequential_task.state.turn_attempts
 
         # Create iteration result
-        iter_result = IterationResult(
-            iteration=iteration_idx,
+        iter_result = TurnResult(
+            turn=turn_idx,
             status="failed",
             attempts=attempts,
             error=result.error,
@@ -1557,7 +1546,7 @@ Use the results above to complete your task."""
         )
 
         # Add to completed iterations
-        sequential_task.state.completed_iterations.append(iter_result)
+        sequential_task.state.completed_turns.append(iter_result)
         sequential_task.state.total_failure_count += 1
 
         # Add None to results to preserve indexing
@@ -1565,6 +1554,6 @@ Use the results above to complete your task."""
 
         # Log failure
         try:
-            self.event_logger.system_error(f"✗ Iteration {iteration_idx} failed after {attempts} attempt(s)")
+            self.event_logger.system_error(f"✗ Turn {turn_idx} failed after {attempts} attempt(s)")
         except Exception:
             pass

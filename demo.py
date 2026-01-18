@@ -30,7 +30,7 @@ KEY FEATURES DEMONSTRATED:
 
 CUSTOMIZATION:
 -------------
-- Task & URL: See bottom of file (execute_task call)
+- Task & URL: See bottom of file (execute_mission call)
 - Models: See config.model section
 - Max iterations: See config.execution.max_attempts
 - Visual effects: Set config.logging.debug_mode=True to disable border
@@ -41,6 +41,7 @@ This demo is production-ready and can be adapted for your own automation tasks.
 from time import sleep
 import sys
 import threading
+import os
 
 from pydantic import BaseModel
 from middleware.error import ErrorHandlingMiddleware
@@ -55,6 +56,8 @@ from agent.interceptor_manager import Interceptor, InterceptorMode, InterceptorC
 from utils.select_option_utils import SelectOptionError
 import random
 from prompt_toolkit import HTML, print_formatted_text as print
+
+os.environ.setdefault("PLAYWRIGHT_CHROMIUM_DISABLE_CRASHPAD", "1")
 
 def type_text_sequentially(page, text: str, delay: int = None):
     if delay is None:
@@ -328,7 +331,7 @@ def setup_interceptors(bot: Browser):
     )
 
     def select_dropdown_handler(context: InterceptorContext):
-    print("🎯 Running dropdown selection interceptor...")
+        print("🎯 Running dropdown selection interceptor...")
 
         try:
             current_action = context.action
@@ -397,7 +400,7 @@ def setup_interceptors(bot: Browser):
     )
 
     def error_recovery_handler(context: InterceptorContext):
-    print("🚨 Error detected, running recovery interceptor...")
+        print("🚨 Error detected, running recovery interceptor...")
 
         error_details = context.ask_question(
             "An error message appeared on the page. What type of error is this and how should I handle it? "
@@ -425,7 +428,7 @@ def setup_interceptors(bot: Browser):
     )
 
     def file_upload_handler(context: InterceptorContext):
-    print("📁 File upload interceptor activated...")
+        print("📁 File upload interceptor activated...")
 
         upload_requirements = context.ask_question(
             "What type of file should be uploaded here? Consider file format, size limits, "
@@ -516,12 +519,16 @@ def ask_user_for_help(question: str, context: dict) -> str | None:
     except (KeyboardInterrupt, EOFError):
         return None
 
-user_data_path = Path.home() / "Desktop" / "bot_user_data_dir"
+user_data_path = Path.cwd() / ".browser_data"
 user_data_path.mkdir(parents=True, exist_ok=True)
+crashpad_path = user_data_path / "crashpad"
+crashpad_path.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("CRASHPAD_DATABASE", str(crashpad_path))
+os.environ.setdefault("CRASHPAD_METRICS", str(crashpad_path))
 
 config = Config(
     model=ModelConfig(
-        agent_model="gemini/gemini-2.5-flash-lite",
+        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         command_model="gpt-5-mini",
         reasoning_level=ReasoningLevel.HIGH
     ),
@@ -538,7 +545,7 @@ config = Config(
         include_overlays_in_agent_context=True,
     ),
     logging=DebugConfig(
-        debug_mode=False,
+        debug_mode=True,
         show_overlay_candidates=False,
     ),
     browser=BrowserConfig(

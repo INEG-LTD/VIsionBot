@@ -62,6 +62,10 @@ class BrowserConfig(BaseModel):
         default="chrome",
         description="Browser channel: 'chrome', 'chromium', 'firefox', etc."
     )
+    chromium_sandbox: bool = Field(
+        default=True,
+        description="Enable Chromium sandbox (disable if it causes permission issues)"
+    )
     
     # Remote browser settings
     remote_cdp_url: Optional[str] = Field(
@@ -180,7 +184,7 @@ class LocalPlaywrightProvider(BrowserProvider):
             args=args,
             channel=self.config.channel,
             ignore_default_args=["--enable-automation"],
-            chromium_sandbox=True  # Keep sandbox enabled to avoid warning
+            chromium_sandbox=self.config.chromium_sandbox
         )
         
         # Get or create page
@@ -334,7 +338,7 @@ class PersistentContextProvider(BrowserProvider):
             args=args,
             channel=self.config.channel,
             ignore_default_args=["--enable-automation"],
-            chromium_sandbox=True  # Keep sandbox enabled to avoid warning
+            chromium_sandbox=self.config.chromium_sandbox
         )
         
         # Get or create page

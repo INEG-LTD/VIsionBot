@@ -8,10 +8,10 @@ import time
 
 from utils.debug_print import dprint, PrintMode
 
-from .task_result import TaskResult
+from agent.results import TaskResult
 
-from .agent_context import AgentContext
-from .sub_agent_result import SubAgentResult
+from agent.agent_context import AgentContext
+from agent.results import SubAgentResult
 if TYPE_CHECKING:
     from .agent_controller import Agent
     from core.browser import Browser

@@ -8,8 +8,8 @@ from enum import Enum
 from pydantic import BaseModel, Field
 from playwright.sync_api import Page
 
-from .tab_manager import TabManager
-from .tab_info import TabInfo
+from .manager import TabManager
+from .info import TabInfo
 from lib.ai import (
     generate_model,
     ReasoningLevel,

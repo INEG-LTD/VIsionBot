@@ -8,7 +8,7 @@ tasks using natural language matching.
 from typing import Optional, List, Dict, Any, Union
 import re
 
-from models.models import TaskList, NormalTask, SequentialTask, TaskType
+from models.models import MissionPlan, Task, Sequence, TaskType
 from lib.ai import generate_model
 from pydantic import BaseModel, Field
 from utils.debug_print import dprint, PrintMode
@@ -45,9 +45,9 @@ class TaskResultRetriever:
     def retrieve_results_for_query(
         self,
         query: str,
-        task_list: TaskList,
+        task_list: MissionPlan,
         top_k: int = 1,
-    ) -> List[Union[NormalTask, SequentialTask]]:
+    ) -> List[Union[Task, Sequence]]:
         """
         Retrieve tasks whose results match the natural language query.
 
@@ -82,7 +82,7 @@ class TaskResultRetriever:
 
     def extract_results_from_tasks(
         self,
-        tasks: List[Union[NormalTask, SequentialTask]],
+        tasks: List[Union[Task, Sequence]],
     ) -> List[Any]:
         """
         Extract result data from a list of tasks.
@@ -96,10 +96,10 @@ class TaskResultRetriever:
         results = []
 
         for task in tasks:
-            if isinstance(task, NormalTask):
+            if isinstance(task, Task):
                 if task.result:
                     results.append(task.result)
-            elif isinstance(task, SequentialTask):
+            elif isinstance(task, Sequence):
                 # For sequential tasks, return the accumulated results
                 if task.results:
                     # Filter out None values (failed iterations)
@@ -112,8 +112,8 @@ class TaskResultRetriever:
     def _keyword_based_matching(
         self,
         query: str,
-        tasks: List[Union[NormalTask, SequentialTask]],
-    ) -> List[Union[NormalTask, SequentialTask]]:
+        tasks: List[Union[Task, Sequence]],
+    ) -> List[Union[Task, Sequence]]:
         """
         Match tasks based on keyword overlap.
 
@@ -137,9 +137,9 @@ class TaskResultRetriever:
             # Build searchable text from task
             searchable_text = f"{task.description} {task.type}"
 
-            if isinstance(task, NormalTask):
+            if isinstance(task, Task):
                 searchable_text += f" {task.instruction}"
-            elif isinstance(task, SequentialTask):
+            elif isinstance(task, Sequence):
                 searchable_text += f" {task.goal}"
 
             # Extract keywords from task
@@ -161,9 +161,9 @@ class TaskResultRetriever:
     def _llm_based_matching(
         self,
         query: str,
-        tasks: List[Union[NormalTask, SequentialTask]],
+        tasks: List[Union[Task, Sequence]],
         top_k: int,
-    ) -> List[Union[NormalTask, SequentialTask]]:
+    ) -> List[Union[Task, Sequence]]:
         """
         Use LLM to match query to tasks semantically.
 
@@ -185,10 +185,10 @@ class TaskResultRetriever:
                 "description": task.description,
             }
 
-            if isinstance(task, NormalTask):
+            if isinstance(task, Task):
                 summary["instruction"] = task.instruction
                 summary["has_result"] = task.result is not None
-            elif isinstance(task, SequentialTask):
+            elif isinstance(task, Sequence):
                 summary["goal"] = task.goal
                 summary["result_count"] = len([r for r in task.results if r is not None])
 
@@ -324,7 +324,7 @@ class TaskResultAccessor:
 
     def __init__(
         self,
-        task_list: TaskList,
+        task_list: MissionPlan,
         retriever: Optional[TaskResultRetriever] = None,
     ):
         """

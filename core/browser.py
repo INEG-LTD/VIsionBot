@@ -53,7 +53,7 @@ from lib.ai import (
     set_default_agent_reasoning_level,
 )
 from agent import Agent
-from agent.results import AgentResult
+from agent.results import MissionResult
 from execution.result import ActionResult
 from pydantic import BaseModel, Field
 from core.config import Config
@@ -1388,7 +1388,7 @@ class Browser:
         interaction_summary_limit_completion: Optional[int] = None,
         interaction_summary_limit_action: Optional[int] = None,
         user_question_callback: Optional[Callable[[str, dict], Optional[str]]] = None,
-    ) -> AgentResult:
+    ) -> MissionResult:
         """
         Execute a task autonomously (Step 1: Basic Reactive Agent).
         
@@ -1427,7 +1427,7 @@ class Browser:
                                    Return user's answer or None to skip. Default: None.
             
         Returns:
-            AgentResult object containing:
+            MissionResult object containing:
             - success: Whether the task completed successfully
             - extracted_data: Dictionary of extracted data (key: extraction prompt, value: extracted result)
             - reasoning: Explanation of the result
@@ -1603,7 +1603,12 @@ class Browser:
 
             # Convert notebook list to extracted_data dict for backwards compatibility
             extracted_data = {}
-            for entry in controller.notebook:
+            notebook_entries = (
+                controller.notebook.to_list()
+                if hasattr(controller.notebook, "to_list")
+                else list(controller.notebook)
+            )
+            for entry in notebook_entries:
                 entry_type = entry.get("type")
                 if entry_type == NotebookEntryType.NORMAL_TASK_RESULT:
                     continue
@@ -1621,7 +1626,7 @@ class Browser:
                     extracted_data[prompt] = data
 
             # Create result
-            result = AgentResult(task_result, extracted_data)
+            result = MissionResult(task_result, extracted_data)
             
             # Execute after hooks
             result = self.middleware.execute_after(context, result)

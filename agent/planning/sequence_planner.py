@@ -5,16 +5,17 @@ This module provides the SequencePlanner class that operates within sequential t
 to determine next steps or end the sequence based on current state and history.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 import json
 
 from models.models import (
-    SequentialTask,
+    Sequence,
     SequenceDecision,
-    IterationResult,
+    TurnResult,
 )
 from core.config import SequentialTaskConfig
 from agent.agent_context import EnvironmentState
+from agent.notebook import Notebook
 from lib.ai import (
     generate_model,
     ReasoningLevel,
@@ -59,11 +60,11 @@ class SequencePlanner:
 
     def decide_next_action(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         environment_state: EnvironmentState,
         screenshot: bytes,
         overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[List[Dict[str, Any]]] = None,
+        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None,
     ) -> SequenceDecision:
         """
         Decides what to do next within a sequential task.
@@ -73,7 +74,7 @@ class SequencePlanner:
             environment_state: Current browser/agent state
             screenshot: Current page screenshot
             overlay_data: Current page overlays (interactive elements)
-            notebook: Agent's extracted data
+            notebook: Agent's extracted data (Notebook or list of dicts).
 
         Returns:
             SequenceDecision with either a new task or end signal
@@ -120,7 +121,7 @@ class SequencePlanner:
 
     def should_retry_iteration(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         last_error: Optional[str] = None,
     ) -> bool:
         """
@@ -131,16 +132,16 @@ class SequencePlanner:
             last_error: Optional error message from last attempt
 
         Returns:
-            True if iteration_attempts < max_attempts_per_iteration
+            True if turn_attempts < max_attempts_per_iteration
         """
         return (
-            sequential_task.state.iteration_attempts
+            sequential_task.state.turn_attempts
             < self.config.max_attempts_per_iteration
         )
 
     def should_end_sequence(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
     ) -> bool:
         """
         Checks if sequence should end based on completion strategy.
@@ -160,7 +161,7 @@ class SequencePlanner:
         state = sequential_task.state
 
         # Safety limit: max total iterations
-        if state.current_iteration >= self.config.max_total_iterations:
+        if state.current_turn >= self.config.max_total_iterations:
             return True
 
         # Fail fast: end on first failure
@@ -199,7 +200,7 @@ class SequencePlanner:
         # Let the LLM decide based on page state
         return False
 
-    def _get_end_reason(self, sequential_task: SequentialTask) -> str:
+    def _get_end_reason(self, sequential_task: Sequence) -> str:
         """
         Generates human-readable reason for ending sequence.
 
@@ -211,7 +212,7 @@ class SequencePlanner:
         """
         state = sequential_task.state
 
-        if state.current_iteration >= self.config.max_total_iterations:
+        if state.current_turn >= self.config.max_total_iterations:
             return f"Maximum iteration limit reached ({self.config.max_total_iterations})"
 
         if self.config.fail_fast and state.total_failure_count > 0:
@@ -315,13 +316,13 @@ When extracting from multiple similar elements (job listings, products, items, e
 
 3. Be EXPLICIT about element position in your generated task
    - Good: "Click the 3rd job listing card and extract the company name"
-   - Bad: "Click the first job listing and extract the company name" (when current_iteration > 0)
+   - Bad: "Click the first job listing and extract the company name" (when current_turn > 0)
    - Good: "Extract product price from the 5th product card visible"
-   - Bad: "Extract product price from the first product card" (when current_iteration > 0)
+   - Bad: "Extract product price from the first product card" (when current_turn > 0)
 
 4. If the extracted data matches a previous iteration, you have NOT advanced
    - The Sequence Planner must ensure each iteration targets a DIFFERENT element
-   - Use positional references: "the Nth element" where N = current_iteration + 1
+   - Use positional references: "the Nth element" where N = current_turn + 1
 
 OUTPUT FORMAT:
 
@@ -336,10 +337,10 @@ Your response must be valid JSON with this structure:
 
     def _build_sequence_planner_prompt(
         self,
-        sequential_task: SequentialTask,
+        sequential_task: Sequence,
         environment_state: EnvironmentState,
         overlay_data: Optional[List[Dict[str, Any]]],
-        notebook: Optional[List[Dict[str, Any]]],
+        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]],
     ) -> str:
         """
         Builds the user prompt for Sequence Planner decision.
@@ -349,14 +350,14 @@ Your response must be valid JSON with this structure:
         - Current iteration state (index, attempts)
         - Completed iteration history (with results)
         - Current page context
-        - Agent's notebook (extracted data)
+        - Agent's notebook (extracted data; Notebook or list of dicts)
         - Two decision options
 
         Args:
             sequential_task: The sequential task being executed
             environment_state: Current browser/agent state
             overlay_data: Current page overlays
-            notebook: Agent's extracted data
+            notebook: Agent's extracted data (Notebook or list of dicts).
 
         Returns:
             User prompt string
@@ -373,7 +374,7 @@ Your response must be valid JSON with this structure:
         notebook_section = self._format_notebook(notebook)
 
         # Calculate which element should be targeted for this iteration
-        target_element_number = state.current_iteration + 1
+        target_element_number = state.current_turn + 1
 
         # Build prompt
         prompt = f"""SEQUENTIAL TASK:
@@ -382,12 +383,12 @@ Completion Condition: {sequential_task.completion_condition}
 Target Count: {sequential_task.target_count if sequential_task.target_count is not None else "Unknown (indefinite)"}
 
 CURRENT STATE:
-- Current Iteration: {state.current_iteration}
+- Current Iteration: {state.current_turn}
 - **TARGET ELEMENT FOR THIS ITERATION: The {target_element_number}{self._ordinal_suffix(target_element_number)} element**
-- Attempts for this iteration: {state.iteration_attempts} / {self.config.max_attempts_per_iteration}
+- Attempts for this iteration: {state.turn_attempts} / {self.config.max_attempts_per_iteration}
 - Total Successes: {state.total_success_count}
 - Total Failures: {state.total_failure_count}
-- Total Iterations Completed: {len(state.completed_iterations)}
+- Total Iterations Completed: {len(state.completed_turns)}
 
 {history_section}
 
@@ -405,7 +406,7 @@ Based on the sequential goal, completion condition, iteration history, and curre
 
 1. Should you generate a new Normal Task for the current iteration?
    - If yes, specify the exact task (grounded in visible elements)
-   - IMPORTANT: For iteration {state.current_iteration}, you should target the **{target_element_number}{self._ordinal_suffix(target_element_number)}** element
+   - IMPORTANT: For iteration {state.current_turn}, you should target the **{target_element_number}{self._ordinal_suffix(target_element_number)}** element
    - Check the extracted items list above - avoid extracting duplicate data
    - Consider: Are there more items to process? Can you see the next element?
 
@@ -419,7 +420,7 @@ Remember:
 - If previous attempts failed, try a different approach
 - Navigation tasks (scroll, click next page) are valid
 - Don't repeat the exact same task that just failed
-- **CRITICAL: For iteration {state.current_iteration}, target the {target_element_number}{self._ordinal_suffix(target_element_number)} element, NOT the 1st element**
+- **CRITICAL: For iteration {state.current_turn}, target the {target_element_number}{self._ordinal_suffix(target_element_number)} element, NOT the 1st element**
 
 Now make your decision."""
 
@@ -440,7 +441,7 @@ Now make your decision."""
         else:
             return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
 
-    def _format_iteration_history(self, sequential_task: SequentialTask) -> str:
+    def _format_iteration_history(self, sequential_task: Sequence) -> str:
         """
         Formats iteration history for prompt using summary-based approach.
 
@@ -459,7 +460,7 @@ Now make your decision."""
         """
         state = sequential_task.state
 
-        if not state.completed_iterations:
+        if not state.completed_turns:
             return "ITERATION HISTORY:\n(None yet - this is the first iteration)"
 
         if not self.config.include_iteration_history:
@@ -467,7 +468,7 @@ Now make your decision."""
 
         # Build summary of ALL iterations
         summary_lines = ["ITERATION HISTORY SUMMARY:"]
-        summary_lines.append(f"- Total iterations completed: {len(state.completed_iterations)}")
+        summary_lines.append(f"- Total iterations completed: {len(state.completed_turns)}")
         summary_lines.append(f"- Successful iterations: {state.total_success_count}")
         summary_lines.append(f"- Failed iterations: {state.total_failure_count}")
 
@@ -476,7 +477,7 @@ Now make your decision."""
         seen_items = set()
         duplicate_count = 0
 
-        for iter_result in state.completed_iterations:
+        for iter_result in state.completed_turns:
             if iter_result.status == "success" and iter_result.result:
                 # Try to extract meaningful identifiers from result
                 result = iter_result.result
@@ -521,13 +522,13 @@ Now make your decision."""
 
         # Build detailed view of RECENT iterations (last 5, not 10)
         max_recent = 5  # Reduced from 10 to save context
-        recent_iterations = state.completed_iterations[-max_recent:]
+        recent_iterations = state.completed_turns[-max_recent:]
 
         recent_lines = ["\n\nRECENT ITERATIONS (detailed):"]
         for iter_result in recent_iterations:
             status_emoji = "✓" if iter_result.status == "success" else "✗"
             recent_lines.append(
-                f"\nIteration {iter_result.iteration}: {status_emoji} {iter_result.status.upper()}"
+                f"\nTurn {iter_result.turn}: {status_emoji} {iter_result.status.upper()}"
             )
             recent_lines.append(f"  Attempts: {iter_result.attempts}")
 
@@ -543,8 +544,8 @@ Now make your decision."""
                     error_str = error_str[:100] + "..."
                 recent_lines.append(f"  Error: {error_str}")
 
-        if len(state.completed_iterations) > max_recent:
-            omitted = len(state.completed_iterations) - max_recent
+        if len(state.completed_turns) > max_recent:
+            omitted = len(state.completed_turns) - max_recent
             recent_lines.insert(
                 1, f"(Showing {max_recent} most recent, {omitted} older iterations in summary above)"
             )
@@ -580,23 +581,24 @@ Now make your decision."""
 
         return f"- Overlays: {len(overlay_data)} interactive elements ({', '.join(summary_parts[:5])})"
 
-    def _format_notebook(self, notebook: Optional[List[Dict[str, Any]]]) -> str:
+    def _format_notebook(self, notebook: Optional[Union[Notebook, List[Dict[str, Any]]]]) -> str:
         """
         Formats agent's notebook for prompt.
 
         Args:
-            notebook: Agent's extracted data
+            notebook: Agent's extracted data (Notebook or list of dicts).
 
         Returns:
             Formatted notebook string
         """
-        if not notebook:
+        entries = notebook.to_list() if isinstance(notebook, Notebook) else notebook
+        if not entries:
             return "AGENT'S NOTEBOOK (previously extracted data):\n(Empty - no data extracted yet)"
 
         notebook_lines = ["AGENT'S NOTEBOOK (previously extracted data):"]
 
         # Show recent entries (last 5)
-        recent_entries = notebook[-5:]
+        recent_entries = entries[-5:]
         for i, entry in enumerate(recent_entries, 1):
             entry_str = json.dumps(entry, indent=2)
             if len(entry_str) > 200:
@@ -604,8 +606,8 @@ Now make your decision."""
             notebook_lines.append(f"\nEntry {i}:")
             notebook_lines.append(entry_str)
 
-        if len(notebook) > 5:
-            omitted = len(notebook) - 5
+        if len(entries) > 5:
+            omitted = len(entries) - 5
             notebook_lines.insert(
                 1, f"(Showing 5 most recent entries, {omitted} older entries omitted)"
             )

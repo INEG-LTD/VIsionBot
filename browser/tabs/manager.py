@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Callable, Any
 from playwright.sync_api import BrowserContext, Page
 import uuid
 
-from .tab_info import TabInfo
+from .info import TabInfo
 from utils.event_logger import get_event_logger
 from utils.debug_print import dprint, PrintMode
 

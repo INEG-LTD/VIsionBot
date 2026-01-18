@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
 from core.session import Interaction
+from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
 from lib.ai import (
     generate_model,
@@ -236,7 +237,7 @@ class ActionPlanner:
         failed_actions: Optional[List[str]] = None,
         ineffective_actions: Optional[List[str]] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[List[Dict[str, Any]]] = None
+        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
     ) -> Optional[ActionPlan]:
         """
         Determine an ordered action plan that can be executed before the viewport changes.
@@ -245,7 +246,7 @@ class ActionPlanner:
             environment_state: Current environment state
             screenshot: Current screenshot (viewport only)
             overlay_data: Optional list of overlay element data with descriptions.
-            notebook: Agent's notebook with previously extracted data.
+            notebook: Agent's notebook with previously extracted data (Notebook or list of dicts).
 
         Returns:
             An ActionPlan describing the steps to take, or None if no plan could be generated.
@@ -279,7 +280,7 @@ class ActionPlanner:
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[List[Dict[str, Any]]] = None
+        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
     ) -> Optional[ActionPlan]:
         """
         Generate an ordered action plan.
@@ -527,7 +528,7 @@ DECISION MAKING:
         failed_actions: List[str] = None,
         ineffective_actions: List[str] = None,
         overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[List[Dict[str, Any]]] = None
+        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
     ) -> str:
         """Build prompt for determining next action"""
 
@@ -725,9 +726,10 @@ overlay_index is only needed when targeting a visible element. Skip it for compl
 """
         return prompt
     
-    def _format_notebook(self, notebook: List[Dict[str, Any]]) -> str:
+    def _format_notebook(self, notebook: Union[Notebook, List[Dict[str, Any]]]) -> str:
         """Format notebook entries for inclusion in the prompt."""
-        if not notebook:
+        entries = notebook.to_list() if isinstance(notebook, Notebook) else notebook
+        if not entries:
             return ""
 
         lines = [
@@ -740,7 +742,7 @@ overlay_index is only needed when targeting a visible element. Skip it for compl
             "EXTRACTED DATA IN NOTEBOOK:"
         ]
 
-        for i, entry in enumerate(notebook[-5:], 1):  # Show last 5 entries
+        for i, entry in enumerate(entries[-5:], 1):  # Show last 5 entries
             prompt = entry.get("prompt", "unknown")
             data = entry.get("data", {})
 
