@@ -133,10 +133,10 @@ class EventType(str, Enum):
     EXTRACTION_RETRY = "extraction_retry"
     EXTRACTION_EMPTY = "extraction_empty"
 
-    # Bridge planner events
-    BRIDGE_DECISION = "bridge_decision"
-    BRIDGE_RETRY = "bridge_retry"
-    BRIDGE_END = "bridge_end"
+    # Sequence planner events
+    SEQUENCE_DECISION = "sequence_decision"
+    SEQUENCE_RETRY = "sequence_retry"
+    SEQUENCE_END = "sequence_end"
 
     # Tab lifecycle events
     TAB_CLOSE = "tab_close"
@@ -753,21 +753,21 @@ class EventLogger:
         except Exception:
             pass
 
-    def bridge_decision(self, decision: str, **details):
+    def sequence_decision(self, decision: str, **details):
         try:
-            self.emit(EventType.BRIDGE_DECISION, f"Bridge decision: {decision}", "INFO", decision=decision, **details)
+            self.emit(EventType.SEQUENCE_DECISION, f"Sequence decision: {decision}", "INFO", decision=decision, **details)
         except Exception:
             pass
 
-    def bridge_retry(self, iteration: int, **details):
+    def sequence_retry(self, iteration: int, **details):
         try:
-            self.emit(EventType.BRIDGE_RETRY, f"Bridge retry iteration {iteration}", "WARNING", iteration=iteration, **details)
+            self.emit(EventType.SEQUENCE_RETRY, f"Sequence retry iteration {iteration}", "WARNING", iteration=iteration, **details)
         except Exception:
             pass
 
-    def bridge_end(self, reason: str, **details):
+    def sequence_end(self, reason: str, **details):
         try:
-            self.emit(EventType.BRIDGE_END, f"Bridge end: {reason}", "INFO", reason=reason, **details)
+            self.emit(EventType.SEQUENCE_END, f"Sequence end: {reason}", "INFO", reason=reason, **details)
         except Exception:
             pass
 

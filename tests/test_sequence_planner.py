@@ -1,5 +1,5 @@
 """
-Unit tests for Bridge Planner.
+Unit tests for Sequence Planner.
 """
 
 import pytest
@@ -8,19 +8,19 @@ from models.models import (
     SequentialTask,
     SequentialState,
     IterationResult,
-    BridgePlannerDecision,
+    SequenceDecision,
 )
 from core.config import SequentialTaskConfig
-from agent.planning.bridge import BridgePlanner
+from agent.planning.sequence_planner import SequencePlanner
 
 
-class TestBridgePlannerRetryLogic:
-    """Test Bridge Planner retry logic"""
+class TestSequencePlannerRetryLogic:
+    """Test Sequence Planner retry logic"""
 
     def test_should_retry_iteration_under_limit(self):
         """Test that retry is allowed when under limit"""
         config = SequentialTaskConfig(max_attempts_per_iteration=3)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -38,7 +38,7 @@ class TestBridgePlannerRetryLogic:
     def test_should_not_retry_at_limit(self):
         """Test that retry is not allowed when at limit"""
         config = SequentialTaskConfig(max_attempts_per_iteration=3)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -54,8 +54,8 @@ class TestBridgePlannerRetryLogic:
         assert should_retry is False
 
 
-class TestBridgePlannerCompletionStrategies:
-    """Test Bridge Planner completion strategies"""
+class TestSequencePlannerCompletionStrategies:
+    """Test Sequence Planner completion strategies"""
 
     def test_strict_strategy_not_complete(self):
         """Test strict strategy when target not reached"""
@@ -63,7 +63,7 @@ class TestBridgePlannerCompletionStrategies:
             completion_strategy="strict",
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -86,7 +86,7 @@ class TestBridgePlannerCompletionStrategies:
             completion_strategy="strict",
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -109,7 +109,7 @@ class TestBridgePlannerCompletionStrategies:
             completion_strategy="best_effort",
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -133,7 +133,7 @@ class TestBridgePlannerCompletionStrategies:
             completion_strategy="best_effort",
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -158,7 +158,7 @@ class TestBridgePlannerCompletionStrategies:
             success_threshold=0.6,
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -183,7 +183,7 @@ class TestBridgePlannerCompletionStrategies:
             success_threshold=0.8,
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -207,7 +207,7 @@ class TestBridgePlannerCompletionStrategies:
             completion_strategy="best_effort",
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -225,8 +225,8 @@ class TestBridgePlannerCompletionStrategies:
         assert should_end is False
 
 
-class TestBridgePlannerSafetyLimits:
-    """Test Bridge Planner safety limits"""
+class TestSequencePlannerSafetyLimits:
+    """Test Sequence Planner safety limits"""
 
     def test_max_iterations_reached(self):
         """Test that sequence ends at max iterations"""
@@ -234,7 +234,7 @@ class TestBridgePlannerSafetyLimits:
             max_total_iterations=10,
             completion_strategy="best_effort",
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -256,7 +256,7 @@ class TestBridgePlannerSafetyLimits:
             fail_fast=True,
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -280,7 +280,7 @@ class TestBridgePlannerSafetyLimits:
             fail_fast=False,
             max_total_iterations=50,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -299,13 +299,13 @@ class TestBridgePlannerSafetyLimits:
         assert should_end is False
 
 
-class TestBridgePlannerEndReason:
-    """Test Bridge Planner end reason generation"""
+class TestSequencePlannerEndReason:
+    """Test Sequence Planner end reason generation"""
 
     def test_end_reason_max_iterations(self):
         """Test end reason for max iterations"""
         config = SequentialTaskConfig(max_total_iterations=10)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -323,7 +323,7 @@ class TestBridgePlannerEndReason:
     def test_end_reason_fail_fast(self):
         """Test end reason for fail fast"""
         config = SequentialTaskConfig(fail_fast=True)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -341,7 +341,7 @@ class TestBridgePlannerEndReason:
     def test_end_reason_strict_complete(self):
         """Test end reason for strict completion"""
         config = SequentialTaskConfig(completion_strategy="strict")
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -364,7 +364,7 @@ class TestIterationHistoryFormatting:
     def test_format_iteration_history_empty(self):
         """Test formatting empty iteration history"""
         config = SequentialTaskConfig(include_iteration_history=True)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -383,7 +383,7 @@ class TestIterationHistoryFormatting:
             include_iteration_history=True,
             max_history_in_prompt=10,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -426,7 +426,7 @@ class TestIterationHistoryFormatting:
             include_iteration_history=True,
             max_history_in_prompt=2,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -457,7 +457,7 @@ class TestIterationHistoryFormatting:
     def test_format_iteration_history_disabled(self):
         """Test iteration history when disabled"""
         config = SequentialTaskConfig(include_iteration_history=False)
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -487,7 +487,7 @@ class TestOverlaySummaryFormatting:
 
     def test_format_overlay_summary_none(self):
         """Test formatting when no overlay data"""
-        planner = BridgePlanner()
+        planner = SequencePlanner()
 
         formatted = planner._format_overlay_summary(None)
 
@@ -495,7 +495,7 @@ class TestOverlaySummaryFormatting:
 
     def test_format_overlay_summary_with_data(self):
         """Test formatting overlay summary with data"""
-        planner = BridgePlanner()
+        planner = SequencePlanner()
 
         overlay_data = [
             {"type": "button", "text": "Submit"},
@@ -517,7 +517,7 @@ class TestNotebookFormatting:
 
     def test_format_notebook_empty(self):
         """Test formatting empty notebook"""
-        planner = BridgePlanner()
+        planner = SequencePlanner()
 
         formatted = planner._format_notebook(None)
 
@@ -525,7 +525,7 @@ class TestNotebookFormatting:
 
     def test_format_notebook_with_entries(self):
         """Test formatting notebook with entries"""
-        planner = BridgePlanner()
+        planner = SequencePlanner()
 
         notebook = [
             {"type": "extraction", "data": {"company": "Apple"}},
@@ -541,7 +541,7 @@ class TestNotebookFormatting:
 
     def test_format_notebook_shows_recent(self):
         """Test that notebook shows only recent entries"""
-        planner = BridgePlanner()
+        planner = SequencePlanner()
 
         # Create 10 entries
         notebook = [

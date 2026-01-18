@@ -25,7 +25,7 @@ except ImportError:
     def stealth_sync(page):
         pass  # No-op function
 
-from agent.mini_goal_manager import MiniGoalMode, MiniGoalScriptContext, MiniGoalTrigger
+from agent.interceptor_manager import InterceptorMode, InterceptorContext, Interceptor
 from models import VisionPlan, PageElements
 from models.models import ActionStep, ActionType, PageInfo, NotebookEntryType
 from browser.dom import build_page_elements, capture_dom_elements
@@ -375,8 +375,8 @@ class Browser:
         # Multi-command reference storage
         self.command_refs: Dict[str, Dict[str, Any]] = {}  # refID -> metadata about stored prompts
 
-        # Mini goals registry (will be passed to Agent)
-        self.mini_goals: List[Dict[str, Any]] = []
+        # Interceptor registry (will be passed to Agent)
+        self.interceptors: List[Dict[str, Any]] = []
 
         # Bot termination state
         self.terminated = False
@@ -1575,13 +1575,13 @@ class Browser:
             )
             controller.max_iterations = max_iterations
             
-            # Register all pre-registered mini goals with the new controller
-            for goal_data in self.mini_goals:
-                controller.register_mini_goal(
-                    trigger=goal_data["trigger"],
-                    mode=goal_data["mode"],
-                    handler=goal_data["handler"],
-                    instruction_override=goal_data["instruction_override"]
+            # Register all pre-registered interceptors with the new controller
+            for interceptor_data in self.interceptors:
+                controller.register_interceptor(
+                    trigger=interceptor_data["trigger"],
+                    mode=interceptor_data["mode"],
+                    handler=interceptor_data["handler"],
+                    instruction_override=interceptor_data["instruction_override"]
                 )
             
             # Store controller for pause/resume access
@@ -2549,36 +2549,36 @@ Return only the extracted text that appears in the text content above. Do not ma
             dprint(f"❌ Error in register_prompts: {e}")
             return False
 
-    def register_mini_goal(
+    def register_interceptor(
         self,
-        trigger: 'MiniGoalTrigger',
-        mode: 'MiniGoalMode',
-        handler: Optional[Callable[['MiniGoalScriptContext'], None]] = None,
+        trigger: 'Interceptor',
+        mode: 'InterceptorMode',
+        handler: Optional[Callable[['InterceptorContext'], None]] = None,
         instruction_override: Optional[str] = None
     ) -> None:
         """
-        Register a mini goal trigger and handler.
+        Register an interceptor trigger and handler.
         
-        Mini goals allow the agent to temporarily switch focus to a sub-objective
+        Interceptors allow the agent to temporarily switch focus to a sub-objective
         when specific conditions (observations or actions) are met.
         
         Args:
-            trigger: The condition that activates this mini-goal
+            trigger: The condition that activates this interceptor
             mode: Either AUTONOMY (agent solves it) or SCRIPTED (handler executes)
             handler: For SCRIPTED mode, the Python function to execute
             instruction_override: Custom instruction for the agent in AUTONOMY mode
         """
-        goal_data = {
+        interceptor_data = {
             "trigger": trigger,
             "mode": mode,
             "handler": handler,
             "instruction_override": instruction_override
         }
-        self.mini_goals.append(goal_data)
+        self.interceptors.append(interceptor_data)
 
         # If an agent is already running, register it there too
         if hasattr(self, 'agent_controller') and self.agent_controller:
-            self.agent_controller.register_mini_goal(
+            self.agent_controller.register_interceptor(
                 trigger=trigger,
                 mode=mode,
                 handler=handler,

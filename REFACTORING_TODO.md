@@ -23,11 +23,11 @@ Split 1,736-line file into 4 focused modules:
 **Recommended Split (7 modules)**:
 
 #### agent/agent/base.py (~400 lines)
-**Purpose**: Core initialization, pause/resume control, mini goals
+**Purpose**: Core initialization, pause/resume control, interceptors
 **Methods**:
 - `__init__` (lines 118-318)
 - `pause`, `resume`, `is_paused`, `_check_pause` (lines 369-469)
-- `register_mini_goal`, `_handle_mini_goal_trigger` (lines 319-355)
+- `register_interceptor`, `_handle_interceptor_trigger` (lines 319-355)
 - `_get_current_prompt`, `_is_nav_action` (lines 356-368)
 
 #### agent/agent/execution_loop.py (~900 lines)
@@ -188,7 +188,7 @@ __all__ = ["Agent", "UserQuestionCallback"]
 
 #### core/browser/helpers.py (~600 lines)
 **Purpose**: Utilities, caching, queue, convenience methods
-**Methods**: Plan caching, defer input, navigation (`goto`), multi-command, mini goals, semantic/DOM helpers, parsing, command history, queue, convenience (`get_url`, `get_title`, `wait_for_load`, `screenshot`), properties
+**Methods**: Plan caching, defer input, navigation (`goto`), multi-command, interceptors, semantic/DOM helpers, parsing, command history, queue, convenience (`get_url`, `get_title`, `wait_for_load`, `screenshot`), properties
 
 **Complexity Notes**:
 - Very high interdependency between modules

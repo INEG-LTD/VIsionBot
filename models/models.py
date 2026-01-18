@@ -267,7 +267,7 @@ class MissionPlan(BaseModel):
 
 
 class SequenceDecision(BaseModel):
-    """Output of Sequence Planner decision (formerly BridgePlannerDecision)"""
+    """Output of Sequence Planner decision."""
     decision: Literal["generate_task", "end_sequence"] = Field(
         description="What the Sequence Planner decided to do"
     )

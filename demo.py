@@ -8,7 +8,7 @@ It showcases the key features of the framework with minimal logging output.
 WHAT THIS DEMO SHOWS:
 --------------------
 1. ✨ Visual Thinking Indicator - Flashing blue border on browser while agent thinks
-2. 🎯 Mini-Goals System - Autonomous dropdown selection, error recovery, file uploads
+2. 🎯 Interceptors System - Autonomous dropdown selection, error recovery, file uploads
 3. 🤖 Clean Event Output - Shows only iteration number, reasoning, and actions
 4. 💬 User Interaction - Agent can ask questions when stuck (ask: command)
 5. ⚙️ Full Configuration - Example of all major configuration options
@@ -17,12 +17,12 @@ QUICK START:
 -----------
 1. Set your task and URL at the bottom of this file (line ~677)
 2. Adjust the model configuration if needed (line ~614)
-3. Run: python agent_simple.py
+3. Run: python demo.py
 
 KEY FEATURES DEMONSTRATED:
 -------------------------
 - Agent iteration loop with visual feedback
-- Mini-goal handlers for common UI patterns (dropdowns, errors, uploads)
+- Interceptor handlers for common UI patterns (dropdowns, errors, uploads)
 - Custom event callbacks for clean console output
 - Browser thinking border effect (flashing blue)
 - Base knowledge injection for task-specific instructions
@@ -34,7 +34,7 @@ CUSTOMIZATION:
 - Models: See config.model section
 - Max iterations: See config.execution.max_attempts
 - Visual effects: Set config.logging.debug_mode=True to disable border
-- Mini-goals: See setup_mini_goals() function
+- Interceptors: See setup_interceptors() function
 
 This demo is production-ready and can be adapted for your own automation tasks.
 """
@@ -51,7 +51,7 @@ from core.config import ActFunctionConfig
 from lib.ai import ReasoningLevel
 from core.browser import Browser
 from utils.event_logger import BotEvent, EventType
-from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
+from agent.interceptor_manager import Interceptor, InterceptorMode, InterceptorContext
 from utils.select_option_utils import SelectOptionError
 import random
 from prompt_toolkit import HTML, print_formatted_text as print
@@ -308,7 +308,7 @@ def _format_action_first_person(action: str) -> str:
         return "I will now ask the user a question"
     return f"I will now [{action_type}] >{target}<"
 
-def setup_mini_goals(bot: Browser):
+def setup_interceptors(bot: Browser):
     
     from typing import Optional
     class DropdownSelection(BaseModel):
@@ -318,17 +318,17 @@ def setup_mini_goals(bot: Browser):
 
     class IsDropdownVisible(BaseModel):
         is_visible: bool
-    dropdown_trigger_select = MiniGoalTrigger(
+    dropdown_trigger_select = Interceptor(
         action_type="select",
         target_regex=r"(?i)dropdown|select|combobox"
     )
-    dropdown_trigger_click = MiniGoalTrigger(
+    dropdown_trigger_click = Interceptor(
         action_type="click",
         target_regex=r"(?i)dropdown|select|combobox"
     )
 
-    def select_dropdown_handler(context: MiniGoalScriptContext):
-        print("🎯 Running dropdown selection mini-goal...")
+    def select_dropdown_handler(context: InterceptorContext):
+    print("🎯 Running dropdown selection interceptor...")
 
         try:
             current_action = context.action
@@ -383,21 +383,21 @@ def setup_mini_goals(bot: Browser):
         except Exception as e:
             print(f"❌ Unexpected error in dropdown handler: {e}")
 
-    bot.register_mini_goal(
+    bot.register_interceptor(
         trigger=dropdown_trigger_click,
-        mode=MiniGoalMode.SCRIPTED,
+        mode=InterceptorMode.SCRIPTED,
         handler=select_dropdown_handler,
         instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
     )
-    bot.register_mini_goal(
+    bot.register_interceptor(
         trigger=dropdown_trigger_select,
-        mode=MiniGoalMode.SCRIPTED,
+        mode=InterceptorMode.SCRIPTED,
         handler=select_dropdown_handler,
         instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
     )
 
-    def error_recovery_handler(context: MiniGoalScriptContext):
-        print("🚨 Error detected, running recovery mini-goal...")
+    def error_recovery_handler(context: InterceptorContext):
+    print("🚨 Error detected, running recovery interceptor...")
 
         error_details = context.ask_question(
             "An error message appeared on the page. What type of error is this and how should I handle it? "
@@ -414,18 +414,18 @@ def setup_mini_goals(bot: Browser):
                 errors.forEach(el => el.style.backgroundColor = 'yellow');
             """)
 
-    error_trigger = MiniGoalTrigger(
+    error_trigger = Interceptor(
         observation_regex=r"(?i)error|failed|invalid|please try again|something went wrong"
     )
 
-    bot.register_mini_goal(
+    bot.register_interceptor(
         trigger=error_trigger,
-        mode=MiniGoalMode.SCRIPTED,
+        mode=InterceptorMode.SCRIPTED,
         handler=error_recovery_handler
     )
 
-    def file_upload_handler(context: MiniGoalScriptContext):
-        print("📁 File upload mini-goal activated...")
+    def file_upload_handler(context: InterceptorContext):
+    print("📁 File upload interceptor activated...")
 
         upload_requirements = context.ask_question(
             "What type of file should be uploaded here? Consider file format, size limits, "
@@ -456,14 +456,14 @@ def setup_mini_goals(bot: Browser):
                 "Should I guide the user through the drag-and-drop process?"
             )
 
-    upload_trigger = MiniGoalTrigger(
+    upload_trigger = Interceptor(
         action_type="click",
         target_regex=r"(?i)upload.*file|choose.*file|select.*file|browse"
     )
 
-    bot.register_mini_goal(
+    bot.register_interceptor(
         trigger=upload_trigger,
-        mode=MiniGoalMode.SCRIPTED,
+        mode=InterceptorMode.SCRIPTED,
         handler=file_upload_handler
     )
 
@@ -557,7 +557,7 @@ config = Config(
     )
 )
 bot = Browser(config=config)
-setup_mini_goals(bot)
+setup_interceptors(bot)
 
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())

@@ -6,7 +6,7 @@ from .agent_controller import Agent, UserQuestionCallback
 from .results import MissionResult, TaskResult, SubAgentResult, TurnDecision
 from .agent_context import AgentContext, EnvironmentState
 from .sub_agent_controller import SubAgent
-from .reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
+from .action_planner import ActionPlanner, ActionPlan, ActionStep
 
 __all__ = [
     "Agent",
@@ -17,7 +17,7 @@ __all__ = [
     "AgentContext",
     "EnvironmentState",
     "SubAgent",
-    "ReactiveGoalDeterminer",
+    "ActionPlanner",
     "ActionPlan",
     "ActionStep",
     "UserQuestionCallback",

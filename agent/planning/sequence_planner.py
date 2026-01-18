@@ -1,7 +1,7 @@
 """
-Bridge Planner - Manages sequential task iteration and progression.
+Sequence Planner - Manages sequential task iteration and progression.
 
-This module provides the BridgePlanner class that operates within sequential tasks
+This module provides the SequencePlanner class that operates within sequential tasks
 to determine next steps or end the sequence based on current state and history.
 """
 
@@ -10,7 +10,7 @@ import json
 
 from models.models import (
     SequentialTask,
-    BridgePlannerDecision,
+    SequenceDecision,
     IterationResult,
 )
 from core.config import SequentialTaskConfig
@@ -23,7 +23,7 @@ from lib.ai import (
 )
 
 
-class BridgePlanner:
+class SequencePlanner:
     """
     Operates within sequential tasks to determine next steps.
     Has access to sequence history and current page state.
@@ -36,7 +36,7 @@ class BridgePlanner:
         config: Optional[SequentialTaskConfig] = None,
     ):
         """
-        Initialize the BridgePlanner.
+        Initialize the SequencePlanner.
 
         Args:
             model_name: Model to use for planning (default: agent model, or config override)
@@ -47,12 +47,12 @@ class BridgePlanner:
 
         # Use config overrides if provided, otherwise fall back to defaults
         self.model_name = (
-            self.config.bridge_planner_model
+            self.config.sequence_planner_model
             or model_name
             or get_default_agent_model()
         )
         self.reasoning_level = (
-            self.config.bridge_planner_reasoning_level
+            self.config.sequence_planner_reasoning_level
             or reasoning_level
             or get_default_agent_reasoning_level()
         )
@@ -64,7 +64,7 @@ class BridgePlanner:
         screenshot: bytes,
         overlay_data: Optional[List[Dict[str, Any]]] = None,
         notebook: Optional[List[Dict[str, Any]]] = None,
-    ) -> BridgePlannerDecision:
+    ) -> SequenceDecision:
         """
         Decides what to do next within a sequential task.
 
@@ -76,14 +76,14 @@ class BridgePlanner:
             notebook: Agent's extracted data
 
         Returns:
-            BridgePlannerDecision with either a new task or end signal
+            SequenceDecision with either a new task or end signal
 
         Raises:
             Exception: If LLM call fails or returns invalid decision
         """
         # Check if we should end based on hard limits
         if self.should_end_sequence(sequential_task):
-            return BridgePlannerDecision(
+            return SequenceDecision(
                 decision="end_sequence",
                 reasoning=self._get_end_reason(sequential_task),
                 completion_reason=self._get_end_reason(sequential_task),
@@ -91,7 +91,7 @@ class BridgePlanner:
 
         # Build prompts
         system_prompt = self._build_system_prompt()
-        user_prompt = self._build_bridge_planner_prompt(
+        user_prompt = self._build_sequence_planner_prompt(
             sequential_task,
             environment_state,
             overlay_data,
@@ -100,9 +100,9 @@ class BridgePlanner:
 
         # Call LLM for decision
         try:
-            decision: BridgePlannerDecision = generate_model(
+            decision: SequenceDecision = generate_model(
                 prompt=user_prompt,
-                model_object_type=BridgePlannerDecision,
+                model_object_type=SequenceDecision,
                 system_prompt=system_prompt,
                 image=screenshot,
                 image_detail="low",  # Use low detail for faster iteration
@@ -112,10 +112,10 @@ class BridgePlanner:
             return decision
         except Exception as e:
             # If LLM call fails, default to ending sequence with error
-            return BridgePlannerDecision(
+            return SequenceDecision(
                 decision="end_sequence",
                 reasoning=f"Failed to generate next action: {str(e)}",
-                completion_reason=f"Error in Bridge Planner: {str(e)}",
+                completion_reason=f"Error in Sequence Planner: {str(e)}",
             )
 
     def should_retry_iteration(
@@ -241,12 +241,12 @@ class BridgePlanner:
 
     def _build_system_prompt(self) -> str:
         """
-        Builds the system prompt for Bridge Planner.
+        Builds the system prompt for Sequence Planner.
 
         Returns:
             System prompt string
         """
-        return """You are a Bridge Planner for a browser automation agent executing a sequential task.
+        return """You are a Sequence Planner for a browser automation agent executing a sequential task.
 
 Your role is to decide what should happen next in the sequence.
 
@@ -320,7 +320,7 @@ When extracting from multiple similar elements (job listings, products, items, e
    - Bad: "Extract product price from the first product card" (when current_iteration > 0)
 
 4. If the extracted data matches a previous iteration, you have NOT advanced
-   - The Bridge Planner must ensure each iteration targets a DIFFERENT element
+   - The Sequence Planner must ensure each iteration targets a DIFFERENT element
    - Use positional references: "the Nth element" where N = current_iteration + 1
 
 OUTPUT FORMAT:
@@ -334,7 +334,7 @@ Your response must be valid JSON with this structure:
 }
 """
 
-    def _build_bridge_planner_prompt(
+    def _build_sequence_planner_prompt(
         self,
         sequential_task: SequentialTask,
         environment_state: EnvironmentState,
@@ -342,7 +342,7 @@ Your response must be valid JSON with this structure:
         notebook: Optional[List[Dict[str, Any]]],
     ) -> str:
         """
-        Builds the user prompt for Bridge Planner decision.
+        Builds the user prompt for Sequence Planner decision.
 
         Includes:
         - Sequential goal and completion condition
@@ -448,7 +448,7 @@ Now make your decision."""
         1. Summary of ALL iterations (successes, failures, extracted items)
         2. Detailed view of recent iterations (last 5, not 10)
 
-        This prevents context window issues where Bridge Planner "forgets"
+        This prevents context window issues where Sequence Planner "forgets"
         early iterations when processing large sequences (e.g., 50+ items).
 
         Args:

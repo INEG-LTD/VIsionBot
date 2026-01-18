@@ -323,27 +323,27 @@ class SequentialTaskConfig(BaseModel):
     )
 
     # Model configuration
-    bridge_planner_model: Optional[str] = Field(
+    sequence_planner_model: Optional[str] = Field(
         default=None,
-        description="Override model for Bridge Planner (None = use agent_model)"
+        description="Override model for Sequence Planner (None = use agent_model)"
     )
 
-    bridge_planner_reasoning_level: Optional[ReasoningLevel] = Field(
+    sequence_planner_reasoning_level: Optional[ReasoningLevel] = Field(
         default=None,
-        description="Override reasoning level for Bridge Planner (None = use agent_reasoning_level)"
+        description="Override reasoning level for Sequence Planner (None = use agent_reasoning_level)"
     )
 
     # Context configuration
     include_iteration_history: bool = Field(
         default=True,
-        description="Include completed iteration history in Bridge Planner prompts"
+        description="Include completed iteration history in Sequence Planner prompts"
     )
 
     max_history_in_prompt: int = Field(
         default=10,
         ge=1,
         le=100,
-        description="Maximum iteration results to include in Bridge Planner context"
+        description="Maximum iteration results to include in Sequence Planner context"
     )
 
     # Partial results handling

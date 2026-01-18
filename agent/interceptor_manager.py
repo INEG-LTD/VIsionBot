@@ -10,12 +10,12 @@ if TYPE_CHECKING:
     from agent.agent_controller import Agent
     from agent.results import TaskResult
 
-class MiniGoalMode(Enum):
+class InterceptorMode(Enum):
     AUTONOMY = "autonomy"
     SCRIPTED = "scripted"
 
-class MiniGoalTrigger(BaseModel):
-    """Defines conditions that trigger a mini goal"""
+class Interceptor(BaseModel):
+    """Defines conditions that trigger an interceptor."""
     action_type: Optional[str] = None  # e.g., "click"
     target_regex: Optional[str] = None # regex matching the element description or label
     selector: Optional[str] = None     # explicit selector match
@@ -31,7 +31,10 @@ class MiniGoalTrigger(BaseModel):
         act_target = parts[1].strip() if len(parts) > 1 else ""
 
         if debug:
-            dprint(f"🔍 Checking trigger match for action: '{action}' against trigger (type={self.action_type}, regex={self.target_regex})")
+            dprint(
+                f"🔍 Checking trigger match for action: '{action}' against trigger "
+                f"(type={self.action_type}, regex={self.target_regex})"
+            )
         if self.action_type and self.action_type.lower() != act_type:
             return False
         
@@ -43,13 +46,13 @@ class MiniGoalTrigger(BaseModel):
         return True
 
     def matches_observation(self, visible_text: str) -> bool:
-        """Check if the current page observation matches this trigger"""
+        """Check if the current page observation matches this trigger."""
         if not self.observation_regex or not visible_text:
             return False
         return bool(re.search(self.observation_regex, visible_text, re.IGNORECASE))
 
-class MiniGoalScriptContext:
-    """Context passed to scripted mini goal handlers"""
+class InterceptorContext:
+    """Context passed to scripted interceptor handlers."""
     def __init__(self, bot: Browser, controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
         self.bot = bot
         self.controller = controller
@@ -57,7 +60,7 @@ class MiniGoalScriptContext:
         self.action = action
 
     def ask_question(self, query: str) -> str:
-        """Uses the agent's current context to answer a question via LLM"""
+        """Uses the agent's current context to answer a question via LLM."""
         from lib.ai import generate_text
 
         # Capture current viewport state for context
@@ -65,7 +68,7 @@ class MiniGoalScriptContext:
 
         prompt = f"""
         You are a scripted helper for an automation agent.
-        A custom script is asking you a question about the current page state to help it complete a mini-goal.
+        A custom script is asking you a question about the current page state to help it complete an interceptor.
 
         CONTEXT:
         URL: {snapshot.url}
@@ -86,7 +89,7 @@ class MiniGoalScriptContext:
         )
 
     def ask_question_structured(self, query: str, model_class: type) -> Any:
-        """Uses the agent's current context to answer a question via LLM and return structured data"""
+        """Uses the agent's current context to answer a question via LLM and return structured data."""
         from lib.ai import generate_model
         from pydantic import BaseModel
 
@@ -98,7 +101,7 @@ class MiniGoalScriptContext:
 
         prompt = f"""
         You are a scripted helper for an automation agent.
-        A custom script is asking you a question about the current page state to help it complete a mini-goal.
+        A custom script is asking you a question about the current page state to help it complete an interceptor.
 
         CONTEXT:
         URL: {snapshot.url}
@@ -119,22 +122,22 @@ class MiniGoalScriptContext:
             reasoning_level="low"
         )
 
-class MiniGoalManager:
-    """Manages the registration and execution of mini goals"""
+class InterceptorManager:
+    """Manages the registration and execution of interceptors."""
     
     def __init__(self, bot: Browser):
         self.bot = bot
         self.registry: List[Dict[str, Any]] = []
         self.recursion_limit = 3
 
-    def register_mini_goal(
+    def register_interceptor(
         self, 
-        trigger: MiniGoalTrigger, 
-        mode: MiniGoalMode, 
-        handler: Optional[Callable[[MiniGoalScriptContext], None]] = None,
+        trigger: Interceptor, 
+        mode: InterceptorMode, 
+        handler: Optional[Callable[[InterceptorContext], None]] = None,
         instruction_override: Optional[str] = None
     ):
-        """Register a new mini goal trigger and handler"""
+        """Register a new interceptor trigger and handler."""
         self.registry.append({
             "trigger": trigger,
             "mode": mode,
@@ -142,8 +145,12 @@ class MiniGoalManager:
             "instruction_override": instruction_override
         })
 
-    def find_matching_goal(self, action: Optional[str] = None, visible_text: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Find a registered mini goal that matches the current action or observation"""
+    def find_matching_interceptor(
+        self,
+        action: Optional[str] = None,
+        visible_text: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Find a registered interceptor that matches the current action or observation."""
         # Check if debug mode is enabled
         debug_mode = (
             hasattr(self.bot, 'event_logger') and 
@@ -152,7 +159,10 @@ class MiniGoalManager:
         )
         
         if debug_mode:
-            dprint(f"🔍 find_matching_goal: registry_size={len(self.registry)}, action='{action}', text_len={len(visible_text) if visible_text else 0}")
+            dprint(
+                f"🔍 find_matching_interceptor: registry_size={len(self.registry)}, "
+                f"action='{action}', text_len={len(visible_text) if visible_text else 0}"
+            )
         for entry in self.registry:
             trigger = entry["trigger"]
             if action and trigger.matches_action(action, debug=debug_mode):
@@ -161,23 +171,29 @@ class MiniGoalManager:
                 return entry
         return None
 
-    def execute_scripted(self, entry: Dict[str, Any], controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
-        """Execute a scripted mini goal"""
+    def execute_scripted(
+        self,
+        entry: Dict[str, Any],
+        controller: Agent,
+        action_step: Optional[Any] = None,
+        action: Optional[str] = None,
+    ):
+        """Execute a scripted interceptor."""
         handler = entry["handler"]
         if not handler:
-            dprint("⚠️ Scripted mini goal triggered but no handler provided")
+            dprint("⚠️ Scripted interceptor triggered but no handler provided")
             return
 
-        context = MiniGoalScriptContext(self.bot, controller, action_step, action)
-        dprint("🎭 Executing Scripted Mini Goal...")
+        context = InterceptorContext(self.bot, controller, action_step, action)
+        dprint("🎭 Executing Scripted Interceptor...")
         handler(context)
-        dprint("✅ Scripted Mini Goal finished")
+        dprint("✅ Scripted Interceptor finished")
 
     def execute_autonomous(self, entry: Dict[str, Any], controller: Agent, action: str) -> TaskResult:
-        """Execute an autonomous mini goal using a sub-agent loop"""
+        """Execute an autonomous interceptor using a sub-agent loop."""
         instruction = entry.get("instruction_override") or f"Complete the following interaction: {action}"
         
-        dprint(f"🤖 Starting Autonomous Mini Goal: {instruction}")
+        dprint(f"🤖 Starting Autonomous Interceptor: {instruction}")
         
         # Use existing SubAgent if available, or create a temporary one
         if not controller.sub_agent_controller:
@@ -199,7 +215,7 @@ class MiniGoalManager:
         
         if not sub_agent_id:
             from agent.results import TaskResult
-            return TaskResult(success=False, reasoning="Failed to spawn sub-agent for mini goal")
+            return TaskResult(success=False, reasoning="Failed to spawn sub-agent for interceptor")
 
         # Execute the sub-agent
         # Note: We should ideally pass a flag to block navigation, but we'll implement that in Agent

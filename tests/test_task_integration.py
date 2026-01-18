@@ -21,10 +21,10 @@ class TestEndToEndSequentialExecution:
 
     def test_successful_sequential_completion(self, sample_sequential_task, default_sequential_config):
         """Test successful completion of sequential task"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         task = sample_sequential_task
-        planner = BridgePlanner(config=default_sequential_config)
+        planner = SequencePlanner(config=default_sequential_config)
 
         # Simulate successful iterations
         for i in range(5):
@@ -52,10 +52,10 @@ class TestEndToEndSequentialExecution:
 
     def test_sequential_with_retries(self, sample_sequential_task, default_sequential_config):
         """Test sequential task with retry attempts"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         task = sample_sequential_task
-        planner = BridgePlanner(config=default_sequential_config)
+        planner = SequencePlanner(config=default_sequential_config)
 
         # Iteration 0: Success on first try
         task.state.iteration_attempts = 0
@@ -89,10 +89,10 @@ class TestEndToEndSequentialExecution:
 
     def test_sequential_partial_completion(self, sample_sequential_task, default_sequential_config):
         """Test sequential task with partial success"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         task = sample_sequential_task
-        planner = BridgePlanner(config=default_sequential_config)
+        planner = SequencePlanner(config=default_sequential_config)
 
         # 3 successes, 2 failures
         for i in range(3):
@@ -250,13 +250,13 @@ class TestCompletionStrategyScenarios:
 
     def test_strict_strategy_scenario(self):
         """Test strict completion strategy in realistic scenario"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         config = SequentialTaskConfig(
             completion_strategy="strict",
             max_total_iterations=10,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -283,14 +283,14 @@ class TestCompletionStrategyScenarios:
 
     def test_threshold_strategy_scenario(self):
         """Test threshold completion strategy"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         config = SequentialTaskConfig(
             completion_strategy="threshold",
             success_threshold=0.7,
             max_total_iterations=10,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -321,13 +321,13 @@ class TestErrorRecoveryScenarios:
 
     def test_max_retries_then_continue(self):
         """Test that task continues after max retries exhausted"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         config = SequentialTaskConfig(
             max_attempts_per_iteration=3,
             fail_fast=False,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",
@@ -360,13 +360,13 @@ class TestErrorRecoveryScenarios:
 
     def test_fail_fast_on_error(self):
         """Test fail fast behavior on error"""
-        from agent.planning.bridge import BridgePlanner
+        from agent.planning.sequence_planner import SequencePlanner
 
         config = SequentialTaskConfig(
             max_attempts_per_iteration=3,
             fail_fast=True,
         )
-        planner = BridgePlanner(config=config)
+        planner = SequencePlanner(config=config)
 
         task = SequentialTask(
             task_id="task_001",

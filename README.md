@@ -179,10 +179,10 @@ A powerful, vision-based web automation framework that uses AI to interact with 
 │   ┌─────────────────────────────────────────────────────────────────┐     │
 │   │                                                                 │     │
 │   │  PATH 1: Simple Normal Task                                     │     │
-│   │  User → Normal Task → ReactiveGoalDeterminer → Plan → Execute   │     │
+│   │  User → Normal Task → ActionPlanner → Plan → Execute   │     │
 │   │                                                                 │     │
 │   │  PATH 2: Sequential Task with Retries                           │     │
-│   │  User → Sequential → Bridge Planner → Subtask → Plan Fail →     │     │
+│   │  User → Sequential → Sequence Planner → Subtask → Plan Fail →     │     │
 │   │       Mini-loop Retry → New Plan → Execute → Complete           │     │
 │   │                                                                 │     │
 │   │  PATH 3: Multi-Step Action Plan (NEW!)                          │     │
@@ -201,7 +201,7 @@ User Request
     ↓
 Normal Task
     ↓
-ReactiveGoalDeterminer
+ActionPlanner
     ↓
 Action Plan [Step 1, Step 2, ...]
     ↓
@@ -216,8 +216,8 @@ User Request
     ↓
 Sequential Task
     ↓
-┌─ Bridge Planner ─┐
-│ Decide: generate_task? ──YES──► Subtask ─► ReactiveGoalDeterminer ─► Action Plan ─► Execute ─► Complete
+┌─ Sequence Planner ─┐
+│ Decide: generate_task? ──YES──► Subtask ─► ActionPlanner ─► Action Plan ─► Execute ─► Complete
 │                      │
 │                      NO
 │                      ↓
@@ -229,14 +229,14 @@ Sequential Task
 ```
 Sequential Task (Level 1)
 ├── Iteration 1 (Level 2)
-│   ├── Bridge Planner Call 1 (Level 3)
+│   ├── Sequence Planner Call 1 (Level 3)
 │   │   └── Subtask: "Extract from item 1"
 │   │       └── Mini-loop (Level 4)
 │   │           ├── Attempt 0: Action Plan [Step A, Step B] (Level 5)
 │   │           │   ├── Execute Step A → Success
 │   │           │   └── Execute Step B → Success → Plan Success
 │   │           └── If Plan Failed → Attempt 1: New Action Plan...
-│   └── If Subtask Failed → Bridge Planner Call 2: New Subtask...
+│   └── If Subtask Failed → Sequence Planner Call 2: New Subtask...
 ├── Iteration 2 (Level 2)
 │   └── [Same structure as Iteration 1]
 └── [Continue until completion condition met]
@@ -252,15 +252,15 @@ AFTER (Fixed): Action Plan [Step 1, Step 2, Step 3] → Execute Step 1 → Execu
 
 | Component | Purpose | Input | Output | Retry Logic |
 |-----------|---------|-------|--------|-------------|
-| **Bridge Planner** | Manages sequential iteration | Task progress + page state | generate_task or end_sequence | Multiple calls per iteration |
-| **ReactiveGoalDeterminer** | Plans specific actions | Task instruction + page state | Action Plan (multi-step) | None (single call per subtask) |
+| **Sequence Planner** | Manages sequential iteration | Task progress + page state | generate_task or end_sequence | Multiple calls per iteration |
+| **ActionPlanner** | Plans specific actions | Task instruction + page state | Action Plan (multi-step) | None (single call per subtask) |
 | **Mini-loop** | Handles action failures | Failed action plan | Alternative action plan | Up to 9 iterations |
 | **Action Executor** | Executes individual steps | Action step + page state | Success/failure | None (single attempt per step) |
 
 ## 🎯 Decision Points
 
 1. **Task Type**: Normal vs Sequential → Route to different execution paths
-2. **Bridge Planner**: Continue iteration vs End sequence → Control loop progression
+2. **Sequence Planner**: Continue iteration vs End sequence → Control loop progression
 3. **Action Plan**: Single step vs Multi-step → Execute all steps sequentially
 4. **Step Success**: Continue plan vs Fail plan → Mini-loop retry logic
 5. **Completion**: Auto-complete vs Manual complete vs Ask help → Different success paths
@@ -269,7 +269,7 @@ AFTER (Fixed): Action Plan [Step 1, Step 2, Step 3] → Execute Step 1 → Execu
 
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection
 - **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
-- **Mini Goals System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
+- **Interceptors System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
 - **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
 - **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text. Robust fallback mechanisms ensure reliable typing for both short and long text inputs, including proper element focusing for complex web forms. Intelligent text parsing handles complex sentences with prepositions and special characters without truncation.
 - **Form Field Context Detection**: Automatically detects and includes associated labels/questions for form elements (inputs, radios, checkboxes). This allows the agent to distinguish between similar options (like "Yes" buttons) that belong to different questions, significantly improving accuracy when filling out complex forms.
@@ -288,7 +288,7 @@ AFTER (Fixed): Action Plan [Step 1, Step 2, Step 3] → Execute Step 1 → Execu
 The agent system has been optimized for significantly reduced token usage and improved response times:
 
 **Token Reduction:**
-- ReactiveGoalDeterminer system prompts: **580 lines → ~100 lines** (83% reduction)
+- ActionPlanner system prompts: **580 lines → ~100 lines** (83% reduction)
 - CompletionContract prompts: **70 lines → ~25 lines** (64% reduction)
 - Interaction summaries: Show full context for recent 3 interactions only, concise indicators for older ones (60% reduction)
 - Base knowledge: Structured format with task-specific rules removed (73% reduction)
@@ -1145,30 +1145,30 @@ while not queue.is_empty():
 ```
 
 
-### Mini Goals System
+### Interceptors System
 
-Mini goals allow you to create trigger-based sub-objectives that activate automatically when specific conditions are met. This is perfect for handling complex UI interactions that require specialized logic, like dropdown menus, multi-step forms, or custom widgets.
+Interceptors allow you to create trigger-based sub-objectives that activate automatically when specific conditions are met. This is perfect for handling complex UI interactions that require specialized logic, like dropdown menus, multi-step forms, or custom widgets.
 
 #### Two Execution Modes
 
-**Autonomy Mode**: The agent handles the mini goal as a complete sub-task, with full planning and completion evaluation.
+**Autonomy Mode**: The agent handles the interceptor as a complete sub-task, with full planning and completion evaluation.
 
 **Scripted Mode**: Execute custom Python functions that can interact with the page and ask the agent questions using its current context.
 
-#### Registering Mini Goals
+#### Registering Interceptors
 
 ```python
-from agent.mini_goal_manager import MiniGoalTrigger, MiniGoalMode
+from agent.interceptor_manager import Interceptor, InterceptorMode
 
 # Example: Handle dropdown selections autonomously
-trigger = MiniGoalTrigger(
+trigger = Interceptor(
     action_type="click",
     target_regex="dropdown|select.*field"
 )
 
-bot.register_mini_goal(
+bot.register_interceptor(
     trigger=trigger,
-    mode=MiniGoalMode.AUTONOMY,
+    mode=InterceptorMode.AUTONOMY,
     instruction_override="Select the most appropriate option from this dropdown based on the context"
 )
 
@@ -1188,9 +1188,9 @@ def validate_form_handler(context):
         });
     """)
 
-bot.register_mini_goal(
-    trigger=MiniGoalTrigger(action_type="click", target_regex="submit.*form"),
-    mode=MiniGoalMode.SCRIPTED,
+bot.register_interceptor(
+    trigger=Interceptor(action_type="click", target_regex="submit.*form"),
+    mode=InterceptorMode.SCRIPTED,
     handler=validate_form_handler
 )
 ```
@@ -1203,9 +1203,9 @@ bot.register_mini_goal(
 
 #### Features
 
-- **Recursion Control**: Configurable recursion limit (default: 3) prevents infinite mini goal loops
-- **State Isolation**: Mini goals maintain their own completion context separate from the main task
-- **Navigation Blocking**: In autonomy mode, navigation actions are blocked to keep focus on the mini goal
+- **Recursion Control**: Configurable recursion limit (default: 3) prevents infinite interceptor loops
+- **State Isolation**: Interceptors maintain their own completion context separate from the main task
+- **Navigation Blocking**: In autonomy mode, navigation actions are blocked to keep focus on the interceptor
 - **Question Asking**: Scripted handlers can ask the agent contextual questions using current page state
 
 ### Error Handling
@@ -1284,7 +1284,7 @@ config = BotConfig(
 
 ### Interaction summarization controls
 
-- Completion evaluation (`CompletionContract`) and next-action generation (`ReactiveGoalDeterminer`) now accept configurable interaction history limits.
+- Completion evaluation (`CompletionContract`) and next-action generation (`ActionPlanner`) now accept configurable interaction history limits.
 - Defaults include all recorded interactions; pass `interaction_summary_limit_completion` or `interaction_summary_limit_action` into `AgentController` to cap how many recent interactions are summarized in prompts.
 
 ## 📖 Examples
@@ -1483,7 +1483,7 @@ browser-vision-bot/
 │   ├── agent_context.py       # Agent context
 │   ├── agent_result.py        # Agent results
 │   ├── completion_contract.py # Completion evaluation
-│   ├── reactive_goal_determiner.py # Next action determination
+│   ├── action_planner.py # Next action determination
 │   └── sub_agent_controller.py # Sub-agent management
 ├── tab_management/           # Tab orchestration
 │   ├── tab_manager.py        # Tab tracking

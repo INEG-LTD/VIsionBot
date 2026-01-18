@@ -18,7 +18,7 @@ from models.models import (
     IterationResult,
 )
 from agent.planning.orchestrator import TaskOrchestrator
-from agent.planning.bridge import BridgePlanner
+from agent.planning.sequence_planner import SequencePlanner
 from agent.agent_context import EnvironmentState
 from core.config import SequentialTaskConfig
 from execution.result import ActionResult
@@ -34,7 +34,7 @@ class TaskBasedExecutionMixin:
     This mixin provides:
     - Task orchestration (decomposing user requests into tasks)
     - Normal task execution (single actions)
-    - Sequential task execution (iteration loops with Bridge Planner)
+    - Sequential task execution (iteration loops with Sequence Planner)
     - Task state management and result tracking
     """
 
@@ -56,8 +56,8 @@ class TaskBasedExecutionMixin:
             reasoning_level=self.agent_reasoning_level,
         )
 
-        # Bridge planner for sequential task iteration
-        self.bridge_planner = BridgePlanner(
+        # Sequence planner for sequential task iteration
+        self.sequence_planner = SequencePlanner(
             model_name=self.agent_model_name,
             reasoning_level=self.agent_reasoning_level,
             config=self.sequential_task_config,
@@ -522,7 +522,7 @@ class TaskBasedExecutionMixin:
         user_prompt: str,
     ) -> bool:
         """
-        Execute a Normal Task using the existing ReactiveGoalDeterminer.
+        Execute a Normal Task using the existing ActionPlanner.
 
         Args:
             task: The normal task to execute
@@ -624,7 +624,7 @@ Use the results above to complete your task."""
         user_prompt: str,
     ) -> bool:
         """
-        Execute a Sequential Task using the Bridge Planner.
+        Execute a Sequential Task using the Sequence Planner.
 
         Args:
             task: The sequential task to execute
@@ -654,14 +654,14 @@ Use the results above to complete your task."""
         # Sequential execution loop
         while True:
             # Check if we should end based on hard limits
-            if self.bridge_planner.should_end_sequence(task):
-                reason = self.bridge_planner._get_end_reason(task)
+            if self.sequence_planner.should_end_sequence(task):
+                reason = self.sequence_planner._get_end_reason(task)
                 try:
                     self.event_logger.system_info(f"Sequential task ending: {reason}")
                 except Exception:
                     pass
                 try:
-                    self.event_logger.bridge_end(reason)
+                    self.event_logger.sequence_end(reason)
                 except Exception:
                     pass
                 break
@@ -688,8 +688,8 @@ Use the results above to complete your task."""
             except Exception:
                 overlay_data = None
 
-            # Get Bridge Planner decision
-            decision = self.bridge_planner.decide_next_action(
+            # Get Sequence Planner decision
+            decision = self.sequence_planner.decide_next_action(
                 sequential_task=task,
                 environment_state=environment_state,
                 screenshot=snapshot.screenshot,
@@ -699,23 +699,23 @@ Use the results above to complete your task."""
 
             # Log decision
             try:
-                self.event_logger.system_debug(f"Bridge Planner decision: {decision.decision}")
+                self.event_logger.system_debug(f"Sequence Planner decision: {decision.decision}")
                 self.event_logger.system_debug(f"Reasoning: {decision.reasoning}")
             except Exception:
                 pass
             try:
-                self.event_logger.bridge_decision(decision.decision, reasoning=decision.reasoning)
+                self.event_logger.sequence_decision(decision.decision, reasoning=decision.reasoning)
             except Exception:
                 pass
 
             # Handle decision
             if decision.decision == "end_sequence":
                 try:
-                    self.event_logger.system_info(f"Bridge Planner ending sequence: {decision.completion_reason}")
+                    self.event_logger.system_info(f"Sequence Planner ending sequence: {decision.completion_reason}")
                 except Exception:
                     pass
                 try:
-                    self.event_logger.bridge_end(decision.completion_reason or "end_sequence")
+                    self.event_logger.sequence_end(decision.completion_reason or "end_sequence")
                 except Exception:
                     pass
 
@@ -753,7 +753,7 @@ Use the results above to complete your task."""
                 except Exception:
                     pass
 
-                # Execute the generated task (using existing ReactiveGoalDeterminer)
+                # Execute the generated task (using existing ActionPlanner)
                 result = self._execute_generated_subtask(
                     generated_task_instruction,
                     task,
@@ -775,7 +775,7 @@ Use the results above to complete your task."""
                     task.state.iteration_attempts += 1
 
                     # Check if we should retry
-                    if self.bridge_planner.should_retry_iteration(task, result.error):
+                    if self.sequence_planner.should_retry_iteration(task, result.error):
                         try:
                             remaining = self.sequential_task_config.max_attempts_per_iteration - task.state.iteration_attempts
                             self.event_logger.system_warning(
@@ -787,7 +787,7 @@ Use the results above to complete your task."""
                         except Exception:
                             pass
                         try:
-                            self.event_logger.bridge_retry(task.state.current_iteration)
+                            self.event_logger.sequence_retry(task.state.current_iteration)
                         except Exception:
                             pass
                     else:
@@ -987,7 +987,7 @@ Use the results above to complete your task."""
             TaskResult indicating success/failure
         """
         from .task_result import TaskResult
-        from agent.reactive_goal_determiner import ReactiveGoalDeterminer
+        from agent.action_planner import ActionPlanner
 
         # Track task-specific failed/ineffective actions
         task_failed_actions = []
@@ -1044,8 +1044,8 @@ Use the results above to complete your task."""
             except Exception:
                 overlay_data = None
 
-            # Create goal determiner for this task
-            goal_determiner = ReactiveGoalDeterminer(
+            # Create action planner for this task
+            action_planner = ActionPlanner(
                 task_instruction,
                 base_knowledge=self.base_knowledge if hasattr(self, "base_knowledge") else [],
                 model_name=self.agent_model_name,
@@ -1061,7 +1061,7 @@ Use the results above to complete your task."""
 
             # Determine next action
             try:
-                action_plan = goal_determiner.determine_action_plan(
+                action_plan = action_planner.determine_action_plan(
                     environment_state=environment_state,
                     screenshot=snapshot.screenshot,
                     failed_actions=task_failed_actions,
@@ -1397,7 +1397,7 @@ Use the results above to complete your task."""
                         action_verbs = [
                             "click", "type", "select", "scroll", "press", "navigate",
                             "back", "forward", "wait", "defer", "upload", "datetime",
-                            "form", "mini_goal"
+                            "form", "interceptor"
                         ]
 
                         # Check if task has any non-extraction action verbs

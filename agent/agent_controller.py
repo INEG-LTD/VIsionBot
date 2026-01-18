@@ -11,7 +11,7 @@ from core.session import BrowserState, Interaction, InteractionType
 from models.models import NotebookEntryType
 from .task_result import TaskResult
 from agent.agent_context import EnvironmentState, CompletionEvaluation
-from agent.reactive_goal_determiner import ReactiveGoalDeterminer, ActionPlan, ActionStep
+from agent.action_planner import ActionPlanner, ActionPlan, ActionStep
 from agent.agent_context import AgentContext
 from agent.subagent.controller import SubAgent
 from agent.results import SubAgentResult
@@ -28,7 +28,7 @@ from lib.ai import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from .mini_goal_manager import MiniGoalManager, MiniGoalTrigger, MiniGoalMode, MiniGoalScriptContext
+from .interceptor_manager import InterceptorManager, Interceptor, InterceptorMode, InterceptorContext
 from utils.overlay_description import describe_overlay_element, metadata_matches
 from agent.task_based_execution import TaskBasedExecutionMixin
 from core.config import SequentialTaskConfig
@@ -89,13 +89,13 @@ class SubAgentPolicyLevel(Enum):
 
 
 """
-Agent Controller - Step 2: LLM-Based Completion + Reactive Goal Determination
+Agent Controller - Step 2: LLM-Based Completion + Action Planning
 
 Implements agentic mode with:
-- Reactive loop: observe → determine goal → act → repeat
+- Reactive loop: observe → plan action → act → repeat
 - Completion is signaled by the agent via complete: commands
 - EnvironmentState for full context
-- Reactive goal determination (what to do now)
+- Action planning (what to do now)
 """
 
 class Agent(TaskBasedExecutionMixin):
@@ -111,7 +111,7 @@ class Agent(TaskBasedExecutionMixin):
 
     Extended with task-based execution capabilities:
     - Task decomposition (Normal and Sequential tasks)
-    - Sequential task iteration with Bridge Planner
+    - Sequential task iteration with Sequence Planner
     - Result tracking and accumulation
     """
     
@@ -309,54 +309,56 @@ class Agent(TaskBasedExecutionMixin):
         self._pause_event.set()  # Initially not paused (event is set = not blocking)
         self._pause_message = "Paused"
 
-        self.mini_goal_manager = MiniGoalManager(self.bot)
-        self.mini_goal_stack: List[Dict[str, Any]] = []  # Stack of active mini goals
+        self.interceptor_manager = InterceptorManager(self.bot)
+        self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
         # Initialize task-based execution system
         self._initialize_task_system(sequential_task_config)
         self.use_task_based_execution = use_task_based_execution
 
-    def register_mini_goal(
+    def register_interceptor(
         self,
-        trigger: MiniGoalTrigger,
-        mode: MiniGoalMode,
-        handler: Optional[Callable[[MiniGoalScriptContext], None]] = None,
+        trigger: Interceptor,
+        mode: InterceptorMode,
+        handler: Optional[Callable[[InterceptorContext], None]] = None,
         instruction_override: Optional[str] = None
     ):
-        """Register a mini goal trigger and handler"""
-        self.mini_goal_manager.register_mini_goal(trigger, mode, handler, instruction_override)
+        """Register an interceptor trigger and handler."""
+        self.interceptor_manager.register_interceptor(trigger, mode, handler, instruction_override)
 
-    def _handle_mini_goal_trigger(self, entry: Dict[str, Any], action: Optional[str] = None, action_step: Optional[Any] = None) -> bool:
-        """Process a triggered mini goal"""
-        if len(self.mini_goal_stack) >= self.mini_goal_manager.recursion_limit:
-            self.event_logger.system_warning(f"Mini goal recursion limit reached ({self.mini_goal_manager.recursion_limit})")
+    def _handle_interceptor_trigger(self, entry: Dict[str, Any], action: Optional[str] = None, action_step: Optional[Any] = None) -> bool:
+        """Process a triggered interceptor"""
+        if len(self.interceptor_stack) >= self.interceptor_manager.recursion_limit:
+            self.event_logger.system_warning(
+                f"Interceptor recursion limit reached ({self.interceptor_manager.recursion_limit})"
+            )
             return False
 
         # Add instruction if missing
         if "instruction" not in entry:
             entry["instruction"] = entry.get("instruction_override") or f"Interact with: {action}"
         
-        self.mini_goal_stack.append(entry)
-        self.event_logger.system_info(f"🎯 Mini Goal Active: {entry['instruction']}")
+        self.interceptor_stack.append(entry)
+        self.event_logger.system_info(f"🎯 Interceptor Active: {entry['instruction']}")
 
-        if entry["mode"] == MiniGoalMode.SCRIPTED:
+        if entry["mode"] == InterceptorMode.SCRIPTED:
             try:
-                self.mini_goal_manager.execute_scripted(entry, self, action_step, action)
-                self.mini_goal_stack.pop()
-                self.event_logger.system_info(f"✅ Scripted Mini Goal Complete")
+                self.interceptor_manager.execute_scripted(entry, self, action_step, action)
+                self.interceptor_stack.pop()
+                self.event_logger.system_info(f"✅ Scripted Interceptor Complete")
                 return True
             except Exception as e:
-                self.mini_goal_stack.pop()
-                self.event_logger.system_error(f"❌ Scripted Mini Goal Failed: {e}")
+                self.interceptor_stack.pop()
+                self.event_logger.system_error(f"❌ Scripted Interceptor Failed: {e}")
                 return False
         
         # Autonomy mode remains on the stack and will be handled by the main loop
         return True
 
     def _get_current_prompt(self, base_prompt: str) -> str:
-        """Returns the current task instruction, considering the mini-goal stack"""
-        if self.mini_goal_stack:
-            return self.mini_goal_stack[-1]["instruction"]
+        """Returns the current task instruction, considering the interceptor stack."""
+        if self.interceptor_stack:
+            return self.interceptor_stack[-1]["instruction"]
         return base_prompt
 
     def _is_nav_action(self, action: str) -> bool:
@@ -624,10 +626,10 @@ class Agent(TaskBasedExecutionMixin):
             self.event_logger.agent_iteration(iteration + 1, self.max_iterations, url=snapshot.url, title=snapshot.title)
             
             # --- MINI GOAL INTEGRATION: Observational Trigger ---
-            if len(self.mini_goal_stack) < self.mini_goal_manager.recursion_limit:
-                matching_goal = self.mini_goal_manager.find_matching_goal(visible_text=snapshot.visible_text)
-                if matching_goal:
-                    self._handle_mini_goal_trigger(matching_goal)
+            if len(self.interceptor_stack) < self.interceptor_manager.recursion_limit:
+                matching_interceptor = self.interceptor_manager.find_matching_interceptor(visible_text=snapshot.visible_text)
+                if matching_interceptor:
+                    self._handle_interceptor_trigger(matching_interceptor)
             # --------------------------------------------------
 
             # 2. Use active instruction from stack if available
@@ -698,7 +700,7 @@ class Agent(TaskBasedExecutionMixin):
                 except Exception:
                     pass
 
-            # 2.1. Prepare goal determiner with current prompt
+            # 2.1. Prepare action planner with current prompt
             dynamic_prompt = self._build_current_task_prompt(user_prompt)
             
             # Combine base_knowledge with temporary user guidance
@@ -709,7 +711,7 @@ class Agent(TaskBasedExecutionMixin):
                     if response:
                         combined_knowledge.append(f"User instruction for this specific state: {response}")
             
-            goal_determiner = ReactiveGoalDeterminer(
+            action_planner = ActionPlanner(
                 dynamic_prompt,
                 base_knowledge=combined_knowledge,
                 model_name=self.agent_model_name,
@@ -757,7 +759,7 @@ class Agent(TaskBasedExecutionMixin):
                     failed_non_scroll = []
                     ineffective_non_scroll = []
 
-                plan = goal_determiner.determine_action_plan(
+                plan = action_planner.determine_action_plan(
                     environment_state,
                     screenshot=snapshot.screenshot,
                     overlay_data=overlay_data,
@@ -787,46 +789,46 @@ class Agent(TaskBasedExecutionMixin):
                     if should_consume_step and not inserted_scroll:
                         self._log_pre_generated_plan_step(pending_plan_step, plan_step_number)
 
-            # --- MINI GOAL INTEGRATION: Action/Historical Trigger ---
-            if current_action and not current_action.startswith("mini_goal:"):
-                matching_goal = self.mini_goal_manager.find_matching_goal(action=current_action)
-                if matching_goal:
-                    # Don't trigger if this specific goal (by identity or instruction) is already active
+            # --- INTERCEPTOR INTEGRATION: Action/Historical Trigger ---
+            if current_action and not current_action.startswith("interceptor:"):
+                matching_interceptor = self.interceptor_manager.find_matching_interceptor(action=current_action)
+                if matching_interceptor:
+                    # Don't trigger if this specific interceptor (by identity or instruction) is already active
                     is_already_active = False
-                    if self.mini_goal_stack:
-                        top = self.mini_goal_stack[-1]
+                    if self.interceptor_stack:
+                        top = self.interceptor_stack[-1]
                         # Use instruction_override or instruction for comparison
                         top_instr = top.get("instruction")
-                        match_instr = matching_goal.get("instruction_override") or f"Interact with: {current_action}"
+                        match_instr = matching_interceptor.get("instruction_override") or f"Interact with: {current_action}"
                         if top_instr == match_instr:
                             is_already_active = True
                     
                     if not is_already_active:
-                        triggered = self._handle_mini_goal_trigger(matching_goal, action=current_action)
+                        triggered = self._handle_interceptor_trigger(matching_interceptor, action=current_action)
                         if triggered:
-                            dprint(f"⚡ Action intercepted by Mini Goal: {current_action}")
+                            dprint(f"⚡ Action intercepted by Interceptor: {current_action}")
                         # If autonomy mode, it stays on stack and we restart iteration with new prompt
                         # If scripted mode, it was executed and popped, we continue?
                         # Scripted mode counts as 1 iteration, so we should skip execution of current_action
-                        if matching_goal["mode"] == MiniGoalMode.SCRIPTED:
+                        if matching_interceptor["mode"] == InterceptorMode.SCRIPTED:
                             time.sleep(self.iteration_delay)
                             continue
                         else:
-                            # Autonomy mode - spawn sub-agent to handle the mini goal
-                            self.event_logger.system_info(f"🤖 Starting Autonomy Mini Goal: {matching_goal.get('instruction_override', current_action)}")
+                            # Autonomy mode - spawn sub-agent to handle the interceptor
+                            self.event_logger.system_info(f"🤖 Starting Autonomy Interceptor: {matching_interceptor.get('instruction_override', current_action)}")
                             try:
-                                result = self.mini_goal_manager.execute_autonomous(matching_goal, self, current_action)
-                                self.mini_goal_stack.pop()
-                                self.event_logger.system_info(f"✅ Autonomy Mini Goal Complete: {result.success}")
+                                result = self.interceptor_manager.execute_autonomous(matching_interceptor, self, current_action)
+                                self.interceptor_stack.pop()
+                                self.event_logger.system_info(f"✅ Autonomy Interceptor Complete: {result.success}")
                             except Exception as e:
-                                self.mini_goal_stack.pop()
-                                self.event_logger.system_error(f"❌ Autonomy Mini Goal Failed: {e}")
+                                self.interceptor_stack.pop()
+                                self.event_logger.system_error(f"❌ Autonomy Interceptor Failed: {e}")
                             time.sleep(self.iteration_delay)
                             continue
 
-            if current_action and current_action.startswith("mini_goal:"):
+            if current_action and current_action.startswith("interceptor:"):
                 instruction = current_action.split(":", 1)[1].strip()
-                self._handle_mini_goal_trigger({"mode": MiniGoalMode.AUTONOMY, "instruction": instruction}, action=current_action)
+                self._handle_interceptor_trigger({"mode": InterceptorMode.AUTONOMY, "instruction": instruction}, action=current_action)
                 time.sleep(self.iteration_delay)
                 continue
             # ----------------------------------------------------------
@@ -856,14 +858,14 @@ class Agent(TaskBasedExecutionMixin):
                     continue
             
             # Block navigation in autonomy mode
-            if self.mini_goal_stack and self._is_nav_action(current_action):
-                self.event_logger.system_warning(f"🚫 Iteration {iteration+1}: Navigation blocked by active Mini Goal.")
+            if self.interceptor_stack and self._is_nav_action(current_action):
+                self.event_logger.system_warning(f"🚫 Iteration {iteration+1}: Navigation blocked by active Interceptor.")
                 current_action = None # Skip this action
             
             # Wait, if current_action is STOP and we have a stack, pop it
-            if current_action == "stop" and self.mini_goal_stack:
-                 self.event_logger.system_info(f"🎯 Mini Goal requested STOP, finishing: {active_user_prompt}")
-                 self.mini_goal_stack.pop()
+            if current_action == "stop" and self.interceptor_stack:
+                 self.event_logger.system_info(f"🎯 Interceptor requested STOP, finishing: {active_user_prompt}")
+                 self.interceptor_stack.pop()
                  time.sleep(self.iteration_delay)
                  continue
             # Update adaptive sub-agent utilization policy (only if not already done in parallel path)
@@ -1405,7 +1407,7 @@ class Agent(TaskBasedExecutionMixin):
         Determine what action needs to be done next.
 
         Step 2: Enhanced with state awareness - can use completion evaluation hints.
-        Later steps will do full LLM-based reactive goal determination.
+        Later steps will do full LLM-based action planning.
 
         Args:
             user_prompt: Original user request
@@ -2239,7 +2241,7 @@ class Agent(TaskBasedExecutionMixin):
 
     def _activate_primary_output_task(self, reason: Optional[str] = None) -> None:
         """
-        Flag the Google Docs output task as ready so the goal determiner pivots away from extraction.
+        Flag the Google Docs output task as ready so the action planner pivots away from extraction.
         """
         entry = self._task_tracker.get("google_docs_report")
         if not entry:

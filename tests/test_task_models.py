@@ -13,7 +13,7 @@ from models.models import (
     TaskList,
     IterationResult,
     SequentialState,
-    BridgePlannerDecision,
+    SequenceDecision,
     TaskOrchestratorOutput,
 )
 
@@ -310,12 +310,12 @@ class TestTaskList:
         assert not_found is None
 
 
-class TestBridgePlannerDecision:
-    """Test BridgePlannerDecision model"""
+class TestSequenceDecision:
+    """Test SequenceDecision model"""
 
     def test_generate_task_decision(self):
         """Test generate task decision"""
-        decision = BridgePlannerDecision(
+        decision = SequenceDecision(
             decision="generate_task",
             reasoning="More items to process",
             next_task="Extract company name from listing #3",
@@ -327,7 +327,7 @@ class TestBridgePlannerDecision:
 
     def test_end_sequence_decision(self):
         """Test end sequence decision"""
-        decision = BridgePlannerDecision(
+        decision = SequenceDecision(
             decision="end_sequence",
             reasoning="Target count reached",
             completion_reason="Successfully extracted 5 company names",

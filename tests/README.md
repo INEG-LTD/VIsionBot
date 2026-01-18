@@ -12,7 +12,7 @@ This directory contains comprehensive tests for the sequential task execution sy
 - SequentialTask model
 - IterationResult model
 - TaskList model and helper methods
-- BridgePlannerDecision model
+- SequenceDecision model
 - TaskOrchestratorOutput model
 
 **test_task_result_retrieval.py** - Tests for result retrieval system
@@ -22,7 +22,7 @@ This directory contains comprehensive tests for the sequential task execution sy
 - Result extraction from tasks
 - Task dependency handling
 
-**test_bridge_planner.py** - Tests for Bridge Planner
+**test_sequence_planner.py** - Tests for Sequence Planner
 - Retry logic
 - Completion strategies (strict, best_effort, threshold)
 - Safety limits (max iterations, fail_fast)
@@ -61,14 +61,14 @@ pytest tests/
 
 ```bash
 pytest tests/test_task_models.py
-pytest tests/test_bridge_planner.py
+pytest tests/test_sequence_planner.py
 ```
 
 ### Run Specific Test Class
 
 ```bash
 pytest tests/test_task_models.py::TestNormalTask
-pytest tests/test_bridge_planner.py::TestBridgePlannerRetryLogic
+pytest tests/test_sequence_planner.py::TestSequencePlannerRetryLogic
 ```
 
 ### Run Specific Test
@@ -86,13 +86,13 @@ pytest tests/ -v
 ### Run with Coverage
 
 ```bash
-pytest tests/ --cov=models.task_models --cov=agent.bridge_planner --cov=agent.task_result_retrieval
+pytest tests/ --cov=models.task_models --cov=agent.planning.sequence_planner --cov=agent.task_result_retrieval
 ```
 
 ### Run with Coverage Report
 
 ```bash
-pytest tests/ --cov=models.task_models --cov=agent.bridge_planner --cov-report=html
+pytest tests/ --cov=models.task_models --cov=agent.planning.sequence_planner --cov-report=html
 ```
 
 Then open `htmlcov/index.html` in a browser.
@@ -108,7 +108,7 @@ Then open `htmlcov/index.html` in a browser.
 ✅ Task list operations (get current, advance, filter)
 ✅ Task lookup by ID
 ✅ Completion checking
-✅ Bridge Planner decision models
+✅ Sequence Planner decision models
 
 ### Retrieval Tests (test_task_result_retrieval.py)
 
@@ -121,7 +121,7 @@ Then open `htmlcov/index.html` in a browser.
 ✅ Empty result handling
 ✅ Formatting for LLM prompts
 
-### Bridge Planner Tests (test_bridge_planner.py)
+### Sequence Planner Tests (test_sequence_planner.py)
 
 ✅ Retry logic (under limit, at limit)
 ✅ Strict completion strategy
@@ -149,7 +149,7 @@ Then open `htmlcov/index.html` in a browser.
 ## Test Coverage Goals
 
 - **Models**: 100% coverage of all task models
-- **Bridge Planner**: 95%+ coverage of decision logic
+- **Sequence Planner**: 95%+ coverage of decision logic
 - **Result Retrieval**: 90%+ coverage of retrieval methods
 - **Integration**: Cover all major execution paths
 
@@ -171,8 +171,8 @@ When adding new functionality:
 ### Example
 
 ```python
-class TestBridgePlannerRetryLogic:
-    """Test Bridge Planner retry logic"""
+class TestSequencePlannerRetryLogic:
+    """Test Sequence Planner retry logic"""
 
     def test_should_retry_iteration_under_limit(self):
         """Test that retry is allowed when under limit"""
@@ -229,7 +229,7 @@ pytest tests/ -m "not slow"
 
 - LLM-based matching tests are mocked (no actual API calls)
 - Some integration tests may need actual browser instance for full E2E
-- Task execution wiring tests pending (requires ReactiveGoalDeterminer mocking)
+- Task execution wiring tests pending (requires ActionPlanner mocking)
 
 ## Future Test Additions
 

@@ -1,7 +1,7 @@
 """
-Reactive Goal Determiner - Determines the next viewport-aware plan based on current state.
+Action Planner - Determines the next viewport-aware plan based on current state.
 
-Step 2: LLM-based reactive goal determination that builds a sequence of actions you can execute
+Step 2: LLM-based action planning that builds a sequence of actions you can execute
 before the viewport changes, relying only on what is visible.
 """
 
@@ -26,7 +26,7 @@ from utils.overlay_description import describe_overlay_element, overlay_element_
 VALID_ACTION_COMMANDS = {
     "click", "type", "press", "scroll", "extract", "extract_url", "get_url",
     "defer", "navigate", "back", "forward", "subagents", "form", "select",
-    "upload", "datetime", "stop", "open", "handle_datetime", "mini_goal",
+    "upload", "datetime", "stop", "open", "handle_datetime", "interceptor",
     "ask", "complete",
 }
 
@@ -97,7 +97,7 @@ def _normalize_body(cmd: str, body: str) -> str:
         return body if body and body.isdigit() else "1"
 
     if cmd in {"extract", "extract_url", "get_url", "navigate", "subagents",
-               "mini_goal", "form", "select", "upload", "datetime", "open",
+               "interceptor", "form", "select", "upload", "datetime", "open",
                "handle_datetime"}:
         if not body:
             raise ValueError(f"{cmd} requires additional detail")
@@ -172,7 +172,7 @@ class ActionPlan(BaseModel):
         return value
 
 
-class ReactiveGoalDeterminer:
+class ActionPlanner:
     """
     Determines a viewport-safe action plan based on:
     - Current viewport (what's visible on screen)
@@ -199,7 +199,7 @@ class ReactiveGoalDeterminer:
         extraction_schema: Optional[Dict[str, Any]] = None,
     ):
         """
-        Initialize the reactive goal determiner.
+        Initialize the action planner.
 
         Args:
             user_prompt: The user's high-level goal
@@ -267,7 +267,7 @@ class ReactiveGoalDeterminer:
             return plan
 
         except Exception as e:
-            dprint(f"⚠️ ReactiveGoalDeterminer error: {e}")
+            dprint(f"⚠️ ActionPlanner error: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -383,7 +383,7 @@ class ReactiveGoalDeterminer:
     
     
     def _build_system_prompt(self) -> str:
-        """Build system prompt for reactive action determination"""
+        """Build system prompt for action planning."""
         # Use cached prompt if available
         if "default" in self._system_prompt_cache:
             return self._system_prompt_cache["default"]
@@ -503,7 +503,7 @@ COMMANDS:
 - defer: [msg|seconds] - Pause for user (captcha/manual input)
 - form: <description> - Fill entire form
 - datetime: <value> in <picker> - Set date/time
-- mini_goal: <instruction> - Focus on complex sub-task
+- interceptor: <instruction> - Focus on complex sub-task
 
 DECISION MAKING:
 - If user's goal is accomplished OR condition not met (for "if" tasks), use "complete: <reasoning>" immediately
