@@ -528,7 +528,7 @@ os.environ.setdefault("CRASHPAD_METRICS", str(crashpad_path))
 
 config = Config(
     model=ModelConfig(
-        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+        agent_model="gemini/gemini-2.5-flash-lite",
         command_model="gpt-5-mini",
         reasoning_level=ReasoningLevel.HIGH
     ),
@@ -569,32 +569,32 @@ setup_interceptors(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://www.google.com/search?q=ios+developer+jobs&sca_esv=325502952459ac64&sxsrf=ANbL-n73LSydD6THtFv_a1zWBUikhaJy0A:1768018647138&source=hp&ei=19Jhaf2eBvLn7_UP2uu1yQM&iflsig=AFdpzrgAAAAAaWHg50wsYj4t-7e-CQfyQQ0kVZKXd1Gn&udm=8&oq=ios+devel&gs_lp=Egdnd3Mtd2l6Iglpb3MgZGV2ZWwqAggAMg0QIxjwBRiABBgnGIoFMgcQIxjwBRgnMg0QIxjwBRiABBgnGIoFMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABEiDHlAAWJgRcAB4AJABAJgBQKABmwSqAQE5uAEDyAEA-AEBmAIJoALABMICChAjGIAEGCcYigXCAgsQABiABBixAxiDAcICERAuGIAEGLEDGNEDGIMBGMcBwgIOEC4YgAQYsQMYgwEYigXCAg4QABiABBixAxiDARiKBcICFBAuGIAEGLEDGNEDGIMBGMcBGIoFwgIIEAAYgAQYsQPCAgsQLhiABBixAxiDAZgDAJIHATmgB9FisgcBObgHwATCBwUwLjcuMsgHGYAIAA&sclient=gws-wiz&jbr=sep:0")
+bot.page.goto("https://www.google.com/")
 
 apply_thinking_border(bot)
 result = bot.execute_mission(
-    "click reject cookies if they are present, get the job title (eg ios developer) and company name from the third job listing",
-    base_knowledge=[
-        "You must click the 'Jobs' tab button before clicking a job listing"
-        "You must press enter after typing in a search field"
-        "Don't click jobs you have already clicked"
-        "To extract the necessary information, you must click the job listing and then extract the job title and company name and then extract the url from the apply button"
-        "Don't click the apply button, just extract the job title, url and company name",
-        """
-        This is what you should do when you are on the job listing page:
-        For each job listing:
-            - Click a job listing
-                - A right side bar should appear with the job listing details
-                - The side bar should have an Apply button, it might have multiple Apply buttons
-            - Extract the job title (eg Doctor), company name (eg NHS)
-            - Extract the URL from the first Apply button in the right side bar
-            - Close the side bar after extracting the URL
-                - If the side bar is still visible, keep attempting to close it
-            - If you are on the 5th job listing, you are done, otherwise:
-                - Scroll down if the other job listings are not visible
-                - Click the next job listing and repeat the process
-        """
-    ],
+    "go to hackernews click the 5th article and whilst on the article page, tell me what its about",
+    # base_knowledge=[
+    #     "You must click the 'Jobs' tab button before clicking a job listing"
+    #     "You must press enter after typing in a search field"
+    #     "Don't click jobs you have already clicked"
+    #     "To extract the necessary information, you must click the job listing and then extract the job title and company name and then extract the url from the apply button"
+    #     "Don't click the apply button, just extract the job title, url and company name",
+    #     """
+    #     This is what you should do when you are on the job listing page:
+    #     For each job listing:
+    #         - Click a job listing
+    #             - A right side bar should appear with the job listing details
+    #             - The side bar should have an Apply button, it might have multiple Apply buttons
+    #         - Extract the job title (eg Doctor), company name (eg NHS)
+    #         - Extract the URL from the first Apply button in the right side bar
+    #         - Close the side bar after extracting the URL
+    #             - If the side bar is still visible, keep attempting to close it
+    #         - If you are on the 5th job listing, you are done, otherwise:
+    #             - Scroll down if the other job listings are not visible
+    #             - Click the next job listing and repeat the process
+    #     """
+    # ],
     show_completion_reasoning_every_iteration=False,
     user_question_callback=ask_user_for_help,
 )
