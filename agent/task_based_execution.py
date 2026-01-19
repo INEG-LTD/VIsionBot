@@ -657,6 +657,8 @@ Use the results above to complete your task."""
                 break
 
             # Capture current state
+            if hasattr(self, "_maybe_wait_for_turn_load"):
+                self._maybe_wait_for_turn_load(reason="sequential turn")
             snapshot = self._capture_snapshot(full_page=False)
             environment_state = EnvironmentState(
                 browser_state=snapshot,
@@ -1003,6 +1005,8 @@ Use the results above to complete your task."""
 
             # Capture current state
             try:
+                if hasattr(self, "_maybe_wait_for_turn_load"):
+                    self._maybe_wait_for_turn_load(reason="mini-loop iteration")
                 snapshot = self._capture_snapshot(full_page=False)
             except Exception as e:
                 return TaskResult(
@@ -1439,7 +1443,6 @@ Use the results above to complete your task."""
                     plan_failed = True
                     break
 
-            # End of step loop - if we get here, all steps in plan were executed
             # Continue to next mini-loop iteration to get a new plan
 
         # Max iterations reached without completion

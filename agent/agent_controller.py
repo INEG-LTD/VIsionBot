@@ -146,6 +146,10 @@ class Agent(TaskBasedExecutionMixin):
         interaction_summary_limit_action: Optional[int] = None,
         # Max actions per plan
         max_actions_per_plan: int = 6,
+        # Per-turn load wait
+        wait_for_load_before_turn: Optional[bool] = None,
+        wait_for_load_state: Optional[str] = None,
+        wait_for_load_timeout_ms: Optional[int] = None,
         # Image detail level for vision API
         image_detail: str = "high",
         # Screenshot saving for debugging
@@ -238,6 +242,21 @@ class Agent(TaskBasedExecutionMixin):
         self.interaction_summary_limit_completion = interaction_summary_limit_completion
         self.interaction_summary_limit_action = interaction_summary_limit_action
         self.max_actions_per_plan = max_actions_per_plan
+        self.wait_for_load_before_turn = (
+            wait_for_load_before_turn
+            if wait_for_load_before_turn is not None
+            else getattr(bot, "wait_for_load_before_turn", False)
+        )
+        self.wait_for_load_state = (
+            wait_for_load_state
+            if wait_for_load_state is not None
+            else getattr(bot, "wait_for_load_state", "networkidle")
+        )
+        self.wait_for_load_timeout_ms = (
+            wait_for_load_timeout_ms
+            if wait_for_load_timeout_ms is not None
+            else getattr(bot, "wait_for_load_timeout_ms", 30000)
+        )
         self._user_inputs: List[Dict[str, Any]] = []
         self._temp_user_inputs: List[Dict[str, Any]] = []  # Single-use suggestions
         self._requirement_flags: Dict[str, bool] = {}
@@ -469,6 +488,25 @@ class Agent(TaskBasedExecutionMixin):
         
         # Wait until resume() is called (this blocks the execution thread)
         self._pause_event.wait()
+
+    def _maybe_wait_for_turn_load(self, reason: str = "turn") -> None:
+        if not self.wait_for_load_before_turn:
+            return
+        try:
+            if getattr(self.bot, "page", None) and not self.bot.page.is_closed():
+                try:
+                    self.event_logger.system_debug(
+                        f"Waiting for page load before {reason} (state={self.wait_for_load_state})"
+                    )
+                except Exception:
+                    pass
+                self.bot.wait_for_load(
+                    timeout=self.wait_for_load_timeout_ms,
+                    state=self.wait_for_load_state,
+                )
+        except Exception:
+            # Best-effort wait; do not block on load wait errors.
+            pass
     
     def run_execute_task(self, user_prompt: str, agent_context: Optional[AgentContext] = None) -> TaskResult:
         """
@@ -623,6 +661,7 @@ class Agent(TaskBasedExecutionMixin):
             self._drain_sub_agent_results()
             
             # 1. Observe: Capture browser state (start with viewport)
+            self._maybe_wait_for_turn_load(reason="iteration")
             snapshot = self._capture_snapshot(full_page=False)
             self.event_logger.agent_iteration(iteration + 1, self.max_iterations, url=snapshot.url, title=snapshot.title)
             

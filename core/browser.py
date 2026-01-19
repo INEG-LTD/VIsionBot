@@ -309,6 +309,9 @@ class Browser:
         self.enable_sub_agents = config.execution.enable_sub_agents
         self.max_actions_per_plan = config.execution.max_actions_per_plan
         self.track_ineffective_actions = config.execution.track_ineffective_actions
+        self.wait_for_load_before_turn = config.execution.wait_for_load_before_turn
+        self.wait_for_load_state = config.execution.wait_for_load_state
+        self.wait_for_load_timeout_ms = config.execution.wait_for_load_timeout_ms
 
         self.history_config = config.history
         self.history_manager = HistoryManager(
@@ -1569,6 +1572,9 @@ class Browser:
                 interaction_summary_limit_completion=interaction_summary_limit_completion,
                 interaction_summary_limit_action=interaction_summary_limit_action,
                 max_actions_per_plan=self.max_actions_per_plan,
+                wait_for_load_before_turn=self.wait_for_load_before_turn,
+                wait_for_load_state=self.wait_for_load_state,
+                wait_for_load_timeout_ms=self.wait_for_load_timeout_ms,
                 image_detail=self.image_detail,
                 save_screenshots=self.save_screenshots,
                 screenshot_dir=self.screenshot_dir,

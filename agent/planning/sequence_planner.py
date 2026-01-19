@@ -258,7 +258,7 @@ You have exactly TWO decision options:
    - The task must be:
      * Immediately executable (grounded in current page state)
      * Specific (not abstract - reference actual visible elements)
-     * Aligned with the sequential goal
+     * Aligned with the sequential task
      * Informed by iteration history (don't repeat failed approaches)
 
    Example: "Extract the company name from the 3rd job listing card currently visible"
@@ -270,7 +270,7 @@ You have exactly TWO decision options:
      * Completion condition is satisfied
      * No more data available to process
      * Unrecoverable error state
-     * Goal has been achieved
+     * Task has been achieved
 
 DECISION CRITERIA:
 
@@ -278,12 +278,12 @@ When to GENERATE NEXT TASK:
 - Completion condition not yet met
 - More data/elements are available to process
 - Current iteration has remaining retry attempts (if previous task failed)
-- Goal still requires more work
+- Task still requires more work
 
 When to END SEQUENCE:
 - Completion condition is satisfied (e.g., collected enough items)
 - No more relevant elements visible on page
-- Goal has been achieved
+- Task has been achieved
 - Unrecoverable error state (same error repeated many times)
 
 IMPORTANT GUIDELINES:
@@ -294,8 +294,8 @@ IMPORTANT GUIDELINES:
 - Consider the completion condition when deciding to end
 - If you see the same elements/state as previous iterations, you may be stuck - consider ending
 
-CRITICAL RULE: Generated tasks must ALWAYS match the sequential goal
-- If the goal is "Extract from N items", EVERY task must be an extraction task
+CRITICAL RULE: Generated tasks must ALWAYS match the sequential task
+- If the task is "Extract from N items", EVERY task must be an extraction task
 - Example: "Extract job title from 5th listing" (correct)
 - Example: "Scroll down to see 5th listing" (WRONG - this is NOT an extraction task)
 - The mini-loop will handle scrolling, clicking, and navigation automatically
@@ -346,7 +346,7 @@ Your response must be valid JSON with this structure:
         Builds the user prompt for Sequence Planner decision.
 
         Includes:
-        - Sequential goal and completion condition
+        - Sequential task and completion condition
         - Current iteration state (index, attempts)
         - Completed iteration history (with results)
         - Current page context
@@ -378,7 +378,7 @@ Your response must be valid JSON with this structure:
 
         # Build prompt
         prompt = f"""SEQUENTIAL TASK:
-Goal: {sequential_task.goal}
+Task: {sequential_task.goal}
 Completion Condition: {sequential_task.completion_condition}
 Target Count: {sequential_task.target_count if sequential_task.target_count is not None else "Unknown (indefinite)"}
 
@@ -402,7 +402,7 @@ CURRENT PAGE STATE:
 
 DECISION REQUIRED:
 
-Based on the sequential goal, completion condition, iteration history, and current page state:
+Based on the sequential task, completion condition, iteration history, and current page state:
 
 1. Should you generate a new Normal Task for the current iteration?
    - If yes, specify the exact task (grounded in visible elements)
@@ -412,7 +412,7 @@ Based on the sequential goal, completion condition, iteration history, and curre
 
 2. Should you end the sequential task?
    - If yes, explain why the sequence is complete
-   - Consider: Is the goal satisfied? Are there no more items? Are we stuck?
+   - Consider: Is the task satisfied? Are there no more items? Are we stuck?
 
 Remember:
 - Look at the screenshot to see what's actually visible

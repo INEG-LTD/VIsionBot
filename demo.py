@@ -535,7 +535,10 @@ config = Config(
     execution=ExecutionConfig(
         max_attempts=30,
         max_actions_per_plan=1,
-        track_ineffective_actions=False
+        track_ineffective_actions=False,
+        wait_for_load_before_turn=True,
+        wait_for_load_state="networkidle",
+        wait_for_load_timeout_ms=30000,
     ),
     elements=ElementConfig(
         overlay_mode="all",
@@ -569,11 +572,14 @@ setup_interceptors(bot)
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
 bot.use(ErrorHandlingMiddleware())
 bot.start()
-bot.page.goto("https://www.google.com/")
+bot.page.goto("https://news.ycombinator.com/")
 
 apply_thinking_border(bot)
 result = bot.execute_mission(
-    "go to hackernews click the 5th article and whilst on the article page, tell me what its about",
+    " click and open the 5th article webpage and give me a summary of the article",
+    base_knowledge=[
+        "Clicking an article will open a new webpage"
+    ],
     # base_knowledge=[
     #     "You must click the 'Jobs' tab button before clicking a job listing"
     #     "You must press enter after typing in a search field"

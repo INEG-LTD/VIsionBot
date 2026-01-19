@@ -437,6 +437,11 @@ class EventLogger:
                 msg += f": {plan_reasoning}"
             if expected_outcome:
                 msg += f" → Expected: {expected_outcome}"
+            why_not_complete = details.get("why_not_complete")
+            if why_not_complete:
+                msg += f" → Why not complete: {why_not_complete}"
+            if details.get("will_complete_task") is True:
+                msg += " → Will complete task: true"
             self.emit(
                 EventType.PLAN_GENERATED,
                 msg,

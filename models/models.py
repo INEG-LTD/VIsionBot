@@ -12,7 +12,7 @@ import time
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 # ============================================================================
@@ -197,7 +197,12 @@ class Sequence(BaseTask):
     """A high-level goal requiring multiple turns (formerly SequentialTask)"""
     type: Literal[TaskType.SEQUENTIAL] = TaskType.SEQUENTIAL
 
-    goal: str = Field(description="The overall objective (e.g., 'Extract company names from job listings')")
+    model_config = ConfigDict(populate_by_name=True)
+
+    goal: str = Field(
+        description="The overall objective (e.g., 'Extract company names from job listings')",
+        validation_alias=AliasChoices("task", "goal"),
+    )
     completion_condition: str = Field(
         description="Natural language description of when this sequence is complete"
     )
