@@ -1003,6 +1003,54 @@ Use the results above to complete your task."""
 
             last_extracted_data = None
 
+            # === COMPLETION CHECK (FIRST - before any observations) ===
+            # Check if task is complete based ONLY on interaction history
+            try:
+                self.event_logger.system_debug(f"[Mini-loop iter {iteration}] Checking completion from history...")
+            except Exception:
+                pass
+
+            if hasattr(self, '_check_completion_from_history'):
+                try:
+                    self.event_logger.system_debug(f"[Mini-loop iter {iteration}] Running history-based completion check")
+                except Exception:
+                    pass
+
+                completion_reasoning = self._check_completion_from_history(
+                    user_prompt=task_instruction,  # Use task instruction, not original mission
+                    interaction_history=self.bot.session_tracker.interaction_history,
+                    notebook=self.notebook if hasattr(self, 'notebook') else None
+                )
+
+                if completion_reasoning:
+                    # Task is complete based on actions performed
+                    try:
+                        self.event_logger.system_info(f"✅ Task complete (history-based): {completion_reasoning}")
+                    except Exception:
+                        pass
+
+                    return TaskResult(
+                        success=True,
+                        confidence=1.0,
+                        reasoning=completion_reasoning,
+                        evidence=self._build_evidence({
+                            "completion_type": "history_based",
+                            "iterations": iteration + 1,
+                            "task_instruction": task_instruction,
+                        }) if hasattr(self, '_build_evidence') else {}
+                    )
+                else:
+                    try:
+                        self.event_logger.system_debug(f"[Mini-loop iter {iteration}] Task not complete yet, continuing...")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.event_logger.system_debug(f"[Mini-loop iter {iteration}] WARNING: _check_completion_from_history method not found!")
+                except Exception:
+                    pass
+            # ===========================================================
+
             # Capture current state
             try:
                 if hasattr(self, "_maybe_wait_for_turn_load"):

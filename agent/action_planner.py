@@ -496,6 +496,7 @@ ACTION RULES:
 3. EXTRACTION - CRITICAL DISTINCTION:
    - "extract: <what>" - Extract DATA/TEXT from page (job title, company name, price, description, etc.)
      Example: "extract: job title and company name"
+   - always extract what the user asks for, do not make up data, eg the user asks for job title and company name, you should extract both, do not make up data like "extract: job title and company name and location"
    - "extract_url: <target>" - Extract URL/LINK from element (apply button, job link, etc.)
      Example: "extract_url: Apply button"
    - ⚠️ NEVER use "extract:" for URLs - ALWAYS use "extract_url:" for links/buttons
@@ -946,11 +947,12 @@ CRITICAL OUTPUT FORMAT:
             if interaction.text_input:
                 summary += f" - entered: '{interaction.text_input[:30]}'"
             if interaction.target_element_info:
-                element_desc = interaction.target_element_info.get('description', '')[:50]
+                element_desc = (interaction.target_element_info.get('description', '') or '')[:50]
                 if element_desc:
                     summary += f" on: {element_desc}"
             # Add reasoning for click actions to help agent understand what happened
-            if interaction.interaction_type.value == "click" and interaction.reasoning:
+            interaction_type_str = interaction.interaction_type.value if hasattr(interaction.interaction_type, 'value') else str(interaction.interaction_type)
+            if interaction_type_str == "click" and interaction.reasoning:
                 summary += f" (reason: {interaction.reasoning[:40]}...)"
             
             summary_parts.append(summary)

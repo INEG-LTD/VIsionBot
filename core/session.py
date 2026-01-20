@@ -274,8 +274,8 @@ class SessionTracker:
         Simple tracking without goal evaluation.
         """
         # For navigation interactions, use provided before_state if available (since navigation already happened)
-        # Otherwise capture current state as before_state
-        before_state = kwargs.get('before_state') or self._capture_current_state()
+        # Otherwise capture current state as before_state. Always include a viewport screenshot.
+        before_state = kwargs.get('before_state') or self._capture_current_state(include_screenshot=True)
         
         interaction = Interaction(
             timestamp=time.time(),

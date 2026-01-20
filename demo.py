@@ -538,7 +538,7 @@ config = Config(
         track_ineffective_actions=False,
         wait_for_load_before_turn=True,
         wait_for_load_state="networkidle",
-        wait_for_load_timeout_ms=30000,
+        wait_for_load_timeout_ms=5000,
     ),
     elements=ElementConfig(
         overlay_mode="all",

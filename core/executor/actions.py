@@ -21,7 +21,7 @@ def execute_forward(executor) -> bool:
     before_state = None
     try:
         before_url = executor.page.url
-        before_state = executor.session_tracker._capture_current_state()
+        before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
     except Exception:
         pass
 
@@ -130,7 +130,7 @@ def execute_click(
         pass
 
     # Capture state BEFORE performing the click (critical for accurate before_state)
-    before_state = executor.session_tracker._capture_current_state()
+    before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
 
     success = False
     error_msg = None
@@ -147,11 +147,53 @@ def execute_click(
     if not success:
         dprint(f"  ❌ Click failed: {error_msg}")
 
+    # Build target description from step information
+    target_description = None
+    overlay_desc = getattr(step, 'overlay_description', None)
+    if overlay_desc:
+        target_description = overlay_desc
+    elif getattr(step, "action", None):
+        # Extract target from action string (e.g., "click: Submit button" -> "Submit button")
+        action_str = step.action.value if hasattr(step.action, "value") else str(step.action)
+        if ":" in action_str:
+            target_description = action_str.split(":", 1)[1].strip()
+
+    # If we still don't have a description, try to pull it from detected elements using overlay index
+    if not target_description and elements and hasattr(elements, "elements") and step.overlay_index is not None:
+        try:
+            for el in elements.elements:
+                overlay_num = getattr(el, "overlay_number", None)
+                if overlay_num == step.overlay_index:
+                    target_description = getattr(el, "description", None)
+                    break
+        except Exception:
+            pass
+    if not target_description and step.overlay_index is not None:
+        target_description = f"element #{step.overlay_index}"
+
+    # Get reasoning if available; fall back to session_tracker's current action reasoning
+    step_reasoning = getattr(step, 'reasoning', None)
+    if not step_reasoning:
+        try:
+            step_reasoning = executor.session_tracker.get_current_action_reasoning()
+        except Exception:
+            step_reasoning = None
+
+    # Debug: Log what we're about to record
+    from utils.debug_print import dprint
+    dprint(f"[CLICK RECORD] target_description={target_description}, reasoning={step_reasoning[:100] if step_reasoning else None}, action={step.action}")
+
     # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
     executor.session_tracker.record_interaction(
         InteractionType.CLICK,
         before_state=before_state,  # Pass explicit before_state captured before the click
         coordinates=(x, y),
+        target_element_info={
+            "description": target_description,
+            "overlay_index": step.overlay_index,
+            "action": step.action.value if hasattr(step.action, "value") else str(step.action),
+        } if target_description or step.overlay_index else None,
+        reasoning=step_reasoning,  # Include WHY this action was taken
         success=success,
         error_message=error_msg
     )
@@ -293,7 +335,7 @@ def execute_type(
         time.sleep(random.uniform(0.1, 0.3))
 
     # Capture state BEFORE performing the type action (critical for accurate before_state)
-    before_state = executor.session_tracker._capture_current_state()
+    before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
 
     try:
         executor.event_logger.system_debug(f"Typing: {step.text_to_type}")
@@ -350,12 +392,54 @@ def execute_type(
         error_msg = str(e)
         dprint(f"  ❌ Typing failed: {e}")
 
+    # Build target description from step information
+    target_description = None
+    overlay_desc = getattr(step, 'overlay_description', None)
+    if overlay_desc:
+        target_description = overlay_desc
+    elif getattr(step, "action", None):
+        # Extract target from action string (e.g., "type: text : field" -> "field")
+        action_str = step.action.value if hasattr(step.action, "value") else str(step.action)
+        if ":" in action_str:
+            parts = action_str.split(":")
+            if len(parts) >= 3:  # "type: text : field" format
+                target_description = parts[2].strip()
+            elif len(parts) == 2:
+                target_description = parts[1].strip()
+
+    # If we still don't have a description, try to pull it from detected elements using overlay index
+    if not target_description and elements and hasattr(elements, "elements") and step.overlay_index is not None:
+        try:
+            for el in elements.elements:
+                overlay_num = getattr(el, "overlay_number", None)
+                if overlay_num == step.overlay_index:
+                    target_description = getattr(el, "description", None)
+                    break
+        except Exception:
+            pass
+    if not target_description and step.overlay_index is not None:
+        target_description = f"element #{step.overlay_index}"
+
+    # Get reasoning if available; fall back to session_tracker's current action reasoning
+    step_reasoning = getattr(step, 'reasoning', None)
+    if not step_reasoning:
+        try:
+            step_reasoning = executor.session_tracker.get_current_action_reasoning()
+        except Exception:
+            step_reasoning = None
+
     # Record type interaction with goal monitor (pass explicit before_state since typing already happened)
     executor.session_tracker.record_interaction(
         InteractionType.TYPE,
         before_state=before_state,  # Pass explicit before_state captured before the typing
         coordinates=(x, y) if x is not None and y is not None else None,
         text_input=step.text_to_type,
+        target_element_info={
+            "description": target_description,
+            "overlay_index": step.overlay_index,
+            "action": step.action.value if hasattr(step.action, "value") else str(step.action),
+        } if target_description or step.overlay_index else None,
+        reasoning=step_reasoning,  # Include WHY this action was taken
         success=success,
         error_message=error_msg
     )
@@ -499,7 +583,7 @@ def execute_scroll(executor, step: ActionStep) -> bool:
     if hasattr(executor.event_logger, 'debug_mode') and executor.event_logger.debug_mode:
         dprint(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
 
-    before_state = executor.session_tracker._capture_current_state()
+    before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
     success = False
     error_msg = None
     try:
@@ -591,7 +675,7 @@ def execute_press(executor, step: ActionStep) -> bool:
     )
 
     # Capture state BEFORE performing the press action (critical for accurate before_state)
-    before_state = executor.session_tracker._capture_current_state()
+    before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
 
     # Record planned interaction with goal monitor
     # Removed planned interaction tracking (was for goal evaluation)
@@ -921,7 +1005,7 @@ def execute_back(executor) -> bool:
     before_state = None
     try:
         before_url = executor.page.url
-        before_state = executor.session_tracker._capture_current_state()
+        before_state = executor.session_tracker._capture_current_state(include_screenshot=True)
     except Exception:
         pass
 

@@ -155,6 +155,8 @@ class Agent(TaskBasedExecutionMixin):
         # Screenshot saving for debugging
         save_screenshots: bool = False,
         screenshot_dir: str = "agent_screenshots",
+        # Completion history images
+        completion_history_image_limit: int = 3,
         # Task-based execution
         sequential_task_config: Optional[SequentialTaskConfig] = None,
         use_task_based_execution: bool = True,
@@ -198,6 +200,7 @@ class Agent(TaskBasedExecutionMixin):
         self.task_start_time: Optional[float] = None
         self.allow_non_clickable_clicks = True  # Allow clicking non-clickable elements (configurable)
         self.track_ineffective_actions = track_ineffective_actions  # Track actions that didn't yield page changes
+        self.completion_history_image_limit = completion_history_image_limit
         self.detect_ineffective_actions = track_ineffective_actions
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
         self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
@@ -659,7 +662,71 @@ class Agent(TaskBasedExecutionMixin):
 
             # Drain any completed sub-agent results before continuing
             self._drain_sub_agent_results()
-            
+
+            # === COMPLETION CHECK (FIRST - before any observations) ===
+            # Check if task is complete based ONLY on interaction history,
+            # without looking at current page state or screenshot
+            try:
+                self.event_logger.system_debug(f"[Iteration {iteration+1}] Checking completion from history...")
+            except Exception:
+                pass
+
+            completion_reasoning = self._check_completion_from_history(
+                user_prompt=user_prompt,
+                interaction_history=self.bot.session_tracker.interaction_history,
+                notebook=self.notebook
+            )
+
+            if completion_reasoning:
+                try:
+                    self.event_logger.system_debug(f"[Iteration {iteration+1}] Task complete (history-based)!")
+                except Exception:
+                    pass
+                # Task is complete based on actions performed - return immediately
+                try:
+                    self.event_logger.agent_completed(completion_reasoning)
+                except Exception:
+                    pass
+
+                # Store completion in interaction history
+                try:
+                    completion_interaction = Interaction(
+                        timestamp=time.time(),
+                        interaction_type=InteractionType.CONTEXT_GUARD,
+                        reasoning=f"Task completed (history-based): {completion_reasoning}",
+                        success=True
+                    )
+                    self.bot.session_tracker.interaction_history.append(completion_interaction)
+                except Exception:
+                    pass
+
+                # Call completion callback if provided
+                if hasattr(self, 'completion_callback') and self.completion_callback:
+                    try:
+                        self.completion_callback(completion_reasoning)
+                    except Exception as e:
+                        dprint(f"⚠️ Completion callback error: {e}")
+
+                # End task successfully
+                self.bot.execution_timer.end_task()
+                self.bot.execution_timer.log_summary(self.event_logger)
+
+                return TaskResult(
+                    success=True,
+                    confidence=1.0,
+                    reasoning=completion_reasoning,
+                    evidence=self._build_evidence({
+                        "completion_type": "history_based",
+                        "iterations": iteration + 1
+                    })
+                )
+            else:
+                try:
+                    self.event_logger.system_debug(f"[Iteration {iteration+1}] Task not complete yet, continuing...")
+                except Exception:
+                    pass
+            # ===========================================================
+
             # 1. Observe: Capture browser state (start with viewport)
             self._maybe_wait_for_turn_load(reason="iteration")
             snapshot = self._capture_snapshot(full_page=False)
@@ -3170,6 +3237,326 @@ class Agent(TaskBasedExecutionMixin):
                 for task_id, data in self._task_tracker.items()
             }
         return evidence
+
+    def _format_interaction_history_detailed(self, interaction_history: List[Interaction]) -> str:
+        """
+        Format interaction history with full details about WHAT was interacted with.
+
+        Returns a detailed string representation showing:
+        - What action was performed
+        - What element/target was interacted with
+        - What text was typed
+        - What was extracted
+        - Success/failure status
+        """
+        if not interaction_history:
+            return "No actions performed yet."
+
+        lines = []
+        for i, interaction in enumerate(interaction_history, 1):
+            action_type = interaction.interaction_type.value
+            parts = [f"{i}. {action_type.upper()}"]
+
+            # Add details based on interaction type
+            if interaction.interaction_type == InteractionType.CLICK:
+                # Show what was clicked with as much detail as possible
+                click_target = None
+                if interaction.reasoning:
+                    # Extract target from reasoning if available
+                    # e.g., "The user wants to click the 5th article link"
+                    parts.append(f"reason: {interaction.reasoning[:150]}")
+                    click_target = "described in reasoning"
+                elif interaction.target_element_info:
+                    elem_desc = interaction.target_element_info.get('description', '')
+                    if elem_desc:
+                        parts.append(f"target: {elem_desc}")
+                        click_target = elem_desc
+                    elif 'overlay_index' in interaction.target_element_info:
+                        overlay_idx = interaction.target_element_info['overlay_index']
+                        parts.append(f"target: element #{overlay_idx}")
+                        click_target = f"element #{overlay_idx}"
+
+                if interaction.coordinates and not click_target:
+                    parts.append(f"at coordinates ({interaction.coordinates[0]}, {interaction.coordinates[1]})")
+                elif interaction.coordinates and click_target:
+                    parts.append(f"at ({interaction.coordinates[0]}, {interaction.coordinates[1]})")
+
+            elif interaction.interaction_type == InteractionType.TYPE:
+                if interaction.text_input:
+                    parts.append(f"text: '{interaction.text_input}'")
+                if interaction.target_element_info:
+                    elem_desc = interaction.target_element_info.get('description', '')
+                    if elem_desc:
+                        parts.append(f"into: {elem_desc}")
+
+            elif interaction.interaction_type == InteractionType.PRESS:
+                if interaction.keys_pressed:
+                    parts.append(f"key: {interaction.keys_pressed}")
+
+            elif interaction.interaction_type == InteractionType.SCROLL:
+                if interaction.scroll_direction:
+                    parts.append(f"direction: {interaction.scroll_direction}")
+                if interaction.scroll_axis:
+                    parts.append(f"axis: {interaction.scroll_axis}")
+
+            elif interaction.interaction_type == InteractionType.NAVIGATION:
+                if interaction.navigation_url:
+                    parts.append(f"to: {interaction.navigation_url}")
+                elif interaction.target_element_info:
+                    direction = interaction.target_element_info.get('direction', '')
+                    if direction:
+                        parts.append(f"direction: {direction}")
+
+            elif interaction.interaction_type == InteractionType.EXTRACT:
+                if interaction.extraction_prompt:
+                    parts.append(f"prompt: {interaction.extraction_prompt}")
+                if interaction.extracted_data:
+                    # Show summary of extracted data
+                    if isinstance(interaction.extracted_data, dict):
+                        if 'items' in interaction.extracted_data:
+                            item_count = len(interaction.extracted_data.get('items', []))
+                            parts.append(f"extracted {item_count} items")
+                        else:
+                            parts.append(f"extracted data with {len(interaction.extracted_data)} fields")
+
+            elif interaction.interaction_type == InteractionType.DEFER:
+                if interaction.text_input:
+                    parts.append(f"reason: {interaction.text_input}")
+
+            # Add reasoning if available (but not if already included above in click target)
+            if interaction.reasoning and interaction.interaction_type != InteractionType.CLICK:
+                parts.append(f"reason: {interaction.reasoning[:100]}")
+
+            # Add success status
+            if not interaction.success:
+                status = "❌ FAILED"
+                if interaction.error_message:
+                    status += f": {interaction.error_message}"
+                parts.append(status)
+            else:
+                parts.append("✓ SUCCESS")
+
+            lines.append(" | ".join(parts))
+
+        return "\n".join(lines)
+
+    def _check_completion_from_history(
+        self,
+        user_prompt: str,
+        interaction_history: List[Interaction],
+        notebook: Notebook
+    ) -> Optional[str]:
+        """
+        Check if task is complete based ONLY on interaction history.
+
+        This method evaluates completion WITHOUT looking at the current page state,
+        current screenshot, or any observations. It only considers what actions have
+        been performed and what data has been extracted.
+
+        Args:
+            user_prompt: The user's original goal
+            interaction_history: List of all actions performed
+            notebook: Extracted data collected during execution
+
+        Returns:
+            str: Completion reasoning if task is complete, None if incomplete
+        """
+        # Define response model
+        class CompletionCheck(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            is_complete: bool = Field(
+                description="True if the user's goal has been accomplished based on the actions performed, False otherwise"
+            )
+            reasoning: str = Field(
+                description="Explain why the task is complete or what is still missing. Be specific about what was accomplished or what remains to be done."
+            )
+
+        # Format the interaction history
+        history_text = self._format_interaction_history_detailed(interaction_history)
+
+        # Debug: Log what is being evaluated
+        try:
+            self.event_logger.system_debug(f"[Completion Check] Evaluating task: {user_prompt}")
+            self.event_logger.system_debug(f"[Completion Check] Formatted history:\n{history_text}")
+        except Exception:
+            pass
+
+        # Collect recent screenshots (oldest → newest) for completion context
+        recent_images: List[bytes] = []
+        recent_image_captions: List[str] = []
+        max_images = getattr(self, "completion_history_image_limit", 0) or 0
+        if max_images > 0 and interaction_history:
+            for interaction in reversed(interaction_history):
+                state = getattr(interaction, "before_state", None)
+                screenshot = getattr(state, "screenshot", None) if state else None
+                if screenshot:
+                    target_desc = ""
+                    if interaction.target_element_info:
+                        target_desc = interaction.target_element_info.get("description") or ""
+                        if not target_desc and interaction.target_element_info.get("overlay_index") is not None:
+                            target_desc = f"element #{interaction.target_element_info.get('overlay_index')}"
+                    reason_snippet = ""
+                    if interaction.reasoning:
+                        reason_snippet = interaction.reasoning[:80]
+                    caption_parts = [
+                        f"Before {interaction.interaction_type.value.upper()}",
+                        f"url: {state.url or 'unknown'}",
+                    ]
+                    if target_desc:
+                        caption_parts.append(f"target: {target_desc}")
+                    if reason_snippet:
+                        caption_parts.append(f"reason: {reason_snippet}")
+                    caption_parts.append("result: " + ("success" if interaction.success else "failed"))
+                    recent_images.append(screenshot)
+                    recent_image_captions.append(" | ".join(caption_parts))
+                if len(recent_images) >= max_images:
+                    break
+            if recent_images:
+                recent_images.reverse()
+                recent_image_captions.reverse()
+
+        # Format notebook entries
+        notebook_text = ""
+        notebook_entries = notebook.to_list() if hasattr(notebook, 'to_list') else (list(notebook) if notebook else [])
+        if notebook_entries:
+            notebook_lines = ["EXTRACTED DATA:"]
+            for i, entry in enumerate(notebook_entries, 1):
+                prompt = entry.get("prompt", "unknown")
+                data = entry.get("data", {})
+
+                if isinstance(data, dict) and "items" in data:
+                    items = data["items"]
+                    notebook_lines.append(f"{i}. [{prompt}] - {len(items)} items extracted")
+                    # Show first 2 samples
+                    for j, item in enumerate(items[:2]):
+                        item_str = str(item)
+                        if len(item_str) > 150:
+                            item_str = item_str[:150] + "..."
+                        notebook_lines.append(f"   Sample {j+1}: {item_str}")
+                    if len(items) > 2:
+                        notebook_lines.append(f"   ... and {len(items) - 2} more items")
+                else:
+                    data_str = str(data)
+                    if len(data_str) > 200:
+                        data_str = data_str[:200] + "..."
+                    notebook_lines.append(f"{i}. [{prompt}] - {data_str}")
+
+            notebook_text = "\n".join(notebook_lines)
+        else:
+            notebook_text = "EXTRACTED DATA:\nNo data extracted yet."
+
+        # Build the prompt
+        system_prompt = """You are evaluating whether a web automation task is complete based ONLY on the history of actions performed.
+
+CRITICAL RULES:
+1. You MUST NOT consider the current page state, current screenshot, or current observations
+2. You can ONLY use the ACTIONS PERFORMED and EXTRACTED DATA to make your decision
+3. Check if the SPECIFIC action requested in the goal was performed
+4. Look at the "target" and "reason" fields in the action history to understand WHAT was clicked/typed/etc
+5. If the goal asks for action X on target Y, verify that BOTH the action type AND target match
+
+COMPLETION CRITERIA:
+- Match the ACTION TYPE (click, type, extract, navigate, etc.)
+- Match the TARGET (what was clicked, where text was typed, what was extracted)
+- Use the "reason" field to understand the intent behind the action
+- If the reason explicitly mentions fulfilling the goal, that's strong evidence of completion
+
+Examples:
+- Goal: "Click the 5th article link"
+  History shows: "CLICK | target: link GLM-4.7-Flash | reason: The user wants to click the 5th article link | ✓ SUCCESS"
+  Decision: COMPLETE (correct action type, and reason confirms it's the 5th article)
+
+- Goal: "Click the 5th article link"
+  History shows: "CLICK | target: element #40 | ✓ SUCCESS"
+  Decision: INCOMPLETE (click happened but no confirmation it's the 5th article)
+
+- Goal: "Extract job title from the 2nd listing"
+  History shows: "EXTRACT | prompt: job title from 2nd listing | extracted 1 item | ✓ SUCCESS"
+  Decision: COMPLETE (extraction was performed for the specified target)
+
+- Goal: "Click the Apply button"
+  History shows: "CLICK | target: Apply button | ✓ SUCCESS"
+  Decision: COMPLETE (correct action and correct target)
+
+- Goal: "Type 'John Doe' in the name field"
+  History shows: "TYPE | text: 'John Doe' | target: name input field | ✓ SUCCESS"
+  Decision: COMPLETE (correct text typed into correct field)
+
+- Goal: "Click the login button"
+  History shows: "SCROLL | direction: down | ✓ SUCCESS"
+  Decision: INCOMPLETE (wrong action type - scroll vs click)
+
+- Goal: "Click the submit button"
+  History shows: "CLICK | target: cancel button | ✓ SUCCESS"
+  Decision: INCOMPLETE (wrong target - cancel vs submit)
+
+- Goal: "Extract products from the first 3 pages"
+  History shows: Only 1 extraction action
+  Decision: INCOMPLETE (need multiple extractions for multiple pages)
+"""
+
+        screenshots_text = ""
+        if recent_image_captions:
+            screenshots_text = "SCREENSHOTS (oldest→newest):\n" + "\n".join(
+                f"{i+1}. {caption}" for i, caption in enumerate(recent_image_captions)
+            )
+
+        user_prompt_text = f"""Evaluate if the following task is complete based ONLY on the actions performed:
+
+USER GOAL:
+{user_prompt}
+
+ACTIONS PERFORMED:
+{history_text}
+
+{notebook_text}
+
+{screenshots_text if screenshots_text else "SCREENSHOTS:\nNone available"}
+
+EVALUATION INSTRUCTIONS:
+- Review the USER GOAL carefully
+- Check if the ACTIONS PERFORMED accomplish that specific goal
+- Check if the EXTRACTED DATA contains what the user requested
+- Remember: You can ONLY use the history above, NOT the current page state
+- Be strict: only mark complete if the goal is clearly satisfied
+
+Is the task complete based on the actions performed?"""
+
+        try:
+            result = generate_model(
+                prompt=user_prompt_text,
+                model_object_type=CompletionCheck,
+                system_prompt=system_prompt,
+                multi_image=recent_images if recent_images else None,
+                image_detail=self.image_detail,
+                model=self.agent_model_name,
+                reasoning_level=self.agent_reasoning_level,
+            )
+
+            if isinstance(result, CompletionCheck):
+                if result.is_complete:
+                    try:
+                        self.event_logger.system_debug(f"[Completion Check] LLM says COMPLETE: {result.reasoning}")
+                    except Exception:
+                        pass
+                    return result.reasoning
+                else:
+                    try:
+                        self.event_logger.system_debug(f"[Completion Check] LLM says INCOMPLETE: {result.reasoning}")
+                    except Exception:
+                        pass
+                    return None
+            else:
+                # Failed to get structured response
+                try:
+                    self.event_logger.system_debug(f"[Completion Check] Failed to get structured response: {result}")
+                except Exception:
+                    pass
+                return None
+
+        except Exception as e:
+            dprint(f"⚠️ Error checking completion from history: {e}")
+            return None
 
     def _rewrite_task_prompt_using_completion_reasoning(
         self,
