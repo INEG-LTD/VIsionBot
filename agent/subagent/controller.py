@@ -331,6 +331,7 @@ class SubAgent:
         base_knowledge = self._get_base_knowledge()
         parallel_completion_and_action = getattr(self.main_bot, "parallel_completion_and_action", True)
         max_actions_per_plan = getattr(self.main_bot, "max_actions_per_plan", 6)
+        auto_complete_extract_commands = getattr(self.main_bot, "auto_complete_extract_commands", True)
         if self._controller_factory:
             try:
                 return self._controller_factory(
@@ -339,7 +340,8 @@ class SubAgent:
                     track_ineffective_actions=self.track_ineffective_actions,
                     allow_partial_completion=self.allow_partial_completion,
                     parallel_completion_and_action=parallel_completion_and_action,
-                    max_actions_per_plan=max_actions_per_plan
+                    max_actions_per_plan=max_actions_per_plan,
+                    auto_complete_extract_commands=auto_complete_extract_commands,
                 )
             except TypeError:
                 try:
@@ -362,7 +364,8 @@ class SubAgent:
             base_knowledge=base_knowledge,
             allow_partial_completion=self.allow_partial_completion,
             parallel_completion_and_action=parallel_completion_and_action,
-            max_actions_per_plan=max_actions_per_plan
+            max_actions_per_plan=max_actions_per_plan,
+            auto_complete_extract_commands=auto_complete_extract_commands,
         )
 
     def _get_base_knowledge(self) -> Optional[List[str]]:

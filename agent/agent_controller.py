@@ -123,7 +123,6 @@ class Agent(TaskBasedExecutionMixin):
         base_knowledge: Optional[List[str]] = None,
         allow_partial_completion: bool = False,
         parallel_completion_and_action: bool = True,
-        completion_mode: str = "agent_only",
         enable_sub_agents: bool = False,
         show_completion_reasoning_every_iteration: bool = False,
         strict_mode: bool = False,
@@ -158,6 +157,7 @@ class Agent(TaskBasedExecutionMixin):
         # Completion history images
         completion_history_image_limit: int = 3,
         # Task-based execution
+        auto_complete_extract_commands: bool = True,
         sequential_task_config: Optional[SequentialTaskConfig] = None,
         use_task_based_execution: bool = True,
     ):
@@ -235,7 +235,7 @@ class Agent(TaskBasedExecutionMixin):
         self._task_tracker: Dict[str, Dict[str, Any]] = {}
         self.allow_partial_completion = allow_partial_completion
         self.parallel_completion_and_action = parallel_completion_and_action
-        self.completion_mode = completion_mode  # "agent_only", "hybrid", or "external_only"
+        self.completion_mode = "external_only"
         self.enable_sub_agents = enable_sub_agents  # Enable/disable sub-agent spawning
         # Completion / evaluation behavior
         self.show_completion_reasoning_every_iteration = show_completion_reasoning_every_iteration
@@ -269,6 +269,7 @@ class Agent(TaskBasedExecutionMixin):
         self._current_task_prompt: Optional[str] = None  # Rewritten prompt when stuck
         self._last_completion_reasoning: Optional[str] = None  # Store for stuck detection at start of next iteration
         self._last_completion_evaluation: Optional[Dict[str, Any]] = None
+        self._latest_external_completion_context: Optional[Dict[str, str]] = None
         self._last_screenshot_hash: Optional[str] = None  # Store screenshot hash for phase-out tracking
 
         # Store user question callback for ask: command
@@ -336,7 +337,10 @@ class Agent(TaskBasedExecutionMixin):
         self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
         # Initialize task-based execution system
-        self._initialize_task_system(sequential_task_config)
+        self._initialize_task_system(
+            sequential_task_config=sequential_task_config,
+            auto_complete_extract_commands=auto_complete_extract_commands,
+        )
         self.use_task_based_execution = use_task_based_execution
 
     def register_interceptor(
@@ -3455,24 +3459,60 @@ CRITICAL RULES:
 4. Look at the "target" and "reason" fields in the action history to understand WHAT was clicked/typed/etc
 5. If the goal asks for action X on target Y, verify that BOTH the action type AND target match
 
+ACTION TYPE MAPPING (Natural Language → Actual Command):
+Map natural language task descriptions to the actual action commands that accomplish them:
+
+INTERACTION ACTIONS (all map to CLICK command):
+- "tap", "press", "hit", "select", "choose", "open" → CLICK
+- "click on", "click the", "click" → CLICK
+
+INPUT ACTIONS (all map to TYPE command):
+- "enter", "input", "fill", "type", "write" + text/value → TYPE
+- "fill in", "fill out", "enter text", "type in" → TYPE
+
+DATA RETRIEVAL ACTIONS (all map to EXTRACT command):
+- "extract", "get", "retrieve", "fetch", "collect", "scrape" → EXTRACT
+- "list", "summarize", "explain", "show", "find", "obtain" → EXTRACT
+- "copy", "save", "record", "note", "capture" → EXTRACT
+- For data retrieval tasks, focus on WHETHER the extraction happened, NOT the specific wording
+- The extraction prompt may differ from the task wording - that's fine as long as the intent matches
+
+NAVIGATION ACTIONS:
+- "go to", "navigate to", "visit", "open" + URL → NAVIGATE
+- "go back", "return", "previous page" → BACK
+- "go forward", "next page" → FORWARD
+
 COMPLETION CRITERIA:
-- Match the ACTION TYPE (click, type, extract, navigate, etc.)
+- Map the task's natural language to the corresponding action command (see mapping above)
 - Match the TARGET (what was clicked, where text was typed, what was extracted)
 - Use the "reason" field to understand the intent behind the action
 - If the reason explicitly mentions fulfilling the goal, that's strong evidence of completion
+- For EXTRACT actions: Don't worry about exact wording - if data was extracted that matches the intent, it's complete
 
 Examples:
-- Goal: "Click the 5th article link"
+- Goal: "Tap the 5th article link"
   History shows: "CLICK | target: link GLM-4.7-Flash | reason: The user wants to click the 5th article link | ✓ SUCCESS"
-  Decision: COMPLETE (correct action type, and reason confirms it's the 5th article)
+  Decision: COMPLETE ("tap" maps to CLICK, and reason confirms it's the 5th article)
+
+- Goal: "Enter 'john@example.com' into the email field"
+  History shows: "TYPE | text: 'john@example.com' | target: email input | ✓ SUCCESS"
+  Decision: COMPLETE ("enter" maps to TYPE, correct text and target)
+
+- Goal: "Summarize the product features"
+  History shows: "EXTRACT | prompt: product features | extracted 1 item | ✓ SUCCESS"
+  Decision: COMPLETE ("summarize" maps to EXTRACT - the data was retrieved, summary is just presentation)
+
+- Goal: "List all the job titles"
+  History shows: "EXTRACT | prompt: job titles | extracted 5 items | ✓ SUCCESS"
+  Decision: COMPLETE ("list" maps to EXTRACT - the data was extracted, listing is just formatting)
+
+- Goal: "Get the price from the 2nd listing"
+  History shows: "EXTRACT | prompt: price from 2nd listing | extracted 1 item | ✓ SUCCESS"
+  Decision: COMPLETE ("get" maps to EXTRACT)
 
 - Goal: "Click the 5th article link"
   History shows: "CLICK | target: element #40 | ✓ SUCCESS"
   Decision: INCOMPLETE (click happened but no confirmation it's the 5th article)
-
-- Goal: "Extract job title from the 2nd listing"
-  History shows: "EXTRACT | prompt: job title from 2nd listing | extracted 1 item | ✓ SUCCESS"
-  Decision: COMPLETE (extraction was performed for the specified target)
 
 - Goal: "Click the Apply button"
   History shows: "CLICK | target: Apply button | ✓ SUCCESS"
@@ -3486,9 +3526,9 @@ Examples:
   History shows: "SCROLL | direction: down | ✓ SUCCESS"
   Decision: INCOMPLETE (wrong action type - scroll vs click)
 
-- Goal: "Click the submit button"
+- Goal: "Press the submit button"
   History shows: "CLICK | target: cancel button | ✓ SUCCESS"
-  Decision: INCOMPLETE (wrong target - cancel vs submit)
+  Decision: INCOMPLETE ("press" maps to CLICK but wrong target - cancel vs submit)
 
 - Goal: "Extract products from the first 3 pages"
   History shows: Only 1 extraction action
@@ -3511,7 +3551,7 @@ ACTIONS PERFORMED:
 
 {notebook_text}
 
-{screenshots_text if screenshots_text else "SCREENSHOTS:\nNone available"}
+{screenshots_text if screenshots_text else "SCREENSHOTS: None available"}
 
 EVALUATION INSTRUCTIONS:
 - Review the USER GOAL carefully
@@ -3519,6 +3559,7 @@ EVALUATION INSTRUCTIONS:
 - Check if the EXTRACTED DATA contains what the user requested
 - Remember: You can ONLY use the history above, NOT the current page state
 - Be strict: only mark complete if the goal is clearly satisfied
+- Keep the reasoning under 60 words
 
 Is the task complete based on the actions performed?"""
 
@@ -3530,7 +3571,7 @@ Is the task complete based on the actions performed?"""
                 multi_image=recent_images if recent_images else None,
                 image_detail=self.image_detail,
                 model=self.agent_model_name,
-                reasoning_level=self.agent_reasoning_level,
+                reasoning_level=ReasoningLevel.LOW,
             )
 
             if isinstance(result, CompletionCheck):

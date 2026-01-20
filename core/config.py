@@ -72,9 +72,9 @@ class ExecutionConfig(BaseModel):
         default=True,
         description="Run completion check and next action in parallel"
     )
-    completion_mode: str = Field(
-        default="agent_only",
-        description="Task completion determination mode: 'agent_only' (agent decides via complete: command), 'hybrid' (agent can complete OR external validation can force complete), 'external_only' (legacy mode using external CompletionContract)"
+    auto_complete_extract_commands: bool = Field(
+        default=True,
+        description="Automatically mark tasks complete after successful extract: commands when the task only contains extraction actions"
     )
     enable_sub_agents: bool = Field(
         default=False,

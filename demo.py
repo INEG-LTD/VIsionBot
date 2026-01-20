@@ -528,7 +528,7 @@ os.environ.setdefault("CRASHPAD_METRICS", str(crashpad_path))
 
 config = Config(
     model=ModelConfig(
-        agent_model="gemini/gemini-2.5-flash-lite",
+        agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         command_model="gpt-5-mini",
         reasoning_level=ReasoningLevel.HIGH
     ),
@@ -539,6 +539,7 @@ config = Config(
         wait_for_load_before_turn=True,
         wait_for_load_state="networkidle",
         wait_for_load_timeout_ms=5000,
+        auto_complete_extract_commands=False
     ),
     elements=ElementConfig(
         overlay_mode="all",

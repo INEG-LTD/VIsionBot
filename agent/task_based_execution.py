@@ -42,14 +42,17 @@ class TaskBasedExecutionMixin:
     def _initialize_task_system(
         self,
         sequential_task_config: Optional[SequentialTaskConfig] = None,
+        auto_complete_extract_commands: bool = True,
     ) -> None:
         """
         Initialize task-based execution system.
 
         Args:
             sequential_task_config: Configuration for sequential task execution
+            auto_complete_extract_commands: If False, require explicit complete: commands after extract: actions
         """
         self.sequential_task_config = sequential_task_config or SequentialTaskConfig()
+        self.auto_complete_extract_commands = auto_complete_extract_commands
 
         # Task orchestrator for decomposition
         self.task_orchestrator = TaskOrchestrator(
@@ -1390,8 +1393,6 @@ Use the results above to complete your task."""
                     if result.success:
                         last_successful_action = current_action
 
-                    # Auto-complete for PURE extraction tasks (Option C: Multi-Action Detection)
-                    # Only auto-complete if the task instruction contains ONLY extraction verbs
                     if result.success and current_action.lower().startswith("extract:"):
                         last_extracted_data = result.data if hasattr(result, "data") else None
                         try:
@@ -1433,6 +1434,17 @@ Use the results above to complete your task."""
                                     )
                                 except Exception:
                                     pass
+
+                        # Respect configuration to disable auto-completion on extract actions
+                        if not getattr(self, "auto_complete_extract_commands", True):
+                            try:
+                                self.event_logger.system_debug(
+                                    "[Extraction auto-complete disabled] Waiting for complete: command"
+                                )
+                            except Exception:
+                                pass
+                            # Skip auto-complete and continue normal loop behavior
+                            continue
 
                         # Define all possible action verbs
                         action_verbs = [

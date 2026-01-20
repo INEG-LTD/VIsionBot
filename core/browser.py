@@ -305,7 +305,8 @@ class Browser:
         # Extract execution configuration
         self.max_attempts = config.execution.max_attempts
         self.parallel_completion_and_action = config.execution.parallel_completion_and_action
-        self.completion_mode = config.execution.completion_mode
+        self.completion_mode = "external_only"
+        self.auto_complete_extract_commands = config.execution.auto_complete_extract_commands
         self.enable_sub_agents = config.execution.enable_sub_agents
         self.max_actions_per_plan = config.execution.max_actions_per_plan
         self.track_ineffective_actions = config.execution.track_ineffective_actions
@@ -1557,7 +1558,6 @@ class Browser:
                 base_knowledge=base_knowledge,
                 allow_partial_completion=allow_partial_completion,
                 parallel_completion_and_action=self.parallel_completion_and_action,
-                completion_mode=self.completion_mode,
                 enable_sub_agents=self.enable_sub_agents,
                 show_completion_reasoning_every_iteration=show_completion_reasoning_every_iteration,
                 strict_mode=strict_mode,
@@ -1578,6 +1578,7 @@ class Browser:
                 image_detail=self.image_detail,
                 save_screenshots=self.save_screenshots,
                 screenshot_dir=self.screenshot_dir,
+                auto_complete_extract_commands=self.auto_complete_extract_commands,
             )
             controller.max_iterations = max_iterations
             
