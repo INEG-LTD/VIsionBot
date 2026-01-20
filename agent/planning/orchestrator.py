@@ -53,6 +53,7 @@ class TaskOrchestrator:
         initial_context: Optional[Dict[str, Any]] = None,
         validation_callback: Optional[Callable[[MissionPlan], Tuple[bool, str]]] = None,
         max_validation_attempts: int = 3,
+        screenshot: Optional[bytes] = None,
     ) -> MissionPlan:
         """
         Analyzes user request and generates a MissionPlan with Normal and Sequential tasks.
@@ -97,6 +98,7 @@ class TaskOrchestrator:
                     system_prompt=system_prompt,
                     model=self.model_name,
                     reasoning_level=self.reasoning_level,
+                    multi_image=[screenshot] if screenshot else None,
                 )
 
                 # Handle case where generate_model returns a string (parsing failed)
@@ -241,6 +243,17 @@ IMPORTANT:
 - Ensure tasks are in logical execution order
 - Each task should move toward completing the user's request
 - Consider dependencies (e.g., must navigate before extracting data)
+- Instructions MUST map to supported agent commands. Use only these leading verbs:
+  - click: (taps, opens, selects)
+  - type: (enter text/credentials/search terms)
+  - scroll: (reveal more content)
+  - press: (keyboard shortcuts/enter)
+  - navigate: (go to a URL), back, forward
+  - wait: (explicit waits), defer: (ask user input), extract: (read/extract/summarize data)
+  - extract_url: (extract URL from element)
+  - extract: (extract data from page)
+- Do NOT create tasks with unsupported verbs like "identify", "summarize", "review" as standalone instructions.
+  For information gathering or summarization, use an extract: instruction that states what to extract/ summarize.
 
 OUTPUT FORMAT:
 
@@ -406,6 +419,30 @@ Response:
   "reasoning": "This is a simple two-step process with no iteration needed. Both steps are single actions.",
   "confidence": 0.95
 }
+
+Example 5: Enforce supported commands
+Request: "Click and open the 5th article webpage and give me a summary of the article"
+Good Response:
+{
+  "tasks": [
+    {
+      "type": "normal",
+      "description": "Open the 5th article link",
+      "instruction": "click: 5th article link"
+    },
+    {
+      "type": "normal",
+      "description": "Extract the article content and summary points",
+      "instruction": "extract: article content and key summary points"
+    }
+  ],
+  "reasoning": "Only supported commands are used: 'click:' to open the article, and 'extract:' to gather and summarize content in one step. No unsupported verbs like 'identify' or 'summarize' as standalone tasks."
+}
+Bad Response (DO NOT DO THIS):
+- "Identify the 5th article link"
+- "Summarize the article"
+- Any instruction without a supported leading verb (click, type, scroll, press, navigate/back/forward, wait, defer, extract).
+Explanation: 'identify' and 'summarize' are not agent commands; use 'click:' and 'extract:' instead.
 """
 
         return f"""USER REQUEST:

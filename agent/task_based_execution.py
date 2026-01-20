@@ -209,11 +209,20 @@ class TaskBasedExecutionMixin:
         except Exception:
             pass
 
+        # Capture current viewport screenshot for task decomposition grounding (best effort)
+        screenshot_bytes = None
+        try:
+            snapshot_for_tasks = self._capture_snapshot(full_page=False)
+            screenshot_bytes = getattr(snapshot_for_tasks, "screenshot", None)
+        except Exception:
+            screenshot_bytes = None
+
         # Call task orchestrator
         task_list = self.task_orchestrator.decompose_user_request(
             user_prompt=user_prompt,
             initial_context=context,
             validation_callback=validation_callback,
+            screenshot=screenshot_bytes,
             max_validation_attempts=3,
         )
 
