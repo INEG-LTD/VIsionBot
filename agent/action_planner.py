@@ -26,7 +26,7 @@ from utils.overlay_description import describe_overlay_element, overlay_element_
 
 VALID_ACTION_COMMANDS = {
     "click", "type", "press", "scroll", "extract", "extract_url", "get_url",
-    "defer", "navigate", "back", "forward", "subagents", "form", "select",
+    "defer", "navigate", "back", "forward", "form", "select",
     "upload", "datetime", "stop", "open", "handle_datetime", "interceptor",
     "ask", "complete",
 }
@@ -97,7 +97,7 @@ def _normalize_body(cmd: str, body: str) -> str:
     if cmd in {"back", "forward"}:
         return body if body and body.isdigit() else "1"
 
-    if cmd in {"extract", "extract_url", "get_url", "navigate", "subagents",
+    if cmd in {"extract", "extract_url", "get_url", "navigate",
                "interceptor", "form", "select", "upload", "datetime", "open",
                "handle_datetime"}:
         if not body:
@@ -300,6 +300,16 @@ class ActionPlanner:
             if not plan:
                 dprint("⚠️ No action plan generated")
                 return self._apply_extraction_fallback(None)
+
+            if len(plan.steps) > self.max_actions_per_plan:
+                original_count = len(plan.steps)
+                plan.steps = plan.steps[: self.max_actions_per_plan]
+                try:
+                    get_event_logger().system_warning(
+                        f"Action plan truncated from {original_count} to {self.max_actions_per_plan} steps."
+                    )
+                except Exception:
+                    pass
 
             return self._apply_extraction_fallback(plan)
 

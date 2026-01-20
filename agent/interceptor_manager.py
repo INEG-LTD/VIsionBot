@@ -8,10 +8,8 @@ from utils.debug_print import dprint, PrintMode
 if TYPE_CHECKING:
     from core.browser import Browser
     from agent.agent_controller import Agent
-    from agent.results import TaskResult
 
 class InterceptorMode(Enum):
-    AUTONOMY = "autonomy"
     SCRIPTED = "scripted"
 
 class Interceptor(BaseModel):
@@ -134,15 +132,13 @@ class InterceptorManager:
         self, 
         trigger: Interceptor, 
         mode: InterceptorMode, 
-        handler: Optional[Callable[[InterceptorContext], None]] = None,
-        instruction_override: Optional[str] = None
+        handler: Optional[Callable[[InterceptorContext], None]] = None
     ):
         """Register a new interceptor trigger and handler."""
         self.registry.append({
             "trigger": trigger,
             "mode": mode,
             "handler": handler,
-            "instruction_override": instruction_override
         })
 
     def find_matching_interceptor(
@@ -188,43 +184,3 @@ class InterceptorManager:
         dprint("🎭 Executing Scripted Interceptor...")
         handler(context)
         dprint("✅ Scripted Interceptor finished")
-
-    def execute_autonomous(self, entry: Dict[str, Any], controller: Agent, action: str) -> TaskResult:
-        """Execute an autonomous interceptor using a sub-agent loop."""
-        instruction = entry.get("instruction_override") or f"Complete the following interaction: {action}"
-        
-        dprint(f"🤖 Starting Autonomous Interceptor: {instruction}")
-        
-        # Use existing SubAgent if available, or create a temporary one
-        if not controller.sub_agent_controller:
-            from agent.subagent.controller import SubAgent
-            controller.sub_agent_controller = SubAgent(
-                self.bot,
-                controller.agent_context,
-                controller_factory=controller._spawn_child_controller,
-                track_ineffective_actions=controller.detect_ineffective_actions,
-                allow_partial_completion=controller.allow_partial_completion
-            )
-
-        # Spawn a sub-agent on the current tab
-        current_tab_id = self.bot.tab_manager.get_active_tab().tab_id if self.bot.tab_manager else "main"
-        sub_agent_id = controller.sub_agent_controller.spawn_sub_agent(
-            tab_id=current_tab_id,
-            instruction=instruction
-        )
-        
-        if not sub_agent_id:
-            from agent.results import TaskResult
-            return TaskResult(success=False, reasoning="Failed to spawn sub-agent for interceptor")
-
-        # Execute the sub-agent
-        # Note: We should ideally pass a flag to block navigation, but we'll implement that in Agent
-        result_dict = controller.sub_agent_controller.execute_sub_agent(sub_agent_id)
-        
-        from agent.results import TaskResult
-        return TaskResult(
-            success=result_dict.get("success", False),
-            reasoning=result_dict.get("reasoning", ""),
-            confidence=result_dict.get("confidence", 0.0),
-            evidence=result_dict.get("evidence", {})
-        )

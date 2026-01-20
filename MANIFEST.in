@@ -7,15 +7,8 @@ include LICENSE
 # Include all python modules and packages
 recursive-include browser_vision_bot *.py
 recursive-include agent *.py
-recursive-include element_detection *.py
-recursive-include handlers *.py
-recursive-include middlewares *.py
 recursive-include models *.py
-recursive-include planner *.py
-recursive-include tab_management *.py
 recursive-include utils *.py
-recursive-include window_mgmt *.py
 
 # Exclude caches and compiled artifacts
 global-exclude __pycache__ *.py[co] *.so .DS_Store
-

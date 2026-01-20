@@ -44,7 +44,6 @@ import threading
 import os
 
 from pydantic import BaseModel
-from middleware.error import ErrorHandlingMiddleware
 from pathlib import Path
 from browser.provider import BrowserConfig
 from core.config import Config, ModelConfig, ExecutionConfig, ElementConfig, DebugConfig, UserMessagesConfig
@@ -389,14 +388,12 @@ def setup_interceptors(bot: Browser):
     bot.register_interceptor(
         trigger=dropdown_trigger_click,
         mode=InterceptorMode.SCRIPTED,
-        handler=select_dropdown_handler,
-        instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
+        handler=select_dropdown_handler
     )
     bot.register_interceptor(
         trigger=dropdown_trigger_select,
         mode=InterceptorMode.SCRIPTED,
-        handler=select_dropdown_handler,
-        instruction_override="A specialized dropdown selection handler will analyze available options and select the most appropriate one based on context."
+        handler=select_dropdown_handler
     )
 
     def error_recovery_handler(context: InterceptorContext):
@@ -534,7 +531,7 @@ config = Config(
     ),
     execution=ExecutionConfig(
         max_attempts=30,
-        max_actions_per_plan=1,
+        # max_actions_per_plan=1,
         track_ineffective_actions=False,
         wait_for_load_before_turn=True,
         wait_for_load_state="networkidle",
@@ -571,7 +568,6 @@ bot = Browser(config=config)
 setup_interceptors(bot)
 
 bot.event_logger.register_callback(create_event_callback(bot, debug_mode=config.logging.debug_mode))
-bot.use(ErrorHandlingMiddleware())
 bot.start()
 bot.page.goto("https://news.ycombinator.com/")
 

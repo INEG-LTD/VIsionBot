@@ -75,8 +75,6 @@ from lib.errors import (
 # AI utilities
 from lib.ai import ReasoningLevel
 
-# Middleware
-from middleware.base import MiddlewareManager, ActionContext, Middleware
 
 # Action ledger and queue
 from execution.ledger import ActionLedger, ActionStatus, ActionRecord
@@ -128,10 +126,6 @@ __all__ = [
     "RecoveryStrategy",
     # AI utilities
     "ReasoningLevel",
-    # Middleware
-    "MiddlewareManager",
-    "ActionContext",
-    "Middleware",
     # Action tracking
     "ActionLedger",
     "ActionStatus",

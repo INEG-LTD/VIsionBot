@@ -58,7 +58,6 @@ from lib.errors import (
 
 # Utilities
 from lib.ai import ReasoningLevel
-from middleware.base import MiddlewareManager, ActionContext, Middleware
 from utils.event_logger import EventLogger, set_event_logger
 
 __version__ = "0.1.1"
@@ -105,10 +104,6 @@ __all__ = [
     "RecoveryStrategy",
     # Utilities
     "ReasoningLevel",
-    "MiddlewareManager",
-    "ActionContext",
-    "Middleware",
     "EventLogger",
     "set_event_logger",
 ]
-

@@ -19,6 +19,7 @@ Split 1,736-line file into 4 focused modules:
 ### 1. agent/agent_controller.py → agent/agent/ (ANALYZED - Ready to implement)
 **Size**: 4,097 lines
 **Complexity**: HIGH (main execution loop is 866 lines alone)
+**Note**: Legacy reactive loop and action-plan helpers were removed in the task-based rewrite; regenerate method lists/line refs before continuing this split.
 
 **Recommended Split (7 modules)**:
 
@@ -89,33 +90,12 @@ Split 1,736-line file into 4 focused modules:
 - `_get_ui_state_info` (lines 2984-3037)
 - `_build_evidence` (lines 3087-3133)
 - `_rewrite_task_prompt_using_completion_reasoning` (lines 3134-3205)
-- `_build_tab_summary` (lines 3206-3221)
 - `_page_state_changed` (lines 3222-3257)
 - `_detect_ui_state_changes` (lines 3258-3312)
 
-#### agent/agent/subagent.py (~650 lines)
-**Purpose**: Sub-agent orchestration and parallelization
-**Methods**:
-- `_update_sub_agent_policy` (lines 3313-3351)
-- `_compute_sub_agent_policy` (lines 3352-3459)
-- `_query_sub_agent_policy_yes_no` (lines 3460-3487)
-- `_build_sub_agent_policy_yes_no_system_prompt`, `_build_sub_agent_policy_yes_no_prompt` (lines 3488-3535)
-- `_query_sub_agent_policy_llm` (lines 3536-3562)
-- `_build_sub_agent_policy_system_prompt`, `_build_sub_agent_policy_prompt` (lines 3563-3633)
-- `_normalize_suggested_url` (lines 3634-3643)
-- `_run_orchestrated_task` (lines 3644-3743)
-- `_orchestrate_parallel_work` (lines 3744-3793)
-- `_create_parallel_plan` (lines 3794-3814)
-- `_build_parallel_plan_system_prompt`, `_build_parallel_plan_prompt` (lines 3815-3858)
-- `_can_spawn_sub_agent` (lines 3859-3873)
-- `_spawn_child_controller`, `_drain_sub_agent_results` (lines 3038-3086)
-- `get_sub_agent_results` (lines 4086-4089)
-- `_apply_sub_agent_override`, `_policy_display_name` (lines 1698-1746)
-
 #### agent/agent/utilities.py (~250 lines)
-**Purpose**: Tab decisions, logging, and misc helpers
+**Purpose**: Logging and misc helpers
 **Methods**:
-- `_execute_tab_decision` (lines 3874-4085)
 - `_log_event` (lines 4090-4097)
 
 #### agent/agent/__init__.py
@@ -128,7 +108,6 @@ from .action_planning import AgentActionPlanningMixin
 from .extraction import AgentExtractionMixin
 from .action_parsing import AgentActionParsingMixin
 from .completion import AgentCompletionMixin
-from .subagent import AgentSubAgentMixin
 from .utilities import AgentUtilitiesMixin
 
 class Agent(
@@ -138,9 +117,7 @@ class Agent(
     AgentExtractionMixin,
     AgentActionParsingMixin,
     AgentCompletionMixin,
-    AgentSubAgentMixin,
     AgentUtilitiesMixin,
-    TaskBasedExecutionMixin,  # Existing mixin
 ):
     """Agent controller with modular implementation"""
     pass
@@ -164,11 +141,11 @@ __all__ = ["Agent", "UserQuestionCallback"]
 
 #### core/browser/core.py (~550 lines)
 **Purpose**: Initialization, lifecycle management, configuration
-**Methods**: `__init__`, `init_browser`, `start`, `end`, `__enter__`, `__exit__`, `_check_termination`, `use`
+**Methods**: `__init__`, `init_browser`, `start`, `end`, `__enter__`, `__exit__`, `_check_termination`
 
 #### core/browser/page_manager.py (~350 lines)
-**Purpose**: Page/tab management, auto-on-load actions
-**Methods**: `switch_to_page`, `on_new_page_load`, `_attach_page_load_handler`, `_run_auto_actions_for_current_page`, etc.
+**Purpose**: Page management, auto-on-load actions
+**Methods**: `on_new_page_load`, `_attach_page_load_handler`, `_run_auto_actions_for_current_page`, etc.
 
 #### core/browser/action_executor.py (~450 lines)
 **Purpose**: Main `act()` method and action routing
@@ -204,7 +181,7 @@ __all__ = ["Agent", "UserQuestionCallback"]
 ### For agent/agent_controller.py:
 
 1. **Create module stubs** - Create all 7 files with imports and class definitions
-2. **Extract methods bottom-up** - Start with least dependent (utilities, completion), then extraction, action_planning, subagent, execution_loop, and finally base
+2. **Extract methods bottom-up** - Start with least dependent (utilities, completion), then extraction, action_planning, execution_loop, and finally base
 3. **Use mixin pattern** - Each module is a mixin that Agent inherits from
 4. **Test incrementally** - Test imports and basic functionality after each module
 5. **Update imports** - Find and update all imports in codebase

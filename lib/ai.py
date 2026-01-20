@@ -530,7 +530,7 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
         if model_object_type.__name__ == "ExtractionResult":
             return _manual_parse_extraction_result(text, model_object_type)
         
-        # Try to parse simple yes/no boolean responses like "is_complete (false)" or "needs_sub_agents false"
+        # Try to parse simple yes/no boolean responses like "is_complete (false)"
         cleaned = text.strip()
         
         # First, try to match "field_name: value" patterns

@@ -103,11 +103,6 @@ class SessionTracker:
         # Capture initial state
         self._capture_initial_state()
     
-    def switch_to_page(self, page: Page) -> None:
-        """Update page reference when active page changes"""
-        if page and page != self.page:
-            self.page = page
-    
     def set_base_knowledge(self, knowledge: List[str]) -> None:
         """Set base knowledge rules"""
         self.base_knowledge = knowledge or []

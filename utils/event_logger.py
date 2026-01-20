@@ -51,9 +51,6 @@ class EventType(str, Enum):
     PLAN_CACHED = "plan_cached"
     PLAN_CLEARED = "plan_cleared"
     
-    # Navigation events
-    TAB_SWITCH = "tab_switch"
-    TAB_NEW = "tab_new"
     
     # Completion events
     COMPLETION_CHECK = "completion_check"
@@ -63,14 +60,10 @@ class EventType(str, Enum):
     ACTION_DETERMINED = "action_determined"
     ACTION_PARAMS = "action_params"
     
-    # Sub-agent events
-    SUB_AGENT_POLICY = "sub_agent_policy"
     
     # Extraction events (already defined above, but adding detail events)
     EXTRACTION_DETECTED = "extraction_detected"
     
-    # Tab events (already defined, but adding registration)
-    TAB_REGISTERED = "tab_registered"
     
     # Performance/cost events
     LLM_COST = "llm_cost"  # Token usage and cost tracking
@@ -138,9 +131,6 @@ class EventType(str, Enum):
     SEQUENCE_RETRY = "sequence_retry"
     SEQUENCE_END = "sequence_end"
 
-    # Tab lifecycle events
-    TAB_CLOSE = "tab_close"
-    TAB_DETECTED = "tab_detected"
 
     # Agent lifecycle events
     AGENT_PAUSE = "agent_pause"
@@ -153,25 +143,6 @@ class EventType(str, Enum):
     # Model selection events
     MODEL_FALLBACK = "model_fallback"
 
-    # Middleware events
-    MIDDLEWARE_BEFORE = "middleware_before"
-    MIDDLEWARE_AFTER = "middleware_after"
-    MIDDLEWARE_ERROR = "middleware_error"
-
-    # Cache events
-    CACHE_HIT = "cache_hit"
-    CACHE_MISS = "cache_miss"
-    CACHE_STORE = "cache_store"
-    CACHE_EVICT = "cache_evict"
-    CACHE_CLEAR = "cache_clear"
-
-    # Cost events
-    COST_WARNING = "cost_warning"
-    COST_LIMIT_EXCEEDED = "cost_limit_exceeded"
-
-    # Human-in-loop events
-    HUMAN_PAUSE = "human_pause"
-    HUMAN_RESUME = "human_resume"
 
     # Context guard events
     CONTEXT_GUARD_START = "context_guard_start"
@@ -461,24 +432,6 @@ class EventLogger:
         except Exception:
             pass
     
-    def tab_switch(self, tab_id: str, url: str = None, **details):
-        try:
-            msg = f"Switched to tab: {tab_id}"
-            if url:
-                msg += f" ({url})"
-            self.emit(EventType.TAB_SWITCH, msg, "INFO", tab_id=tab_id, url=url, **details)
-        except Exception:
-            pass
-    
-    def tab_new(self, tab_id: str, url: str = None, **details):
-        try:
-            msg = f"New tab registered: {tab_id}"
-            if url:
-                msg += f" ({url})"
-            self.emit(EventType.TAB_NEW, msg, "INFO", tab_id=tab_id, url=url, **details)
-        except Exception:
-            pass
-    
     def completion_check(self, is_complete: bool, reasoning: str = None, confidence: float = None, **details):
         try:
             status = "complete" if is_complete else "not complete"
@@ -520,28 +473,6 @@ class EventLogger:
             for key, value in params.items():
                 msg += f"\n   {key}: {value}"
             self.emit(EventType.ACTION_PARAMS, msg, "DEBUG", **params, **details)
-        except Exception:
-            pass
-    
-    def sub_agent_policy(self, policy: str, score: float = None, reason: str = None, **details):
-        try:
-            msg = f"Sub-agent utilization policy → {policy}"
-            if score is not None:
-                msg += f" (score {score:.2f})"
-            if reason:
-                msg += f"\n   Reason: {reason}"
-            self.emit(EventType.SUB_AGENT_POLICY, msg, "INFO", policy=policy, score=score, reason=reason, **details)
-        except Exception:
-            pass
-    
-    def tab_registered(self, tab_id: str, purpose: str = None, url: str = None, **details):
-        try:
-            msg = f"Registered tab: {tab_id}"
-            if purpose:
-                msg += f" ({purpose})"
-            if url:
-                msg += f" - {url}"
-            self.emit(EventType.TAB_REGISTERED, msg, "INFO", tab_id=tab_id, purpose=purpose, url=url, **details)
         except Exception:
             pass
     
@@ -776,18 +707,6 @@ class EventLogger:
         except Exception:
             pass
 
-    def tab_close(self, tab_id: str, **details):
-        try:
-            self.emit(EventType.TAB_CLOSE, f"Tab closed: {tab_id}", "INFO", tab_id=tab_id, **details)
-        except Exception:
-            pass
-
-    def tab_detected(self, tab_id: str, **details):
-        try:
-            self.emit(EventType.TAB_DETECTED, f"Tab detected: {tab_id}", "INFO", tab_id=tab_id, **details)
-        except Exception:
-            pass
-
     def agent_pause(self, message: str = None, **details):
         try:
             msg = "Agent paused"
@@ -821,83 +740,6 @@ class EventLogger:
     def model_fallback(self, primary: str, fallback: str, **details):
         try:
             self.emit(EventType.MODEL_FALLBACK, f"Model fallback: {primary} -> {fallback}", "WARNING", primary=primary, fallback=fallback, **details)
-        except Exception:
-            pass
-
-    def middleware_before(self, middleware_name: str, action_type: str = None, **details):
-        try:
-            msg = f"Middleware before: {middleware_name}"
-            self.emit(EventType.MIDDLEWARE_BEFORE, msg, "DEBUG", middleware=middleware_name, action_type=action_type, **details)
-        except Exception:
-            pass
-
-    def middleware_after(self, middleware_name: str, action_type: str = None, **details):
-        try:
-            msg = f"Middleware after: {middleware_name}"
-            self.emit(EventType.MIDDLEWARE_AFTER, msg, "DEBUG", middleware=middleware_name, action_type=action_type, **details)
-        except Exception:
-            pass
-
-    def middleware_error(self, middleware_name: str, action_type: str = None, error: str = None, **details):
-        try:
-            msg = f"Middleware error: {middleware_name}"
-            self.emit(EventType.MIDDLEWARE_ERROR, msg, "ERROR", middleware=middleware_name, action_type=action_type, error=error, **details)
-        except Exception:
-            pass
-
-    def cache_hit(self, cache_key: str = None, **details):
-        try:
-            self.emit(EventType.CACHE_HIT, "Cache hit", "DEBUG", cache_key=cache_key, **details)
-        except Exception:
-            pass
-
-    def cache_miss(self, cache_key: str = None, **details):
-        try:
-            self.emit(EventType.CACHE_MISS, "Cache miss", "DEBUG", cache_key=cache_key, **details)
-        except Exception:
-            pass
-
-    def cache_store(self, cache_key: str = None, **details):
-        try:
-            self.emit(EventType.CACHE_STORE, "Cache store", "DEBUG", cache_key=cache_key, **details)
-        except Exception:
-            pass
-
-    def cache_evict(self, cache_key: str = None, **details):
-        try:
-            self.emit(EventType.CACHE_EVICT, "Cache evict", "WARNING", cache_key=cache_key, **details)
-        except Exception:
-            pass
-
-    def cache_clear(self, **details):
-        try:
-            self.emit(EventType.CACHE_CLEAR, "Cache cleared", "INFO", **details)
-        except Exception:
-            pass
-
-    def cost_warning(self, total_cost: float, max_cost: float, **details):
-        try:
-            msg = f"Cost warning: ${total_cost:.4f} / ${max_cost:.2f}"
-            self.emit(EventType.COST_WARNING, msg, "WARNING", total_cost=total_cost, max_cost=max_cost, **details)
-        except Exception:
-            pass
-
-    def cost_limit_exceeded(self, total_cost: float, max_cost: float, **details):
-        try:
-            msg = f"Cost limit exceeded: ${total_cost:.4f} > ${max_cost:.2f}"
-            self.emit(EventType.COST_LIMIT_EXCEEDED, msg, "ERROR", total_cost=total_cost, max_cost=max_cost, **details)
-        except Exception:
-            pass
-
-    def human_pause(self, message: str, **details):
-        try:
-            self.emit(EventType.HUMAN_PAUSE, f"Human pause: {message}", "INFO", message=message, **details)
-        except Exception:
-            pass
-
-    def human_resume(self, **details):
-        try:
-            self.emit(EventType.HUMAN_RESUME, "Human resumed", "INFO", **details)
         except Exception:
             pass
 

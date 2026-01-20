@@ -1,11 +1,8 @@
 """
-Task-Based Execution Extension for Agent.
-
-This module provides task-based execution capabilities that integrate with
-the existing Agent reactive loop.
+Task-based execution engine for Agent.
 """
 
-from typing import Optional, Dict, Any, List, Tuple, Callable, Union, Iterable, Type
+from typing import Optional, Dict, Any, List, Tuple, Callable, Union, Type
 import time
 import hashlib
 
@@ -23,21 +20,35 @@ from agent.agent_context import EnvironmentState
 from core.config import SequentialTaskConfig
 from execution.result import ActionResult
 from models.models import NotebookEntryType
-from agent.subagent.retrieval import TaskResultRetriever, TaskResultAccessor
 from agent.results import TaskResult
 from pydantic import BaseModel, Field, create_model
 
 
-class TaskBasedExecutionMixin:
+class TaskBasedExecution:
     """
-    Mixin class that adds task-based execution capabilities to Agent.
+    Task-based execution engine owned by the Agent.
 
-    This mixin provides:
+    Provides:
     - Task orchestration (decomposing user requests into tasks)
     - Normal task execution (single actions)
     - Sequential task execution (iteration loops with Sequence Planner)
     - Task state management and result tracking
     """
+
+    def __init__(
+        self,
+        agent: Any,
+        sequential_task_config: Optional[SequentialTaskConfig] = None,
+        auto_complete_extract_commands: bool = True,
+    ) -> None:
+        self.agent = agent
+        self._initialize_task_system(
+            sequential_task_config=sequential_task_config,
+            auto_complete_extract_commands=auto_complete_extract_commands,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.agent, name)
 
     def _initialize_task_system(
         self,
@@ -67,26 +78,14 @@ class TaskBasedExecutionMixin:
             config=self.sequential_task_config,
         )
 
-        # Result retriever for natural language access to task results
-        self.task_result_retriever = TaskResultRetriever(
-            model_name=self.agent_model_name,
-            use_llm_matching=True,
-        )
-
         # Current task list (set during execution)
         self.task_list: Optional[MissionPlan] = None
-
-        # Result accessor (created when task_list is set)
-        self.task_result_accessor: Optional[TaskResultAccessor] = None
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
 
-        # Flag to enable task-based execution
-        self.use_task_based_execution: bool = False
 
     def _run_task_based_execution(
         self,
         user_prompt: str,
-        agent_context: Optional[Any] = None,
     ):
         """
         Execute a task using the task-based execution system.
@@ -98,8 +97,6 @@ class TaskBasedExecutionMixin:
 
         Args:
             user_prompt: User's high-level request
-            agent_context: Optional agent context
-
         Returns:
             TaskResult indicating success or failure
         """
@@ -184,6 +181,10 @@ class TaskBasedExecutionMixin:
                 evidence=self._build_evidence() if hasattr(self, '_build_evidence') else {}
             )
 
+    def run(self, user_prompt: str) -> TaskResult:
+        """Public entry point for task-based execution."""
+        return self._run_task_based_execution(user_prompt)
+
     def _decompose_user_request_into_tasks(
         self,
         user_prompt: str,
@@ -253,12 +254,6 @@ class TaskBasedExecutionMixin:
             True if all tasks completed successfully, False otherwise
         """
         self.task_list = task_list
-
-        # Create result accessor for this task list
-        self.task_result_accessor = TaskResultAccessor(
-            task_list=self.task_list,
-            retriever=self.task_result_retriever,
-        )
 
         # Execute tasks sequentially
         while self.task_list.get_current_task() is not None:
@@ -345,7 +340,7 @@ class TaskBasedExecutionMixin:
         Returns:
             Context dict with previous results if available
         """
-        if not task.depends_on or not self.task_result_accessor:
+        if not task.depends_on:
             return None
 
         # Get the dependent task
@@ -355,7 +350,11 @@ class TaskBasedExecutionMixin:
             return None
 
         # Extract results from dependent task
-        results = self.task_result_retriever.extract_results_from_tasks([dependent_task])
+        results = None
+        if isinstance(dependent_task, Task):
+            results = dependent_task.result
+        elif isinstance(dependent_task, Sequence):
+            results = dependent_task.results
 
         if not results:
             return None

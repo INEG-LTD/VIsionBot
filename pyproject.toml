@@ -74,7 +74,6 @@ py-modules = [
     "ai_utils",
     "command_ledger",
     "error_handling",
-    "middleware",
     "session_tracker",
     "vision_utils",
     "command_parser",
@@ -90,7 +89,6 @@ target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-
 
 
 

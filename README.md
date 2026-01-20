@@ -270,12 +270,10 @@ AFTER (Fixed): Action Plan [Step 1, Step 2, Step 3] → Execute Step 1 → Execu
 - **Vision-Based Automation**: Uses AI vision models to understand web pages visually, not just through DOM inspection
 - **Intelligent Agent System**: Autonomous agents that can plan, execute, and adapt to complete tasks
 - **Interceptors System**: Trigger-based sub-objectives that activate automatically when specific conditions are met, allowing agents to handle complex UI interactions like dropdowns with specialized logic
-- **Multi-Tab Management**: Sophisticated tab orchestration with sub-agent support for parallel workflows
 - **Flexible Action System**: Supports clicks, typing, form filling, file uploads, navigation, and custom actions. Text input fields are automatically cleared before typing to ensure clean input, even when fields contain previous text. Robust fallback mechanisms ensure reliable typing for both short and long text inputs, including proper element focusing for complex web forms. Intelligent text parsing handles complex sentences with prepositions and special characters without truncation.
 - **Form Field Context Detection**: Automatically detects and includes associated labels/questions for form elements (inputs, radios, checkboxes). This allows the agent to distinguish between similar options (like "Yes" buttons) that belong to different questions, significantly improving accuracy when filling out complex forms.
 - **Data Extraction**: Extract structured data from web pages using natural language prompts
 - **Stealth Capabilities**: Built-in stealth features to avoid bot detection
-- **Middleware System**: Extensible middleware for logging, caching, error handling, and custom behaviors
 - **Smart Error Recovery**: Automatic retry logic, fallback strategies, and native user question support with contextual guidance that preserves original task intent
 - **Single-Use User Suggestions**: User-provided suggestions and clarifications (from both defer inputs and ask commands) are now only available for the next command, preventing outdated guidance from persisting across iterations
 - **Configuration-Driven**: Type-safe configuration using Pydantic models
@@ -489,15 +487,6 @@ The agent system enables autonomous task completion:
 - **Adaptive Planning**: Dynamically adjusts strategy based on page state and history
 - **Native User Questions**: Agent can ask the user for help using `ask:` command when stuck or needing clarification
 - **Pause/Resume Control**: Fine-grained pause functionality between actions for debugging and inspection
-
-### Tab Management
-
-Sophisticated multi-tab orchestration:
-
-- **Tab Tracking**: Automatic registration and metadata tracking for all tabs
-- **Tab Decisions**: LLM-based decisions on when to switch, close, or create tabs
-- **Sub-Agents**: Spawn independent agents in separate tabs for parallel workflows
-- **Tab Synchronization**: Keeps all components synchronized when switching tabs
 
 ### Pause Functionality
 
@@ -896,7 +885,6 @@ result = bot.execute_task(
 
 if result.success:
     print("Extracted data:", result.extracted_data)
-    print("Sub-agent results:", result.sub_agent_results)
 ```
 
 **Parameters:**
@@ -918,7 +906,6 @@ if result.success:
   - Backed by the agent Notebook (`agent.notebook.Notebook`) during execution
 - `reasoning`: Explanation of the result
 - `confidence`: Confidence score (0.0-1.0)
-- `sub_agent_results`: Results from sub-agents if any
 
 **Raises:**
 - `RuntimeError`: If bot is not started or has been terminated
@@ -1072,36 +1059,6 @@ page = provider.get_page()
 bot = BrowserVisionBot(browser_provider=provider)
 ```
 
-### Middleware System
-
-Extend bot behavior with middleware.
-
-```python
-from middleware import MiddlewareManager, Middleware, ActionContext
-from middlewares import LoggingMiddleware, CachingMiddleware, RetryMiddleware
-
-# Create middleware manager
-middleware = MiddlewareManager()
-
-# Add built-in middleware
-middleware.use(LoggingMiddleware())
-middleware.use(CachingMiddleware(ttl=300))
-middleware.use(RetryMiddleware(max_retries=3))
-
-# Create custom middleware
-class CustomLoggingMiddleware(Middleware):
-    async def before_action(self, context: ActionContext):
-        print(f"About to execute: {context.action}")
-        context.metadata["start_time"] = time.time()
-    
-    async def after_action(self, context: ActionContext):
-        duration = time.time() - context.metadata["start_time"]
-        print(f"Action took {duration:.2f}s")
-
-# Use middleware
-bot.middleware = middleware
-```
-
 ## 🔥 Advanced Features
 
 ### Action Ledger
@@ -1150,9 +1107,7 @@ while not queue.is_empty():
 
 Interceptors allow you to create trigger-based sub-objectives that activate automatically when specific conditions are met. This is perfect for handling complex UI interactions that require specialized logic, like dropdown menus, multi-step forms, or custom widgets.
 
-#### Two Execution Modes
-
-**Autonomy Mode**: The agent handles the interceptor as a complete sub-task, with full planning and completion evaluation.
+#### Execution Mode
 
 **Scripted Mode**: Execute custom Python functions that can interact with the page and ask the agent questions using its current context.
 
@@ -1161,24 +1116,12 @@ Interceptors allow you to create trigger-based sub-objectives that activate auto
 ```python
 from agent.interceptor_manager import Interceptor, InterceptorMode
 
-# Example: Handle dropdown selections autonomously
-trigger = Interceptor(
-    action_type="click",
-    target_regex="dropdown|select.*field"
-)
-
-bot.register_interceptor(
-    trigger=trigger,
-    mode=InterceptorMode.AUTONOMY,
-    instruction_override="Select the most appropriate option from this dropdown based on the context"
-)
-
 # Example: Handle form validation with a script
 def validate_form_handler(context):
     # Ask the agent for validation info
     validation_rules = context.ask_question("What validation rules should be applied to this form?")
 
-    # Interact with the page
+# Interact with the page
     context.bot.page.evaluate("""
         // Custom validation logic
         const inputs = document.querySelectorAll('input');
@@ -1206,7 +1149,6 @@ bot.register_interceptor(
 
 - **Recursion Control**: Configurable recursion limit (default: 3) prevents infinite interceptor loops
 - **State Isolation**: Interceptors maintain their own completion context separate from the main task
-- **Navigation Blocking**: In autonomy mode, navigation actions are blocked to keep focus on the interceptor
 - **Question Asking**: Scripted handlers can ask the agent contextual questions using current page state
 
 ### Error Handling
@@ -1243,13 +1185,13 @@ config = BotConfig(
 ┌─────────────────────────────────────────────────────────┐
 │                    BrowserVisionBot                      │
 │  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │   Vision   │  │    Agent     │  │      Tab         │  │
-│  │   System   │  │  Controller  │  │   Management    │  │
+│  │   Vision   │  │    Agent     │  │    Action      │  │
+│  │   System   │  │  Controller  │  │   Executor     │  │
 │  └────────────┘  └──────────────┘  └────────────────┘  │
-│  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │   Action   │  │  Extraction   │  │   Middleware    │  │
-│  │  Executor  │  │   Pipeline    │  │     System      │  │
-│  └────────────┘  └──────────────┘  └────────────────┘  │
+│  ┌────────────┐  ┌──────────────┐                      │
+│  │ Extraction │  │  Planning    │                      │
+│  │  Pipeline  │  │  & Models    │                      │
+│  └────────────┘  └──────────────┘                      │
 └─────────────────────────────────────────────────────────┘
                          │
                          ▼
@@ -1266,12 +1208,8 @@ config = BotConfig(
 - **action_executor.py**: Low-level action execution with retries and fallbacks
 - **session_tracker.py**: Tracks browser state, interactions, and navigation history
 - **ai_utils.py**: LLM and vision API calls for planning and analysis
-- **tab_management/**: Tab tracking, decision engine, and sub-agent coordination
-- **element_detection/**: Element detection and overlay management
-- **handlers/**: Specialized handlers for selects, uploads, datetime pickers
-- **middlewares/**: Extensible middleware for cross-cutting concerns
+- **execution/handlers/**: Specialized handlers for uploads and datetime inputs
 - **utils/**: Utilities for logging, parsing, vision, and page operations
-- **planner/**: Plan generation for AI-based action planning
 
 ### Data Flow
 
@@ -1339,29 +1277,7 @@ for article in articles:
     print(f"{article.title} by {article.author}")
 ```
 
-### Example 3: Multi-Tab Workflow
-
-```python
-# Agent automatically manages tabs
-result = bot.execute_task(
-    user_prompt="""
-    Research the following topics in parallel:
-    1. Latest AI developments
-    2. Climate change news
-    3. Stock market trends
-    
-    Extract key points from each topic.
-    """,
-    max_iterations=30
-)
-
-# Results from sub-agents in different tabs
-for sub_result in result.sub_agent_results:
-    print(f"Sub-agent: {sub_result.agent_id}")
-    print(f"Data: {sub_result.extracted_data}")
-```
-
-### Example 4: Agentic Mode for Complex Tasks
+### Example 3: Agentic Mode for Complex Tasks
 
 ```python
 # Use execute_task for complex workflows that require conditional logic
@@ -1382,7 +1298,7 @@ result = bot.execute_task(
 )
 ```
 
-### Example 5: Complete Workflow
+### Example 4: Complete Workflow
 
 ```python
 from browser_vision_bot import BotConfig, create_browser_provider
@@ -1413,7 +1329,7 @@ if result.success:
 bot.end()
 ```
 
-### Example 6: Agent Asking User Questions
+### Example 5: Agent Asking User Questions
 
 The agent can natively ask the user for help using the `ask:` command when it's stuck or needs clarification:
 
@@ -1476,7 +1392,6 @@ browser-vision-bot/
 ├── browser_provider.py       # Browser management
 ├── action_ledger.py         # Action tracking
 ├── action_queue.py           # Action queuing
-├── middleware.py             # Middleware system
 ├── error_handling.py         # Error handling
 ├── vision_utils.py           # Vision utilities
 ├── agent/                    # Agent system
@@ -1485,25 +1400,8 @@ browser-vision-bot/
 │   ├── agent_result.py        # Agent results
 │   ├── completion_contract.py # Completion evaluation
 │   ├── action_planner.py # Next action determination
-│   └── sub_agent_controller.py # Sub-agent management
-├── tab_management/           # Tab orchestration
-│   ├── tab_manager.py        # Tab tracking
-│   ├── tab_decision_engine.py # Tab decisions
-│   └── tab_info.py           # Tab metadata
-├── element_detection/        # Element detection
-│   ├── element_detector.py   # Element detection
-│   └── overlay_manager.py    # Overlay management
-├── handlers/                 # Specialized handlers
-│   ├── upload_handler.py     # File upload handling
-│   └── datetime_handler.py   # Date/time handling
-├── middlewares/              # Built-in middleware
-│   ├── logging_middleware.py
-│   ├── caching.py
-│   ├── retry.py
-│   ├── cost_tracking.py
-│   ├── metrics.py
-│   ├── human_in_loop.py
-│   └── error_handling_middleware.py
+├── execution/                # Action execution and handlers
+│   └── handlers/             # Upload/datetime handling
 ├── models/                   # Data models
 │   ├── core_models.py        # Core models
 │   └── intent_models.py      # Intent models
@@ -1513,10 +1411,7 @@ browser-vision-bot/
 │   ├── intent_parsers.py     # Intent parsing
 │   ├── page_utils.py         # Page utilities
 │   ├── selector_utils.py    # Selector utilities
-│   ├── vision_resolver.py    # Vision resolution
 │   └── ...
-├── planner/                  # Planning system
-│   └── plan_generator.py     # Plan generation
 ├── session_tracker.py        # Session state tracking
 ├── tests/                    # Test suite
 │   ├── unit/                 # Unit tests
@@ -1545,8 +1440,6 @@ pytest tests/ --cov=. --cov-report=html
 - If an upload path is provided but doesn’t exist, the upload handler now falls back to the manual picker flow (click + wait for user to select).
 
 # Run specific test file
-pytest tests/unit/test_tab_manager.py -v
-
 pytest tests/integration/test_selector_coordinates.py -v  # Test selector coordinate resolution
 ```
 

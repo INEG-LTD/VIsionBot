@@ -13,7 +13,6 @@ from models.models import (
     IterationResult,
 )
 from core.config import SequentialTaskConfig
-from agent.subagent.retrieval import TaskResultRetriever, TaskResultAccessor
 
 
 class TestEndToEndSequentialExecution:
@@ -141,8 +140,7 @@ class TestTaskDependencyFlow:
         assert dependency == sequential_task
 
         # Extract results from dependency
-        retriever = TaskResultRetriever()
-        results = retriever.extract_results_from_tasks([dependency])
+        results = [item for item in dependency.results if item]
 
         # Should have 4 results (filtering out the None)
         assert len(results) == 4
@@ -192,57 +190,6 @@ class TestTaskDependencyFlow:
 
         dep2 = task_list.get_task_by_id(task3.depends_on)
         assert dep2 == task2
-
-
-class TestResultRetrievalIntegration:
-    """Test result retrieval integration with task execution"""
-
-    def test_retrieve_results_after_execution(self, completed_task_list):
-        """Test retrieving results after task execution"""
-        accessor = TaskResultAccessor(
-            task_list=completed_task_list,
-            retriever=TaskResultRetriever(use_llm_matching=False),
-        )
-
-        # Query for company names
-        results = accessor.get_results("company names", return_first_only=False)
-
-        assert results is not None
-        assert len(results) == 4  # 4 successful extractions
-        assert {"company": "Apple Inc."} in results
-        assert {"company": "Google LLC"} in results
-
-    def test_retrieve_all_results(self, completed_task_list):
-        """Test retrieving all results from completed tasks"""
-        accessor = TaskResultAccessor(
-            task_list=completed_task_list,
-            retriever=TaskResultRetriever(),
-        )
-
-        all_results = accessor.get_all_results()
-
-        # Should have: 1 from task1 + 4 from task2 + 1 from task3 = 6
-        assert len(all_results) == 6
-
-    def test_no_results_for_incomplete_tasks(self):
-        """Test that incomplete tasks don't return results"""
-        task = NormalTask(
-            task_id="task_001",
-            description="Extract data",
-            instruction="Extract company name",
-            status=TaskStatus.IN_PROGRESS,  # Not complete
-        )
-
-        task_list = TaskList(tasks=[task])
-        accessor = TaskResultAccessor(task_list=task_list)
-
-        # Should have no completed tasks
-        completed = task_list.get_completed_tasks()
-        assert len(completed) == 0
-
-        # Should have no results
-        all_results = accessor.get_all_results()
-        assert len(all_results) == 0
 
 
 class TestCompletionStrategyScenarios:

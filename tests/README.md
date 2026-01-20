@@ -15,13 +15,6 @@ This directory contains comprehensive tests for the sequential task execution sy
 - SequenceDecision model
 - TaskOrchestratorOutput model
 
-**test_task_result_retrieval.py** - Tests for result retrieval system
-- TaskResultRetriever keyword matching
-- TaskResultRetriever LLM-based matching
-- TaskResultAccessor interface
-- Result extraction from tasks
-- Task dependency handling
-
 **test_sequence_planner.py** - Tests for Sequence Planner
 - Retry logic
 - Completion strategies (strict, best_effort, threshold)
@@ -35,7 +28,6 @@ This directory contains comprehensive tests for the sequential task execution sy
 **test_task_integration.py** - End-to-end integration tests
 - Sequential task execution flows
 - Task dependency and result flow
-- Result retrieval integration
 - Completion strategy scenarios
 - Error recovery scenarios
 - Task list management
@@ -86,7 +78,7 @@ pytest tests/ -v
 ### Run with Coverage
 
 ```bash
-pytest tests/ --cov=models.task_models --cov=agent.planning.sequence_planner --cov=agent.task_result_retrieval
+pytest tests/ --cov=models.task_models --cov=agent.planning.sequence_planner
 ```
 
 ### Run with Coverage Report
@@ -110,17 +102,6 @@ Then open `htmlcov/index.html` in a browser.
 ✅ Completion checking
 ✅ Sequence Planner decision models
 
-### Retrieval Tests (test_task_result_retrieval.py)
-
-✅ Keyword extraction and matching
-✅ Keyword-based task matching
-✅ Result extraction from normal tasks
-✅ Result extraction from sequential tasks (with None filtering)
-✅ Result accessor interface
-✅ Task dependency resolution
-✅ Empty result handling
-✅ Formatting for LLM prompts
-
 ### Sequence Planner Tests (test_sequence_planner.py)
 
 ✅ Retry logic (under limit, at limit)
@@ -141,7 +122,6 @@ Then open `htmlcov/index.html` in a browser.
 ✅ Partial completion scenarios
 ✅ Task dependency flow
 ✅ Multi-task result flow
-✅ Result retrieval after execution
 ✅ Completion strategy scenarios
 ✅ Error recovery scenarios
 ✅ Task list progression
@@ -150,7 +130,6 @@ Then open `htmlcov/index.html` in a browser.
 
 - **Models**: 100% coverage of all task models
 - **Sequence Planner**: 95%+ coverage of decision logic
-- **Result Retrieval**: 90%+ coverage of retrieval methods
 - **Integration**: Cover all major execution paths
 
 ## Adding New Tests

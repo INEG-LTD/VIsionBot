@@ -58,7 +58,6 @@ from execution.result import ActionResult
 from pydantic import BaseModel, Field
 from core.config import Config
 from browser.provider import BrowserProvider, create_browser_provider
-from middleware.base import MiddlewareManager, ActionContext
 from lib.errors import (
     BotNotStartedError,
     BotTerminatedError,
@@ -81,6 +80,28 @@ DOM_ELEMENT_CENTER_SCRIPT = """
     return {
         x: Math.round(rect.left + rect.width / 2),
         y: Math.round(rect.top + rect.height / 2),
+    };
+}
+"""
+
+DOM_ELEMENT_SCROLL_INTO_VIEW_SCRIPT = """
+(idx) => {
+    const el = document.querySelector(`[data-dom-index="${idx}"]`);
+    if (!el) {
+        return null;
+    }
+    if (el.scrollIntoView) {
+        el.scrollIntoView({block: "center", inline: "center"});
+    }
+    const rect = el.getBoundingClientRect();
+    if (!rect) {
+        return null;
+    }
+    return {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
     };
 }
 """
@@ -283,9 +304,6 @@ class Browser:
         self.browser_provider = browser_provider
         self.page = page  # Will be set in start() if None
         
-        # Initialize middleware manager
-        self.middleware = MiddlewareManager()
-
         # Extract model configuration
         self.command_model_name = config.model.command_model
         self.agent_model_name = config.model.agent_model
@@ -307,7 +325,6 @@ class Browser:
         self.parallel_completion_and_action = config.execution.parallel_completion_and_action
         self.completion_mode = "external_only"
         self.auto_complete_extract_commands = config.execution.auto_complete_extract_commands
-        self.enable_sub_agents = config.execution.enable_sub_agents
         self.max_actions_per_plan = config.execution.max_actions_per_plan
         self.track_ineffective_actions = config.execution.track_ineffective_actions
         self.wait_for_load_before_turn = config.execution.wait_for_load_before_turn
@@ -610,23 +627,6 @@ class Browser:
         self._pending_defer_input = None
         return payload
     
-    def use(self, middleware) -> 'Browser':
-        """
-        Add middleware to the bot.
-        
-        Args:
-            middleware: Middleware instance to add
-            
-        Returns:
-            Self for method chaining
-            
-        Example:
-            >>> bot.use(LoggingMiddleware()) \\
-            ...    .use(CostTrackingMiddleware(max_cost=1.00))
-        """
-        self.middleware.use(middleware)
-        return self
-    
     def start(self) -> None:
         """Start the bot"""
         # Get page from browser provider if not already provided
@@ -656,26 +656,6 @@ class Browser:
         # Initialize components
         self.session_tracker: SessionTracker = SessionTracker(page)
         
-        # Initialize tab management (Phase 1)
-        try:
-            from browser.tabs import TabManager
-            if page and hasattr(page, 'context'):
-                self.tab_manager: Optional[TabManager] = TabManager(page.context)
-                # Register the initial page
-                self.tab_manager.register_tab(
-                    page=page,
-                    purpose="main",
-                    agent_id=None,
-                    metadata={"initial": True}
-                )
-            else:
-                self.tab_manager: Optional[TabManager] = None
-        except Exception as e:
-            try:
-                self.event_logger.system_error("Failed to initialize TabManager", error=e)
-            except Exception:
-                pass
-            self.tab_manager: Optional[TabManager] = None
         self.page_utils = PageUtils(page)
 
         # Plan generator for DOM-based prompts
@@ -698,15 +678,6 @@ class Browser:
         
         # Plan generator for AI planning prompts
         
-        # Auto-switch to new tabs/windows when they open (e.g., target=_blank)
-        try:
-            self._attach_new_page_listener()
-        except Exception as e:
-            try:
-                self.event_logger.system_error("Failed to attach new page listener", error=e)
-            except Exception:
-                pass
-
         self.started = True
 
         # If auto-on-load was enabled before start, attach handler now
@@ -820,109 +791,6 @@ class Browser:
                     metadata={"terminated": True}
                 )
             )
-
-    def _attach_new_page_listener(self) -> None:
-        """Attach a browser-context listener to detect new pages/tabs and switch context automatically."""
-        if not self.page:
-            return
-        ctx = self.page.context
-
-        def _on_new_page(new_page: Page) -> None:
-            try:
-                # Bring to front and wait for basic readiness
-                try:
-                    new_page.bring_to_front()
-                except Exception:
-                    pass
-                try:
-                    new_page.wait_for_load_state("domcontentloaded", timeout=5000)
-                except Exception:
-                    pass
-                self.event_logger.system_info("New page/tab detected by context listener → switching…")
-                
-                # If TabManager is available, detect and register the new tab
-                if self.tab_manager:
-                    tab_id = self.tab_manager.detect_new_tab(new_page)
-                    if tab_id:
-                        self.event_logger.tab_new(tab_id=tab_id, url=new_page.url)
-                
-                self.switch_to_page(new_page)
-            except Exception as e:
-                self.event_logger.system_error("Error handling new page event", error=e)
-
-        try:
-            ctx.on("page", _on_new_page)
-        except Exception as e:
-            self.event_logger.system_error("Could not register context 'page' listener", error=e)
-
-    def switch_to_page(self, new_page: Page) -> None:
-        """Switch all components to a different active Page (new tab/window)."""
-        if not new_page or new_page is self.page:
-            return
-        try:
-            # Set a reasonable default timeout for snappy interactions on the new page
-            try:
-                new_page.set_default_timeout(2000)
-            except Exception:
-                pass
-
-            # Update TabManager if available
-            if self.tab_manager:
-                # Find tab ID for this page
-                tab_id = None
-                for tid, tab_info in self.tab_manager.tabs.items():
-                    if id(tab_info.page) == id(new_page):
-                        tab_id = tid
-                        break
-                
-                # If not found, detect and register
-                if tab_id is None:
-                    tab_id = self.tab_manager.detect_new_tab(new_page)
-                
-                # Switch to this tab in TabManager
-                if tab_id:
-                    self.tab_manager.switch_to_tab(tab_id)
-
-            self.page = new_page
-            # Update core components
-            try:
-                if self.page_utils:
-                    if hasattr(self.page_utils, "set_page"):
-                        self.page_utils.set_page(new_page)
-                    else:
-                        self.page_utils.page = new_page
-            except Exception:
-                pass
-            try:
-                if self.session_tracker:
-                    self.session_tracker.switch_to_page(new_page)
-            except Exception:
-                pass
-            try:
-                if self.action_executor:
-                    self.action_executor.set_page(new_page)
-            except Exception:
-                pass
-            # Focus system removed - no longer needed
-            # Clear cached screenshot data tied to previous page
-            try:
-                self._cached_clean_screenshot = None
-                self._cached_dom_signature = None
-                self.last_dom_signature = None
-            except Exception:
-                pass
-
-            self.event_logger.tab_switch(tab_id=str(id(new_page)), url=getattr(new_page, 'url', ''))
-            # Re-attach auto-on-load handler for the new page if feature is enabled
-            try:
-                if self._auto_on_load_enabled:
-                    self._attach_page_load_handler()
-                    # Also run immediately for the new page so it happens before next act()
-                    self._run_auto_actions_for_current_page()
-            except Exception:
-                pass
-        except Exception as e:
-            self.event_logger.system_error("Failed to switch to new page", error=e)
 
     # ---------- Auto actions on page load ----------
     def on_new_page_load(self, actions_to_take: List[str], run_once_per_url: bool = True, action_id: Optional[str] = None) -> None:
@@ -1525,25 +1393,6 @@ class Browser:
         # Set agent mode flag
         self._agent_mode = True
         
-        # Create middleware context
-        context = ActionContext(
-            action_type='execute_task',
-            action_data={
-                'user_prompt': user_prompt,
-                'max_iterations': max_iterations,
-                'strict_mode': strict_mode
-            },
-            bot=self,
-            metadata={}
-        )
-        
-        # Execute before hooks
-        context = self.middleware.execute_before(context)
-        
-        # Check if middleware wants to skip execution
-        if not context.should_continue:
-            return context.cached_result
-        
         try:
             # Use config default if not explicitly provided
             if track_ineffective_actions is None:
@@ -1558,7 +1407,6 @@ class Browser:
                 base_knowledge=base_knowledge,
                 allow_partial_completion=allow_partial_completion,
                 parallel_completion_and_action=self.parallel_completion_and_action,
-                enable_sub_agents=self.enable_sub_agents,
                 show_completion_reasoning_every_iteration=show_completion_reasoning_every_iteration,
                 strict_mode=strict_mode,
                 clarification_callback=clarification_callback,
@@ -1587,8 +1435,7 @@ class Browser:
                 controller.register_interceptor(
                     trigger=interceptor_data["trigger"],
                     mode=interceptor_data["mode"],
-                    handler=interceptor_data["handler"],
-                    instruction_override=interceptor_data["instruction_override"]
+                    handler=interceptor_data["handler"]
                 )
             
             # Store controller for pause/resume access
@@ -1632,21 +1479,13 @@ class Browser:
                 else:
                     extracted_data[prompt] = data
 
-            # Create result
-            result = MissionResult(task_result, extracted_data)
-            
-            # Execute after hooks
-            result = self.middleware.execute_after(context, result)
-            
-            return result
+            return MissionResult(task_result, extracted_data)
             
         except Exception as e:
             try:
                 self.event_logger.agent_error(str(e))
             except Exception:
                 pass
-            # Execute error hooks
-            self.middleware.execute_on_error(context, e)
             raise
         finally:
             # Reset agent mode flag when done
@@ -2565,8 +2404,7 @@ Return only the extracted text that appears in the text content above. Do not ma
         self,
         trigger: 'Interceptor',
         mode: 'InterceptorMode',
-        handler: Optional[Callable[['InterceptorContext'], None]] = None,
-        instruction_override: Optional[str] = None
+        handler: Optional[Callable[['InterceptorContext'], None]] = None
     ) -> None:
         """
         Register an interceptor trigger and handler.
@@ -2576,15 +2414,13 @@ Return only the extracted text that appears in the text content above. Do not ma
         
         Args:
             trigger: The condition that activates this interceptor
-            mode: Either AUTONOMY (agent solves it) or SCRIPTED (handler executes)
+            mode: Execution mode (scripted handlers only)
             handler: For SCRIPTED mode, the Python function to execute
-            instruction_override: Custom instruction for the agent in AUTONOMY mode
         """
         interceptor_data = {
             "trigger": trigger,
             "mode": mode,
             "handler": handler,
-            "instruction_override": instruction_override
         }
         self.interceptors.append(interceptor_data)
 
@@ -2593,8 +2429,7 @@ Return only the extracted text that appears in the text content above. Do not ma
             self.agent_controller.register_interceptor(
                 trigger=trigger,
                 mode=mode,
-                handler=handler,
-                instruction_override=instruction_override
+                handler=handler
             )
 
     def _get_semantic_target(self, description: str) -> Optional[SemanticTarget]:
@@ -2661,6 +2496,27 @@ Return only the extracted text that appears in the text content above. Do not ma
         except Exception:
             pass
         return None, None
+
+    def _is_bbox_in_viewport(self, bbox: Dict[str, Any], page_info: Optional[PageInfo]) -> bool:
+        if not bbox or not page_info:
+            return True
+        width = page_info.width or 0
+        height = page_info.height or 0
+        if width <= 0 or height <= 0:
+            return True
+        x = bbox.get("x", 0)
+        y = bbox.get("y", 0)
+        w = bbox.get("width", 0)
+        h = bbox.get("height", 0)
+        return x >= 0 and y >= 0 and (x + w) <= width and (y + h) <= height
+
+    def _scroll_overlay_into_view(self, overlay_index: int) -> Optional[Dict[str, Any]]:
+        if overlay_index is None or self.page is None:
+            return None
+        try:
+            return self.page.evaluate(DOM_ELEMENT_SCROLL_INTO_VIEW_SCRIPT, overlay_index)
+        except Exception:
+            return None
     
     def _execute_keyword_command(
         self,
@@ -2986,9 +2842,40 @@ Return only the extracted text that appears in the text content above. Do not ma
                 dprint(f"[KeywordCommand] ❌ Selected overlay #{overlay_index} missing in element data after all retries")
                 return False
             
+            bbox = matching_data.get("boundingBox") if matching_data else None
+            if bbox and not self._is_bbox_in_viewport(bbox, page_info):
+                try:
+                    self.event_logger.system_debug(
+                        f"Overlay #{overlay_index} outside viewport; scrolling into view before click."
+                    )
+                except Exception:
+                    pass
+                scrolled_bbox = self._scroll_overlay_into_view(overlay_index)
+                if not scrolled_bbox:
+                    if attempt < max_attempts:
+                        dprint(f"⚠️ Failed to scroll overlay #{overlay_index} into view (attempt {attempt}/{max_attempts}), retrying...")
+                        continue
+                    return False
+                bbox = scrolled_bbox
+                if page_info and not self._is_bbox_in_viewport(bbox, page_info):
+                    if attempt < max_attempts:
+                        dprint(f"⚠️ Overlay #{overlay_index} still offscreen after scroll (attempt {attempt}/{max_attempts}), retrying...")
+                        continue
+                    return False
+
             # Record exact DOM coordinates for reliable clicking
             center_x, center_y = self._get_dom_element_center(overlay_index)
             if center_x is not None and center_y is not None:
+                if page_info and (
+                    center_x < 0
+                    or center_y < 0
+                    or center_x > (page_info.width or center_x)
+                    or center_y > (page_info.height or center_y)
+                ):
+                    if attempt < max_attempts:
+                        dprint(f"⚠️ Overlay #{overlay_index} center offscreen (attempt {attempt}/{max_attempts}), retrying...")
+                        continue
+                    return False
                 filtered_kwargs["x"] = center_x
                 filtered_kwargs["y"] = center_y
 

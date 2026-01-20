@@ -76,10 +76,6 @@ class ExecutionConfig(BaseModel):
         default=True,
         description="Automatically mark tasks complete after successful extract: commands when the task only contains extraction actions"
     )
-    enable_sub_agents: bool = Field(
-        default=False,
-        description="Enable sub-agent spawning for parallel task execution. When enabled, the agent can spawn sub-agents to handle subtasks in parallel."
-    )
     max_actions_per_plan: int = Field(
         default=6,
         ge=1,
