@@ -378,7 +378,7 @@ class Agent:
             # Best-effort wait; do not block on load wait errors.
             pass
     
-    def run_execute_task(self, user_prompt: str) -> TaskResult:
+    def run_task(self, user_prompt: str) -> TaskResult:
         """
         Execute a task autonomously.
         
@@ -401,6 +401,8 @@ class Agent:
         self._consecutive_page_changes = 0
         # Reset screenshot hash tracking
         self._last_screenshot_hash = None
+        # Initialize global iteration counter for mission-wide tracking
+        self._current_iteration = 0
 
         self.event_logger.agent_start(user_prompt, agent_type="Main agent", max_iterations=self.max_iterations)
 

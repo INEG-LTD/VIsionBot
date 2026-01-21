@@ -540,25 +540,12 @@ class TaskBasedExecution:
         # Prepare task context with previous results
         task_context = self._prepare_task_context(task)
 
-        # Build enhanced task instruction with context
-        task_prompt = task.instruction
-
-        if task_context and "previous_task" in task_context:
-            prev = task_context["previous_task"]
-            task_prompt = f"""{task.instruction}
-
-CONTEXT - Previous Task Results:
-Task: {prev['description']}
-Results: {prev['results']}
-
-Use the results above to complete your task."""
-
-        # Execute using mini reactive loop for this specific task
-        result = self._run_reactive_loop_for_task(
-            task_instruction=task_prompt,
+        # Execute using shared task loop
+        result = self.run_task_loop(
+            task_instruction=task.instruction,
             original_prompt=user_prompt,
-            max_iterations=20,  # Limit iterations per task
             extraction_schema=getattr(task, 'extraction_schema', None),
+            context=task_context,
         )
 
         # Store result
@@ -938,10 +925,9 @@ Use the results above to complete your task."""
             self.event_logger.subtask_start(task_instruction)
         except Exception:
             pass
-        result = self._run_reactive_loop_for_task(
+        result = self.run_task_loop(
             task_instruction=task_instruction,
             original_prompt=sequential_task.goal,
-            max_iterations=10,  # Limit iterations per subtask
             extraction_schema=getattr(sequential_task, 'extraction_schema', None),
         )
         try:
@@ -969,26 +955,45 @@ Use the results above to complete your task."""
             error=result.reasoning if not result.success else None,
         )
 
-    def _run_reactive_loop_for_task(
+    def run_task_loop(
         self,
         task_instruction: str,
         original_prompt: str,
-        max_iterations: int = 20,
         extraction_schema: Optional[Dict[str, Any]] = None,
-    ):
+        context: Optional[Dict[str, Any]] = None,
+    ) -> TaskResult:
         """
-        Run a mini reactive loop for a specific task instruction.
+        Run a task loop for a specific instruction.
 
-        This executes actions until the agent issues a complete: command or max iterations reached.
+        This executes actions until the agent issues a complete: command or max global iterations reached.
+        It handles:
+        - Context integration (previous task results)
+        - History-based completion checks
+        - Snapshot execution
+        - Planning and Action execution
+        - Extraction validation
 
         Args:
             task_instruction: The specific instruction to execute
             original_prompt: Original user prompt (for context)
-            max_iterations: Maximum iterations for this task
+            extraction_schema: Optional schema for extraction validation
+            context: Optional context dictionary (e.g. previous task results)
 
         Returns:
             TaskResult indicating success/failure
         """
+        
+        # Augment instruction with context if provided
+        if context and "previous_task" in context:
+            prev = context["previous_task"]
+            task_instruction = f"""{task_instruction}
+
+CONTEXT - Previous Task Results:
+Task: {prev['description']}
+Results: {prev['results']}
+
+Use the results above to complete your task."""
+
         from agent.action_planner import ActionPlanner
 
         # Track task-specific failed/ineffective actions
@@ -998,12 +1003,16 @@ Use the results above to complete your task."""
         # Track repeated failures for stuck detection
         repeated_failure_count = {}  # action -> count
 
-        for iteration in range(max_iterations):
+        # Use global mission-wide iteration counter
+        while self.agent._current_iteration < self.agent.max_iterations:
+            self.agent._current_iteration += 1
+            iteration = self.agent._current_iteration
+            
             # Debug: Log iteration start
             try:
                 is_opt = self._is_optional_task(task_instruction)
                 self.event_logger.system_debug(
-                    f"[Mini-loop] Starting iteration {iteration}/{max_iterations-1} for task: '{task_instruction}' (optional={is_opt})"
+                    f"[Task Loop] Starting global iteration {iteration}/{self.agent.max_iterations} for task: '{task_instruction}' (optional={is_opt})"
                 )
             except Exception:
                 pass
@@ -1513,16 +1522,18 @@ Use the results above to complete your task."""
 
             # Continue to next mini-loop iteration to get a new plan
 
+            # Continue to next iteration
+        
         # Max iterations reached without completion
         try:
-            self.event_logger.miniloop_iteration_fail(task_instruction, max_iterations - 1, error="max_iterations")
+            self.event_logger.miniloop_iteration_fail(task_instruction, self.agent.max_iterations, error="max_iterations_reached")
         except Exception:
             pass
         return TaskResult(
             success=False,
             confidence=0.0,
-            reasoning=f"Task did not complete within {max_iterations} iterations",
-            evidence={"max_iterations": max_iterations, "task_instruction": task_instruction},
+            reasoning=f"Mission reached maximum global iterations ({self.agent.max_iterations}) without completing task",
+            evidence={"max_iterations": self.agent.max_iterations, "task_instruction": task_instruction},
         )
 
     def _record_iteration_success(

@@ -259,15 +259,15 @@ def apply_thinking_border(bot: Browser):
             manager.enable_blocking()
     Browser.extract = patched_extract
 
-    original_run = Agent.run_execute_task
-    def patched_run(self, *args, **kwargs):
+    original_run_task = Agent.run_task
+    def patched_run_task(self, *args, **kwargs):
         manager.enable_blocking()
         try:
-            result = original_run(self, *args, **kwargs)
+            result = original_run_task(self, *args, **kwargs)
             return result
         finally:
             manager.disable_blocking()
-    Agent.run_execute_task = patched_run
+    Agent.run_task = patched_run_task
 
     return manager
 

@@ -1453,7 +1453,7 @@ class Browser:
                 
                 self.action_executor.set_pause_callback(pause_check)
             
-            task_result = controller.run_execute_task(user_prompt)
+            task_result = controller.run_task(user_prompt)
 
             # Convert notebook list to extracted_data dict for backwards compatibility
             extracted_data = {}
