@@ -1,35 +1,9 @@
 """
 Visual feedback and highlighting for action confirmation.
 """
-from typing import Optional, Tuple, List
+from typing import List
 
 from models import PageInfo
-
-
-def confirm_interaction_visual(
-    executor,
-    *,
-    action_label: str,
-    overlay_index: Optional[int],
-    selector: Optional[str],
-    coordinates: Optional[Tuple[int, int]],
-    box: Optional[List[int]] = None,
-    page_info: Optional[PageInfo] = None,
-) -> None:
-    highlight = False
-    try:
-        if box and page_info and highlight_box(executor, box, page_info):
-            highlight = True
-        elif coordinates and highlight_point(executor, *coordinates):
-            highlight = True
-        elif overlay_index is not None and highlight_overlay(executor, overlay_index):
-            highlight = True
-        overlay_text = f" overlay #{overlay_index}" if overlay_index is not None else ""
-        input(f"\n👀 Confirm {action_label.upper()}{overlay_text} target. Press Enter to continue... ")
-    finally:
-        if highlight:
-            clear_highlight(executor)
-
 
 def highlight_selector(executor, selector: str) -> bool:
     script = """
@@ -148,12 +122,112 @@ def highlight_point(executor, x: int, y: int) -> bool:
         return False
 
 
+def highlight_click_location(executor, x: int, y: int, duration_ms: int = 1000) -> bool:
+    """
+    Highlight the click location for debugging purposes.
+    Shows a pulsing circle at the click coordinates.
+    
+    Args:
+        executor: Executor instance with page access
+        x: X coordinate to highlight
+        y: Y coordinate to highlight
+        duration_ms: How long to show the highlight (milliseconds)
+    
+    Returns:
+        True if highlight was successfully shown, False otherwise
+    """
+    script = """
+    ({x, y, durationMs}) => {
+        if (typeof x !== 'number' || typeof y !== 'number') return false;
+        
+        const overlayId = '__codex_click_debug_highlight';
+        let overlay = document.getElementById(overlayId);
+        
+        // Remove existing overlay if present
+        if (overlay) {
+            overlay.remove();
+        }
+        
+        // Create style element for animation if it doesn't exist
+        let styleEl = document.getElementById('__codex_click_debug_style');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = '__codex_click_debug_style';
+            styleEl.textContent = `
+                @keyframes codex-click-pulse {
+                    0% {
+                        transform: scale(0.8);
+                        opacity: 1;
+                        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7);
+                    }
+                    50% {
+                        transform: scale(1.2);
+                        opacity: 0.8;
+                        box-shadow: 0 0 0 20px rgba(255, 0, 0, 0);
+                    }
+                    100% {
+                        transform: scale(1);
+                        opacity: 0.6;
+                        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0);
+                    }
+                }
+            `;
+            document.head.appendChild(styleEl);
+        }
+        
+        // Create overlay element
+        overlay = document.createElement('div');
+        overlay.id = overlayId;
+        overlay.style.position = 'fixed';
+        overlay.style.pointerEvents = 'none';
+        overlay.style.zIndex = 2147483647;
+        overlay.style.borderRadius = '50%';
+        overlay.style.border = '4px solid #ff0000';
+        overlay.style.background = 'rgba(255, 0, 0, 0.3)';
+        overlay.style.boxShadow = '0 0 20px rgba(255, 0, 0, 0.8)';
+        overlay.style.animation = 'codex-click-pulse 0.6s ease-out infinite';
+        
+        const size = 40;
+        overlay.style.width = size + 'px';
+        overlay.style.height = size + 'px';
+        overlay.style.left = (x - size / 2) + 'px';
+        overlay.style.top = (y - size / 2) + 'px';
+        
+        document.body.appendChild(overlay);
+        
+        // Auto-remove after duration
+        setTimeout(() => {
+            if (overlay && overlay.parentNode) {
+                overlay.style.transition = 'opacity 0.3s ease-out';
+                overlay.style.opacity = '0';
+                setTimeout(() => {
+                    if (overlay && overlay.parentNode) {
+                        overlay.remove();
+                    }
+                }, 300);
+            }
+        }, durationMs);
+        
+        return true;
+    }
+    """
+    try:
+        return bool(executor.browser.page.evaluate(script, {"x": x, "y": y, "durationMs": duration_ms}))
+    except Exception:
+        return False
+
+
 def clear_highlight(executor) -> None:
     script = """
     () => {
         const overlay = document.getElementById('__codex_confirm_highlight');
         if (overlay && overlay.remove) {
             overlay.remove();
+        }
+        // Also clear click debug highlight
+        const clickOverlay = document.getElementById('__codex_click_debug_highlight');
+        if (clickOverlay && clickOverlay.remove) {
+            clickOverlay.remove();
         }
         return true;
     }

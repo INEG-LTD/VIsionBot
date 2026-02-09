@@ -16,8 +16,9 @@ from .models import (
     MissionPlan,
     TaskType,
     TaskStatus,
-    TurnResult,
+    SequenceSubTaskResult,
     SequenceDecision,
+    SequenceDecisionType,
     MissionPlannerOutput,
 )
 
@@ -36,7 +37,8 @@ __all__ = [
     "MissionPlan",
     "TaskType",
     "TaskStatus",
-    "TurnResult",
+    "SequenceSubTaskResult",
     "SequenceDecision",
+    "SequenceDecisionType",
     "MissionPlannerOutput",
 ]

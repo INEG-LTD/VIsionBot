@@ -14,11 +14,14 @@ import time
 
 from playwright.sync_api import Page
 
+from core.browser import Browser
+
 
 class InteractionType(str, Enum):
     """Types of browser interactions"""
     CLICK = "click"
     TYPE = "type"
+    CLEAR_TEXT = "clear_text"
     SCROLL = "scroll"
     PRESS = "press"
     SELECT = "select"
@@ -31,6 +34,7 @@ class InteractionType(str, Enum):
     CONTEXT_GUARD = "context_guard"
     EXTRACT = "extract"
     DEFER = "defer"
+    REMEMBER = "remember"
 
 
 @dataclass
@@ -54,10 +58,25 @@ class BrowserState:
 
 
 @dataclass
+class OverlayCapture:
+    timestamp: float
+    url: str
+    command: str
+    element_data: List[Dict[str, Any]]
+    screenshot: Optional[bytes]
+
+    def __post_init__(self):
+        if self.timestamp == 0:
+            self.timestamp = time.time()
+
+
+@dataclass
 class Interaction:
     """Record of a browser interaction"""
     timestamp: float
     interaction_type: InteractionType
+    before_state: BrowserState
+    after_state: BrowserState
     coordinates: Optional[tuple[int, int]] = None
     target_element_info: Optional[Dict[str, Any]] = None
     text_input: Optional[str] = None
@@ -67,17 +86,81 @@ class Interaction:
     target_x: Optional[int] = None
     target_y: Optional[int] = None
     navigation_url: Optional[str] = None
-    before_state: Optional[BrowserState] = None
-    after_state: Optional[BrowserState] = None
     success: bool = True
     error_message: Optional[str] = None
     extracted_data: Optional[Dict[str, Any]] = None
     extraction_prompt: Optional[str] = None
     reasoning: Optional[str] = None  # Why this action was taken
-    
+    sequential_iteration: Optional[int] = None
+
     def __post_init__(self):
         if self.timestamp == 0:
             self.timestamp = time.time()
+
+    def summary_line(self, step_number: int) -> str:
+        """Generate a human-readable summary line for this interaction."""
+        
+        # Map action types to past tense verbs
+        action_verb_map = {
+            "click": "clicked",
+            "type": "type",
+            "clear_text": "clear text",
+            "scroll": "scroll",
+            "press": "press",
+            "select": "select",
+            "upload": "upload",
+            "datetime": "set datetime",
+            "navigation": "navigate",
+            "page_load": "load page",
+            "element_appear": "wait for element to appear",
+            "element_disappear": "wait for element to disappear",
+            "context_guard": "guard context",
+            "extract": "extract",
+            "defer": "defer",
+            "remember": "remember",
+        }
+        
+        # Get past tense verb for the action
+        action_type = self.interaction_type.value
+        past_tense_verb = action_verb_map.get(action_type, action_type)
+
+        # Add details based on type
+        details = []
+        if self.text_input:
+            details.append(f"'{self.text_input}'")
+
+        if self.target_element_info:
+            elem_desc = (self.target_element_info.get('description', '') or '')
+            if elem_desc:
+                details.append(f"on {elem_desc}")
+
+        if self.extracted_data:
+            data_count = len(self.extracted_data.get('items', [])) if isinstance(self.extracted_data, dict) and 'items' in self.extracted_data else len(self.extracted_data) if isinstance(self.extracted_data, (list, dict)) else 1
+            details.append(f"extracted {data_count} item(s)")
+
+        if self.error_message:
+            details.append(f"ERROR: {self.error_message}")
+
+        # Build the action description
+        action_description = past_tense_verb
+        if details:
+            action_description += " " + " ".join(details)
+
+        # Page context (from after_state if available)
+        page_info = ""
+        if self.after_state:
+            page_title = (self.after_state.title or 'page')
+            page_url = self.after_state.url if self.after_state.url else ""
+            page_info = f" @ {page_title} ({page_url})"
+
+        # Reasoning
+        reasoning = (self.reasoning or "").replace("\n", " ").strip()
+        reasoning_text = f" — {reasoning}" if reasoning else ""
+
+        # Format: "1. You successfully clicked ..." or "2. You failed to type ..."
+        success_prefix = "successfully" if self.success else "failed to"
+        
+        return f"{step_number}. You {success_prefix} {action_description}{page_info}{reasoning_text}"
 
 
 class SessionTracker:
@@ -89,17 +172,19 @@ class SessionTracker:
     of goal evaluation and management.
     """
     
-    def __init__(self, page: Page):
-        self.page = page
+    def __init__(self, browser: Browser):
+        self.page = browser.page
         self.interaction_history: List[Interaction] = []
-        self.state_history: List[BrowserState] = []
         self.url_history: List[str] = []
         self.url_pointer: int = -1
         self.session_start_time = time.time()
         self.base_knowledge: List[str] = []
         self.user_prompt: str = ""
         self._current_action_reasoning: Optional[str] = None  # Store reasoning for next interaction
-        
+        self._last_overlay_capture: Optional[OverlayCapture] = None
+        # Store question/answer pairs from ask: commands for agent context
+        self.question_answer_pairs: List[Dict[str, str]] = []
+
         # Capture initial state
         self._capture_initial_state()
     
@@ -110,6 +195,13 @@ class SessionTracker:
     def set_user_prompt(self, prompt: str) -> None:
         """Set the user prompt"""
         self.user_prompt = prompt
+    
+    def add_question_answer(self, question: str, answer: str) -> None:
+        """Add a question/answer pair from an ask: command for agent context."""
+        self.question_answer_pairs.append({
+            "question": question,
+            "answer": answer
+        })
     
     def set_current_action_reasoning(self, reasoning: Optional[str]) -> None:
         """Set the reasoning for the next action to be executed"""
@@ -133,7 +225,51 @@ class SessionTracker:
         """Clear the overlay index after action execution"""
         self._current_action_overlay_index = None
 
-    def _capture_current_state(self, include_screenshot: bool = False) -> BrowserState:
+    def get_last_interaction_overlay_index(self) -> Optional[int]:
+        """Get the overlay index from the most recent interaction"""
+        if not self.interaction_history:
+            return None
+        
+        last_interaction = self.interaction_history[-1]
+        if last_interaction.target_element_info and isinstance(last_interaction.target_element_info, dict):
+            return last_interaction.target_element_info.get("overlay_index")
+        return None
+
+    def store_overlay_capture(
+        self,
+        *,
+        command: str,
+        element_data: List[Dict[str, Any]],
+        screenshot: Optional[bytes],
+    ) -> None:
+        try:
+            url = self.page.url if self.page else ""
+        except Exception:
+            url = ""
+        self._last_overlay_capture = OverlayCapture(
+            timestamp=time.time(),
+            url=url,
+            command=command,
+            element_data=element_data or [],
+            screenshot=screenshot,
+        )
+
+    def get_overlay_capture(self) -> Optional[OverlayCapture]:
+        capture = self._last_overlay_capture
+        if not capture:
+            return None
+        try:
+            current_url = self.page.url if self.page else ""
+        except Exception:
+            current_url = ""
+        if current_url and capture.url and (capture.url != current_url):
+            return None
+        return capture
+
+    def clear_overlay_capture(self) -> None:
+        self._last_overlay_capture = None
+
+    def _capture_current_state(self) -> BrowserState:
         """Capture current browser state"""
         try:
             url = self.page.url if self.page else ""
@@ -222,12 +358,11 @@ class SessionTracker:
             
             # Optionally capture screenshot (expensive, so only when needed)
             screenshot = None
-            if include_screenshot:
-                try:
-                    if self.page:
-                        screenshot = self.page.screenshot(type="jpeg", quality=50, full_page=False)
-                except Exception:
-                    pass
+            try:
+                if self.page:
+                    screenshot = self.page.screenshot(full_page=False)
+            except Exception:
+                pass
             
             return BrowserState(
                 timestamp=time.time(),
@@ -256,22 +391,18 @@ class SessionTracker:
         """Capture initial browser state"""
         try:
             initial_state = self._capture_current_state()
-            self.state_history.append(initial_state)
             if initial_state.url:
                 self.url_history.append(initial_state.url)
                 self.url_pointer = 0
         except Exception:
             pass
     
-    def record_interaction(self, interaction_type: InteractionType, **kwargs) -> None:
+    def record_interaction(self, interaction_type: InteractionType, before_state: BrowserState, after_state: BrowserState, **kwargs) -> None:
         """
         Record an interaction that has occurred.
         Simple tracking without goal evaluation.
         """
-        # For navigation interactions, use provided before_state if available (since navigation already happened)
-        # Otherwise capture current state as before_state. Always include a viewport screenshot.
-        before_state = kwargs.get('before_state') or self._capture_current_state(include_screenshot=True)
-        
+    
         interaction = Interaction(
             timestamp=time.time(),
             interaction_type=interaction_type,
@@ -285,23 +416,19 @@ class SessionTracker:
             target_y=kwargs.get('target_y'),
             navigation_url=kwargs.get('navigation_url'),
             before_state=before_state,
+            after_state=after_state,
             success=kwargs.get('success', True),
             error_message=kwargs.get('error_message'),
             extracted_data=kwargs.get('extracted_data'),
             extraction_prompt=kwargs.get('extraction_prompt'),
-            reasoning=kwargs.get('reasoning') or self._current_action_reasoning  # Why this action was taken
+            reasoning=kwargs.get('reasoning') or self._current_action_reasoning,  # Why this action was taken
+            sequential_iteration=kwargs.get('sequential_iteration'),
         )
         
         # Clear reasoning after using it (it's only for the next interaction)
         self._current_action_reasoning = None
         
-        # Capture state after interaction (small delay for page updates)
-        time.sleep(0.1)
-        interaction.after_state = self._capture_current_state()
-        
         self.interaction_history.append(interaction)
-        if interaction.after_state:
-            self.state_history.append(interaction.after_state)
         
         # Update URL history
         current_url = interaction.after_state.url if interaction.after_state else (self.page.url if self.page else "")
@@ -321,6 +448,128 @@ class SessionTracker:
             )
         except Exception:
             pass
-        # Keep url_history as it's useful for navigation context
-        # self.url_history.clear()
-        # self.url_pointer = -1
+
+    def history_block(self, limit: Optional[int] = 20, sequential_iteration: Optional[int] = None, just_data: bool = False) -> str:
+        """
+        Generate a formatted history block for LLM prompts.
+
+        Args:
+            limit: Maximum number of recent interactions to include (None = all)
+
+        Returns:
+            Formatted string suitable for inclusion in LLM prompts
+        """
+        interactions = self.interaction_history
+
+        if limit is not None and limit > 0:
+            interactions = interactions[-limit:]
+
+        if not interactions:
+            return "HISTORY: <none yet>"
+
+        lines = []
+        lines_str = ""
+        print(f"sequential_iteration: {sequential_iteration}")
+        print(f"just_data: {just_data}")
+        # If sequential_iteration is specified, filter interactions to only those from that iteration
+        if sequential_iteration is not None:
+            filtered_interactions = [
+                interaction
+                for interaction in interactions
+                if getattr(interaction, "sequential_iteration", None) == sequential_iteration
+            ]
+        else:
+            filtered_interactions = interactions
+
+        for i, interaction in enumerate(filtered_interactions, start=1):
+            lines.append(interaction.summary_line(step_number=i))
+            lines_str += f"{interaction.summary_line(step_number=i)}\n"
+        # Build question/answer pairs section if available
+        qa_section = ""
+        if self.question_answer_pairs:
+            qa_section = ""
+            for i, qa in enumerate(self.question_answer_pairs, 1):
+                qa_section += f"{i}. Q: {qa['question']}\n   A: {qa['answer']}\n"
+        else:
+            qa_section = "No conversation history recorded yet."
+            
+        if just_data:
+            return lines_str
+        else:
+            return f"""
+        
+        Here's what you've done so far. Use this as a reference when deciding what to do next:
+        
+        When planning your next move, look at both what you've already tried (listed below) and what's currently 
+        on the page. If something isn't working—like you've tried clicking the same button twice and nothing's 
+        happening, or the page isn't changing, or you're not making progress—try a different approach. There's 
+        usually an obvious alternative action you can take, so try that before asking for help.
+        
+        Here's what you've tried and what happened:
+        {lines_str}
+        
+        Conversation history:
+        Below you'll also see the back-and-forth between you and the user—questions you asked and their answers.
+        
+        When what the user told you in conversation doesn't match what you already know, go with what they said 
+        in the conversation. For example, if you asked where they want to travel and they said "London", use 
+        "London" when filling out location fields, not whatever you might have known before.
+        
+        Sometimes what the user says will directly go against what you already know. Like they might say they 
+        want to go to "London" in the summer, but you previously knew they wanted "Egypt" in the summer. When 
+        that happens, just ask them to clarify—they know what they actually want better than what you knew before.
+        
+        Pay attention when the user gives you instructions about how to work. If they say things like "Don't do X", 
+        "From now on, always Y", or "Only use Z", follow those instructions completely. The only time you can 
+        ignore a direct instruction is if there's another instruction that conflicts with it or information that 
+        doesn't match. One thing though—asking questions is core to how you work, so you can't stop doing that 
+        even if asked.
+        
+        For example, if a user answers a question with "... and just use African countries for the location", 
+        that means whenever you need to pick a country, stick to African ones.
+        
+        Here's what you've discussed with the user:
+        {qa_section}
+        """
+
+    def detect_state_change(self, before: BrowserState, after: BrowserState) -> bool:
+        """
+        Detect if a meaningful change occurred between two browser states.
+
+        Returns:
+            True if something changed, False if nothing happened
+        """
+        if not before or not after:
+            return False
+
+        # Check URL change (navigation)
+        if before.url != after.url:
+            return True
+
+        # Check title change
+        if before.title != after.title:
+            return True
+
+        # Check scroll position change (user scrolled or page auto-scrolled)
+        if abs(before.scroll_y - after.scroll_y) > 10 or abs(before.scroll_x - after.scroll_x) > 10:
+            return True
+
+        # Check visible text change (DOM changed)
+        if before.visible_text and after.visible_text:
+            # Normalize whitespace for comparison
+            before_text = ' '.join(before.visible_text.split())
+            after_text = ' '.join(after.visible_text.split())
+
+            # If text is significantly different (>5% change), something happened
+            if before_text != after_text:
+                # Calculate simple difference ratio
+                max_len = max(len(before_text), len(after_text))
+                if max_len > 0:
+                    # Use a simple character-level comparison
+                    common_length = len(set(before_text) & set(after_text))
+                    diff_ratio = 1.0 - (common_length / max_len)
+                    if diff_ratio > 0.05:  # 5% threshold
+                        return True
+
+        # If we get here, nothing meaningful changed
+        return False

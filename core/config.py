@@ -1,20 +1,14 @@
 """
-Configuration models for Browser.
+Configuration models for Agent.
 
 This module provides structured, type-safe configuration using Pydantic models.
-Instead of passing 30+ arguments to Browser, you can create a Config
+Instead of passing 30+ arguments to Agent, you can create a Config
 object with grouped settings.
 
-Example:
-    >>> from core.config import Config, ModelConfig, ExecutionConfig
-    >>> config = Config(
-    ...     model=ModelConfig(agent_model="gpt-5-mini"),
-    ...     execution=ExecutionConfig()
-    ... )
-    >>> bot = Browser(config=config)
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
 from lib.ai import ReasoningLevel
@@ -24,13 +18,17 @@ from browser.provider import BrowserConfig as BrowserProviderConfig
 BrowserConfig = BrowserProviderConfig
 
 
+class CompletionStrategy(str, Enum):
+    """Completion strategy for sequential task execution."""
+    
+    STRICT = "strict"
+    BEST_EFFORT = "best_effort"
+    THRESHOLD = "threshold"
+
+
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
 
-    model_name: str = Field(
-        default="gpt-5-mini",
-        description="Default model for all operations"
-    )
     agent_model: str = Field(
         default="gpt-5-mini",
         description="Model used for high-level agent decisions"
@@ -38,10 +36,6 @@ class ModelConfig(BaseModel):
     command_model: str = Field(
         default="gpt-5-mini",
         description="Model used for command generation"
-    )
-    reasoning_level: ReasoningLevel = Field(
-        default=ReasoningLevel.MEDIUM,
-        description="Default reasoning level for all operations"
     )
     agent_reasoning_level: ReasoningLevel = Field(
         default=ReasoningLevel.MEDIUM,
@@ -195,6 +189,10 @@ class DebugConfig(BaseModel):
         default="agent_screenshots",
         description="Directory to save agent screenshots"
     )
+    show_llm_costs: bool = Field(
+        default=True,
+        description="Show LLM cost information in debug mode"
+    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -306,8 +304,8 @@ class SequentialTaskConfig(BaseModel):
     )
 
     # Completion strategy
-    completion_strategy: str = Field(
-        default="best_effort",
+    completion_strategy: CompletionStrategy = Field(
+        default=CompletionStrategy.BEST_EFFORT,
         description="Completion strategy: 'strict' (only complete when target count reached with all successes), 'best_effort' (complete after attempting all iterations regardless of failures), 'threshold' (complete when success_threshold percentage is met)"
     )
 
@@ -378,17 +376,10 @@ class SequentialTaskConfig(BaseModel):
 
 class Config(BaseModel):
     """
-    Main configuration object for Browser.
+    Main configuration object for Agent.
     
-    This provides a structured, type-safe way to configure the bot instead of
+    This provides a structured, type-safe way to configure the agent instead of
     passing 30+ individual arguments.
-    
-    Example:
-        >>> config = Config(
-        ...     model=ModelConfig(agent_model="gpt-5-mini"),
-        ...     execution=ExecutionConfig()
-        ... )
-        >>> bot = Browser(config=config)
     """
     
     model: ModelConfig = Field(

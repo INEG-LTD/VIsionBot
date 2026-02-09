@@ -9,169 +9,18 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
-from core.session import Interaction
+from core.session import SessionTracker
 from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
 from lib.ai import (
     generate_model,
+    generate_action_with_tools,
     ReasoningLevel,
     get_default_agent_model,
     get_default_agent_reasoning_level,
 )
+from models.models import ActionPlan, ActionStep, FailedAction, NotebookEntryType, PageElements
 from utils.event_logger import get_event_logger
-from utils.debug_print import dprint, PrintMode
-from core.history import HistoryManager
-from utils.overlay_description import describe_overlay_element, overlay_element_metadata
-
-
-VALID_ACTION_COMMANDS = {
-    "click", "type", "press", "scroll", "extract", "extract_url", "get_url",
-    "defer", "navigate", "back", "forward", "form", "select",
-    "upload", "datetime", "stop", "open", "handle_datetime", "interceptor",
-    "ask", "complete",
-}
-
-
-def _parse_action(text: str) -> tuple[str, str]:
-    """Parse action text into (command, body). Raises ValueError if invalid."""
-    text = text.strip()
-    if not text:
-        raise ValueError("action cannot be empty")
-
-    if ":" in text:
-        cmd, body = text.split(":", 1)
-        return cmd.strip().lower(), body.strip()
-
-    # Try to parse "command args" format
-    match = re.match(r"^(\w+)\s+(.+)$", text)
-    if match:
-        cmd, body = match.groups()
-        # Handle "click on X" -> "click X"
-        if cmd.lower() == "click" and body.lower().startswith("on "):
-            body = body[3:]
-        return cmd.lower(), body.strip()
-
-    # Single word command (defer, stop, forward, back)
-    if text.isalpha():
-        return text.lower(), ""
-
-    raise ValueError("action must be 'command: target' or 'command target'")
-
-
-def _normalize_body(cmd: str, body: str) -> str:
-    """Normalize the body based on command type."""
-    if cmd == "click":
-        if not body:
-            raise ValueError("click requires a target")
-        body = body[3:].strip() if body.lower().startswith("on ") else body
-        # Add element type hint if missing
-        if not re.search(r"\b(button|link|tab|checkbox|radio|option|div|input|icon|item)\b", body, re.I):
-            if not body.lower().endswith("link"):
-                body = f"{body} link"
-        return body.strip()
-
-    if cmd == "type":
-        if not body:
-            raise ValueError("type requires text and target")
-        # Accept "text : field" or "text in/into field" format
-        if " : " in body:
-            parts = body.split(" : ", 1)
-            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-                return re.sub(r"\s+", " ", body).strip()
-        if re.search(r"\b(in|into)\b", body, re.I):
-            return re.sub(r"\s+", " ", body).strip()
-        raise ValueError("type must use 'text : field' or 'text in field'")
-
-    if cmd == "press":
-        key = body.strip()
-        if not key or " " in key:
-            raise ValueError("press requires a single key")
-        return key
-
-    if cmd == "scroll":
-        direction = body.strip().lower()
-        if direction not in {"up", "down", "left", "right"}:
-            raise ValueError("scroll must be up, down, left, or right")
-        return direction
-
-    if cmd in {"back", "forward"}:
-        return body if body and body.isdigit() else "1"
-
-    if cmd in {"extract", "extract_url", "get_url", "navigate",
-               "interceptor", "form", "select", "upload", "datetime", "open",
-               "handle_datetime"}:
-        if not body:
-            raise ValueError(f"{cmd} requires additional detail")
-        return body
-
-    # Commands with optional body: defer, stop, complete, ask
-    return body
-
-
-class ActionStep(BaseModel):
-    """One viewport-safe action"""
-    # Allow extra attributes (like overlay_metadata) without including them in the schema
-    model_config = ConfigDict(extra='allow')
-
-    action: str = Field(
-        description="Command to execute on the current viewport (e.g., 'click: Submit button')."
-    )
-    overlay_index: Optional[int] = Field(
-        default=None,
-        description="Overlay index from the reference table for the element referenced in this step."
-    )
-    reasoning: Optional[str] = Field(
-        default=None,
-        description="Explain why this action is needed and how it advances the goal without leaving the current viewport."
-    )
-    overlay_description: Optional[str] = Field(
-        default=None,
-        description="Canonical description of the overlay element so it can be matched across iterations."
-    )
-    # Note: overlay_metadata is handled as an extra attribute, not a Pydantic field
-    # This prevents it from appearing in the JSON schema sent to Gemini
-
-    def __init__(self, **data):
-        super().__init__(**data)
-        # Ensure overlay_metadata always exists, even if not provided
-        if not hasattr(self, 'overlay_metadata'):
-            object.__setattr__(self, 'overlay_metadata', None)
-
-    def __setattr__(self, name, value):
-        """Allow setting overlay_metadata after initialization."""
-        if name == 'overlay_metadata':
-            object.__setattr__(self, name, value)
-        else:
-            super().__setattr__(name, value)
-
-    @field_validator("action", mode="before")
-    @classmethod
-    def _normalize_action(cls, value: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError("action must be a string")
-
-        cmd, body = _parse_action(value)
-        if cmd not in VALID_ACTION_COMMANDS:
-            raise ValueError(f"Unsupported command: '{cmd}'")
-
-        body = _normalize_body(cmd, body)
-        return f"{cmd}: {body}" if body else cmd
-
-
-class ActionPlan(BaseModel):
-    """A sequential plan of actions that can be executed before the viewport changes."""
-    steps: List[ActionStep] = Field(description="Actions that can be executed sequentially on the current viewport.")
-    reasoning: str = Field(description="Why this sequence of steps achieves progress right now.")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in this plan for the current viewport.")
-    expected_outcome: str = Field(description="What should happen after executing the plan.")
-
-    @field_validator("steps")
-    @classmethod
-    def _validate_steps(cls, value: List[ActionStep]) -> List[ActionStep]:
-        if not value:
-            raise ValueError("Action plan must contain at least one step.")
-        return value
-
 
 class ActionPlanner:
     """
@@ -187,32 +36,20 @@ class ActionPlanner:
     def __init__(
         self,
         user_prompt: str,
+        session_tracker: SessionTracker,
         base_knowledge: Optional[List[str]] = None,
         *,
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
-        image_detail: str = "low",
+        image_detail: str = "high",
         interaction_summary_limit: Optional[int] = None,
-        include_overlays_in_agent_context: bool = True,
         include_visible_text_in_agent_context: bool = False,
-        history_manager: Optional[HistoryManager] = None,
         max_actions_per_plan: int = 6,
         extraction_schema: Optional[Dict[str, Any]] = None,
+        current_sequence_task: Optional[str] = None,
+        current_sequential_iteration: int = 0,
+        current_iteration: int = 0,
     ):
-        """
-        Initialize the action planner.
-
-        Args:
-            user_prompt: The user's high-level goal
-            base_knowledge: Optional list of knowledge rules/instructions that guide the agent's behavior.
-                           Example: ["just press enter after you've typed a search term into a search field"]
-            image_detail: Image detail level for vision API ("low" for faster, "high" for more accurate).
-                         Default: "low" for better performance.
-            interaction_summary_limit: Max interactions to include in the prompt.
-                                       None means include all interactions. Default: None.
-            max_actions_per_plan: Maximum number of actions to generate in a single plan. Default: 6.
-            extraction_schema: Optional JSON schema for extraction tasks to enforce consistent field names.
-        """
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
         self.model_name = model_name or get_default_agent_model()
@@ -224,634 +61,315 @@ class ActionPlanner:
         self.image_detail = image_detail
         self._system_prompt_cache: dict[str, str] = {}  # Cache system prompts
         self.interaction_summary_limit = interaction_summary_limit
-        self.include_overlays_in_agent_context = include_overlays_in_agent_context
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
-        self.history_manager = history_manager
+        self.session_tracker: SessionTracker = session_tracker
         self.max_actions_per_plan = max_actions_per_plan
         self.extraction_schema = extraction_schema
-
-    def _infer_extraction_prompt(self) -> Optional[str]:
-        if not self.extraction_schema:
-            return None
-
-        keys = list(self.extraction_schema.keys())
-        if keys:
-            return " and ".join(keys)
-
-        return None
-
-    def _apply_extraction_fallback(self, plan: Optional[ActionPlan]) -> Optional[ActionPlan]:
-        prompt = self._infer_extraction_prompt()
-        if not prompt:
-            return plan
-
-        if plan is None:
-            return ActionPlan(
-                steps=[ActionStep(action=f"extract: {prompt}")],
-                reasoning="Fallback extraction step generated from task instruction.",
-                confidence=0.5,
-                expected_outcome="Extract requested data.",
-            )
-
-        if any(step.action.lower().startswith("extract:") for step in plan.steps):
-            return plan
-
-        if all(step.action.lower().startswith("complete:") for step in plan.steps):
-            return ActionPlan(
-                steps=[ActionStep(action=f"extract: {prompt}")],
-                reasoning="Fallback extraction step generated from task instruction.",
-                confidence=0.5,
-                expected_outcome="Extract requested data.",
-            )
-
-        return plan
-    
-    def determine_action_plan(
+        self.current_sequential_iteration = current_sequential_iteration
+        self.current_sequence_task = current_sequence_task
+        self.current_iteration = current_iteration
+   
+    def get_next_actions_with_function_calling(
         self,
         environment_state: EnvironmentState,
         screenshot: bytes,
-        failed_actions: Optional[List[str]] = None,
-        ineffective_actions: Optional[List[str]] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
-    ) -> Optional[ActionPlan]:
+        notebook: Notebook,
+        element_data: PageElements,
+    ) -> tuple[Optional[list[ActionStep]], Optional[str]]:
         """
-        Determine an ordered action plan that can be executed before the viewport changes.
+        Generate next action using function calling (alternative to full plan generation).
+
+        This uses OpenAI function calling to generate a single validated action
+        with strict parameter schemas.
 
         Args:
             environment_state: Current environment state
             screenshot: Current screenshot (viewport only)
-            overlay_data: Optional list of overlay element data with descriptions.
-            notebook: Agent's notebook with previously extracted data (Notebook or list of dicts).
+            notebook: Agent's notebook with previously extracted data
 
         Returns:
-            An ActionPlan describing the steps to take, or None if no plan could be generated.
+            Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
+        from agent.action_tools import ACTION_TOOLS
+
         try:
-            plan = self._generate_action_plan(
+            user_prompt = f"""
+            You are currently trying to: {self.user_prompt}
+
+            Based on the screenshot and context, what is the best next action to accomplish this task?
+            """
+            system_prompt = self._build_function_calling_system_prompt(
+                self.session_tracker,
                 environment_state,
-                screenshot,
-                failed_actions or [],
-                ineffective_actions or [],
-                overlay_data,
-                notebook or []
+                notebook,
+                element_data,
             )
-
-            if not plan:
-                dprint("⚠️ No action plan generated")
-                return self._apply_extraction_fallback(None)
-
-            if len(plan.steps) > self.max_actions_per_plan:
-                original_count = len(plan.steps)
-                plan.steps = plan.steps[: self.max_actions_per_plan]
-                try:
-                    get_event_logger().system_warning(
-                        f"Action plan truncated from {original_count} to {self.max_actions_per_plan} steps."
-                    )
-                except Exception:
-                    pass
-
-            return self._apply_extraction_fallback(plan)
-
-        except Exception as e:
-            dprint(f"⚠️ ActionPlanner error: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
-    def _generate_action_plan(
-        self,
-        environment_state: EnvironmentState,
-        screenshot: bytes,
-        failed_actions: List[str] = None,
-        ineffective_actions: List[str] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
-    ) -> Optional[ActionPlan]:
-        """
-        Generate an ordered action plan.
-
-        Returns:
-            ActionPlan or None if no plan can be determined
-        """
-        try:
-            system_prompt = self._build_system_prompt()
-            user_prompt_text = self._build_action_prompt(
-                environment_state,
-                failed_actions or [],
-                ineffective_actions or [],
-                overlay_data,
-                notebook or []
-            )
-            plan = generate_model(
-                prompt=user_prompt_text,
-                model_object_type=ActionPlan,
+            
+            # Generate action using function calling
+            result = generate_action_with_tools(
+                prompt=user_prompt,
+                tools=ACTION_TOOLS,
                 system_prompt=system_prompt,
                 image=screenshot,
                 image_detail=self.image_detail,
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
+                tool_choice="required"
             )
 
-            # Handle case where generate_model returns a string (parsing failed)
-            if isinstance(plan, str):
-                # Try to parse it ourselves
-                import json
-                import re
+            actions = []
+            for action in result:
+                # Check if function was called
+                if not action["function_name"]:
+                    return None, "Model did not call any function"
+                
+                get_event_logger().system_debug(f"Function name: {action['function_name']}")
+                get_event_logger().system_debug(f"Arguments: {action['arguments']}")
+                
+                # Create ActionStep from function call
+                action_step = ActionStep.from_function_call(
+                    function_name=action["function_name"],
+                    arguments=action["arguments"],
+                )
+                get_event_logger().command_generated(command=action_step)
 
-                # Strip markdown code blocks if present
-                cleaned = plan.strip()
-                if cleaned.startswith("```"):
-                    # Remove ```json or ``` at start and ``` at end
-                    cleaned = re.sub(r'^```(?:json)?\s*\n', '', cleaned)
-                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+                actions.append(action_step)
 
-                # Remove control characters that break JSON parsing (except \t and \n for structure)
-                # This handles cases where the LLM output has null bytes or other control chars
-                cleaned = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', ' ', cleaned)
+            return actions, None
 
-                # Fix common JSON syntax errors
-                # Remove trailing commas before closing braces/brackets
-                cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
-
-                # Replace literal newlines/returns with spaces
-                cleaned = cleaned.replace('\n', ' ').replace('\r', ' ')
-
-                # Parse JSON
-                try:
-                    data = json.loads(cleaned)
-                    plan = ActionPlan(**data)
-                except Exception as parse_error:
-                    dprint(f"⚠️ Failed to parse action plan from string: {parse_error}")
-                    dprint(f"⚠️ First 500 chars of cleaned JSON: {cleaned[:500]}")
-                    from lib.ai import _manual_parse_structured_output
-                    plan = _manual_parse_structured_output(cleaned, ActionPlan)
-                    if plan is None:
-                        return None
-
-            # Ensure plan is the correct type
-            if plan and not isinstance(plan, ActionPlan):
-                dprint(f"⚠️ Expected ActionPlan, got {type(plan)}")
-                return None
-
-            if plan and overlay_data:
-                overlay_desc_map = {}
-                overlay_metadata_map = {}
-                for elem in overlay_data:
-                    idx = elem.get("index")
-                    if idx is None:
-                        continue
-                    overlay_desc_map[idx] = describe_overlay_element(elem)
-                    overlay_metadata_map[idx] = overlay_element_metadata(elem)
-                for step in plan.steps:
-                    if step.overlay_index is not None:
-                        if desc := overlay_desc_map.get(step.overlay_index):
-                            step.overlay_description = desc
-                        if metadata := overlay_metadata_map.get(step.overlay_index):
-                            step.overlay_metadata = metadata
-            if plan:
-                try:
-                    steps_summary = "\n".join(
-                        f"{idx}. {step.action} (overlay {step.overlay_index or 'N'}) - {step.reasoning or 'No reasoning provided.'}"
-                        for idx, step in enumerate(plan.steps, 1)
-                    )
-                    get_event_logger().plan_generated(
-                        plan_reasoning=plan.reasoning,
-                        confidence=plan.confidence,
-                        expected_outcome=plan.expected_outcome,
-                        steps_summary=steps_summary,
-                    )
-                except Exception:
-                    pass
-            return plan
         except Exception as e:
-            dprint(f"⚠️ Error generating action plan: {e}")
+            get_event_logger().system_error(f"Error generating action with function calling: {e}")
             import traceback
             traceback.print_exc()
-            return None
-    
-    
-    def _build_system_prompt(self) -> str:
-        """Build system prompt for action planning."""
-        # Use cached prompt if available
-        if "default" in self._system_prompt_cache:
-            return self._system_prompt_cache["default"]
-        
+            return None, f"Error generating action: {e}"
+
+    def _build_function_calling_system_prompt(
+        self,
+        session_tracker: SessionTracker,
+        state: EnvironmentState,
+        notebook: Notebook,
+        element_data: PageElements,
+    ) -> str:
+        """Build system prompt for function calling action generation."""
+
         # Build base knowledge section if provided
         base_knowledge_section = ""
         if self.base_knowledge:
-            base_knowledge_section = "\n\nBASE KNOWLEDGE (Custom Rules):\n"
+            base_knowledge_section = "\n\nCUSTOM RULES:\n"
             for i, knowledge in enumerate(self.base_knowledge, 1):
                 base_knowledge_section += f"{i}. {knowledge}\n"
-        
-        prompt = f"""
-You determine the NEXT VIEWPORT-AWARE PLAN based on the current screenshot.
 
-CRITICAL - VISUAL-FIRST DECISION MAKING:
-You MUST make decisions based on what you SEE in the screenshot, NOT based on the overlay list.
-1. Look at the screenshot to understand the page and identify what element to interact with
-2. Use the visual appearance, text, position, and context to decide your action
-3. ONLY THEN match your chosen element to an overlay ID from the reference list
-The overlay list is purely for IDENTIFICATION - it tells you which number corresponds to which element.
-Never let the overlay numbers influence WHAT you decide to do - only use them to reference your visual choice.
-
-MODAL/POPUP AWARENESS:
-After clicking a button (especially "Apply", "Submit", "Continue"), CHECK if a modal, popup, or new form appeared:
-- If you see a darkened/grayed background with a centered panel, a MODAL has opened
-- If new form fields appeared that weren't there before, interact with THOSE instead
-- NEVER click the same button repeatedly - if it didn't work, something else is now in focus
-- If an overlay/modal is blocking the page, interact with the modal content FIRST
-- Look for close buttons (X), form fields, or action buttons INSIDE any visible modal
-
-{base_knowledge_section}
-
-- Before choosing the next plan, review your previous step: was it successful, unsuccessful, or uncertain? Use the interaction summary and history context to remember what changed.
-- Note any blockers, failed actions, or missing inputs so they stay visible in future steps, and avoid repeating actions that already failed.
-- Define a precise next goal that stays aligned with the user prompt, then let that goal guide your chosen action.
-- If you still need clarification or data, frame it as an `ask:` question before attempting more actions.
-
-⚠️ IMPORTANT - PRIORITIZE USER GUIDANCE & RULES:
-1. CUSTOM RULES (Base Knowledge): Always follow instructions in "BASE KNOWLEDGE".
-2. USER CLARIFICATIONS (Interaction History): Check "User-provided clarifications" section. If a previous answer addresses the current situation, you MUST act on it instead of asking again.
-3. ASK FOR HELP WHEN STUCK: Use "ask: <question>" ONLY IF no previous guidance covers the current blocker. Do not repeat questions if you have an answer.
-
-Use "ask: <question>" immediately when:
-- A dropdown/autocomplete shows "no results" or doesn't match expected values AND no clarification exists
-- You've tried the same element 2+ times without success  
-- The provided data doesn't work (e.g., city not in location options)
-- You're unsure what value to use or how to proceed
-- An element behaves unexpectedly
-
-Examples:
-- "ask: The location field shows 'no results' for Liverpool. What location should I use instead?"
-- "ask: I've tried selecting the date but the picker won't accept it. How should I proceed?"
-- "ask: The form requires a field I don't have data for. What should I enter?"
-
-VIEWPORT PLAN RULES:
-- Stay anchored to what you can see; do not reference elements that are not in the current screenshot.
-- When an element is partially off-screen, include a scroll step before interacting with it and treat that scroll as part of the same plan.
-- Stop the plan as soon as the next logical step would require additional viewport content (autocomplete, modal, navigation, etc.).
-- Each plan should include up to {self.max_actions_per_plan} steps to keep execution focused.
-
-ACTION RULES:
-1. FILE UPLOADS (type=file or upload/attach/browse): Use "upload: [file] in <target>"
-   - With file: "upload: resume.pdf in file input"
-   - Without file: "upload: file input" (opens picker)
-   - Never invent filenames
-
-2. TEXT INPUTS: Fields auto-clear before typing - type complete desired value
-   - Format: "type: <text> : <field>" - Use colon to separate text from target
-   - Example: "type: john@example.com : email input field" (not "type: john")
-
-3. EXTRACTION - CRITICAL DISTINCTION:
-   - "extract: <what>" - Extract DATA/TEXT from page (job title, company name, price, description, etc.)
-     Example: "extract: job title and company name"
-   - always extract what the user asks for, do not make up data, eg the user asks for job title and company name, you should extract both, do not make up data like "extract: job title and company name and location"
-   - "extract_url: <target>" - Extract URL/LINK from element (apply button, job link, etc.)
-     Example: "extract_url: Apply button"
-   - ⚠️ NEVER use "extract:" for URLs - ALWAYS use "extract_url:" for links/buttons
-   - If user asks for URL/link/href → use "extract_url:", NOT "extract:"
-
-4. COMMAND FORMAT:
-   - Click: Must include element type (button/link/div) - "click: Submit button"
-   - Type: Use colon separator - "type: John Doe : name input field"
-   - Press: Just key name - "press: Enter"
-   - Extract data: "extract: job title and company"
-   - Extract URL: "extract_url: Apply button" (NOT "extract: url from apply button")
-
-5. AVOID REPEATING: Failed actions should not be repeated - ASK for help instead
-
-6. DEFER: Use "defer:" when user requests manual control or captcha appears
-
-7. COMPLETION: Use "complete: <reasoning>" when the task is finished
-   - CRITICAL: If a NOTEBOOK section appears below, CHECK IT FIRST before planning more actions
-   - If the notebook already contains the data the user asked for, use "complete:" IMMEDIATELY
-   - Do NOT extract the same data twice - if it's in the notebook, the task is DONE
-   - Provide clear reasoning explaining what was accomplished
-   - Example: "complete: Successfully extracted 10 job listings. Data includes job titles, companies, and locations."
-   - If an EXTRACTION SCHEMA is shown and the notebook does NOT contain that data yet, you MUST include an "extract:" step before using "complete:"
-   - Do NOT return "complete:" by itself for extraction tasks that still need data
-
-   CONDITIONAL TASKS (tasks with "if present", "if visible", "if exists", etc.):
-   - If the condition is NOT met (element not found), use "complete:" with explanation
-   - Example: "complete: No cookie banner found, condition not met, proceeding"
-   - DO NOT return empty actions - always use "complete:" when nothing more to do
-   - The task is FINISHED when either: (1) action performed, or (2) condition not met
-
-COMMANDS:
-- complete: <reasoning> - CALL WHEN TASK FINISHED - Use when: (1) goal accomplished, (2) conditional task where condition not met, or (3) nothing more to do
-- ask: <question> - ASK USER when stuck, confused, or element not working as expected
-- click: <type> <description> - Interact with element (must specify type: button/link/etc)
-- type: <text> : <field> - Enter text (use colon separator, field auto-clears first)
-- select: <option> in <dropdown> - Pick option from dropdown
-- upload: [file] in <target> - Handle file uploads (file optional, opens picker if omitted)
-- press: <key> - Press single key (Enter/Escape/Tab)
-- scroll: <up|down> - Move viewport
-- extract: <what> - Extract visible data from page
-- extract_url: <target> - Get URL from element (button/link/div with href or data-url)
-- get_url: <target> - Alias for extract_url
-- navigate: <url> - Direct navigation
-- back: [n] / forward: [n] - Navigate history
-- defer: [msg|seconds] - Pause for user (captcha/manual input)
-- form: <description> - Fill entire form
-- datetime: <value> in <picker> - Set date/time
-- interceptor: <instruction> - Focus on complex sub-task
-
-DECISION MAKING:
-- If user's goal is accomplished OR condition not met (for "if" tasks), use "complete: <reasoning>" immediately
-- NEVER return empty actions - if nothing to do, use "complete:" to signal task is finished
-- Interact with visible elements. If target not visible, use scroll commands
-- If something isn't working after 1-2 attempts, use "ask:" to get user guidance
-"""
-
-        # Cache the prompt
-        self._system_prompt_cache["default"] = prompt
-        return prompt
-
-    def _get_history_block(self) -> str:
-        if not self.history_manager:
-            return ""
-        return self.history_manager.history_block(limit=self.interaction_summary_limit)
-    
-    def _build_action_prompt(
-        self,
-        state: EnvironmentState,
-        failed_actions: List[str] = None,
-        ineffective_actions: List[str] = None,
-        overlay_data: Optional[List[Dict[str, Any]]] = None,
-        notebook: Optional[Union[Notebook, List[Dict[str, Any]]]] = None
-    ) -> str:
-        """Build prompt for determining next action"""
-
-        # Summarize what's been done
-        interaction_summary = self._summarize_interactions(state.interaction_history)
-        
-        # Extract what still needs to be done from user prompt and interactions
-        remaining_tasks = self._identify_remaining_tasks(state.interaction_history)
-        
-        # Add failed and ineffective actions context
-        ineffective_actions_context = ""
-        all_ineffective = []
-        
-        if failed_actions:
-            all_ineffective.extend([(action, "failed") for action in failed_actions])
-        if ineffective_actions:
-            all_ineffective.extend([(action, "succeeded but no change") for action in ineffective_actions])
-        
-        if all_ineffective:
-            ineffective_actions_context = "\n⚠️ ACTIONS THAT DIDN'T WORK - Consider using 'ask:' for help:\n"
-            for i, (action, reason) in enumerate(all_ineffective, 1):
-                ineffective_actions_context += f"   {i}. {action} ({reason})\n"
-            ineffective_actions_context += "\nDO NOT repeat these. If you've tried 2+ different approaches without success, use 'ask: <your question>' to get user guidance.\n"
-        
+        # Get history and navigation info
+        history_block = self._get_history_block()
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
             getattr(state, "url_pointer", None)
         )
-        
-        # Format overlay information if available
-        # Only include overlay context if configured to do so
-        overlay_context = ""
-        if self.include_overlays_in_agent_context:
-            count = len(overlay_data) if overlay_data else 0
-            if get_event_logger().debug_mode:
-                dprint(f"[Debug] overlay_data available: {count} elements")
-        if overlay_data and self.include_overlays_in_agent_context:
-            # Filter to only interactive/actionable elements (similar to what plan_generator does)
-            # Focus on elements that are likely to be interacted with
-            relevant_elements = []
-            for elem in overlay_data:
-                idx = elem.get("index")
-                tag = (elem.get("tagName") or "").lower()
-                role = (elem.get("role") or "").lower()
-                text = (elem.get("textContent") or "").strip()
-                aria = (elem.get("ariaLabel") or "").strip()
-                placeholder = (elem.get("placeholder") or "").strip()
-                
-                # Include elements that are interactive or have useful text
-                is_select = tag == "select" or role in ("combobox", "listbox")
-                has_content = text or aria or placeholder or is_select
-                
-                if has_content:
-                    # Build description similar to plan_generator format
-                    parts = []
-                    parts.append(f"#{idx} tag={tag}")
-                    
-                    if role and role != tag:
-                        parts.append(f"role={role}")
-                    
-                    if placeholder:
-                        parts.append(f'placeholder="{placeholder[:40]}"')
-                    
-                    if text:
-                        parts.append(f'txt="{text[:60]}"')
-                    elif aria:
-                        parts.append(f'aria="{aria[:60]}"')
-                    
-                    description = " ".join(parts)
-                    
-                    # Add relationship/grouping information
-                    related_elements = elem.get("relatedElements", [])
-                    group_size = elem.get("groupSize", 0)
-                    if related_elements and group_size > 1:
-                        # Show which other elements are in the same group
-                        related_indices = [str(r) for r in related_elements[:5]]  # Limit to 5 for brevity
-                        if len(related_elements) > 5:
-                            related_indices.append(f"... ({group_size} total in group)")
-                        group_info = f"[GROUP: elements #{', '.join(related_indices)} belong to same question/group]"
-                        parts.append(group_info)
-                        description = " ".join(parts)
-                    
-                    relevant_elements.append(description)
-            
-            if relevant_elements:
-                # Limit to most relevant elements (prioritize inputs, buttons)
-                # Show up to 30 elements to give good context without overwhelming
-                overlay_context = "\n\nELEMENT REFERENCE TABLE (for matching your visual choice to an ID):\n"
-                overlay_context += "DO NOT use this list to decide what to do - use the SCREENSHOT for that.\n"
-                overlay_context += "This table helps you find the overlay_index for the element you've already chosen visually.\n"
-                overlay_context += "After deciding which element to interact with based on the screenshot, find it here and provide its overlay_index.\n"
-                overlay_context += "Elements with '[GROUP: ...]' belong to the same question/group.\n\n"
-                for elem_desc in relevant_elements[:30]:  # Limit to 30 most relevant
-                    overlay_context += f"  • {elem_desc}\n"
-                if len(relevant_elements) > 30:
-                    overlay_context += f"  ... and {len(relevant_elements) - 30} more elements\n"
-        
-        # Build visible text context if enabled
-        visible_text_context = ""
-        if self.include_visible_text_in_agent_context and state.visible_text:
-            visible_text_context = f"- Visible Text: {state.visible_text[:300]}...\n"
 
-        # Simplified user prompt - only essential context (rules/examples are in system prompt)
-        history_block = self._get_history_block()
-        history_prefix = f"{history_block}\n\n" if history_block else ""
+        # Build sequential task section ONLY if actually in a sequence
+        sequence_info = ""
+        if self.current_sequence_task is not None:
+            get_event_logger().system_debug("Building sequential task prompt section")
+            sequence_info = f"""
+═══════════════════════════════════════════════════════════════
+🔄 SEQUENTIAL TASK MODE (PRIORITY CONTEXT)
+═══════════════════════════════════════════════════════════════
 
-        prompt = f"""
-{history_prefix}Determine a viewport-aware plan of steps that can be executed without introducing new UI elements:
+You are executing a multi-turn sequential task.
 
-USER GOAL: "{self.user_prompt}"
+Main task: {self.current_sequence_task}
+Current turn: {self.current_sequential_iteration}
 
-CURRENT STATE:
-- URL: {state.current_url}
-- Page Title: {state.page_title}
-- Scroll Position: Y={state.browser_state.scroll_y}, X={state.browser_state.scroll_x}
-- Viewport: {state.browser_state.page_width}x{state.browser_state.page_height}
-- Screenshot: VIEWPORT ONLY (currently visible area)
-{visible_text_context}
-NAVIGATION HISTORY:
+HOW SEQUENTIAL TASKS WORK:
+1. Each turn requires specific action(s)
+2. After completing actions for your turn → call complete_task
+3. After completing the FINAL turn → call complete_sequence
+
+EXAMPLES:
+• "click a button 3 times":
+  Turn 1: Click button → complete_task
+  Turn 2: Click button → complete_task
+  Turn 3: Click button → complete_task → complete_sequence
+
+• "type 'hello' in field A and field B for 3 turns":
+  Turn 1: Type in A → Type in B → complete_task
+  Turn 2: Type in A → Type in B → complete_task
+  Turn 3: Type in A → Type in B → complete_task → complete_sequence
+
+CRITICAL RULES:
+✓ Check "Turn {self.current_sequential_iteration} actions so far" below
+✓ Count ONLY current turn actions (ignore previous turns)
+✓ If required action(s) succeeded this turn → call complete_task
+✓ DO NOT repeat actions endlessly (if it worked once, you're done)
+✓ After final turn → call complete_sequence
+
+"""
+            # Add previous turn results
+            for notebook_entry in notebook.to_list():
+                if notebook_entry.type == NotebookEntryType.SEQUENTIAL_SUBTASK_RESULT:
+                    prev_turn_history = self._get_history_block(
+                        sequential_iteration=notebook_entry.subtask_turn,
+                        just_data=True
+                    )
+                    sequence_info += f"""
+Turn {notebook_entry.subtask_turn} completed:
+{prev_turn_history}
+"""
+
+            # Add current turn progress
+            current_turn_history = self._get_history_block(
+                sequential_iteration=self.current_sequential_iteration,
+                just_data=True
+            )
+            sequence_info += f"""
+Turn {self.current_sequential_iteration} actions so far:
+{current_turn_history if current_turn_history else "No actions yet this turn."}
+
+═══════════════════════════════════════════════════════════════
+"""
+
+        # Build overlay list
+        candidate_lines: list[str] = []
+        for elem in element_data.elements:
+            idx = elem.overlay_number
+            elem_type = elem.element_type or "unknown"
+            subtype = elem.field_subtype or ""
+            label = elem.element_label or ""
+            focused = elem.is_focused
+
+            # Compact format: Overlay {idx} type={type} [subtype={subtype}] label={label} focused={bool}
+            overlay_desc = f"Overlay {idx} type={elem_type}"
+            if subtype:
+                overlay_desc += f" subtype={subtype}"
+            if label:
+                overlay_desc += f" label=\"{label}\""
+            overlay_desc += f" focused={focused}"
+
+            candidate_lines.append(overlay_desc)
+
+        overlays = "\n".join(candidate_lines) if candidate_lines else "No interactive elements found."
+
+        return f"""You are a browser automation agent. Your job: determine the next action to accomplish the user's task.
+
+{sequence_info}
+
+═══════════════════════════════════════════════════════════════
+WHAT YOU'VE DONE SO FAR
+═══════════════════════════════════════════════════════════════
+{history_block if history_block else "No actions yet."}
+
+Navigation history:
 {nav_summary}
 
-WHAT'S BEEN DONE (DO NOT REPEAT THESE):
-{interaction_summary}
+═══════════════════════════════════════════════════════════════
+AVAILABLE ELEMENTS (Overlays)
+═══════════════════════════════════════════════════════════════
+{overlays}
 
-⚠️ CRITICAL: Review the list above. DO NOT REPEAT these actions:
-- If you already clicked something, don't click it again - look for what changed
-- If you already extracted data, USE "complete:" - don't extract the same data again
-- If your intended action matches something already done, the page state has likely CHANGED
+Format: Overlay <#> type=<button|input|link|...> [subtype=<text|email|...>] label="<text>" focused=<true|false>
 
-{ineffective_actions_context if ineffective_actions_context else ""}
-{overlay_context if overlay_context else ""}
-{"WHAT STILL NEEDS TO BE DONE:" if remaining_tasks else ""}
-{remaining_tasks if remaining_tasks else ""}
-{self._format_notebook(notebook) if notebook else ""}
+FOCUS STATE EXPLAINED:
+• focused=true → Element has keyboard focus
+• If you need to type and input is focused=true → Just call type_text (don't click first)
+• Clicking an already-focused element usually does nothing
+• Don't click elements just to focus them if they're already focused
+
+═══════════════════════════════════════════════════════════════
+WHEN TO CALL complete_task
+═══════════════════════════════════════════════════════════════
+Call complete_task when:
+✓ User's request is fulfilled (e.g., "click login" → you clicked login successfully)
+✓ Data extraction done and stored in notebook
+✓ Navigation completed successfully
+✓ Form filled and submitted successfully
+
+Do NOT call complete_task when:
+✗ An action just failed
+✗ You're waiting for a page to load (use defer_action instead)
+✗ You're stuck and need help (use ask_user instead)
+✗ You're in the middle of a multi-step process
+
+{self._format_notebook(notebook)}
+
 {self._format_extraction_schema() if self.extraction_schema else ""}
-{self._format_extraction_requirement() if self.extraction_schema else ""}
-COMPLETION CHECK (DO THIS FIRST):
-1. Review the USER GOAL shown above - this is YOUR specific task to accomplish right now
-2. IF you've accomplished the USER GOAL → use "complete:" IMMEDIATELY
-   - Example: Goal is "Extract job title from 2nd listing" and you just extracted it → DONE, use complete:
-   - Example: Goal is "Click listing and extract title" and you did both → DONE, use complete:
-3. IF there is a NOTEBOOK section showing this goal is already satisfied → use "complete:"
-   - Example: Goal asks for specific data and notebook already has it → DONE
-4. ONLY if goal is not accomplished yet → plan next actions to achieve it
-- CRITICAL: After completing an extraction, use "complete:" - don't extract again!
-- NEVER extract the same data twice - check interaction history and notebook first!
 
-PLAN GUIDELINES:
-- Choose a sequential plan of up to {self.max_actions_per_plan} steps that can all be executed without leaving the current viewport.
-- Each step must include its own reasoning explaining how it moves the task forward while relying only on visible UI.
-- Do NOT plan for autocomplete suggestions, dropdown entries, or modals unless they are already visible in the screenshot.
-- Plan for the full set of actions you can safely execute now (e.g., typing into a field and then pressing Enter) and stop once the next action would require new UI content (modal, suggestion list, navigation, etc.).
+═══════════════════════════════════════════════════════════════
+FUNCTIONS AVAILABLE
+═══════════════════════════════════════════════════════════════
+• click - Click an element (provide overlay index in overlay_index parameter)
+• type_text - Type text into an input
+• clear_text - Clear text from an input field
+• select_option - Select option from dropdown
+• upload_file - Upload a file
+• set_datetime - Set date/time in picker
+• press_key - Press keyboard key (Enter, Tab, Escape, etc.)
+• scroll_page - Scroll up/down
+• open_url - Navigate to URL
+• go_back / go_forward - Browser navigation
+• extract_data - Extract and store data in notebook
+• remember_data - Store information for later use
+• complete_task - Mark current task as complete
+• complete_sequence - End sequential task (call after final turn)
+• ask_user - Ask user for clarification
+• talk_to_user - Send message to user (doesn't advance task)
+• defer_action - Wait for page to load/element to appear
 
-CRITICAL - CLIPPED ELEMENTS:
-- ALWAYS check if your target element is FULLY visible in the screenshot
-- If element is partially visible (clipped at top/bottom/edges), you MUST scroll first
-- NEVER interact with clipped elements - always reveal them fully first
-- Example BAD: click: 5th job listing (when bottom half is cut off in screenshot)
-- Example GOOD: Step 1: scroll: down, Step 2: click: 5th job listing (after fully visible)
-- If element is not visible at all, scroll to bring it into view before interacting
+═══════════════════════════════════════════════════════════════
+ERROR RECOVERY ESCALATION
+═══════════════════════════════════════════════════════════════
+After 1 failed attempt → Try different element or approach
+After 2 failed attempts → Try scrolling or navigation
+After 3 failed attempts → Use ask_user to get help
+NEVER retry the exact same action that just failed
 
-RESPOND IN THIS JSON SHAPE:
+═══════════════════════════════════════════════════════════════
+SPECIAL CASES
+═══════════════════════════════════════════════════════════════
+• Modal blocking page → Close modal first
+• No elements found → Try scrolling
+• CAPTCHA appears → Use ask_user
+• Page still loading → Use defer_action
+• Element list changed after scroll → This is normal
 
-For COMPLETION (when notebook has data, goal achieved, OR conditional task where condition not met):
-{{
-  "steps": [
-    {{"action": "complete: Successfully extracted 10 job listings including titles, companies, and locations.", "reasoning": "The notebook contains the job data the user requested. Task is done."}}
-  ],
-  "reasoning": "The notebook already contains the extracted job listings. No further actions needed.",
-  "confidence": 0.95,
-  "expected_outcome": "Task complete. User has the requested data."
-}}
+═══════════════════════════════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════════════════════════════
+1. Only act on elements visible in screenshot
+2. Be specific in element descriptions
+3. type_text REPLACES content (doesn't append)
+4. Check focused=true before clicking to focus
+5. Don't repeat failed actions
+6. For sequential tasks: complete_task after each turn, complete_sequence after final turn
+{base_knowledge_section}
 
-For CONDITIONAL TASK COMPLETION (when element "if present" is not found):
-{{
-  "steps": [
-    {{"action": "complete: No cookie banner found on page. Conditional task complete.", "reasoning": "The task was to click cookie banner 'if present'. Since no banner exists, the condition is not met and the task is complete."}}
-  ],
-  "reasoning": "Searched for cookie banner but none exists. Conditional task satisfied.",
-  "confidence": 0.95,
-  "expected_outcome": "Task complete. Condition was not met as expected for optional task."
-}}
-
-For ACTIONS (when more work is needed):
-{{
-  "steps": [
-    {{"action": "type: john@example.com : email input field", "overlay_index": 12, "reasoning": "Enter the recipient address that is currently visible and required."}},
-    {{"action": "press: Tab", "reasoning": "Move focus to the next input that's already visible."}}
-  ],
-  "reasoning": "Explain how these steps progress toward the goal.",
-  "confidence": 0.0-1.0,
-  "expected_outcome": "Describe what should happen after executing the plan."
-}}
-
-overlay_index is only needed when targeting a visible element. Skip it for complete/press/scroll/defer actions.
-
-CRITICAL OUTPUT FORMAT:
-- Return a SINGLE valid JSON object (no markdown, no extra text, no multiple objects).
-- Do NOT include trailing commentary before or after the JSON.
+Choose the next action to take.
 """
-        return prompt
 
-    def _format_extraction_requirement(self) -> str:
-        """Add a hard rule when extraction schema is present."""
-        if not self.extraction_schema:
+    def _get_history_block(self, sequential_iteration: Optional[int] = None, just_data: bool = False) -> str:
+        if not self.session_tracker:
             return ""
+        return self.session_tracker.history_block(limit=self.interaction_summary_limit, sequential_iteration=sequential_iteration, just_data=just_data)
 
-        required_fields = self.extraction_schema.get("required", [])
-        if required_fields:
-            fields = ", ".join(required_fields)
-        else:
-            fields = ", ".join(self.extraction_schema.keys())
-
-        return (
-            "\n"
-            "⚠️ EXTRACTION REQUIRED:\n"
-            f"- You must extract these fields before completing: {fields}\n"
-            "- If the notebook does NOT already contain these fields, your plan MUST include an \"extract:\" step.\n"
-            "- Do NOT return only \"complete:\" when extraction is still missing.\n"
-        )
-    
-    def _format_notebook(self, notebook: Union[Notebook, List[Dict[str, Any]]]) -> str:
+    def _format_notebook(self, notebook: Notebook) -> str:
         """Format notebook entries for inclusion in the prompt."""
-        entries = notebook.to_list() if isinstance(notebook, Notebook) else notebook
+
+        entries = notebook.to_list()
         if not entries:
             return ""
 
-        lines = [
-            "",
-            "=" * 60,
-            "🛑 STOP - CHECK THIS BEFORE PLANNING MORE ACTIONS:",
-            "=" * 60,
-            f"USER GOAL: \"{self.user_prompt}\"",
-            "",
-            "EXTRACTED DATA IN NOTEBOOK:"
-        ]
+        notebook_str = ""
+        for i, entry in enumerate(entries, 1):
+            notebook_str += f"{i}. {entry.task} → {entry.data}\n"
 
-        for i, entry in enumerate(entries[-5:], 1):  # Show last 5 entries
-            prompt = entry.get("prompt", "unknown")
-            data = entry.get("data", {})
-
-            # Show actual data samples so LLM can verify extraction matches user goal
-            if isinstance(data, dict) and "items" in data:
-                items = data["items"]
-                lines.append(f"  Entry {i}: [{prompt}] - {len(items)} items")
-                # Show first 2-3 items as samples
-                for j, item in enumerate(items[:3]):
-                    item_str = str(item)
-                    if len(item_str) > 150:
-                        item_str = item_str[:150] + "..."
-                    lines.append(f"    Sample {j+1}: {item_str}")
-                if len(items) > 3:
-                    lines.append(f"    ... and {len(items) - 3} more items")
-            else:
-                data_str = str(data)
-                if len(data_str) > 300:
-                    data_str = data_str[:300] + "..."
-                lines.append(f"  Entry {i}: [{prompt}] - {data_str}")
-
-        lines.extend([
-            "",
-            "=" * 60,
-            "⚠️ DECISION REQUIRED:",
-            "  - Does the notebook data above satisfy the USER GOAL?",
-            "  - If YES: Use 'complete: Successfully extracted [X items/data]. Summary: [brief description]'",
-            "  - If NO: Explain what's missing and plan next action",
-            "  - DO NOT extract the same data again!",
-            "=" * 60,
-            ""
-        ])
-
-        return "\n".join(lines)
+        return f"""
+═══════════════════════════════════════════════════════════════
+NOTEBOOK (Your Stored Data)
+═══════════════════════════════════════════════════════════════
+{notebook_str}
+• Use extract_data or remember_data to store information
+• Check notebook to determine if extraction tasks are complete
+• Partial matches OK (extracting "Jan 1, 1990" satisfies "extract birth date")
+"""
 
     def _format_extraction_schema(self) -> str:
         """Format extraction schema for inclusion in the prompt."""
@@ -860,115 +378,30 @@ CRITICAL OUTPUT FORMAT:
 
         import json
 
-        # Get required fields
         required_fields = self.extraction_schema.get("required", [])
         properties = self.extraction_schema.get("properties", {})
 
-        lines = [
-            "",
-            "=" * 60,
-            "📋 EXTRACTION SCHEMA - USE THESE EXACT FIELD NAMES:",
-            "=" * 60,
-        ]
-
+        field_lines = []
         for field in required_fields:
             field_info = properties.get(field, {})
             description = field_info.get("description", "")
-            lines.append(f"  • {field}: {description}")
+            field_lines.append(f"  • {field}: {description}")
 
-        lines.extend([
-            "",
-            "⚠️ CRITICAL: When extracting data, use these EXACT field names.",
-            "   Example CORRECT extraction:",
-            f"   {json.dumps({field: '...' for field in required_fields[:3]}, indent=6)}",
-            "",
-            "   Example WRONG extraction (inconsistent field names):",
-            "   {\"title\": \"...\", \"company_name\": \"...\"}  ❌ Wrong! Use the field names above.",
-            "=" * 60,
-            ""
-        ])
+        example = json.dumps({field: "..." for field in required_fields}, indent=2)
 
-        return "\n".join(lines)
+        return f"""
+═══════════════════════════════════════════════════════════════
+EXTRACTION SCHEMA (Use Exact Field Names)
+═══════════════════════════════════════════════════════════════
+Required fields:
+{chr(10).join(field_lines)}
 
-    def _identify_remaining_tasks(self, interactions: List[Interaction]) -> Optional[str]:
-        """
-        Identify what still needs to be done by comparing user prompt with interaction history.
-        Returns a description of remaining tasks.
-        """
-        # Extract form fields from user prompt
-        prompt_lower = self.user_prompt.lower()
-        
-        # Pattern to match "field: value" or "field: value,"
-        field_pattern = r'(\w+)\s*:\s*([^,]+)'
-        requested_fields = {}
-        for match in re.finditer(field_pattern, prompt_lower):
-            field_name = match.group(1).strip()
-            field_value = match.group(2).strip()
-            requested_fields[field_name] = field_value
-        
-        # Check what's been filled from interaction history
-        filled_fields = set()
-        for interaction in interactions:
-            if interaction.text_input:
-                text_lower = interaction.text_input.lower()
-                # Check if any requested field value matches what was typed
-                for field_name, field_value in requested_fields.items():
-                    if field_value.lower() in text_lower or text_lower in field_value.lower():
-                        filled_fields.add(field_name)
-                        break
-        
-        # Determine what's still missing
-        if not requested_fields:
-            return None
-        
-        remaining = []
-        for field_name in requested_fields.keys():
-            if field_name not in filled_fields:
-                remaining.append(field_name)
-        
-        if remaining:
-            return ", ".join([f"{field} field" for field in remaining])
-        return None
-    
-    def _summarize_interactions(self, interactions) -> str:
-        """Summarize what interactions have occurred"""
-        if not interactions:
-            return "No interactions yet."
-        
-        summary_parts = []
-        limit = self.interaction_summary_limit
-        interactions_to_summarize = interactions if not limit or limit <= 0 else interactions[-limit:]
-        for i, interaction in enumerate(interactions_to_summarize, 1):
-            interaction_type = interaction.interaction_type.value
-            summary = f"{i}. {interaction_type}"
-            
-            # Special handling for defer interactions
-            if interaction.interaction_type.value == "defer":
-                if interaction.text_input:
-                    if interaction.text_input == "resumed":
-                        summary += " - resumed (control returned to agent)"
-                    else:
-                        summary += f" - {interaction.text_input}"
-                if interaction.reasoning:
-                    summary += f" ({interaction.reasoning[:50]})"
-                summary_parts.append(summary)
-                continue
-            
-            if interaction.text_input:
-                summary += f" - entered: '{interaction.text_input[:30]}'"
-            if interaction.target_element_info:
-                element_desc = (interaction.target_element_info.get('description', '') or '')[:50]
-                if element_desc:
-                    summary += f" on: {element_desc}"
-            # Add reasoning for click actions to help agent understand what happened
-            interaction_type_str = interaction.interaction_type.value if hasattr(interaction.interaction_type, 'value') else str(interaction.interaction_type)
-            if interaction_type_str == "click" and interaction.reasoning:
-                summary += f" (reason: {interaction.reasoning[:40]}...)"
-            
-            summary_parts.append(summary)
-        
-        return "\n".join(summary_parts) if summary_parts else "No interactions."
-    
+Example correct format:
+{example}
+
+⚠️ Use these EXACT field names when calling extract_data
+"""
+
     def _summarize_navigation_history(self, url_history: List[str], url_pointer: Optional[int]) -> str:
         """Provide a concise navigation summary for the prompt."""
         if not url_history:

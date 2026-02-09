@@ -1,84 +1,91 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Union
 
 from models.models import NotebookEntryType
+from utils.event_logger import get_event_logger
 
+@dataclass
+class NotebookEntry:
+    def __init__(self, timestamp: float, task: str, iteration: Optional[int], subtask_turn: Optional[int], data: Any, url: Optional[str] = None, type: NotebookEntryType = NotebookEntryType.EXTRACTION) -> None:
+        self.timestamp: float = timestamp
+        self.task: str = task
+        self.iteration: Optional[int] = iteration
+        self.subtask_turn: Optional[int] = subtask_turn
+        self.data: Any = data
+        self.url: Optional[str] = url
+        self.type: NotebookEntryType = type
 
+@dataclass
 class Notebook:
     """Collects extracted data and task results during agent execution."""
 
-    def __init__(self, entries: Optional[Iterable[Dict[str, Any]]] = None) -> None:
-        self._entries: List[Dict[str, Any]] = list(entries or [])
+    def __init__(self, entries: Optional[Iterable[NotebookEntry]] = None) -> None:
+        self._entries: List[NotebookEntry] = list(entries or [])
 
     def add_extraction(
         self,
-        prompt: str,
+        task: str,
         data: Any,
         url: Optional[str] = None,
         timestamp: Optional[float] = None,
     ) -> None:
-        self._entries.append(
-            {
-                "timestamp": timestamp or time.time(),
-                "prompt": prompt,
-                "data": data,
-                "url": url,
-                "type": NotebookEntryType.EXTRACTION,
-            }
-        )
+        self._entries.append(NotebookEntry(
+            timestamp=timestamp or time.time(), 
+            task=task, 
+            data=data, 
+            url=url, 
+            iteration=None,
+            subtask_turn=None,
+            type=NotebookEntryType.EXTRACTION))
+        get_event_logger().system_debug(f"Added extraction to notebook: {task} {data} {url}")
 
-    def add_url_extraction(
+    def add_remember(
         self,
-        element: str,
-        url: str,
-        context_url: Optional[str] = None,
+        task: str,
+        data: Any,
         timestamp: Optional[float] = None,
     ) -> None:
-        self._entries.append(
-            {
-                "timestamp": timestamp or time.time(),
-                "prompt": f"URL from {element}",
-                "data": {"url": url, "element": element},
-                "url": context_url,
-                "type": NotebookEntryType.URL_EXTRACTION,
-            }
-        )
+        self._entries.append(NotebookEntry(
+            timestamp=timestamp or time.time(), 
+            task=task, 
+            data=data, 
+            iteration=None,
+            subtask_turn=None,
+            type=NotebookEntryType.REMEMBER))
+        get_event_logger().system_debug(f"Added remember to notebook: {task} {data}")
+        return True
 
-    def add_task_result(
+    def add_subtask_result(
         self,
-        source: str,
         task_id: str,
         description: str,
         data: Any,
         entry_type: NotebookEntryType,
-        iteration: Optional[int] = None,
+        subtask_turn: Optional[int] = None,
     ) -> None:
-        entry: Dict[str, Any] = {
-            "source": source,
-            "task_id": task_id,
-            "description": description,
-            "data": data,
-            "type": entry_type,
-        }
-        if iteration is not None:
-            entry["iteration"] = iteration
+        entry: NotebookEntry = NotebookEntry(
+            timestamp=time.time(), 
+            task=description, 
+            data=data, 
+            iteration=None,
+            subtask_turn=subtask_turn,
+            type=entry_type)
+        self._entries.append(entry)
+        from utils.event_logger import get_event_logger
+        event_logger = get_event_logger()
+        event_logger.notebook_entry_added(task_id, entry_type, data)
+
+
+    def add_entry(self, entry: NotebookEntry) -> None:
         self._entries.append(entry)
 
-    def add_entry(self, entry: Dict[str, Any]) -> None:
-        self._entries.append(entry)
+    def to_list(self) -> List[NotebookEntry]:
+        return self._entries
 
-    def extend(self, entries: Union["Notebook", Iterable[Dict[str, Any]]]) -> None:
-        if isinstance(entries, Notebook):
-            self._entries.extend(entries._entries)
-        else:
-            self._entries.extend(entries)
-
-    def to_list(self) -> List[Dict[str, Any]]:
-        return list(self._entries)
-
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[NotebookEntry]:
         return iter(self._entries)
 
     def __len__(self) -> int:

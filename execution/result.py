@@ -5,36 +5,10 @@ Provides consistent return type with success status, data, and metadata.
 """
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict
-from utils.debug_print import dprint, PrintMode
 
 
 @dataclass
 class ActionResult:
-    """
-    Structured result for act() and extract() operations.
-    
-    Provides consistent return type with success status, data, and metadata.
-    Similar to AgentResult but for individual actions and extractions.
-    
-    Attributes:
-        success: Whether the action/extraction succeeded
-        message: Human-readable message describing the result
-        data: The actual data (for extract) or action context (for act)
-        confidence: Confidence score (0.0-1.0)
-        metadata: Additional metadata about the operation
-        error: Error message if operation failed (None if successful)
-    
-    Example:
-        >>> result = bot.act("Click button", return_result=True)
-        >>> if result.success:
-        ...     dprint(f"Success: {result.message}")
-        ...     dprint(f"Confidence: {result.confidence}")
-        
-        >>> result = bot.extract("Get price", return_result=True)
-        >>> if result.success:
-        ...     price = result.data  # The extracted data
-        ...     dprint(f"Confidence: {result.confidence}")
-    """
     success: bool
     message: str = ""
     data: Optional[Any] = None

@@ -216,67 +216,7 @@ class ErrorHandler:
     
     # Error history
     errors: List[ErrorContext] = field(default_factory=list)
-    
-    def handle_error(
-        self,
-        error: Exception,
-        bot: Any,
-        action_context: Optional[Dict[str, Any]] = None
-    ) -> RecoveryStrategy:
-        """
-        Handle an error and determine recovery strategy.
-        
-        Args:
-            error: The exception that occurred
-            bot: Reference to the bot instance
-            action_context: Context about the action that failed
-            
-        Returns:
-            RecoveryStrategy to use
-        """
-        # Create error context
-        if isinstance(error, BotError):
-            context = error.context
-        else:
-            context = ErrorContext(
-                error_type=type(error).__name__,
-                message=str(error)
-            )
-        
-        # Capture browser state
-        if bot and hasattr(bot, 'page') and bot.page:
-            try:
-                context.page_url = bot.page.url
-                context.page_title = bot.page.title()
-                
-                # Take screenshot if enabled
-                if self.screenshot_on_error:
-                    import os
-                    os.makedirs(self.screenshot_dir, exist_ok=True)
-                    
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"{context.error_type}_{timestamp}.png"
-                    screenshot_path = os.path.join(self.screenshot_dir, filename)
-                    
-                    bot.page.screenshot(path=screenshot_path)
-                    context.screenshot_path = screenshot_path
-            except Exception:
-                pass  # Don't fail if we can't capture state
-        
-        # Add action context
-        if action_context:
-            context.action_type = action_context.get('action_type')
-            context.action_data = action_context.get('action_data')
-        
-        # Store error
-        self.errors.append(context)
-        
-        # Determine recovery strategy
-        if isinstance(error, BotError):
-            return error.recovery_strategy
-        else:
-            return RecoveryStrategy.RETRY
-    
+ 
     def get_error_summary(self) -> Dict[str, Any]:
         """Get summary of all errors."""
         error_counts = {}

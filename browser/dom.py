@@ -11,6 +11,10 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         "button",
         "a[href]",
         "input:not([type='hidden'])",
+        // Add support for contenteditable <div> elements (rich text editors, editable fields)
+        "div[contenteditable='true']",
+        "div[contenteditable='']",
+        "div[contenteditable]",  // handles case-insensitivity and existence of attribute
         "textarea",
         "select",
         "[role='button']",
@@ -19,7 +23,28 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         "[role='menuitem']",
         "[role='tab']",
         "[role='checkbox']",
-        "[role='radio']"
+        "[role='radio']",
+
+        // Headings in links (covers Google search, news sites, blogs)
+        "a[href] h1",
+        "a[href] h2",
+        "a[href] h3",
+        "a[href] h4",
+        "a[href] h5",
+        "a[href] h6",
+
+        // Button text (covers Material-UI, Bootstrap, Tailwind styled buttons)
+        "button span",
+        "[role='button'] span",
+
+        // Icons (covers icon buttons, navigation)
+        "button svg",
+        "a[href] svg",
+        "button i",
+        "a[href] i",
+
+        // Images (covers thumbnails, product images)
+        "a[href] img"
     ];
 
     const seen = new Set();
@@ -59,6 +84,9 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         const textContent = (node.innerText || node.value || "").trim();
         const idx = elements.length + 1;
         node.dataset.domIndex = String(idx);
+        // Check if this element or any of its descendants is currently focused
+        const activeElement = document.activeElement;
+        const isFocused = activeElement === node || (activeElement && node.contains && node.contains(activeElement));
         elements.push({
             index: idx,
             tagName: node.tagName.toLowerCase(),
@@ -79,6 +107,7 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
                 height: rect.height
             },
             cssPath: buildCssPath(node),
+            isFocused: isFocused || false,
         });
     };
 
@@ -98,8 +127,8 @@ def _normalize_box(raw_box: Dict[str, float], page_info: PageInfo) -> List[int]:
     width = page_info.width or 1
     y_min = int(max(0, min(1000, (raw_box.get("y", 0) / height) * 1000)))
     x_min = int(max(0, min(1000, (raw_box.get("x", 0) / width) * 1000)))
-    y_max = int(max(y_min, min(1000, (raw_box.get("y", 0) + raw_box.get("height", 0) / max(1, height)) * 1000)))
-    x_max = int(max(x_min, min(1000, (raw_box.get("x", 0) + raw_box.get("width", 0) / max(1, width)) * 1000)))
+    y_max = int(max(y_min, min(1000, ((raw_box.get("y", 0) + raw_box.get("height", 0)) / height) * 1000)))                          
+    x_max = int(max(x_min, min(1000, ((raw_box.get("x", 0) + raw_box.get("width", 0)) / width) * 1000)))
     return [y_min, x_min, y_max, x_max]
 
 
@@ -118,42 +147,67 @@ def _describe_element(raw: Dict[str, Any]) -> str:
         parts.append(f'({raw["placeholder"]})')
     return " ".join(parts).strip()
 
-
-def build_page_elements(raw_elements: List[Dict[str, Any]], page_info: PageInfo, max_elements: int = 400) -> PageElements:
+def build_page_elements(page, page_info: PageInfo) -> PageElements:
     """Convert raw DOM capture into structured PageElements."""
+    
+    def is_clickable(raw: Dict[str, Any]) -> bool:
+        return raw.get("tagName") in [
+            "button", "a", "input", "textarea", "select", "option", "menuitem", "tab", "checkbox", "radio",
+            "h1", "h2", "h3", "h4", "span", "svg", "i", "img"
+        ]
+
     detected: List[DetectedElement] = []
-    for raw in raw_elements[:max_elements]:
+    
+    raw_elements = page.evaluate(DOM_ELEMENT_CAPTURE_SCRIPT)
+    if isinstance(raw_elements, str):
+        try:
+            raw_elements = json.loads(raw_elements)
+        except Exception:
+            return PageElements(elements=[])
+    if not isinstance(raw_elements, list):
+        return PageElements(elements=[])  
+    for raw in raw_elements:
         bounding_box = raw.get("boundingBox", {})
         box = _normalize_box(bounding_box, page_info)
         element = DetectedElement(
             element_label=raw.get("ariaLabel") or raw.get("placeholder") or _describe_element(raw),
             description=_describe_element(raw),
             element_type=raw.get("tagName") or "element",
-            is_clickable=True,
+            is_clickable=is_clickable(raw),
             box_2d=box,
             section=PageSection.CONTENT,
             field_subtype=raw.get("type") or raw.get("role") or None,
             confidence=0.65,
             requires_special_handling=False,
             overlay_number=raw.get("index"),
+            is_focused=raw.get("isFocused", False),
         )
         detected.append(element)
     return PageElements(elements=detected)
 
 
-def capture_dom_elements(page, page_info: PageInfo, max_elements: int = 400) -> List[Dict[str, Any]]:
+def capture_dom_elements(page, page_info: PageInfo, max_elements: int = 400) -> PageElements:
     """Capture interactive elements via DOM inspection and return serializable metadata."""
     raw = page.evaluate(DOM_ELEMENT_CAPTURE_SCRIPT)
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except Exception:
-            return []
+            return PageElements(elements=[])
     if not isinstance(raw, list):
-        return []
-    result = []
+        return PageElements(elements=[])   
+    elements = []
     for elem in raw[:max_elements]:
-        norm = _normalize_box(elem.get("boundingBox", {}), page_info)
-        elem["normalizedCoords"] = norm
-        result.append(elem)
-    return result
+        bounding_box = elem.get("boundingBox", {})
+        box = _normalize_box(bounding_box, page_info)
+        element = DetectedElement(
+            element_label=elem.get("ariaLabel") or elem.get("placeholder") or _describe_element(elem),
+            description=_describe_element(elem),
+            element_type=elem.get("tagName") or "element",
+            is_clickable=True,
+            box_2d=box,
+            section=PageSection.CONTENT,
+            is_focused=elem.get("isFocused", False),
+        )
+        elements.append(element)
+    return PageElements(elements=elements)

@@ -27,15 +27,16 @@ class PrintMode(Enum):
 _current_print_mode: PrintMode = PrintMode.DEBUG
 
 
-def set_print_mode(mode: PrintMode) -> None:
-    """Switch the global print mode so calls to :func:`dprint` respect it."""
-    global _current_print_mode
-    _current_print_mode = mode
-
 
 def get_print_mode() -> PrintMode:
     """Return the current print mode."""
     return _current_print_mode
+
+
+def set_print_mode(mode: PrintMode) -> None:
+    """Set the current print mode."""
+    global _current_print_mode
+    _current_print_mode = mode
 
 
 def _should_print(message_mode: PrintMode) -> bool:

@@ -51,8 +51,8 @@ class Interceptor(BaseModel):
 
 class InterceptorContext:
     """Context passed to scripted interceptor handlers."""
-    def __init__(self, bot: Browser, controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
-        self.bot = bot
+    def __init__(self, browser: Browser, controller: Agent, action_step: Optional[Any] = None, action: Optional[str] = None):
+        self.browser = browser
         self.controller = controller
         self.action_step = action_step
         self.action = action
@@ -83,7 +83,6 @@ class InterceptorContext:
             prompt=prompt,
             image=snapshot.screenshot,
             model=self.controller.agent_model_name,
-            reasoning_level="low"
         )
 
     def ask_question_structured(self, query: str, model_class: type) -> Any:
@@ -117,14 +116,13 @@ class InterceptorContext:
             model_object_type=model_class,
             image=snapshot.screenshot,
             model=self.controller.agent_model_name,
-            reasoning_level="low"
         )
 
 class InterceptorManager:
     """Manages the registration and execution of interceptors."""
     
-    def __init__(self, bot: Browser):
-        self.bot = bot
+    def __init__(self, browser: Browser):
+        self.browser = browser
         self.registry: List[Dict[str, Any]] = []
         self.recursion_limit = 3
 
@@ -180,7 +178,7 @@ class InterceptorManager:
             dprint("⚠️ Scripted interceptor triggered but no handler provided")
             return
 
-        context = InterceptorContext(self.bot, controller, action_step, action)
+        context = InterceptorContext(self.browser, controller, action_step, action)
         dprint("🎭 Executing Scripted Interceptor...")
         handler(context)
         dprint("✅ Scripted Interceptor finished")

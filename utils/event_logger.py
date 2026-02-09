@@ -1,8 +1,8 @@
 """
-Simple, robust event-driven logging system for Browser.
+Simple, robust event-driven logging system for Agent.
 
 Design principles:
-- Non-blocking: logging errors never break the bot
+- Non-blocking: logging errors never break the agent
 - Simple: minimal API surface
 - Flexible: easy to customize output via callbacks
 """
@@ -11,14 +11,15 @@ from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
-from utils.debug_print import dprint, PrintMode
-
+from models import Sequence, SequenceDecision
+from models.models import ActionStep, NotebookEntryType, TaskDefinition
+from utils.debug_print import dprint
+import simplejson as json
 
 class EventType(str, Enum):
     """All event types that can be logged"""
     # Agent events
     AGENT_START = "agent_start"
-    AGENT_ITERATION = "agent_iteration"
     AGENT_COMPLETE = "agent_complete"
     AGENT_ERROR = "agent_error"
     
@@ -35,6 +36,8 @@ class EventType(str, Enum):
     COMMAND_SUCCESS = "command_success"
     COMMAND_FAILURE = "command_failure"
     
+    ASK_REQUESTED = "ask_requested"
+    
     # System events
     SYSTEM_INFO = "system_info"
     SYSTEM_WARNING = "system_warning"
@@ -50,7 +53,7 @@ class EventType(str, Enum):
     PLAN_GENERATED = "plan_generated"
     PLAN_CACHED = "plan_cached"
     PLAN_CLEARED = "plan_cleared"
-    
+    ACTION_STEP_GENERATION_ERROR = "action_step_generation_error"
     
     # Completion events
     COMPLETION_CHECK = "completion_check"
@@ -58,8 +61,8 @@ class EventType(str, Enum):
     
     # Action determination events
     ACTION_DETERMINED = "action_determined"
-    ACTION_PARAMS = "action_params"
-    
+    ACTION_ERROR = "action_error"
+    ACTION_PLAN_GENERATION_ERROR = "action_plan_generation_error"
     
     # Extraction events (already defined above, but adding detail events)
     EXTRACTION_DETECTED = "extraction_detected"
@@ -71,6 +74,7 @@ class EventType(str, Enum):
     # Command execution events
     COMMAND_EXECUTION_START = "command_execution_start"
     COMMAND_EXECUTION_COMPLETE = "command_execution_complete"
+    COMMAND_EXECUTION_FAILURE = "command_execution_failure"
     OVERLAY_SELECTION = "overlay_selection"
     
     # Planning events (detailed)
@@ -94,12 +98,13 @@ class EventType(str, Enum):
     TASK_START = "task_start"
     TASK_COMPLETE = "task_complete"
     TASK_FAIL = "task_fail"
+    UNKNOWN_TASK_TYPE = "unknown_task_type"
 
     # Sequential task events
+    SEQUENTIAL_TASK_GENERATION_ERROR = "sequential_task_generation_error"
     SEQUENTIAL_START = "sequential_start"
     SEQUENTIAL_COMPLETE = "sequential_complete"
     SEQUENTIAL_FAIL = "sequential_fail"
-    SEQUENTIAL_ITERATION_START = "sequential_iteration_start"
     SEQUENTIAL_ITERATION_COMPLETE = "sequential_iteration_complete"
     SEQUENTIAL_ITERATION_FAIL = "sequential_iteration_fail"
     SUBTASK_START = "subtask_start"
@@ -107,9 +112,9 @@ class EventType(str, Enum):
     SUBTASK_FAIL = "subtask_fail"
 
     # Mini-loop events
-    MINILOOP_ITERATION_START = "miniloop_iteration_start"
-    MINILOOP_ITERATION_COMPLETE = "miniloop_iteration_complete"
-    MINILOOP_ITERATION_FAIL = "miniloop_iteration_fail"
+    ITERATION_START = "iteration_start"
+    ITERATION_COMPLETE = "iteration_complete"
+    ITERATION_FAIL = "iteration_fail"
 
     # Plan execution events
     PLAN_EXECUTE_START = "plan_execute_start"
@@ -143,6 +148,11 @@ class EventType(str, Enum):
     # Model selection events
     MODEL_FALLBACK = "model_fallback"
 
+    ASK_COMMAND_ANSWERED = "ask_command_answered"
+    ASK_COMMAND_SKIPPED = "ask_command_skipped"
+    ASK_COMMAND_FAILURE = "ask_command_failure"
+    AGENT_TALK = "agent_talk"
+    AGENT_TALK_FAILURE = "agent_talk_failure"
 
     # Context guard events
     CONTEXT_GUARD_START = "context_guard_start"
@@ -154,6 +164,17 @@ class EventType(str, Enum):
     QUEUE_DEQUEUE = "queue_dequeue"
     QUEUE_CLEAR = "queue_clear"
     QUEUE_REJECT = "queue_reject"
+    
+    NOTEBOOK_ENTRY_ADDED = "notebook_entry_added"
+
+
+class LogLevel(str, Enum):
+    """Log levels for event logging"""
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    SUCCESS = "SUCCESS"
 
 
 @dataclass
@@ -162,7 +183,7 @@ class BotEvent:
     event_type: EventType
     message: str
     timestamp: float = field(default_factory=time.time)
-    level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, SUCCESS
+    level: LogLevel = LogLevel.INFO
     details: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -185,10 +206,11 @@ class EventLogger:
     In normal mode: only calls callbacks (no prints)
     """
     
-    def __init__(self, debug_mode: bool = True, show_overlay_candidates: bool = False):
+    def __init__(self, debug_mode: bool = True, show_overlay_candidates: bool = False, show_llm_costs: bool = True):
         try:
             self.debug_mode = debug_mode
             self.show_overlay_candidates = show_overlay_candidates
+            self.show_llm_costs = show_llm_costs
             self._callbacks: List[Callable[[BotEvent], None]] = []
             self._event_history: List[BotEvent] = []
             self._max_history = 1000
@@ -196,6 +218,7 @@ class EventLogger:
             # If even initialization fails, set minimal defaults
             self.debug_mode = True
             self.show_overlay_candidates = False
+            self.show_llm_costs = True
             self._callbacks = []
             self._event_history = []
             self._max_history = 1000
@@ -232,11 +255,11 @@ class EventLogger:
     def _print_event(self, event: BotEvent) -> None:
         """Print event in debug mode"""
         level_emoji = {
-            "DEBUG": "🔍",
-            "INFO": "ℹ️",
-            "WARNING": "⚠️",
-            "ERROR": "❌",
-            "SUCCESS": "✅"
+            LogLevel.DEBUG: "🔍",
+            LogLevel.INFO: "ℹ️",
+            LogLevel.WARNING: "⚠️",
+            LogLevel.ERROR: "❌",
+            LogLevel.SUCCESS: "✅"
         }
         emoji = level_emoji.get(event.level, "•")
         dprint(f"{emoji} {event.message}")
@@ -252,7 +275,7 @@ class EventLogger:
                     except Exception:
                         pass
     
-    def emit(self, event_type: EventType, message: str, level: str = "INFO", **details) -> None:
+    def emit(self, event_type: EventType, message: str, level: LogLevel = LogLevel.INFO, **details) -> None:
         """Emit an event - safe wrapper that never raises"""
         try:
             event = BotEvent(
@@ -270,55 +293,55 @@ class EventLogger:
                 except Exception:
                     pass
     
+    def notebook_entry_added(self, task_id: str, entry_type: NotebookEntryType, entry: Dict[str, Any], **details):
+        try:
+            self.emit(EventType.NOTEBOOK_ENTRY_ADDED, f"Added notebook entry for task {task_id}", LogLevel.INFO, task_id=task_id, entry_type=entry_type, entry=entry, **details)
+        except Exception:
+            pass
+    
     # Convenience methods - all wrapped in try/except for safety
     def agent_start(self, prompt: str, **details):
         try:
-            self.emit(EventType.AGENT_START, f"Starting agentic mode: {prompt}", "INFO", prompt=prompt, **details)
+            self.emit(EventType.AGENT_START, f"Started agent with prompt: {prompt}", LogLevel.INFO, prompt=prompt, **details)
         except Exception:
             pass
     
-    def agent_iteration(self, iteration: int, max_iterations: int, url: str = None, title: str = None, **details):
-        try:
-            msg = f"Iteration {iteration}/{max_iterations}"
-            if url:
-                msg += f" - {url}"
-            self.emit(EventType.AGENT_ITERATION, msg, "INFO", 
-                     iteration=iteration, max_iterations=max_iterations, url=url, title=title, **details)
-        except Exception:
-            pass
-    
-    def agent_complete(self, success: bool, reasoning: str = None, confidence: float = None, **details):
+    def agent_complete(self, success: bool, reasoning: str = None, **details):
         try:
             status = "completed successfully" if success else "failed"
-            level = "SUCCESS" if success else "ERROR"
+            level = LogLevel.SUCCESS if success else LogLevel.ERROR
             msg = f"Agent {status}"
             if reasoning:
                 msg += f": {reasoning}"
             self.emit(EventType.AGENT_COMPLETE, msg, level, 
-                     success=success, reasoning=reasoning, confidence=confidence, **details)
+                     success=success, reasoning=reasoning, **details)
         except Exception:
             pass
 
     def agent_error(self, message: str, **details):
         try:
-            self.emit(EventType.AGENT_ERROR, f"Agent error: {message}", "ERROR", message=message, **details)
+            self.emit(EventType.AGENT_ERROR, f"Agent error: {message}", LogLevel.ERROR, message=message, **details)
         except Exception:
             pass
     
-    def command_start(self, command: str, command_id: str = None, **details):
+    def command_generated(self, command: ActionStep, **details):
+        try:
+            self.emit(EventType.COMMAND_GENERATED, f"Command generated: {command.action}", LogLevel.INFO, command=command.action, **details)
+        except Exception:
+            pass
+    
+    def command_start(self, command: str, **details):
         try:
             msg = f"Starting command: {command}"
-            if command_id:
-                msg += f" [ID: {command_id}]"
-            self.emit(EventType.COMMAND_START, msg, "INFO",
-                     command=command, command_id=command_id, **details)
+            self.emit(EventType.COMMAND_START, msg, LogLevel.INFO,
+                     command=command, **details)
         except Exception:
             pass
 
     def command_success(self, command: str, **details):
         try:
             msg = f"Command completed: {command}"
-            self.emit(EventType.COMMAND_SUCCESS, msg, "SUCCESS", command=command, **details)
+            self.emit(EventType.COMMAND_SUCCESS, msg, LogLevel.SUCCESS, command=command, **details)
         except Exception:
             pass
 
@@ -327,19 +350,55 @@ class EventLogger:
             msg = f"Command failed: {command}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.COMMAND_FAILURE, msg, "ERROR", command=command, error=error, **details)
+            self.emit(EventType.COMMAND_FAILURE, msg, LogLevel.ERROR, command=command, error=error, **details)
+        except Exception:
+            pass
+    
+    def ask_requested(self, question: str, **details):
+        try:
+            self.emit(EventType.ASK_REQUESTED, f"Agent asking for help: {question}", LogLevel.INFO, question=question, **details)
+        except Exception:
+            pass
+    
+    def ask_command_answered(self, question: str, response: str, **details):
+        try:
+            self.emit(EventType.ASK_COMMAND_ANSWERED, "User answered question", LogLevel.INFO, question=question, response=response, **details)
+        except Exception:
+            pass
+    
+    def ask_command_skipped(self, question: str, **details):
+        try:
+            self.emit(EventType.ASK_COMMAND_SKIPPED, "User skipped question", LogLevel.INFO, question=question, **details)
+        except Exception:
+            pass
+    
+    def ask_command_failure(self, question: str, error: str, **details):
+        try:
+            self.emit(EventType.ASK_COMMAND_FAILURE, "Error in ask callback", LogLevel.ERROR, question=question, error=error, **details)
+        except Exception:
+            pass
+    
+    def agent_talk(self, message: str, **details):
+        try:
+            self.emit(EventType.AGENT_TALK, "Agent talking", LogLevel.INFO, message=message, **details)
+        except Exception:
+            pass
+    
+    def agent_talk_failure(self, message: str, error: str, **details):
+        try:
+            self.emit(EventType.AGENT_TALK_FAILURE, "Agent talk failed", LogLevel.ERROR, message=message, error=error, **details)
         except Exception:
             pass
     
     def system_info(self, message: str, **details):
         try:
-            self.emit(EventType.SYSTEM_INFO, message, "INFO", **details)
+            self.emit(EventType.SYSTEM_INFO, message, LogLevel.INFO, **details)
         except Exception:
             pass
     
     def system_warning(self, message: str, **details):
         try:
-            self.emit(EventType.SYSTEM_WARNING, message, "WARNING", **details)
+            self.emit(EventType.SYSTEM_WARNING, message, LogLevel.WARNING, **details)
         except Exception:
             pass
     
@@ -348,25 +407,25 @@ class EventLogger:
             msg = message
             if error:
                 msg += f" - {str(error)}"
-            self.emit(EventType.SYSTEM_ERROR, msg, "ERROR", error=str(error) if error else None, **details)
+            self.emit(EventType.SYSTEM_ERROR, msg, LogLevel.ERROR, error=str(error) if error else None, **details)
         except Exception:
             pass
     
     def system_debug(self, message: str, **details):
         try:
-            self.emit(EventType.SYSTEM_DEBUG, message, "DEBUG", **details)
+            self.emit(EventType.SYSTEM_DEBUG, message, LogLevel.DEBUG, **details)
         except Exception:
             pass
     
     def extraction_start(self, prompt: str, **details):
         try:
-            self.emit(EventType.EXTRACTION_START, f"Extracting: {prompt}", "INFO", prompt=prompt, **details)
+            self.emit(EventType.EXTRACTION_START, f"Extracting: {prompt}", LogLevel.INFO, prompt=prompt, **details)
         except Exception:
             pass
     
     def extraction_success(self, prompt: str, result: Any = None, **details):
         try:
-            self.emit(EventType.EXTRACTION_SUCCESS, f"Extraction completed: {prompt}", "SUCCESS", prompt=prompt, result=str(result) if result else None, **details)
+            self.emit(EventType.EXTRACTION_SUCCESS, f"Extraction completed: {prompt}", LogLevel.SUCCESS, prompt=prompt, result=str(result) if result else None, **details)
         except Exception:
             pass
     
@@ -375,20 +434,32 @@ class EventLogger:
             msg = f"Extraction failed: {prompt}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.EXTRACTION_FAILURE, msg, "ERROR", prompt=prompt, error=error, **details)
+            self.emit(EventType.EXTRACTION_FAILURE, msg, LogLevel.ERROR, prompt=prompt, error=error, **details)
         except Exception:
             pass
     
     def plan_cached(self, command: str, **details):
         try:
-            self.emit(EventType.PLAN_CACHED, f"Cached plan for command '{command}'", "INFO",
+            self.emit(EventType.PLAN_CACHED, f"Cached plan for command '{command}'", LogLevel.INFO,
                      command=command, **details)
         except Exception:
             pass
     
     def plan_cleared(self, reason: str, **details):
         try:
-            self.emit(EventType.PLAN_CLEARED, f"Clearing cached plan ({reason})", "INFO", reason=reason, **details)
+            self.emit(EventType.PLAN_CLEARED, f"Clearing cached plan ({reason})", LogLevel.INFO, reason=reason, **details)
+        except Exception:
+            pass
+
+    def action_plan_generation_error(self, error: str, **details):
+        try:
+            self.emit(EventType.ACTION_PLAN_GENERATION_ERROR, f"Error generating action plan: {error}", LogLevel.ERROR, error=error, **details)
+        except Exception:
+            pass
+
+    def action_step_generation_error(self, failed_command: str, error: str, **details):
+        try:
+            self.emit(EventType.ACTION_STEP_GENERATION_ERROR, f"Error generating action step for command '{failed_command}': {error}", LogLevel.ERROR, failed_command=failed_command, error=error, **details)
         except Exception:
             pass
 
@@ -397,26 +468,16 @@ class EventLogger:
             msg = f"Overlay data captured: {count} elements"
             if preview:
                 msg += f" ({preview})"
-            self.emit(EventType.OVERLAY_DATA, msg, "DEBUG", count=count, preview=preview, **details)
+            self.emit(EventType.OVERLAY_DATA, msg, LogLevel.DEBUG, count=count, preview=preview, **details)
         except Exception:
             pass
 
     def plan_generated(self, plan_reasoning: str, confidence: float, expected_outcome: str, steps_summary: str = "", **details):
         try:
-            msg = f"Plan generated (confidence {confidence:.2f})"
-            if plan_reasoning:
-                msg += f": {plan_reasoning}"
-            if expected_outcome:
-                msg += f" → Expected: {expected_outcome}"
-            why_not_complete = details.get("why_not_complete")
-            if why_not_complete:
-                msg += f" → Why not complete: {why_not_complete}"
-            if details.get("will_complete_task") is True:
-                msg += " → Will complete task: true"
             self.emit(
                 EventType.PLAN_GENERATED,
-                msg,
-                "INFO",
+                "Plan generated",
+                LogLevel.INFO,
                 plan_reasoning=plan_reasoning,
                 confidence=confidence,
                 expected_outcome=expected_outcome,
@@ -428,7 +489,7 @@ class EventLogger:
     
     def plan_reused(self, **details):
         try:
-            self.emit(EventType.PLAN_CACHED, "Reusing cached plan (skipped LLM planning)", "INFO", **details)
+            self.emit(EventType.PLAN_CACHED, "Reusing cached plan (skipped LLM planning)", LogLevel.INFO, **details)
         except Exception:
             pass
     
@@ -438,7 +499,7 @@ class EventLogger:
             msg = f"Task {status}"
             if reasoning:
                 msg += f": {reasoning}"
-            level = "SUCCESS" if is_complete else "INFO"
+            level = LogLevel.SUCCESS if is_complete else LogLevel.INFO
             event_type = EventType.COMPLETION_SUCCESS if is_complete else EventType.COMPLETION_CHECK
             self.emit(event_type, msg, level, is_complete=is_complete, reasoning=reasoning, confidence=confidence, **details)
         except Exception:
@@ -450,7 +511,7 @@ class EventLogger:
             msg = "✅ Agent signaled task completion"
             if reasoning:
                 msg += f"\n   Reasoning: {reasoning}"
-            self.emit(EventType.COMPLETION_SUCCESS, msg, "SUCCESS", completion_type="agent_signaled", reasoning=reasoning, **details)
+            self.emit(EventType.COMPLETION_SUCCESS, msg, LogLevel.SUCCESS, completion_type="agent_signaled", reasoning=reasoning, **details)
         except Exception:
             pass
 
@@ -463,121 +524,100 @@ class EventLogger:
                 msg += f"\n   Confidence: {confidence:.2f}"
             if expected_outcome:
                 msg += f"\n   Expected outcome: {expected_outcome}"
-            self.emit(EventType.ACTION_DETERMINED, msg, "INFO", action=action, reasoning=reasoning, confidence=confidence, expected_outcome=expected_outcome, **details)
+            self.emit(EventType.ACTION_DETERMINED, msg, LogLevel.INFO, action=action, reasoning=reasoning, confidence=confidence, expected_outcome=expected_outcome, **details)
         except Exception:
             pass
     
-    def action_params(self, params: dict, **details):
+    def action_error(self, action: str, error: str = None, **details):
         try:
-            msg = "act() parameters:"
-            for key, value in params.items():
-                msg += f"\n   {key}: {value}"
-            self.emit(EventType.ACTION_PARAMS, msg, "DEBUG", **params, **details)
+            msg = f"Action failed: {action}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.ACTION_ERROR, msg, LogLevel.ERROR, action=action, error=error, **details)
         except Exception:
             pass
     
     def extraction_detected(self, prompt: str, **details):
         try:
-            self.emit(EventType.EXTRACTION_DETECTED, f"Extraction detected: {prompt}", "INFO", prompt=prompt, **details)
-        except Exception:
-            pass
-    
-    def action_step(self, step_number: int, action_type: str, **details):
-        try:
-            self.emit(EventType.ACTION_STEP, f"Step {step_number}: {action_type}", "DEBUG", step_number=step_number, action_type=action_type, **details)
-        except Exception:
-            pass
-
-    def action_start(self, action_type: str, **details):
-        try:
-            self.emit(EventType.ACTION_START, f"Action start: {action_type}", "INFO", action_type=action_type, **details)
-        except Exception:
-            pass
-
-    def action_success(self, action_type: str, **details):
-        try:
-            self.emit(EventType.ACTION_SUCCESS, f"Action success: {action_type}", "SUCCESS", action_type=action_type, **details)
-        except Exception:
-            pass
-
-    def action_failure(self, action_type: str, error: str = None, **details):
-        try:
-            msg = f"Action failed: {action_type}"
-            if error:
-                msg += f" - {error}"
-            self.emit(EventType.ACTION_FAILURE, msg, "ERROR", action_type=action_type, error=error, **details)
+            self.emit(EventType.EXTRACTION_DETECTED, f"Extraction detected: {prompt}", LogLevel.INFO, prompt=prompt, **details)
         except Exception:
             pass
 
     def task_decompose_start(self, prompt: str, **details):
         try:
-            self.emit(EventType.TASK_DECOMPOSE_START, "Task decomposition started", "INFO", prompt=prompt, **details)
+            self.emit(EventType.TASK_DECOMPOSE_START, "Task decomposition started", LogLevel.INFO, prompt=prompt, **details)
         except Exception:
             pass
 
-    def task_decompose_complete(self, task_count: int, **details):
+    def task_decompose_complete(self, tasks: list[TaskDefinition], task_count: int, **details):
         try:
-            self.emit(EventType.TASK_DECOMPOSE_COMPLETE, f"Task decomposition complete: {task_count} tasks", "SUCCESS", task_count=task_count, **details)
+            self.emit(EventType.TASK_DECOMPOSE_COMPLETE, f"Task decomposition complete \n {json.dumps([task.model_dump() for task in tasks], indent=4)}", LogLevel.SUCCESS, task_count=task_count, tasks=tasks, **details)
         except Exception:
             pass
 
     def task_decompose_fail(self, error: str, **details):
         try:
-            self.emit(EventType.TASK_DECOMPOSE_FAIL, f"Task decomposition failed: {error}", "ERROR", error=error, **details)
+            self.emit(EventType.TASK_DECOMPOSE_FAIL, f"Task decomposition failed: {error}", LogLevel.ERROR, error=error, **details)
         except Exception:
             pass
 
-    def task_start(self, task_id: str, description: str, **details):
+    def task_start(self, task_id: str, task: str, **details):
         try:
-            self.emit(EventType.TASK_START, f"Task start: {description}", "INFO", task_id=task_id, description=description, **details)
+            self.emit(EventType.TASK_START, f"Task start: {task}", LogLevel.INFO, task_id=task_id, **details)
         except Exception:
             pass
 
-    def task_complete(self, task_id: str, description: str, **details):
+    def task_complete(self, task_id: str, **details):
         try:
-            self.emit(EventType.TASK_COMPLETE, f"Task complete: {description}", "SUCCESS", task_id=task_id, description=description, **details)
+            self.emit(EventType.TASK_COMPLETE, f"Task complete: {task_id}", LogLevel.SUCCESS, task_id=task_id, **details)
         except Exception:
             pass
 
-    def task_fail(self, task_id: str, description: str, error: str = None, **details):
+    def task_fail(self, task_id: str, error: str = None, **details):
         try:
-            msg = f"Task failed: {description}"
+            msg = f"Task failed: {task_id}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.TASK_FAIL, msg, "ERROR", task_id=task_id, description=description, error=error, **details)
+            self.emit(EventType.TASK_FAIL, msg, LogLevel.ERROR, task_id=task_id, error=error, **details)
         except Exception:
             pass
 
-    def sequential_start(self, task_id: str, goal: str, **details):
+    def unknown_task_type(self, task_type: str, **details):
         try:
-            self.emit(EventType.SEQUENTIAL_START, f"Sequential task start: {goal}", "INFO", task_id=task_id, goal=goal, **details)
+            self.emit(EventType.UNKNOWN_TASK_TYPE, f"Unknown task type: {task_type}", LogLevel.ERROR, task_type=task_type, **details)
         except Exception:
             pass
 
-    def sequential_complete(self, task_id: str, goal: str, **details):
+    def sequential_task_generation_error(self, error: str, **details):
         try:
-            self.emit(EventType.SEQUENTIAL_COMPLETE, f"Sequential task complete: {goal}", "SUCCESS", task_id=task_id, goal=goal, **details)
+            self.emit(EventType.SEQUENTIAL_TASK_GENERATION_ERROR, f"Error generating sequential task: {error}", LogLevel.ERROR, error=error, **details)
         except Exception:
             pass
 
-    def sequential_fail(self, task_id: str, goal: str, error: str = None, **details):
+    def sequential_task_start(self, sequential_task: Sequence, **details):
         try:
-            msg = f"Sequential task failed: {goal}"
+            self.emit(EventType.SEQUENTIAL_START, f"Sequential task start: {sequential_task.task}", LogLevel.INFO, sequential_task=sequential_task, **details)
+        except Exception:
+            pass
+
+    def sequential_task_complete(self, sequential_task: Sequence, **details):
+        try:
+            self.emit(EventType.SEQUENTIAL_COMPLETE, f"Sequential task complete: {sequential_task.task}", LogLevel.SUCCESS, sequential_task=sequential_task, **details)
+        except Exception:
+            pass
+
+    def sequential_task_fail(self, sequential_task: Sequence, error: str = None, **details):
+        try:
+            msg = f"Sequential task failed: {sequential_task.task}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.SEQUENTIAL_FAIL, msg, "ERROR", task_id=task_id, goal=goal, error=error, **details)
-        except Exception:
-            pass
-
-    def sequential_iteration_start(self, task_id: str, iteration: int, **details):
-        try:
-            self.emit(EventType.SEQUENTIAL_ITERATION_START, f"Sequential iteration start: {iteration}", "INFO", task_id=task_id, iteration=iteration, **details)
+            self.emit(EventType.SEQUENTIAL_FAIL, msg, LogLevel.ERROR, sequential_task=sequential_task, error=error, **details)
         except Exception:
             pass
 
     def sequential_iteration_complete(self, task_id: str, iteration: int, **details):
         try:
-            self.emit(EventType.SEQUENTIAL_ITERATION_COMPLETE, f"Sequential iteration complete: {iteration}", "SUCCESS", task_id=task_id, iteration=iteration, **details)
+            self.emit(EventType.SEQUENTIAL_ITERATION_COMPLETE, f"Sequential iteration complete: {iteration}", LogLevel.SUCCESS, task_id=task_id, iteration=iteration, **details)
         except Exception:
             pass
 
@@ -586,19 +626,19 @@ class EventLogger:
             msg = f"Sequential iteration failed: {iteration}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.SEQUENTIAL_ITERATION_FAIL, msg, "ERROR", task_id=task_id, iteration=iteration, error=error, **details)
+            self.emit(EventType.SEQUENTIAL_ITERATION_FAIL, msg, LogLevel.ERROR, task_id=task_id, iteration=iteration, error=error, **details)
         except Exception:
             pass
 
     def subtask_start(self, instruction: str, **details):
         try:
-            self.emit(EventType.SUBTASK_START, f"Subtask start: {instruction}", "INFO", instruction=instruction, **details)
+            self.emit(EventType.SUBTASK_START, f"Subtask start: {instruction}", LogLevel.INFO, instruction=instruction, **details)
         except Exception:
             pass
 
     def subtask_complete(self, instruction: str, **details):
         try:
-            self.emit(EventType.SUBTASK_COMPLETE, f"Subtask complete: {instruction}", "SUCCESS", instruction=instruction, **details)
+            self.emit(EventType.SUBTASK_COMPLETE, f"Subtask complete: {instruction}", LogLevel.SUCCESS, instruction=instruction, **details)
         except Exception:
             pass
 
@@ -607,40 +647,40 @@ class EventLogger:
             msg = f"Subtask failed: {instruction}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.SUBTASK_FAIL, msg, "ERROR", instruction=instruction, error=error, **details)
+            self.emit(EventType.SUBTASK_FAIL, msg, LogLevel.ERROR, instruction=instruction, error=error, **details)
         except Exception:
             pass
 
-    def miniloop_iteration_start(self, task_instruction: str, iteration: int, **details):
+    def iteration_start(self, task_instruction: str, iteration: int, max_iterations: int, **details):
         try:
-            self.emit(EventType.MINILOOP_ITERATION_START, f"Mini-loop iteration start: {iteration}", "DEBUG", task_instruction=task_instruction, iteration=iteration, **details)
+            self.emit(EventType.ITERATION_START, f"Iteration start: {iteration}/{max_iterations}", LogLevel.DEBUG, task_instruction=task_instruction, iteration=iteration, max_iterations=max_iterations, **details)
         except Exception:
             pass
 
-    def miniloop_iteration_complete(self, task_instruction: str, iteration: int, **details):
+    def iteration_complete(self, task_instruction: str, iteration: int, max_iterations: int, **details):
         try:
-            self.emit(EventType.MINILOOP_ITERATION_COMPLETE, f"Mini-loop iteration complete: {iteration}", "DEBUG", task_instruction=task_instruction, iteration=iteration, **details)
+            self.emit(EventType.ITERATION_COMPLETE, f"Iteration complete: {iteration}/{max_iterations}", LogLevel.DEBUG, task_instruction=task_instruction, iteration=iteration, max_iterations=max_iterations, **details)
         except Exception:
             pass
 
-    def miniloop_iteration_fail(self, task_instruction: str, iteration: int, error: str = None, **details):
+    def iteration_fail(self, task_instruction: str, iteration: int, error: str = None, **details):
         try:
-            msg = f"Mini-loop iteration failed: {iteration}"
+            msg = f"Iteration failed: {iteration}"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.MINILOOP_ITERATION_FAIL, msg, "WARNING", task_instruction=task_instruction, iteration=iteration, error=error, **details)
+            self.emit(EventType.ITERATION_FAIL, msg, LogLevel.WARNING, task_instruction=task_instruction, iteration=iteration, error=error, **details)
         except Exception:
             pass
 
     def plan_execute_start(self, step_count: int, **details):
         try:
-            self.emit(EventType.PLAN_EXECUTE_START, f"Plan execution start ({step_count} steps)", "INFO", step_count=step_count, **details)
+            self.emit(EventType.PLAN_EXECUTE_START, f"Plan execution start ({step_count} steps)", LogLevel.INFO, step_count=step_count, **details)
         except Exception:
             pass
 
     def plan_execute_complete(self, **details):
         try:
-            self.emit(EventType.PLAN_EXECUTE_COMPLETE, "Plan execution completed", "SUCCESS", **details)
+            self.emit(EventType.PLAN_EXECUTE_COMPLETE, "Plan execution completed", LogLevel.SUCCESS, **details)
         except Exception:
             pass
 
@@ -649,61 +689,61 @@ class EventLogger:
             msg = "Plan execution failed"
             if error:
                 msg += f" - {error}"
-            self.emit(EventType.PLAN_EXECUTE_FAIL, msg, "ERROR", error=error, **details)
+            self.emit(EventType.PLAN_EXECUTE_FAIL, msg, LogLevel.ERROR, error=error, **details)
         except Exception:
             pass
 
     def schema_infer_start(self, goal: str, **details):
         try:
-            self.emit(EventType.SCHEMA_INFER_START, "Schema inference started", "DEBUG", goal=goal, **details)
+            self.emit(EventType.SCHEMA_INFER_START, "Schema inference started", LogLevel.DEBUG, goal=goal, **details)
         except Exception:
             pass
 
     def schema_infer_success(self, fields: list[str], **details):
         try:
-            self.emit(EventType.SCHEMA_INFER_SUCCESS, f"Schema inferred: {fields}", "SUCCESS", fields=fields, **details)
+            self.emit(EventType.SCHEMA_INFER_SUCCESS, f"Schema inferred: {fields}", LogLevel.SUCCESS, fields=fields, **details)
         except Exception:
             pass
 
     def schema_infer_fail(self, error: str, **details):
         try:
-            self.emit(EventType.SCHEMA_INFER_FAIL, f"Schema inference failed: {error}", "ERROR", error=error, **details)
+            self.emit(EventType.SCHEMA_INFER_FAIL, f"Schema inference failed: {error}", LogLevel.ERROR, error=error, **details)
         except Exception:
             pass
 
     def schema_validate_fail(self, error: str, **details):
         try:
-            self.emit(EventType.SCHEMA_VALIDATE_FAIL, f"Schema validation failed: {error}", "WARNING", error=error, **details)
+            self.emit(EventType.SCHEMA_VALIDATE_FAIL, f"Schema validation failed: {error}", LogLevel.WARNING, error=error, **details)
         except Exception:
             pass
 
     def extraction_retry(self, prompt: str, attempt: int, **details):
         try:
-            self.emit(EventType.EXTRACTION_RETRY, f"Extraction retry {attempt}: {prompt}", "WARNING", prompt=prompt, attempt=attempt, **details)
+            self.emit(EventType.EXTRACTION_RETRY, f"Extraction retry {attempt}: {prompt}", LogLevel.WARNING, prompt=prompt, attempt=attempt, **details)
         except Exception:
             pass
 
     def extraction_empty(self, prompt: str, **details):
         try:
-            self.emit(EventType.EXTRACTION_EMPTY, f"Extraction empty: {prompt}", "WARNING", prompt=prompt, **details)
+            self.emit(EventType.EXTRACTION_EMPTY, f"Extraction empty: {prompt}", LogLevel.WARNING, prompt=prompt, **details)
         except Exception:
             pass
 
     def sequence_decision(self, decision: str, **details):
         try:
-            self.emit(EventType.SEQUENCE_DECISION, f"Sequence decision: {decision}", "INFO", decision=decision, **details)
+            self.emit(EventType.SEQUENCE_DECISION, f"Sequence decision: {decision}", LogLevel.INFO, decision=decision, **details)
         except Exception:
             pass
 
     def sequence_retry(self, iteration: int, **details):
         try:
-            self.emit(EventType.SEQUENCE_RETRY, f"Sequence retry iteration {iteration}", "WARNING", iteration=iteration, **details)
+            self.emit(EventType.SEQUENCE_RETRY, f"Sequence retry iteration {iteration}", LogLevel.WARNING, iteration=iteration, **details)
         except Exception:
             pass
 
     def sequence_end(self, reason: str, **details):
         try:
-            self.emit(EventType.SEQUENCE_END, f"Sequence end: {reason}", "INFO", reason=reason, **details)
+            self.emit(EventType.SEQUENCE_END, f"Sequence end: {reason}", LogLevel.INFO, reason=reason, **details)
         except Exception:
             pass
 
@@ -712,19 +752,19 @@ class EventLogger:
             msg = "Agent paused"
             if message:
                 msg += f": {message}"
-            self.emit(EventType.AGENT_PAUSE, msg, "INFO", message=message, **details)
+            self.emit(EventType.AGENT_PAUSE, msg, LogLevel.INFO, message=message, **details)
         except Exception:
             pass
 
     def agent_resume(self, **details):
         try:
-            self.emit(EventType.AGENT_RESUME, "Agent resumed", "INFO", **details)
+            self.emit(EventType.AGENT_RESUME, "Agent resumed", LogLevel.INFO, **details)
         except Exception:
             pass
 
     def retry_backoff(self, delay_seconds: float, attempt: int, **details):
         try:
-            self.emit(EventType.RETRY_BACKOFF, f"Retry backoff {attempt}: {delay_seconds:.2f}s", "WARNING", delay_seconds=delay_seconds, attempt=attempt, **details)
+            self.emit(EventType.RETRY_BACKOFF, f"Retry backoff {attempt}: {delay_seconds:.2f}s", LogLevel.WARNING, delay_seconds=delay_seconds, attempt=attempt, **details)
         except Exception:
             pass
 
@@ -733,25 +773,25 @@ class EventLogger:
             msg = "Retry give up"
             if reason:
                 msg += f": {reason}"
-            self.emit(EventType.RETRY_GIVEUP, msg, "ERROR", reason=reason, **details)
+            self.emit(EventType.RETRY_GIVEUP, msg, LogLevel.ERROR, reason=reason, **details)
         except Exception:
             pass
 
     def model_fallback(self, primary: str, fallback: str, **details):
         try:
-            self.emit(EventType.MODEL_FALLBACK, f"Model fallback: {primary} -> {fallback}", "WARNING", primary=primary, fallback=fallback, **details)
+            self.emit(EventType.MODEL_FALLBACK, f"Model fallback: {primary} -> {fallback}", LogLevel.WARNING, primary=primary, fallback=fallback, **details)
         except Exception:
             pass
 
     def context_guard_start(self, guard_text: str, overlay_index: int = None, **details):
         try:
-            self.emit(EventType.CONTEXT_GUARD_START, "Context guard start", "DEBUG", guard_text=guard_text, overlay_index=overlay_index, **details)
+            self.emit(EventType.CONTEXT_GUARD_START, "Context guard start", LogLevel.DEBUG, guard_text=guard_text, overlay_index=overlay_index, **details)
         except Exception:
             pass
 
     def context_guard_decision(self, passed: bool, reason: str = None, cached: bool = False, **details):
         try:
-            level = "SUCCESS" if passed else "WARNING"
+            level = LogLevel.SUCCESS if passed else LogLevel.WARNING
             msg = "Context guard passed" if passed else "Context guard failed"
             self.emit(EventType.CONTEXT_GUARD_DECISION, msg, level, passed=passed, reason=reason, cached=cached, **details)
         except Exception:
@@ -759,53 +799,55 @@ class EventLogger:
 
     def context_guard_cache(self, guard_text: str, overlay_index: int = None, **details):
         try:
-            self.emit(EventType.CONTEXT_GUARD_CACHE, "Context guard cache hit", "DEBUG", guard_text=guard_text, overlay_index=overlay_index, **details)
+            self.emit(EventType.CONTEXT_GUARD_CACHE, "Context guard cache hit", LogLevel.DEBUG, guard_text=guard_text, overlay_index=overlay_index, **details)
         except Exception:
             pass
 
     def queue_enqueue(self, action_id: str = None, **details):
         try:
-            self.emit(EventType.QUEUE_ENQUEUE, "Queue enqueue", "DEBUG", action_id=action_id, **details)
+            self.emit(EventType.QUEUE_ENQUEUE, "Queue enqueue", LogLevel.DEBUG, action_id=action_id, **details)
         except Exception:
             pass
 
     def queue_dequeue(self, action_id: str = None, **details):
         try:
-            self.emit(EventType.QUEUE_DEQUEUE, "Queue dequeue", "DEBUG", action_id=action_id, **details)
+            self.emit(EventType.QUEUE_DEQUEUE, "Queue dequeue", LogLevel.DEBUG, action_id=action_id, **details)
         except Exception:
             pass
 
     def queue_clear(self, **details):
         try:
-            self.emit(EventType.QUEUE_CLEAR, "Queue cleared", "INFO", **details)
+            self.emit(EventType.QUEUE_CLEAR, "Queue cleared", LogLevel.INFO, **details)
         except Exception:
             pass
 
     def queue_reject(self, reason: str, action_id: str = None, **details):
         try:
             msg = f"Queue reject: {reason}"
-            self.emit(EventType.QUEUE_REJECT, msg, "WARNING", reason=reason, action_id=action_id, **details)
+            self.emit(EventType.QUEUE_REJECT, msg, LogLevel.WARNING, reason=reason, action_id=action_id, **details)
         except Exception:
             pass
     
     def action_coordinates(self, message: str, **details):
         try:
-            self.emit(EventType.ACTION_COORDINATES, message, "DEBUG", **details)
+            self.emit(EventType.ACTION_COORDINATES, message, LogLevel.DEBUG, **details)
         except Exception:
             pass
     
     def action_refinement(self, message: str, **details):
         try:
-            self.emit(EventType.ACTION_REFINEMENT, message, "DEBUG", **details)
+            self.emit(EventType.ACTION_REFINEMENT, message, LogLevel.DEBUG, **details)
         except Exception:
             pass
     
     def llm_cost(self, cost_usd: float, input_tokens: int, output_tokens: int, total_tokens: int, model: str = None, **details):
         try:
+            if not self.show_llm_costs:
+                return
             msg = f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {total_tokens}"
             if model:
                 msg += f" (Model: {model})"
-            self.emit(EventType.LLM_COST, msg, "DEBUG", cost_usd=cost_usd, input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens, model=model, **details)
+            self.emit(EventType.LLM_COST, msg, LogLevel.DEBUG, cost_usd=cost_usd, input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens, model=model, **details)
         except Exception:
             pass
     
@@ -814,32 +856,41 @@ class EventLogger:
             msg = f"Executing command for instruction='{instruction}'"
             if target_hint:
                 msg += f" target_hint='{target_hint}'"
-            self.emit(EventType.COMMAND_EXECUTION_START, msg, "DEBUG", instruction=instruction, target_hint=target_hint, **details)
+            self.emit(EventType.COMMAND_EXECUTION_START, msg, LogLevel.DEBUG, instruction=instruction, target_hint=target_hint, **details)
         except Exception:
             pass
     
     def command_execution_complete(self, command: str, success: bool = True, **details):
         try:
             msg = f"Command execution completed: {command}"
-            level = "SUCCESS" if success else "ERROR"
+            level = LogLevel.SUCCESS if success else LogLevel.ERROR
             self.emit(EventType.COMMAND_EXECUTION_COMPLETE, msg, level, command=command, success=success, **details)
+        except Exception:
+            pass
+    
+    def command_execution_failure(self, command: str, error: str = None, **details):
+        try:
+            msg = f"Command execution failed: {command}"
+            if error:
+                msg += f" - {error}"
+            self.emit(EventType.COMMAND_EXECUTION_FAILURE, msg, LogLevel.ERROR, command=command, error=error, **details)
         except Exception:
             pass
     
     def overlay_selection(self, message: str, **details):
         try:
-            self.emit(EventType.OVERLAY_SELECTION, message, "DEBUG", **details)
+            self.emit(EventType.OVERLAY_SELECTION, message, LogLevel.DEBUG, **details)
         except Exception:
             pass
     
-    def plan_overlay_candidates(self, candidates: List[str], **details):
+    def plan_overlay_candidates(self, candidates: list[str], **details):
         try:
             if not self.show_overlay_candidates:
                 return
             msg = "Candidate overlays for LLM selection:"
             for candidate in candidates:
                 msg += f"\n  • {candidate}"
-            self.emit(EventType.PLAN_OVERLAY_CANDIDATES, msg, "DEBUG", candidates=candidates, **details)
+            self.emit(EventType.PLAN_OVERLAY_CANDIDATES, msg, LogLevel.DEBUG, candidates=candidates, **details)
         except Exception:
             pass
     
@@ -848,13 +899,13 @@ class EventLogger:
             msg = f"overlay #{overlay_index} chosen"
             if raw_response:
                 msg += f" (raw='{raw_response}')"
-            self.emit(EventType.PLAN_OVERLAY_CHOSEN, msg, "DEBUG", overlay_index=overlay_index, raw_response=raw_response, **details)
+            self.emit(EventType.PLAN_OVERLAY_CHOSEN, msg, LogLevel.DEBUG, overlay_index=overlay_index, raw_response=raw_response, **details)
         except Exception:
             pass
     
     def command_history(self, command: str, **details):
         try:
-            self.emit(EventType.COMMAND_HISTORY, f"Added to command history: '{command}'", "DEBUG", command=command, **details)
+            self.emit(EventType.COMMAND_HISTORY, f"Added to command history: '{command}'", LogLevel.DEBUG, command=command, **details)
         except Exception:
             pass
     
@@ -863,17 +914,21 @@ class EventLogger:
             message = f"Recorded {interaction_type} interaction"
             if details.get('reasoning'):
                 message += f"\n   Why: {details['reasoning']}"
-            self.emit(EventType.INTERACTION_RECORDED, message, "DEBUG", interaction_type=interaction_type, **details)
+            self.emit(EventType.INTERACTION_RECORDED, message, LogLevel.DEBUG, interaction_type=interaction_type, **details)
         except Exception:
             pass
     
     def action_state_change(self, message: str, url_before: str = None, url_after: str = None, dom_changed: bool = None, **details):
         try:
-            self.emit(EventType.ACTION_STATE_CHANGE, message, "INFO", url_before=url_before, url_after=url_after, dom_changed=dom_changed, **details)
+            self.emit(EventType.ACTION_STATE_CHANGE, message, LogLevel.INFO, url_before=url_before, url_after=url_after, dom_changed=dom_changed, **details)
         except Exception:
             pass
     
-
+    def action_state_change_failure(self, message: str, **details):
+        try:
+            self.emit(EventType.ACTION_STATE_CHANGE_FAILURE, message, LogLevel.WARNING, **details)
+        except Exception:
+            pass
 
 # Global instance
 _global_event_logger: Optional[EventLogger] = None
@@ -882,7 +937,7 @@ def get_event_logger() -> EventLogger:
     """Get the global event logger instance"""
     global _global_event_logger
     if _global_event_logger is None:
-        _global_event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False)  # Default to debug for backward compatibility
+        _global_event_logger = EventLogger(debug_mode=True, show_overlay_candidates=False, show_llm_costs=True)  # Default to debug for backward compatibility
     return _global_event_logger
 
 def set_event_logger(logger: EventLogger) -> None:

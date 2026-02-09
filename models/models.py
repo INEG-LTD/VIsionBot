@@ -8,11 +8,13 @@ This module contains all core data models organized by category:
 """
 from __future__ import annotations
 
-import time
+from ast import Str
+from dataclasses import dataclass
+import re
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ============================================================================
@@ -26,7 +28,8 @@ class ActionType(str, Enum):
     SCROLL = "scroll"
     WAIT = "wait"
     PRESS = "press"
-    STOP = "stop"
+    COMPLETE = "complete"
+    ASK = "ask"
     HANDLE_SELECT = "handle_select"
     HANDLE_UPLOAD = "handle_upload"
     HANDLE_DATETIME = "handle_datetime"
@@ -47,7 +50,7 @@ class PageSection(str, Enum):
 class NotebookEntryType(str, Enum):
     """Types of entries stored in the agent notebook"""
     NORMAL_TASK_RESULT = "normal_task_result"
-    SEQUENTIAL_TASK_RESULT = "sequential_task_result"
+    SEQUENTIAL_SUBTASK_RESULT = "sequential_subtask_result"
     EXTRACTION = "extraction"
     URL_EXTRACTION = "url_extraction"
 
@@ -55,7 +58,7 @@ class NotebookEntryType(str, Enum):
 class DetectedElement(BaseModel):
     """A UI element detected in the screenshot"""
     element_label: Optional[str] = Field(default=None, description="The label of the element")
-    description: str = Field(description="What this element is (e.g., 'Submit button', 'Email input')")
+    # description: str = Field(description="What this element is (e.g., 'Submit button', 'Email input')")
     element_type: str = Field(description="Type: button, input, link, text, select, upload, date, etc.")
     is_clickable: bool = Field(description="Can this element be clicked?")
     box_2d: List[int] = Field(description="Gemini format: [y_min, x_min, y_max, x_max] normalized 0-1000")
@@ -64,6 +67,8 @@ class DetectedElement(BaseModel):
     confidence: Optional[float] = Field(default=0.5, description="Detection confidence 0.0-1.0")
     requires_special_handling: Optional[bool] = Field(default=False, description="Whether this field requires special multi-step handling")
     overlay_number: Optional[int] = Field(default=None, description="The overlay number from numbered detection system")
+    is_focused: Optional[bool] = Field(default=False, description="Is this element currently focused?")
+    
 
 
 class PageElements(BaseModel):
@@ -72,19 +77,141 @@ class PageElements(BaseModel):
 
 
 class ActionStep(BaseModel):
-    """A single action to perform"""
-    action: ActionType
-    overlay_index: Optional[int] = Field(default=None, description="Overlay index of target element from detections")
-    x: Optional[int] = Field(default=None, description="X coordinate in pixels")
-    y: Optional[int] = Field(default=None, description="Y coordinate in pixels")
-    text_to_type: Optional[str] = Field(default=None, description="Text to type (for TYPE action)")
-    wait_time_ms: Optional[int] = Field(default=500, description="Time to wait in milliseconds (for WAIT action)")
-    scroll_direction: Optional[str] = Field(default="down", description="Scroll direction: up/down")
-    keys_to_press: Optional[str] = Field(default=None, description="Keys to press (for PRESS action, e.g., 'enter', 'ctrl+c', 'tab')")
-    select_option_text: Optional[str] = Field(default=None, description="Text of option to select (for HANDLE_SELECT)")
-    datetime_value: Optional[str] = Field(default=None, description="Date/time value to set (for HANDLE_DATETIME)")
-    upload_file_path: Optional[str] = Field(default=None, description="File path to upload (for HANDLE_UPLOAD)")
-    url: Optional[str] = Field(default=None, description="URL to open (for OPEN action)")
+    """One viewport-safe action"""
+    # Allow extra attributes (like overlay_metadata) without including them in the schema
+    action: str
+    reasoning: str | None = None
+    keys_to_press: List[str] | None = None
+
+    # Function calling metadata (optional, for tracking structured actions)
+    # These are excluded from JSON schema to avoid OpenAI strict mode conflicts
+    # function_name: str | None = Field(default=None, exclude=True)
+    # function_arguments: Dict[str, Any] | None = Field(default=None, exclude=True)
+
+    def __init__(self, **data):
+        super().__init__(**data)
+
+    @classmethod
+    def from_function_call(
+        cls,
+        function_name: str,
+        arguments: dict,
+    ) -> "ActionStep":
+        """
+        Create ActionStep from function call.
+
+        Converts function call to keyword action string format for backward
+        compatibility with existing executor infrastructure.
+
+        Args:
+            function_name: Name of the function called
+            arguments: Dictionary of function arguments
+            reasoning: Optional reasoning for the action
+
+        Returns:
+            ActionStep instance with both keyword and function call data
+        """
+        from agent.action_tools import function_call_to_keyword_action
+
+        # Convert to keyword format for backward compatibility
+        action_string = function_call_to_keyword_action(function_name, arguments)
+
+        return cls(
+            action=action_string,
+            function_name=function_name,
+            function_arguments=arguments
+        )
+
+    def _parse_action(text: str) -> tuple[str, str]:
+        """Parse action text into (command, body). Raises ValueError if invalid."""
+        text = text.strip()
+        if not text:
+            raise ValueError("action cannot be empty")
+
+        # Strip @ URL suffix if present (e.g., "click button @ https://...")
+        if " @ " in text:
+            text = text.split(" @ ")[0].strip()
+
+        if ":" in text:
+            cmd, body = text.split(":", 1)
+            return cmd.strip().lower(), body.strip()
+
+        # Try to parse "command args" format
+        match = re.match(r"^(\w+)\s+(.+)$", text)
+        if match:
+            cmd, body = match.groups()
+
+            # Clean up body - handle various formats
+            # "- on X" -> "X"
+            body = re.sub(r"^-\s+on\s+", "", body, flags=re.IGNORECASE)
+            # "on X" -> "X"
+            if cmd.lower() == "click" and body.lower().startswith("on "):
+                body = body[3:]
+
+            return cmd.lower(), body.strip()
+
+        # Single word command (defer, stop, forward, back)
+        if text.isalpha():
+            return text.lower(), ""
+
+        raise ValueError("action must be 'command: target' or 'command target'")
+
+    def _normalize_body(cmd: str, body: str) -> str:
+        """Normalize the body based on command type."""
+        if cmd == "click":
+            if not body:
+                raise ValueError("click requires a target")
+            body = body[3:].strip() if body.lower().startswith("on ") else body
+            # Add element type hint if missing
+            if not re.search(r"\b(button|link|tab|checkbox|radio|option|div|input|icon|item)\b", body, re.I):
+                if not body.lower().endswith("link"):
+                    body = f"{body} link"
+            return body.strip()
+
+        if cmd == "type":
+            if not body:
+                raise ValueError("type requires text and target")
+            # Accept "text : field" or "text in/into field" format
+            if " : " in body:
+                parts = body.split(" : ", 1)
+                if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                    return re.sub(r"\s+", " ", body).strip()
+            if re.search(r"\b(in|into)\b", body, re.I):
+                return re.sub(r"\s+", " ", body).strip()
+            raise ValueError("type must use 'text : field' or 'text in field'")
+
+        if cmd == "press":
+            key = body.strip()
+            if not key or " " in key:
+                raise ValueError("press requires a single key")
+            return key
+
+        if cmd == "scroll":
+            # Strip quotes and whitespace from direction
+            direction = body.strip().strip("'\"").lower()
+            if direction not in {"up", "down", "left", "right"}:
+                raise ValueError("scroll must be up, down, left, or right")
+            return direction
+
+        if cmd in {"back", "forward"}:
+            return body if body and body.isdigit() else "1"
+
+        if cmd in {"extract", "interceptor", "form", "select", "upload", "datetime", "open",
+                "handle_datetime"}:
+            if not body:
+                raise ValueError(f"{cmd} requires additional detail")
+            return body
+
+        # Commands with optional body: defer, stop, complete, ask
+        return body
+
+
+class ActionPlan(BaseModel):
+    """A sequential plan of actions that can be executed before the viewport changes."""
+    steps: List[ActionStep]
+    reasoning: str
+    confidence: float
+    expected_outcome: str
 
 
 class VisionPlan(BaseModel):
@@ -97,7 +224,7 @@ class VisionPlan(BaseModel):
 
 class Goal(BaseModel):
     """Goal definition"""
-    description: str = Field(description="What we want to achieve")
+    # description: str = Field(description="What we want to achieve")
     target_url_contains: List[str] = Field(default_factory=list, description="URL should contain these strings")
     target_page_text: List[str] = Field(default_factory=list, description="Page should contain this text")
     form_should_be_filled: bool = Field(default=False, description="All required form fields should be filled")
@@ -119,6 +246,15 @@ class PageInfo(BaseModel):
     doc_height: int = Field(description="Document height in pixels")
 
 
+class FailedAction(BaseModel):
+    """Represents a failed action attempt with context about where and what was attempted"""
+    action: str = Field(description="The action command that was attempted (e.g., 'click: Submit button')")
+    overlay_index: Optional[int] = Field(default=None, description="The overlay index that was used for this action")
+    url: str = Field(description="The page URL where the action was attempted")
+    page_title: Optional[str] = Field(default=None, description="The page title where the action was attempted")
+    timestamp: Optional[float] = Field(default=None, description="When the action failed (Unix timestamp)")
+
+
 # ============================================================================
 # TASK MODELS - Mission, Task, and Sequence execution
 # ============================================================================
@@ -136,109 +272,54 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-
-class BaseTask(BaseModel):
-    """Base class for all task types"""
-    task_id: str = Field(default="", description="Unique identifier for this task (auto-generated if empty)")
-    type: TaskType = Field(description="Type of task (normal or sequential)")
-    description: str = Field(description="Natural language description of what needs to be done")
-    status: TaskStatus = Field(default=TaskStatus.PENDING)
-    created_at: float = Field(default_factory=time.time, description="Timestamp when task was created")
-    completed_at: Optional[float] = Field(default=None, description="Timestamp when task was completed")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata for this task")
-
-
-class Task(BaseTask):
+@dataclass
+class Task:
     """A single executable instruction (formerly NormalTask)"""
-    type: Literal[TaskType.NORMAL] = TaskType.NORMAL
-    instruction: str = Field(description="The specific instruction to execute (e.g., 'click the login button')")
+    # Must be Literal for Pydantic discriminated union (MissionPlan / MissionPlannerOutput)
+    goal: str
+    task_id: str
+    status: TaskStatus
+    created_at: float
+    completed_at: Optional[float]
 
-    depends_on: Optional[str] = Field(
-        default=None,
-        description="Task ID whose results this task may reference"
-    )
-
-    result: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Result of executing this task"
-    )
-    error: Optional[str] = Field(
-        default=None,
-        description="Error message if task failed"
-    )
-
-
-class TurnResult(BaseModel):
+class SequenceSubTaskResult(BaseModel):
     """Result of a single turn within a sequence (formerly IterationResult)"""
-    turn: int = Field(description="Turn number (0-indexed)")
+    turn: int = Field(description="Turn number (1-indexed)")
     status: Literal["success", "failed"] = Field(description="Whether this turn succeeded")
-    attempts: int = Field(description="Number of task generation attempts for this turn")
-    result: Optional[Any] = Field(default=None, description="Data collected in this turn")
+    result: Optional[Dict[str, Any]] = Field(default=None, description="Data collected in this turn")
     error: Optional[str] = Field(default=None, description="Error message if failed")
-    tasks_attempted: List[str] = Field(
-        default_factory=list,
-        description="List of task instructions attempted for this turn"
-    )
-
+    task_attempted: str = Field(description="Task instruction attempted for this turn")
 
 class SequenceState(BaseModel):
     """Tracks progress through a sequence (formerly SequentialState)"""
-    current_turn: int = Field(default=0, description="Current turn index")
-    turn_attempts: int = Field(default=0, description="Attempts for current turn")
-    completed_turns: List[TurnResult] = Field(
-        default_factory=list,
-        description="History of completed turns"
-    )
-    total_success_count: int = Field(default=0, description="Number of successful turns")
-    total_failure_count: int = Field(default=0, description="Number of failed turns")
+    current_turn: int = 1
+    completed_turns: List[SequenceSubTaskResult] = Field(default_factory=list)
+    total_success_count: int = 0
+    total_failure_count: int = 0
 
 
-class Sequence(BaseTask):
+class SequenceBlueprint(BaseModel):
+    """A blueprint for a sequence task"""
+    target_count: int = Field(description="Target count, or -1 for indefinite sequences")
+    task: str
+
+class Sequence(BaseModel):
     """A high-level goal requiring multiple turns (formerly SequentialTask)"""
-    type: Literal[TaskType.SEQUENTIAL] = TaskType.SEQUENTIAL
+    target_count: int = Field(description="Target count, or -1 for indefinite sequences")
+    extraction_schema: Dict[str, Any]
+    task: str
+    task_id: str
+    created_at: float
+    completed_at: float | None = None
+    state: SequenceState | None = None
+    current_subtask: str = None
+    status: TaskStatus = TaskStatus.PENDING 
 
-    model_config = ConfigDict(populate_by_name=True)
-
-    goal: str = Field(
-        description="The overall objective (e.g., 'Extract company names from job listings')",
-        validation_alias=AliasChoices("task", "goal"),
-    )
-    completion_condition: str = Field(
-        description="Natural language description of when this sequence is complete"
-    )
-
-    target_count: Optional[int] = Field(
-        default=None,
-        description="Target number of turns (if known upfront). None for indefinite sequences."
-    )
-
-    state: SequenceState = Field(default_factory=SequenceState)
-
-    results: List[Any] = Field(
-        default_factory=list,
-        description="Accumulated results from all turns"
-    )
-
-    current_subtask: Optional[str] = Field(
-        default=None,
-        description="The current task being executed within this sequence"
-    )
-
-    extraction_schema: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="JSON schema for extraction results, inferred from goal if this is an extraction task"
-    )
-
-
-class MissionPlan(BaseModel):
+@dataclass
+class MissionPlan:
     """Complete plan of tasks for executing a mission (formerly TaskList)"""
-    tasks: List[Annotated[Union[Task, Sequence], Field(discriminator="type")]] = Field(
-        description="Ordered list of tasks to execute"
-    )
-    current_task_index: int = Field(
-        default=0,
-        description="Index of currently executing task"
-    )
+    tasks: List[Union[Task, Sequence]]
+    current_task_index: int = 0
 
     def get_current_task(self) -> Optional[Union[Task, Sequence]]:
         """Get the current task being executed"""
@@ -254,11 +335,6 @@ class MissionPlan(BaseModel):
         """Get all pending tasks"""
         return [t for t in self.tasks if t.status == TaskStatus.PENDING]
 
-    def advance_to_next_task(self) -> bool:
-        """Move to next task, return True if more tasks remain"""
-        self.current_task_index += 1
-        return self.current_task_index < len(self.tasks)
-
     def all_tasks_completed(self) -> bool:
         """Check if all tasks have been completed"""
         return all(t.status == TaskStatus.COMPLETED for t in self.tasks)
@@ -271,38 +347,26 @@ class MissionPlan(BaseModel):
         return None
 
 
+class SequenceDecisionType(str, Enum):
+    """Types of decisions the Sequence Planner can make."""
+    GENERATE_TASK = "generate_task"
+    END_SEQUENCE = "end_sequence"
+
+
 class SequenceDecision(BaseModel):
     """Output of Sequence Planner decision."""
-    decision: Literal["generate_task", "end_sequence"] = Field(
-        description="What the Sequence Planner decided to do"
-    )
-    reasoning: str = Field(description="Why this decision was made")
+    decision: SequenceDecisionType
+    reasoning: str
+    next_task: Optional[str]
+    completion_reason: Optional[str]
 
-    next_task: Optional[str] = Field(
-        default=None,
-        description="The specific, grounded task to execute next (if decision == 'generate_task')"
-    )
-
-    completion_reason: Optional[str] = Field(
-        default=None,
-        description="Why the sequence is being ended (if decision == 'end_sequence')"
-    )
-
+class TaskDefinition(BaseModel):
+    task: str
+    type: TaskType
 
 class MissionPlannerOutput(BaseModel):
     """Output from Mission Planner decomposition (formerly TaskOrchestratorOutput)"""
-    tasks: List[Annotated[Union[Task, Sequence], Field(discriminator="type")]] = Field(
-        description="Ordered list of tasks decomposed from user request"
-    )
-    reasoning: str = Field(
-        description="Explanation of how the request was decomposed"
-    )
-    confidence: float = Field(
-        default=0.8,
-        ge=0.0,
-        le=1.0,
-        description="Confidence in this decomposition (0.0-1.0)"
-    )
+    tasks: list[TaskDefinition]
 
 
 # ============================================================================

@@ -1,10 +1,13 @@
-"""Shared utilities for invoking chat/vision models through LiteLLM.
+"""Shared utilities for invoking OpenAI chat/vision models.
 
-The helpers in this module provide a consistent way to:
-    * keep default model / reasoning settings in sync
-    * map model identifiers to providers and API keys
-    * call LiteLLM with optional vision inputs and schema parsing
-    * obtain usage and cost information in a common format
+This module provides a consistent way to interact with OpenAI models using the Responses API.
+
+Features:
+- Native structured output support (Pydantic models)
+- Streaming support for both text and structured output
+- Vision support (single and multiple images)
+- Cost tracking and token usage
+- Fallback manual parsing for edge cases
 """
 
 from __future__ import annotations
@@ -12,27 +15,23 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Sequence, Tuple, Type, Union, List
-from collections.abc import Sequence as SequenceABC
-import re
-from utils.debug_print import dprint, PrintMode
-from litellm import completion, completion_cost
-try:
-    from litellm.exceptions import UnsupportedParamsError
-except ImportError:
-    # Fallback if the exception isn't available
-    UnsupportedParamsError = None
-
-import litellm
-litellm.suppress_debug_info = True
+from typing import Any, Iterator, List, Optional, Sequence, Tuple, Type, Union
 
 from pydantic import BaseModel, ValidationError
 
+from utils.debug_print import dprint, get_print_mode, PrintMode
+
+# ============================================================================
+# ENUMS & DATA CLASSES
+# ============================================================================
+
 
 class ReasoningLevel(str, Enum):
-    """Supported reasoning effort knobs for providers that expose them."""
+    """Supported reasoning effort levels for providers that expose them."""
 
     NONE = "none"
     LOW = "low"
@@ -41,20 +40,6 @@ class ReasoningLevel(str, Enum):
 
     @classmethod
     def coerce(cls, value: Union["ReasoningLevel", str]) -> "ReasoningLevel":
-        """
-        Return a `ReasoningLevel` instance for the provided value.
-
-        Examples
-        --------
-        >>> ReasoningLevel.coerce("LOW")
-        <ReasoningLevel.LOW: 'low'>
-        >>> ReasoningLevel.coerce(ReasoningLevel.HIGH)
-        <ReasoningLevel.HIGH: 'high'>
-        >>> ReasoningLevel.coerce("Expert")
-        Traceback (most recent call last):
-            ...
-        ValueError: Invalid reasoning level 'expert'. Allowed values: none, low, medium, high.
-        """
         if isinstance(value, cls):
             return value
         try:
@@ -66,82 +51,57 @@ class ReasoningLevel(str, Enum):
             ) from exc
 
 
+@dataclass
+class ProviderResponse:
+    """Standardized response from any provider."""
+
+    text: str
+    parsed: Optional[BaseModel]  # Pre-parsed object from provider (if structured)
+    usage: dict[str, int]  # input_tokens, output_tokens, total_tokens
+    cost_usd: float
+    raw_response: Any
+
+
+@dataclass
+class StreamChunk:
+    """A single chunk in a streaming response."""
+
+    delta: str  # Incremental text
+    is_final: bool  # Whether this is the last chunk
+    parsed: Optional[BaseModel] = None  # Parsed object in final chunk (structured)
+    usage: Optional[dict] = None  # Only present in final chunk
+
+
+class UnsupportedModelError(Exception):
+    """Raised when a model provider is not implemented."""
+
+    pass
+
+
+class ProviderAPIError(Exception):
+    """Raised when provider API returns an error."""
+
+    pass
+
+
+# ============================================================================
+# GLOBAL CONFIGURATION
+# ============================================================================
+
 # Global defaults – kept in module state so callers can change them centrally.
 _DEFAULT_MODEL = "gpt-5-mini"
 _DEFAULT_REASONING_LEVEL: str = ReasoningLevel.MEDIUM.value
 _DEFAULT_AGENT_MODEL = "gpt-5-mini"
 _DEFAULT_AGENT_REASONING_LEVEL: str = ReasoningLevel.MEDIUM.value
-
+_DEFAULT_TEMPERATURE: Optional[float] = None  # None means use provider default
 
 # Optional per-model or per-provider API keys. Populate this if you do not want
 # to rely solely on environment variables.
 MODEL_API_KEYS: dict[str, str] = {}
 
-
-@dataclass(frozen=True)
-class ProviderConfig:
-    """Configuration describing provider-specific behaviour."""
-
-    env_vars: Sequence[str]
-    supports_reasoning_flag: bool = False
-    requires_string_content: bool = False
-    supports_image_understanding: bool = True
-
-
-_PROVIDERS: dict[str, ProviderConfig] = {
-    "openai": ProviderConfig(env_vars=("OPENAI_API_KEY",)),
-    "google": ProviderConfig(
-        env_vars=("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-        supports_reasoning_flag=True,
-    ),
-    "gemini": ProviderConfig(
-        env_vars=("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-        supports_reasoning_flag=True,
-    ),
-    "groq": ProviderConfig(
-        env_vars=("GROQ_API_KEY",),
-        # requires_string_content=True,
-    ),
-    "anthropic": ProviderConfig(
-        env_vars=("ANTHROPIC_API_KEY",),
-        supports_reasoning_flag=True,
-    ),
-    "deepseek": ProviderConfig(
-        env_vars=("DEEPSEEK_API_KEY",),
-        supports_reasoning_flag=True,
-    ),
-    "cerebras": ProviderConfig(
-        env_vars=("CEREBRAS_API_KEY",),
-        supports_reasoning_flag=False,
-        supports_image_understanding=False,
-    ),
-}
-
-__all__ = [
-    "ReasoningLevel",
-    "MODEL_API_KEYS",
-    "set_default_model",
-    "get_default_model",
-    "set_default_agent_model",
-    "get_default_agent_model",
-    "set_default_reasoning_level",
-    "get_default_reasoning_level",
-    "set_default_agent_reasoning_level",
-    "get_default_agent_reasoning_level",
-    "generate_text_with_cost",
-    "generate_text_gpt_with_cost",
-    "generate_text",
-    "answer_question_with_vision",
-    "generate_model_with_cost",
-    "generate_model_gpt_with_cost",
-    "generate_model_gpt",
-    "generate_model",
-]
-
-
-# ---------------------------------------------------------------------------
-# Public configuration helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# CONFIGURATION HELPERS
+# ============================================================================
 
 
 def set_default_model(model_name: str) -> None:
@@ -190,107 +150,368 @@ def get_default_agent_reasoning_level() -> str:
     return _DEFAULT_AGENT_REASONING_LEVEL
 
 
-# ---------------------------------------------------------------------------
-# Internal helper utilities
-# ---------------------------------------------------------------------------
+def set_default_temperature(temperature: Optional[float]) -> None:
+    """Set the default temperature used when callers omit the parameter."""
+    global _DEFAULT_TEMPERATURE
+    if temperature is not None and not (0.0 <= temperature <= 2.0):
+        raise ValueError("Temperature must be between 0.0 and 2.0")
+    _DEFAULT_TEMPERATURE = temperature
 
 
-def _infer_provider(model: str) -> str:
-    """Best-effort provider inference based on model id."""
-    if "/" in model:
-        candidate = model.split("/", 1)[0].lower()
-        if candidate in _PROVIDERS:
-            return candidate
-    lowered = model.lower()
-    if "gemini" in lowered or "google" in lowered:
-        return "google"
-    if "groq" in lowered:
-        return "groq"
-    if "deepseek" in lowered:
-        return "deepseek"
-    if "anthropic" in lowered or "claude" in lowered:
-        return "anthropic"
-    return "openai"
+def get_default_temperature() -> Optional[float]:
+    """Return the globally configured default temperature."""
+    return _DEFAULT_TEMPERATURE
 
 
-# Models that don't support reasoning_effort parameter
-_MODELS_WITHOUT_REASONING: set[str] = {
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash-lite-001",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-flash-8b-001",
-    # Add more models as needed
-}
+def _is_debug_mode() -> bool:
+    """Check if debug mode is enabled (uses global PrintMode from debug_print)."""
+    return get_print_mode() == PrintMode.DEBUG
 
 
-def _model_supports_reasoning(model: str, provider: str, config: ProviderConfig) -> bool:
+# ============================================================================
+# ABSTRACT BASE PROVIDER
+# ============================================================================
+
+
+class ModelProvider(ABC):
+    """Base class for all model providers."""
+
+    @abstractmethod
+    def complete(
+        self,
+        messages: list[dict],
+        model: str,
+        reasoning_effort: Optional[str] = None,
+        response_format: Optional[Type[BaseModel]] = None,
+        temperature: Optional[float] = None,
+        stream: bool = False,
+    ) -> Union[ProviderResponse, Iterator[StreamChunk]]:
+        """
+        Generate completion (text or structured).
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            model: Model identifier
+            reasoning_effort: Reasoning level string if supported
+            response_format: Pydantic BaseModel class for structured output
+            temperature: Sampling temperature (0.0 to 2.0), None for provider default
+            stream: Whether to stream the response
+
+        Returns:
+            ProviderResponse if stream=False
+            Iterator[StreamChunk] if stream=True
+        """
+        pass
+
+    @abstractmethod
+    def supports_vision(self) -> bool:
+        """Whether this provider supports image inputs."""
+        pass
+
+    @abstractmethod
+    def supports_reasoning(self, model: str) -> bool:
+        """Whether this model supports reasoning parameters."""
+        pass
+
+    @abstractmethod
+    def supports_streaming(self) -> bool:
+        """Whether this provider supports streaming."""
+        pass
+
+    @abstractmethod
+    def calculate_cost(self, usage: dict, model: str) -> float:
+        """Calculate cost in USD based on usage and model."""
+        pass
+
+
+# ============================================================================
+# OPENAI PROVIDER (Responses API)
+# ============================================================================
+
+
+class OpenAIProvider(ModelProvider):
+    """OpenAI implementation using Responses API with native structured outputs."""
+
+    def __init__(self):
+        try:
+            from openai import OpenAI
+            api_key = self._get_api_key()
+            self.client = OpenAI(api_key=api_key)
+        except ImportError:
+            raise ImportError(
+                "OpenAI Python SDK is required for OpenAI models. "
+                "Install with: pip install openai"
+            )
+
+    def complete(
+        self,
+        messages: list[dict],
+        model: str,
+        reasoning_effort: Optional[str] = None,
+        response_format: Optional[Type[BaseModel]] = None,
+        temperature: Optional[float] = None,
+        stream: bool = False,
+    ) -> Union[ProviderResponse, Iterator[StreamChunk]]:
+
+        # Convert messages to OpenAI Responses API format
+        input_messages = self._convert_to_openai_format(messages)
+
+        # Build optional parameters
+        kwargs = {}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        # STRUCTURED OUTPUT PATH - responses.parse()
+        if response_format:
+            try:
+                response = self.client.responses.parse(
+                    model=model,
+                    input=input_messages,
+                    text_format=response_format,
+                    stream=stream,
+                    **kwargs,
+                )
+
+                if stream:
+                    return self._handle_structured_stream(response, model)
+                else:
+                    # Debug logging
+                    # if _is_debug_mode():
+                    #     dprint(f"🔍 OpenAI Response (structured): {response}")
+
+                    parsed_obj = response.output_parsed
+
+                    # Check if parsed object is None or empty
+                    if parsed_obj is None:
+                        dprint("⚠️ OpenAI returned None for output_parsed")
+                        dprint(f"Full response: {response}")
+                        raise ProviderAPIError(
+                            f"OpenAI returned empty parsed output. "
+                            f"Response: {response}"
+                        )
+
+                    usage = self._extract_usage(response)
+                    cost = self.calculate_cost(usage, model)
+
+                    return ProviderResponse(
+                        text=parsed_obj.model_dump_json(),
+                        parsed=parsed_obj,
+                        usage=usage,
+                        cost_usd=cost,
+                        raw_response=response,
+                    )
+            except Exception as e:
+                dprint(f"❌ OpenAI structured output error: {e}")
+                dprint(f"Model: {model}")
+                dprint(f"Input messages count: {len(input_messages)}")
+                raise ProviderAPIError(f"OpenAI structured output failed: {e}")
+
+        # TEXT GENERATION PATH - responses.create()
+        else:
+            try:
+                response = self.client.responses.create(
+                    model=model,
+                    input=input_messages,
+                    stream=stream,
+                    **kwargs,
+                )
+
+                if stream:
+                    return self._handle_text_stream(response, model)
+                else:
+
+                    text = response.output_text
+
+                    # Check if text is None or empty
+                    if text is None or text == "":
+                        dprint("⚠️ OpenAI returned empty output_text")
+                        dprint(f"Full response: {response}")
+                        dprint(f"Response attributes: {dir(response)}")
+
+                        # Check for refusal or other status
+                        if hasattr(response, 'refusal') and response.refusal:
+                            raise ProviderAPIError(
+                                f"OpenAI refused the request: {response.refusal}"
+                            )
+
+                        if hasattr(response, 'status') and response.status:
+                            raise ProviderAPIError(
+                                f"OpenAI response status: {response.status}"
+                            )
+
+                        raise ProviderAPIError(
+                            f"OpenAI returned empty output. "
+                            f"Response: {response}"
+                        )
+
+                    usage = self._extract_usage(response)
+                    cost = self.calculate_cost(usage, model)
+
+                    return ProviderResponse(
+                        text=text,
+                        parsed=None,
+                        usage=usage,
+                        cost_usd=cost,
+                        raw_response=response,
+                    )
+            except Exception as e:
+                dprint(f"❌ OpenAI text generation error: {e}")
+                dprint(f"Model: {model}")
+                dprint(f"Input messages count: {len(input_messages)}")
+                raise ProviderAPIError(f"OpenAI text generation failed: {e}")
+
+    def _convert_to_openai_format(self, messages: list[dict]) -> list[dict]:
+        """Convert provider-agnostic messages to OpenAI Responses API format."""
+        openai_messages = []
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            # Handle multi-part content (text + images)
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if part.get("type") == "input_text":
+                        parts.append({
+                            "type": "input_text",
+                            "text": part["text"]
+                        })
+                    elif part.get("type") == "input_image":
+                        image_data = part.get("image_url", {})
+                        parts.append({
+                            "type": "input_image",
+                            "image_url": image_data.get("url"),
+                            "detail": image_data.get("detail", "high")
+                        })
+
+                openai_messages.append({
+                    "role": role,
+                    "content": parts
+                })
+
+            # Handle simple text content
+            else:
+                openai_messages.append({
+                    "role": role,
+                    "content": content
+                })
+
+        return openai_messages
+
+    def _handle_structured_stream(
+        self, stream_response, model: str
+    ) -> Iterator[StreamChunk]:
+        """Handle streaming structured output."""
+        for chunk in stream_response:
+            delta = getattr(chunk, "output_text_delta", "")
+            is_final = hasattr(chunk, "output_parsed") and chunk.output_parsed is not None
+
+            if is_final:
+                usage = self._extract_usage(chunk) if hasattr(chunk, "usage") else None
+                yield StreamChunk(
+                    delta=delta,
+                    is_final=True,
+                    parsed=chunk.output_parsed,
+                    usage=usage,
+                )
+            else:
+                yield StreamChunk(
+                    delta=delta,
+                    is_final=False,
+                    parsed=None,
+                    usage=None,
+                )
+
+    def _handle_text_stream(self, stream_response, model: str) -> Iterator[StreamChunk]:
+        """Handle streaming text generation."""
+        for chunk in stream_response:
+            delta = getattr(chunk, "output_text_delta", "")
+            is_final = hasattr(chunk, "finish_reason") and chunk.finish_reason is not None
+
+            usage = None
+            if is_final and hasattr(chunk, "usage"):
+                usage = self._extract_usage(chunk)
+
+            yield StreamChunk(
+                delta=delta,
+                is_final=is_final,
+                parsed=None,
+                usage=usage,
+            )
+
+    def _extract_usage(self, response) -> dict:
+        """Extract token usage from OpenAI response."""
+        if hasattr(response, "usage"):
+            usage = response.usage
+            return {
+                "input_tokens": getattr(usage, "input_tokens", 0),
+                "output_tokens": getattr(usage, "output_tokens", 0),
+                "total_tokens": getattr(usage, "total_tokens", 0),
+            }
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    def _get_api_key(self) -> str:
+        """Get OpenAI API key from environment or MODEL_API_KEYS."""
+        return MODEL_API_KEYS.get("openai") or os.getenv("OPENAI_API_KEY") or ""
+
+    def supports_vision(self) -> bool:
+        return True
+
+    def supports_reasoning(self, model: str) -> bool:
+        model_lower = model.lower()
+        return "gpt-4o" in model_lower or "o1" in model_lower or "gpt-5" in model_lower
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def calculate_cost(self, usage: dict, model: str) -> float:
+        """Calculate cost based on OpenAI pricing."""
+        pricing = {
+            "gpt-4o": {"input": 2.50 / 1_000_000, "output": 10.00 / 1_000_000},
+            "gpt-4o-mini": {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
+            "gpt-5-mini": {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
+            "gpt-5": {"input": 2.50 / 1_000_000, "output": 10.00 / 1_000_000},
+        }
+
+        model_lower = model.lower()
+        for key, price in pricing.items():
+            if key in model_lower:
+                return (
+                    usage.get("input_tokens", 0) * price["input"]
+                    + usage.get("output_tokens", 0) * price["output"]
+                )
+
+        return 0.0
+
+
+
+
+# ============================================================================
+# PROVIDER REGISTRY
+# ============================================================================
+
+
+def get_provider(model: str) -> ModelProvider:
     """
-    Check if a specific model supports the reasoning_effort parameter.
-    
+    Get the OpenAI provider instance.
+
     Args:
-        model: The model identifier
-        provider: The provider name
-        config: The provider configuration
-    
+        model: Model identifier (e.g., "gpt-4o", "gpt-5-mini")
+
     Returns:
-        True if the model supports reasoning, False otherwise
+        OpenAIProvider instance
     """
-    # First check if provider supports reasoning at all
-    if not config.supports_reasoning_flag:
-        return False
-    
-    # Check model-specific exceptions
-    model_lower = model.lower()
-    if model_lower in _MODELS_WITHOUT_REASONING:
-        return False
-    
-    # Check for patterns in model names that indicate no reasoning support
-    # Some "lite" or "flash" models may not support reasoning
-    if provider == "google" or provider == "gemini":
-        # Most Gemini models support reasoning, but some lite/flash variants don't
-        if "-lite" in model_lower or "-flash" in model_lower:
-            # Check against known exceptions
-            if model_lower not in _MODELS_WITHOUT_REASONING:
-                # For unknown lite/flash models, we'll try and catch the error
-                # This allows us to be permissive but handle failures gracefully
-                pass
-    
-    return True
+    return OpenAIProvider()
 
 
-def _resolve_api_key(model: str, provider: str) -> str:
-    """Locate an API key for the provider/model combination."""
-    override = MODEL_API_KEYS.get(model) or MODEL_API_KEYS.get(provider)
-    if override:
-        return override
-
-    config = _PROVIDERS.get(provider)
-    env_names = config.env_vars if config else ()
-    for env_name in env_names:
-        value = os.getenv(env_name)
-        if value:
-            return value
-
-    env_hint = ", ".join(env_names) or "<provider specific env var>"
-    raise RuntimeError(
-        f"No API key configured for model '{model}' (provider '{provider}'). "
-        f"Set one in MODEL_API_KEYS or via environment variable(s): {env_hint}."
-    )
+# ============================================================================
+# SHARED UTILITIES
+# ============================================================================
 
 
 def _detect_image_type(image_bytes: bytes) -> str:
-    """Determine MIME suffix for raw image bytes without relying on imghdr."""
-    try:
-        import imghdr
-
-        detected = imghdr.what(None, image_bytes)
-        if detected:
-            return detected
-    except ModuleNotFoundError:
-        pass
-
+    """Determine MIME suffix for raw image bytes."""
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if image_bytes.startswith(b"\xff\xd8\xff"):
@@ -302,177 +523,72 @@ def _detect_image_type(image_bytes: bytes) -> str:
     return "jpeg"
 
 
-def _prepare_image_part(image: Union[bytes, bytearray, str], image_detail: str) -> dict[str, Any]:
-    """Convert bytes/base64 content into the structure expected by LiteLLM."""
+def _prepare_image_part(
+    image: Union[bytes, bytearray, str], image_detail: str
+) -> dict:
+    """Convert image to provider-agnostic format."""
+
     if isinstance(image, (bytes, bytearray)):
+        # Detect image type and encode as base64
         detected_type = _detect_image_type(image)
         b64 = base64.b64encode(image).decode("ascii")
         url = f"data:image/{detected_type};base64,{b64}"
     else:
-        string_value = str(image)
-        url = string_value if string_value.startswith("data:image/") else f"data:image/jpeg;base64,{string_value}"
-    return {"type": "image_url", "image_url": {"url": url, "detail": image_detail}}
+        # Already a string (base64 or URL)
+        url = str(image)
+        if not url.startswith("data:image/") and not url.startswith("http"):
+            url = f"data:image/jpeg;base64,{url}"
 
-
-def _build_user_content(
-    prompt: str,
-    image: Optional[Union[bytes, bytearray, str]],
-    multi_image: Optional[Sequence[bytes]],
-    image_detail: str,
-    *,
-    requires_string_content: bool,
-    supports_image_understanding: bool = True,
-) -> Union[str, list[dict[str, Any]]]:
-    """Produce the user message content, honouring provider content rules."""
-    if requires_string_content:
-        segments: list[str] = []
-        if prompt:
-            segments.append(prompt)
-        attachments = (len(multi_image) if multi_image else 0) + (1 if image is not None else 0)
-        if attachments:
-            segments.append(f"[{attachments} image(s) attached – omitted for this provider]")
-        return "\n\n".join(segments)
-
-    content_parts: list[dict[str, Any]] = []
-    if prompt:
-        content_parts.append({"type": "text", "text": prompt})
-    # Only add images if the provider supports image understanding
-    if supports_image_understanding:
-        if multi_image:
-            for extra_image in multi_image:
-                content_parts.append(_prepare_image_part(extra_image, image_detail))
-        if image is not None:
-            content_parts.append(_prepare_image_part(image, image_detail))
-    return content_parts or [{"type": "text", "text": prompt}]
-
-
-def _build_messages_for_provider(
-    prompt: str,
-    system_prompt: str,
-    image: Optional[Union[bytes, bytearray, str]],
-    multi_image: Optional[Sequence[bytes]],
-    image_detail: str,
-    config: ProviderConfig,
-) -> list[dict[str, Any]]:
-    """Compose the LiteLLM messages payload for the given provider."""
-    messages: list[dict[str, Any]] = []
-    if system_prompt:
-        messages.append(
-            {
-                "role": "system",
-                "content": system_prompt if not config.requires_string_content else system_prompt,
-            }
-        )
-
-    user_content = _build_user_content(
-        prompt=prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
-        requires_string_content=config.requires_string_content,
-        supports_image_understanding=config.supports_image_understanding,
-    )
-    messages.append({"role": "user", "content": user_content})
-    return messages
-
-
-def _extract_text_from_response(response: dict[str, Any]) -> str:
-    """Best-effort text extraction from a LiteLLM completion response."""
-    choices = response.get("choices") or []
-    if not choices:
-        return ""
-
-    message = choices[0].get("message") or {}
-    parsed = message.get("parsed")
-    if parsed is not None:
-        return parsed if isinstance(parsed, str) else str(parsed)
-
-    content = message.get("content")
-    if isinstance(content, list):
-        return "\n".join(segment.get("text", "") for segment in content if isinstance(segment, dict) and segment.get("text"))
-    if isinstance(content, str):
-        return content
-    return ""
-
-
-def _extract_usage(response: dict[str, Any], model: str) -> Tuple[float, dict[str, Any]]:
-    """Extract token usage and cost data from a LiteLLM response."""
-    usage = response.get("usage") or {}
-    input_tokens = usage.get("prompt_tokens") or usage.get("prompt_tokens_total") or usage.get("input_tokens") or 0
-    output_tokens = usage.get("completion_tokens") or usage.get("completion_tokens_total") or usage.get("output_tokens") or 0
-    total_tokens = usage.get("total_tokens") or (input_tokens + output_tokens) or None
-
-    try:
-        cost_usd = completion_cost(response) or 0.0
-    except Exception:
-        cost_usd = 0.0
-
-    return cost_usd, {
-        "model": model,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-    }
-
-
-def _build_response_format(model_object_type: Optional[Type[BaseModel]], model: str = "") -> dict[str, Any]:
-    """Construct a LiteLLM-compatible response schema when structured output is requested."""
-    if model_object_type is None:
-        return {"type": "json_object"}
-    
-    # Gemini models can use json_schema mode with some limitations
-    if "gemini" in model.lower() or "google" in model.lower():
-        try:
-            schema = model_object_type.model_json_schema()
-        except AttributeError:
-            schema = model_object_type.schema()
-        _enforce_no_additional_properties(schema)
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": model_object_type.__name__,
-                "schema": schema,
-                "strict": False,  # Less strict for Gemini compatibility
-            },
-        }
-    
-    try:
-        schema = model_object_type.model_json_schema()
-    except AttributeError:
-        schema = model_object_type.schema()
-    _enforce_no_additional_properties(schema)
     return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": model_object_type.__name__,
-            "schema": schema,
-            "strict": True,
-        },
+        "type": "input_image",
+        "image_url": {"url": url, "detail": image_detail},
     }
 
 
-def _enforce_no_additional_properties(schema: Any) -> None:
-    """Recursively set additionalProperties=false on object schemas."""
-    if not isinstance(schema, dict):
-        return
-    if schema.get("type") == "object":
-        schema.setdefault("additionalProperties", False)
-        props = schema.get("properties", {})
-        if props:
-            schema["required"] = list(props.keys())
-        for prop in schema.get("properties", {}).values():
-            _enforce_no_additional_properties(prop)
-    if "items" in schema:
-        _enforce_no_additional_properties(schema["items"])
-    if "anyOf" in schema:
-        for entry in schema["anyOf"]:
-            _enforce_no_additional_properties(entry)
-    if "allOf" in schema:
-        for entry in schema["allOf"]:
-            _enforce_no_additional_properties(entry)
-    if "oneOf" in schema:
-        for entry in schema["oneOf"]:
-            _enforce_no_additional_properties(entry)
+def _build_messages(
+    system_prompt: str,
+    prompt: str,
+    image: Optional[Union[bytes, bytearray, str]] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+) -> list[dict]:
+    """
+    Build messages with support for multiple images.
+
+    Returns messages in a provider-agnostic format that each provider
+    will convert to their specific format.
+    """
+    messages = []
+
+    # System message
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    # User message with text and images
+    content_parts = []
+
+    # Add text
+    if prompt:
+        content_parts.append({"type": "input_text", "text": prompt})
+
+    # Add images
+    all_images = []
+    if multi_image:
+        all_images.extend(multi_image)
+    if image is not None:
+        all_images.append(image)
+
+    for img in all_images:
+        image_part = _prepare_image_part(img, image_detail)
+        content_parts.append(image_part)
+
+    # Use multi-part content if we have images, otherwise simple text
+    if len(content_parts) > 1 or all_images:
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": prompt})
+
+    return messages
 
 
 def _extract_json_object(text: str) -> Optional[Any]:
@@ -482,32 +598,37 @@ def _extract_json_object(text: str) -> Optional[Any]:
 
     candidates: List[str] = []
     stripped = text.strip()
+
+    # Extract from markdown code blocks
     if stripped.startswith("```"):
-        for block in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL):
+        for block in re.findall(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL
+        ):
             candidates.append(block)
+
     candidates.append(stripped)
 
     decoder = json.JSONDecoder()
     for candidate in candidates:
         candidate_stripped = candidate.strip()
 
-        # Remove control characters that break JSON parsing
-        # This handles cases where the LLM output has unescaped newlines, tabs, etc.
-        candidate_cleaned = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', ' ', candidate_stripped)
+        # Remove control characters
+        candidate_cleaned = re.sub(
+            r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]", " ", candidate_stripped
+        )
 
-        # Fix common JSON syntax errors
-        # Remove trailing commas before closing braces/brackets
-        candidate_cleaned = re.sub(r',(\s*[}\]])', r'\1', candidate_cleaned)
+        # Remove trailing commas
+        candidate_cleaned = re.sub(r",(\s*[}\]])", r"\1", candidate_cleaned)
 
-        # Try to fix unescaped newlines in string values (if any remain)
-        # This is tricky, so we just try to replace literal newlines with space
-        candidate_cleaned = candidate_cleaned.replace('\n', ' ').replace('\r', ' ')
+        # Replace literal newlines with spaces
+        candidate_cleaned = candidate_cleaned.replace("\n", " ").replace("\r", " ")
 
         try:
             return json.loads(candidate_cleaned)
         except Exception:
             pass
 
+        # Try to find JSON object starting with {
         for idx, ch in enumerate(candidate_cleaned):
             if ch == "{":
                 try:
@@ -515,56 +636,63 @@ def _extract_json_object(text: str) -> Optional[Any]:
                     return obj
                 except Exception:
                     continue
+
     return None
 
 
-def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
+def _manual_parse_structured_output(
+    text: str, model_object_type: Type[BaseModel]
+) -> Optional[BaseModel]:
     """Attempt lightweight manual parsing when the model fails to return valid JSON."""
     try:
-        if model_object_type.__name__ == "ActionPlan":
-            return _manual_parse_action_plan(text, model_object_type)
-        if model_object_type.__name__ == "NextAction":
-            return _manual_parse_next_action(text, model_object_type)
-        if model_object_type.__name__ == "CompletionEvaluation":
-            return _manual_parse_completion_evaluation(text, model_object_type)
-        if model_object_type.__name__ == "ExtractionResult":
-            return _manual_parse_extraction_result(text, model_object_type)
-        
-        # Try to parse simple yes/no boolean responses like "is_complete (false)"
+        # Try to parse simple yes/no boolean responses
         cleaned = text.strip()
-        
-        # First, try to match "field_name: value" patterns
-        simple_bool_match = re.match(r'^(\w+)\s*[\(:]?\s*(true|false|yes|no)\s*[\)]?$', cleaned, re.IGNORECASE)
+
+        # Match "field_name: value" patterns
+        simple_bool_match = re.match(
+            r"^(\w+)\s*[:(]?\s*(true|false|yes|no)\s*[)]?$", cleaned, re.IGNORECASE
+        )
         if simple_bool_match:
             field_name = simple_bool_match.group(1)
             value_str = simple_bool_match.group(2).lower()
-            bool_value = value_str in ('true', 'yes')
+            bool_value = value_str in ("true", "yes")
             try:
                 if hasattr(model_object_type, "model_validate"):
                     return model_object_type.model_validate({field_name: bool_value})
                 return model_object_type(**{field_name: bool_value})
             except ValidationError as exc:
-                dprint(f"⚠️ Simple boolean parse failed validation for {model_object_type.__name__}: {exc}")
-        
-        # Handle plain boolean text like "false" or "true" by inferring field name from schema
-        if cleaned.lower() in ('true', 'false', 'yes', 'no'):
-            bool_value = cleaned.lower() in ('true', 'yes')
+                dprint(
+                    f"⚠️ Simple boolean parse failed validation for {model_object_type.__name__}: {exc}"
+                )
+
+        # Handle plain boolean text
+        if cleaned.lower() in ("true", "false", "yes", "no"):
+            bool_value = cleaned.lower() in ("true", "yes")
             try:
-                # Try to get the schema to find boolean field names
-                schema = model_object_type.model_json_schema() if hasattr(model_object_type, "model_json_schema") else model_object_type.schema()
-                properties = schema.get('properties', {})
-                # Find boolean fields
-                bool_fields = [name for name, prop in properties.items() if prop.get('type') == 'boolean']
+                schema = (
+                    model_object_type.model_json_schema()
+                    if hasattr(model_object_type, "model_json_schema")
+                    else model_object_type.schema()
+                )
+                properties = schema.get("properties", {})
+                bool_fields = [
+                    name
+                    for name, prop in properties.items()
+                    if prop.get("type") == "boolean"
+                ]
                 if len(bool_fields) == 1:
-                    # If there's only one boolean field, use it
                     field_name = bool_fields[0]
                     if hasattr(model_object_type, "model_validate"):
-                        return model_object_type.model_validate({field_name: bool_value})
+                        return model_object_type.model_validate(
+                            {field_name: bool_value}
+                        )
                     return model_object_type(**{field_name: bool_value})
             except Exception as exc:
-                dprint(f"⚠️ Plain boolean inference failed for {model_object_type.__name__}: {exc}")
-        
-        # Generic fallback: try to extract JSON from markdown-wrapped responses
+                dprint(
+                    f"⚠️ Plain boolean inference failed for {model_object_type.__name__}: {exc}"
+                )
+
+        # Generic fallback: try to extract JSON
         json_obj = _extract_json_object(text)
         if isinstance(json_obj, dict):
             try:
@@ -572,393 +700,21 @@ def _manual_parse_structured_output(text: str, model_object_type: Type[BaseModel
                     return model_object_type.model_validate(json_obj)
                 return model_object_type(**json_obj)
             except ValidationError as exc:
-                dprint(f"⚠️ Generic JSON extraction failed validation for {model_object_type.__name__}: {exc}")
+                dprint(
+                    f"⚠️ Generic JSON extraction failed validation for {model_object_type.__name__}: {exc}"
+                )
                 return None
+
     except Exception as exc:
         dprint(f"⚠️ Manual parse helper error for {model_object_type.__name__}: {exc}")
+
     return None
-
-
-def _manual_parse_next_action(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
-    """
-    Extract a NextAction response from loosely structured prose.
-    Accepts free-form text like:
-        "Action: click: Google Search button\nReasoning: ...\nConfidence: 0.8\nExpected outcome: ...\nNeeds exploration: no"
-    Falls back to heuristics if explicit keys are missing.
-    """
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-
-    json_obj = _extract_json_object(cleaned)
-    if isinstance(json_obj, dict):
-        if isinstance(json_obj.get("evidence"), dict):
-            try:
-                json_obj["evidence"] = json.dumps(json_obj["evidence"])
-            except Exception:
-                json_obj["evidence"] = str(json_obj["evidence"])
-        try:
-            if hasattr(model_object_type, "model_validate"):
-                return model_object_type.model_validate(json_obj)  # type: ignore[attr-defined]
-            return model_object_type(**json_obj)
-        except ValidationError as exc:
-            dprint(f"⚠️ Manual NextAction JSON parse failed validation: {exc}")
-        except Exception as exc:
-            dprint(f"⚠️ Manual NextAction JSON parse error: {exc}")
-
-def _manual_parse_action_plan(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
-    """
-    Parse ActionPlan output when the LLM emits JSON or lightly-structured prose.
-    """
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-
-    json_obj = _extract_json_object(cleaned)
-    if isinstance(json_obj, dict):
-        try:
-            if hasattr(model_object_type, "model_validate"):
-                return model_object_type.model_validate(json_obj)
-            return model_object_type(**json_obj)
-        except ValidationError as exc:
-            dprint(f"⚠️ Manual ActionPlan JSON parse failed validation: {exc}")
-        except Exception as exc:
-            dprint(f"⚠️ Manual ActionPlan JSON parse error: {exc}")
-
-    actions: List[str] = []
-    for match in re.finditer(r"\"action\"\s*:\s*\"([^\"]+)\"", cleaned):
-        actions.append(match.group(1).strip())
-
-    if not actions:
-        action_pattern = re.compile(
-            r"\b(click|type|scroll|press|wait|open|back|forward|stop|extract|select|upload|datetime|ask)\s*:\s*([^\n\r]+)",
-            flags=re.IGNORECASE,
-        )
-        for line in cleaned.splitlines():
-            match = action_pattern.search(line)
-            if match:
-                cmd = match.group(1).lower()
-                body = match.group(2).strip().rstrip(" .")
-                actions.append(f"{cmd}: {body}" if body else cmd)
-
-    if not actions:
-        return None
-
-    steps = [{"action": action} for action in actions]
-    try:
-        return model_object_type(
-            steps=steps,
-            reasoning="Parsed from unstructured output.",
-            confidence=0.5,
-            expected_outcome="",
-        )
-    except ValidationError as exc:
-        dprint(f"⚠️ Manual ActionPlan parse failed validation: {exc}")
-        return None
-
-
-def _manual_parse_completion_evaluation(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
-    """
-    Heuristic parser for CompletionEvaluation when the model emits prose.
-    """
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-
-    json_obj = _extract_json_object(cleaned)
-    if isinstance(json_obj, dict):
-        def _coerce_fields(data: dict[str, Any]) -> None:
-            if isinstance(data.get("evidence"), dict):
-                try:
-                    data["evidence"] = json.dumps(data["evidence"])
-                except Exception:
-                    data["evidence"] = str(data["evidence"])
-            if isinstance(data.get("remaining_steps"), str):
-                stripped = data["remaining_steps"].strip()
-                if stripped:
-                    data["remaining_steps"] = [stripped]
-                else:
-                    data["remaining_steps"] = []
-
-        _coerce_fields(json_obj)
-        try:
-            if hasattr(model_object_type, "model_validate"):
-                return model_object_type.model_validate(json_obj)  # type: ignore[attr-defined]
-            return model_object_type(**json_obj)
-        except ValidationError as exc:
-            _coerce_fields(json_obj)
-            try:
-                if hasattr(model_object_type, "model_validate"):
-                    return model_object_type.model_validate(json_obj)  # type: ignore[attr-defined]
-                return model_object_type(**json_obj)
-            except Exception:
-                dprint(f"⚠️ Manual CompletionEvaluation JSON parse failed validation: {exc}")
-        except Exception as exc:
-            dprint(f"⚠️ Manual CompletionEvaluation JSON parse error: {exc}")
-
-    lower = cleaned.lower()
-
-    # Determine completion status heuristically
-    negative_patterns = [
-        r"\bnot\s+(?:yet\s+)?complete\b",
-        r"\bnot\s+(?:yet\s+)?completed\b",
-        r"\bnot\s+(?:yet\s+)?fulfilled\b",
-        r"\bnot\s+(?:yet\s+)?done\b",
-        r"\bnot\s+(?:yet\s+)?achieved\b",
-        r"\bnot\s+(?:yet\s+)?finished\b",
-        r"\bincomplete\b",
-        r"\bfailed\b",
-        r"\bstill\s+in\s+progress\b",
-        r"\bhas\s+not\s+been\s+fulfilled\b",
-        r"\bhas\s+not\s+been\s+achieved\b",
-    ]
-    positive_pattern = r"(?<!not\s)(?:task\s+)?(?:complete|completed|fulfilled|done|achieved|success(?:fully)?)"
-
-    is_complete = False
-    if any(re.search(pattern, lower) for pattern in negative_patterns):
-        is_complete = False
-    elif re.search(positive_pattern, lower):
-        is_complete = True
-
-    # Confidence
-    confidence = 0.5
-    conf_match = re.search(r"confidence\s*[:\-]\s*([0-9]*\.?[0-9]+)", cleaned, flags=re.IGNORECASE)
-    if conf_match:
-        try:
-            confidence = float(conf_match.group(1))
-        except ValueError:
-            pass
-    else:
-        conf_pct = re.search(r"confidence\s*[:\-]\s*([0-9]{1,3})\s*%", cleaned, flags=re.IGNORECASE)
-        if conf_pct:
-            try:
-                confidence = float(conf_pct.group(1)) / 100.0
-            except ValueError:
-                pass
-    confidence = max(0.0, min(confidence, 1.0))
-
-    reasoning = cleaned
-    reasoning_match = re.search(r"(reasoning|analysis|explanation)\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    if reasoning_match:
-        reasoning = reasoning_match.group(2).strip()
-
-    evidence = None
-    evidence_match = re.search(r"(evidence|support|proof)\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    if evidence_match:
-        evidence = evidence_match.group(2).strip()
-
-    remaining_steps: List[str] = []
-    rem_section = re.search(r"(remaining\s+steps|next\s+steps|todo|actions)\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    if rem_section:
-        block = rem_section.group(2)
-        lines = [line.strip(" -*\t\r") for line in block.splitlines()]
-        for line in lines:
-            if not line:
-                continue
-            if re.match(r"(reason|confidence|evidence)\s*[:\-]", line, flags=re.IGNORECASE):
-                break
-            remaining_steps.append(line)
-
-    try:
-        return model_object_type(
-            is_complete=is_complete,
-            confidence=confidence,
-            reasoning=reasoning,
-            evidence=evidence,
-            remaining_steps=remaining_steps,
-        )
-    except ValidationError as exc:
-        dprint(f"⚠️ Manual CompletionEvaluation parse failed validation: {exc}")
-        return None
-
-
-def _manual_parse_extraction_result(text: str, model_object_type: Type[BaseModel]) -> Optional[BaseModel]:
-    """
-    Heuristic parser for ExtractionResult when the model emits prose instead of structured JSON.
-    
-    Attempts to extract:
-    - extracted_data: JSON object or key-value pairs
-    - confidence: float between 0.0 and 1.0
-    - reasoning: explanation text
-    """
-    import json
-    
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-    
-    # First, try to extract JSON object from the text
-    json_obj = _extract_json_object(cleaned)
-    if isinstance(json_obj, dict):
-        # Try to match ExtractionResult structure
-        extracted_data = json_obj.get("extracted_data") or json_obj.get("data") or json_obj
-        confidence = json_obj.get("confidence", 0.7)
-        reasoning = json_obj.get("reasoning") or json_obj.get("explanation") or "Extracted from JSON response"
-        
-        # Ensure extracted_data is a JSON string
-        if isinstance(extracted_data, dict):
-            extracted_data = json.dumps(extracted_data)
-        elif not isinstance(extracted_data, str):
-            extracted_data = json.dumps({"content": str(extracted_data)})
-        
-        try:
-            # Validate confidence
-            confidence = float(confidence)
-            confidence = max(0.0, min(1.0, confidence))
-            
-            if hasattr(model_object_type, "model_validate"):
-                return model_object_type.model_validate({
-                    "extracted_data": extracted_data,
-                    "confidence": confidence,
-                    "reasoning": reasoning
-                })
-            return model_object_type(
-                extracted_data=extracted_data,
-                confidence=confidence,
-                reasoning=reasoning
-            )
-        except (ValidationError, ValueError) as exc:
-            dprint(f"⚠️ Manual ExtractionResult JSON parse failed validation: {exc}")
-    
-    # Fallback: extract key-value pairs from prose
-    pairs = {}
-    for key in ("extracted_data", "extracted data", "data", "confidence", "reasoning", "explanation"):
-        match = re.search(rf"{key}\s*[:\-]\s*(.+)", cleaned, flags=re.IGNORECASE | re.DOTALL)
-        if match:
-            pairs[key.lower().replace(" ", "_")] = match.group(1).strip(" \n\r\t\"'")
-    
-    # Try to extract JSON from the text content
-    extracted_data_raw = pairs.get("extracted_data") or pairs.get("data") or cleaned
-    extracted_data = None
-    
-    # Try to find JSON in the text
-    json_obj = _extract_json_object(extracted_data_raw)
-    if json_obj:
-        extracted_data = json.dumps(json_obj)
-    else:
-        # If no JSON found, wrap the content as a description
-        # Remove common prefixes like "extracted_data:", "data:", etc.
-        content = extracted_data_raw
-        for prefix in ["extracted_data:", "data:", "extraction:", "result:"]:
-            if content.lower().startswith(prefix.lower()):
-                content = content[len(prefix):].strip()
-        # Try to create a simple key-value structure from the description
-        extracted_data = json.dumps({"description": content[:500]})
-    
-    # Extract confidence
-    confidence = 0.7  # Default
-    confidence_str = pairs.get("confidence")
-    if confidence_str:
-        try:
-            confidence = float(re.search(r"[\d.]+", confidence_str).group() if re.search(r"[\d.]+", confidence_str) else confidence_str)
-            confidence = max(0.0, min(1.0, confidence))
-        except (ValueError, AttributeError):
-            pass
-    
-    # Extract reasoning
-    reasoning = pairs.get("reasoning") or pairs.get("explanation") or cleaned[:200]
-    
-    try:
-        if hasattr(model_object_type, "model_validate"):
-            return model_object_type.model_validate({
-                "extracted_data": extracted_data,
-                "confidence": confidence,
-                "reasoning": reasoning
-            })
-        return model_object_type(
-            extracted_data=extracted_data,
-            confidence=confidence,
-            reasoning=reasoning
-        )
-    except ValidationError as exc:
-        dprint(f"⚠️ Manual ExtractionResult parse failed validation: {exc}")
-        return None
-
-
-def _perform_completion(
-    *,
-    prompt: str,
-    system_prompt: str,
-    image: Optional[Union[bytes, bytearray, str]],
-    multi_image: Optional[Sequence[bytes]],
-    image_detail: str,
-    model: str,
-    reasoning_level: Optional[str],
-    response_format: Optional[dict[str, Any]] = None,
-) -> Tuple[str, float, dict[str, Any], dict[str, Any]]:
-    """Invoke LiteLLM and return the text, usage, cost, and raw response."""
-    provider = _infer_provider(model)
-    config = _PROVIDERS.get(provider, ProviderConfig(env_vars=()))
-    api_key = _resolve_api_key(model, provider)
-    messages = _build_messages_for_provider(
-        prompt=prompt,
-        system_prompt=system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
-        config=config,
-    )
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "api_key": api_key,
-        "tool_choice": "none",
-        "tools": [],
-    }
-    if response_format is not None:
-        kwargs["response_format"] = response_format
-    
-    # Check if model supports reasoning before adding the parameter
-    use_reasoning = reasoning_level and _model_supports_reasoning(model, provider, config)
-    if use_reasoning:
-        kwargs["reasoning_effort"] = reasoning_level
-
-    # Try completion with reasoning, fallback without if it fails
-    try:
-        response = completion(**kwargs)
-    except Exception as e:
-        # If we get an UnsupportedParamsError for reasoning_effort, retry without it
-        error_str = str(e).lower()
-        is_reasoning_error = (
-            (UnsupportedParamsError is not None and isinstance(e, UnsupportedParamsError)) or
-            (("reasoning_effort" in error_str or "reasoning" in error_str) and
-             ("unsupported" in error_str or "not support" in error_str or "does not support" in error_str))
-        )
-        
-        if is_reasoning_error and "reasoning_effort" in kwargs:
-            # Remove reasoning_effort and retry
-            kwargs.pop("reasoning_effort", None)
-            dprint(f"⚠️ Model {model} doesn't support reasoning_effort, retrying without it...")
-            # Retry
-            response = completion(**kwargs)
-            # Cache this model as not supporting reasoning for future calls
-            _MODELS_WITHOUT_REASONING.add(model.lower())
-        else:
-            raise
-    text = _extract_text_from_response(response)
-    cost_usd, usage = _extract_usage(response, model)
-
-    try:
-        from utils.event_logger import get_event_logger
-
-        get_event_logger().llm_cost(
-            cost_usd=cost_usd,
-            input_tokens=usage['input_tokens'],
-            output_tokens=usage['output_tokens'],
-            total_tokens=usage['total_tokens'],
-            model=model
-        )
-    except Exception:
-        pass
-
-    return text, cost_usd, usage, response
 
 
 def _normalize_reasoning_level(
     reasoning_level: Union[ReasoningLevel, str, None]
 ) -> tuple[ReasoningLevel, Optional[str]]:
-    """Normalize caller input to `(enum, provider_value)`."""
+    """Normalize caller input to (enum, provider_value)."""
     if reasoning_level is None:
         reasoning_enum = ReasoningLevel.coerce(get_default_reasoning_level())
     else:
@@ -969,52 +725,69 @@ def _normalize_reasoning_level(
     return reasoning_enum, reasoning_enum.value
 
 
-# ---------------------------------------------------------------------------
-# Public text-generation helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# PUBLIC API - NON-STREAMING
+# ============================================================================
 
 
 def generate_text_with_cost(
     prompt: str,
     system_prompt: str = "",
     image: bytes | bytearray | str | None = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
     model: str | None = None,
     reasoning_level: Union[ReasoningLevel, str, None] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[str, float, dict[str, Any]]:
     """Generate text and capture usage/cost metadata in a single call."""
     if model is None:
         model = get_default_model()
+
     _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
-    text, cost_usd, usage, _ = _perform_completion(
-        prompt=prompt,
-        system_prompt=system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
+    if temperature is None:
+        temperature = get_default_temperature()
+
+    provider = get_provider(model)
+    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+
+    response = provider.complete(
+        messages=messages,
         model=model,
-        reasoning_level=reasoning_value,
+        reasoning_effort=reasoning_value,
+        temperature=temperature,
+        stream=False,
     )
-    return text, cost_usd, usage
 
+    # Log cost
+    try:
+        from utils.event_logger import get_event_logger
 
-# ---------------------------------------------------------------------------
-# Convenience wrappers around the text helpers
-# ---------------------------------------------------------------------------
+        get_event_logger().llm_cost(
+            cost_usd=response.cost_usd,
+            input_tokens=response.usage["input_tokens"],
+            output_tokens=response.usage["output_tokens"],
+            total_tokens=response.usage["total_tokens"],
+            model=model,
+        )
+    except Exception:
+        pass
+
+    return response.text, response.cost_usd, response.usage
 
 
 def generate_text_gpt_with_cost(
     prompt: str,
     system_prompt: str = "",
     image: bytes | bytearray | str | None = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
     model: str | None = None,
     reasoning_level: Union[ReasoningLevel, str, None] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[str, float, dict[str, Any]]:
-    """Backward-compatible alias around `generate_text_with_cost`."""
+    """Backward-compatible alias around generate_text_with_cost."""
     return generate_text_with_cost(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -1023,6 +796,7 @@ def generate_text_gpt_with_cost(
         image_detail=image_detail,
         model=model,
         reasoning_level=reasoning_level,
+        temperature=temperature,
     )
 
 
@@ -1030,10 +804,11 @@ def generate_text(
     prompt: str,
     system_prompt: str = "",
     image: bytes | bytearray | str | None = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
     reasoning_level: Union[ReasoningLevel, str, None] = None,
     model: str | None = None,
+    temperature: Optional[float] = None,
 ) -> str:
     """Convenience helper returning only the generated text."""
     return generate_text_gpt_with_cost(
@@ -1044,12 +819,152 @@ def generate_text(
         image_detail=image_detail,
         model=model,
         reasoning_level=reasoning_level,
+        temperature=temperature,
     )[0]
+
+
+def generate_model_with_cost(
+    prompt: str,
+    model_object_type: Optional[Type[BaseModel]] = None,
+    system_prompt: str = "",
+    image: Union[bytes, bytearray, str, None] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    model: str | None = None,
+    reasoning_level: Union[ReasoningLevel, str, None] = None,
+    temperature: Optional[float] = None,
+) -> Tuple[Any, float, dict[str, Any]]:
+    """Generate structured output and capture usage/cost metadata."""
+    if model is None:
+        model = get_default_model()
+
+    _, reasoning_value = _normalize_reasoning_level(reasoning_level)
+
+    if temperature is None:
+        temperature = get_default_temperature()
+
+    provider = get_provider(model)
+    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+
+    response = provider.complete(
+        messages=messages,
+        model=model,
+        reasoning_effort=reasoning_value,
+        response_format=model_object_type,
+        temperature=temperature,
+        stream=False,
+    )
+
+    # Log cost
+    try:
+        from utils.event_logger import get_event_logger
+
+        get_event_logger().llm_cost(
+            cost_usd=response.cost_usd,
+            input_tokens=response.usage["input_tokens"],
+            output_tokens=response.usage["output_tokens"],
+            total_tokens=response.usage["total_tokens"],
+            model=model,
+        )
+    except Exception:
+        pass
+
+    # Return parsed object or fallback to text
+    if response.parsed is not None:
+        return response.parsed, response.cost_usd, response.usage
+    else:
+        # Fallback parsing
+        if model_object_type:
+            try:
+                parsed = model_object_type.model_validate_json(response.text)
+                return parsed, response.cost_usd, response.usage
+            except Exception:
+                parsed = _manual_parse_structured_output(response.text, model_object_type)
+                if parsed is not None:
+                    return parsed, response.cost_usd, response.usage
+
+        # Return raw text if all parsing fails
+        return response.text, response.cost_usd, response.usage
+
+
+def generate_model_gpt_with_cost(
+    prompt: str,
+    model_object_type: Optional[Type[BaseModel]] = None,
+    system_prompt: str = "",
+    image: Union[bytes, bytearray, str, None] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    model: str | None = None,
+    reasoning_level: Union[ReasoningLevel, str, None] = None,
+    temperature: Optional[float] = None,
+) -> Tuple[Any, float, dict[str, Any]]:
+    """Backward-compatible alias around generate_model_with_cost."""
+    return generate_model_with_cost(
+        prompt=prompt,
+        model_object_type=model_object_type,
+        system_prompt=system_prompt,
+        image=image,
+        multi_image=multi_image,
+        image_detail=image_detail,
+        model=model,
+        reasoning_level=reasoning_level,
+        temperature=temperature,
+    )
+
+
+def generate_model_gpt(
+    prompt: str,
+    model_object_type: Optional[Type[BaseModel]] = None,
+    system_prompt: str = "",
+    image: Union[bytes, bytearray, str, None] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    reasoning_level: Union[ReasoningLevel, str, None] = None,
+    model: str | None = None,
+    temperature: Optional[float] = None,
+) -> Any:
+    """Convenience helper returning only the parsed structured output."""
+    return generate_model_gpt_with_cost(
+        prompt,
+        model_object_type=model_object_type,
+        system_prompt=system_prompt,
+        image=image,
+        multi_image=multi_image,
+        image_detail=image_detail,
+        model=model,
+        reasoning_level=reasoning_level,
+        temperature=temperature,
+    )[0]
+
+
+def generate_model(
+    prompt: str,
+    model_object_type: Optional[Type[BaseModel]] = None,
+    system_prompt: str = "",
+    image: Union[bytes, bytearray, str, None] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    reasoning_level: Union[ReasoningLevel, str, None] = None,
+    model: str | None = None,
+    temperature: Optional[float] = None,
+) -> Any:
+    """Public entry-point mirroring previous API semantics."""
+    return generate_model_gpt(
+        prompt=prompt,
+        model_object_type=model_object_type,
+        system_prompt=system_prompt,
+        image=image,
+        multi_image=multi_image,
+        image_detail=image_detail,
+        reasoning_level=reasoning_level,
+        model=model,
+        temperature=temperature,
+    )
 
 
 def answer_question_with_vision(
     question: str,
-    screenshot: Optional[Union[bytes, Sequence[bytes]]],
+    screenshot: Optional[Union[bytes, list[bytes]]],
     *,
     model: str | None = None,
     reasoning_level: Union[ReasoningLevel, str, None] = None,
@@ -1057,20 +972,24 @@ def answer_question_with_vision(
     """Use a vision-capable model to answer a yes/no question about screenshots."""
     if model is None:
         model = get_default_model()
+
     if reasoning_level is None:
         final_reasoning_level = ReasoningLevel.coerce(get_default_reasoning_level())
     else:
         final_reasoning_level = ReasoningLevel.coerce(reasoning_level)
+
     question = (question or "").strip()
     if not screenshot or not question:
         return None
 
     image: Union[bytes, bytearray, str, None]
-    multi_image: Optional[Sequence[bytes]] = None
+    multi_image: Optional[list[bytes]] = None
 
     if isinstance(screenshot, (bytes, bytearray)):
         image = screenshot
-    elif isinstance(screenshot, SequenceABC) and not isinstance(screenshot, (str, bytes, bytearray)):
+    elif isinstance(screenshot, Sequence) and not isinstance(
+        screenshot, (str, bytes, bytearray)
+    ):
         screenshot_list = list(screenshot)
         if not screenshot_list:
             return None
@@ -1082,12 +1001,10 @@ def answer_question_with_vision(
 
     system_prompt = (
         "You are a careful web QA assistant. Look at the screenshot(s) and answer the question strictly using JSON.\n"
-        "Reply with exactly one JSON object: {\"answer\": \"yes\"} or {\"answer\": \"no\"} (lowercase). No extra text."
+        'Reply with exactly one JSON object: {"answer": "yes"} or {"answer": "no"} (lowercase). No extra text.'
     )
-    prompt = (
-        f"Question: {question}\n"
-        "Respond with JSON only. Example: {\"answer\": \"yes\"}"
-    )
+    prompt = f"Question: {question}\n" 'Respond with JSON only. Example: {"answer": "yes"}'
+
     try:
         answer = (
             generate_text(
@@ -1105,11 +1022,13 @@ def answer_question_with_vision(
 
     if not answer:
         return None
+
     cleaned = answer.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("` \n")
         if cleaned.startswith("json"):
             cleaned = cleaned[4:].lstrip()
+
     try:
         data = json.loads(cleaned)
         value = str(data.get("answer", "")).strip().lower()
@@ -1125,182 +1044,221 @@ def answer_question_with_vision(
         return True
     if lowered.startswith("no"):
         return False
+
     return None
 
 
-# ---------------------------------------------------------------------------
-# Structured output helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# PUBLIC API - STREAMING
+# ============================================================================
 
 
-def generate_model_with_cost(
+def generate_text_stream(
     prompt: str,
-    model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
-    image: Union[bytes, bytearray, str, None] = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
-    model: str | None = None,
-    reasoning_level: Union[ReasoningLevel, str, None] = None,
-) -> Tuple[Any, float, dict[str, Any]]:
-    """Generate structured output and capture usage/cost metadata."""
+    image: Optional[bytes] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    model: Optional[str] = None,
+    reasoning_level: Optional[str] = None,
+) -> Iterator[StreamChunk]:
+    """Generate text with streaming."""
     if model is None:
         model = get_default_model()
+
     _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
-    response_format = _build_response_format(model_object_type, model)
-    
-    # Add explicit JSON instructions to system prompt for all models when using structured output
-    # This is a workaround for LiteLLM bug #16813 where models don't return proper JSON
-    enhanced_system_prompt = system_prompt
-    if model_object_type:
-        json_instruction = "\n\nIMPORTANT: You MUST respond with valid JSON only. Do not include any markdown formatting, explanations, or text outside the JSON object."
-        # Include schema for better guidance
-        try:
-            schema = model_object_type.model_json_schema()
-        except AttributeError:
-            schema = model_object_type.schema()
-        json_instruction += f"\n\nExpected JSON schema:\n{json.dumps(schema, indent=2)}"
-        enhanced_system_prompt = (system_prompt + json_instruction) if system_prompt else json_instruction.strip()
+    provider = get_provider(model)
+    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
 
-    text, cost_usd, usage, response = _perform_completion(
-        prompt=prompt,
-        system_prompt=enhanced_system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
+    return provider.complete(
+        messages=messages,
         model=model,
-        reasoning_level=reasoning_value,
-        response_format=response_format,
+        reasoning_effort=reasoning_value,
+        stream=True,
     )
 
-    if model_object_type is None:
-        parsed_result: Any = text
-    else:
-        # Safely extract message from response
-        choices = response.get("choices")
-        if not isinstance(choices, list) or not choices:
-            choices = [{}]
-        message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
-        parsed_obj = message.get("parsed") if isinstance(message, dict) else None
-        
-        # Check if parsed_obj is valid - it should be a dict or a Pydantic model instance
-        if parsed_obj is not None:
-            # If it's already a Pydantic model instance, use it
-            if isinstance(parsed_obj, model_object_type):
-                parsed_result = parsed_obj
-            # If it's a dict, validate it
-            elif isinstance(parsed_obj, dict):
-                try:
-                    if hasattr(model_object_type, "model_validate"):
-                        parsed_result = model_object_type.model_validate(parsed_obj)
-                    else:
-                        parsed_result = model_object_type(**parsed_obj)
-                except ValidationError as exc:
-                    dprint(f"⚠️ Pre-parsed object validation failed for {model_object_type.__name__}: {exc}")
-                    # Fall back to manual parsing
-                    manual = _manual_parse_structured_output(text, model_object_type)
-                    parsed_result = manual if manual is not None else text
-            # If it's a primitive type (bool, str, int, etc.), try to parse from text instead
-            else:
-                dprint(f"⚠️ LLM returned primitive type {type(parsed_obj).__name__} instead of object for {model_object_type.__name__}")
-                manual = _manual_parse_structured_output(text, model_object_type)
-                parsed_result = manual if manual is not None else text
+
+def generate_model_stream(
+    prompt: str,
+    model_object_type: Type[BaseModel],
+    system_prompt: str = "",
+    image: Optional[bytes] = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
+    model: Optional[str] = None,
+    reasoning_level: Optional[str] = None,
+) -> Iterator[Union[StreamChunk, BaseModel]]:
+    """
+    Generate structured output with streaming.
+
+    Yields:
+        StreamChunk objects with incremental JSON/text
+        Final yield is the fully parsed BaseModel instance (if successful)
+    """
+    if model is None:
+        model = get_default_model()
+
+    _, reasoning_value = _normalize_reasoning_level(reasoning_level)
+
+    provider = get_provider(model)
+    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+
+    for chunk in provider.complete(
+        messages=messages,
+        model=model,
+        reasoning_effort=reasoning_value,
+        response_format=model_object_type,
+        stream=True,
+    ):
+        if chunk.is_final and chunk.parsed:
+            # Yield the final parsed object
+            yield chunk.parsed
         else:
-            try:
-                parsed_result = model_object_type.model_validate_json(text)  # type: ignore[attr-defined]
-            except AttributeError:
-                try:
-                    parsed_result = model_object_type.parse_raw(text)  # type: ignore[attr-defined]
-                except Exception as exc:
-                    manual = _manual_parse_structured_output(text, model_object_type)
-                    if manual is not None:
-                        parsed_result = manual
-                    else:
-                        dprint(f"⚠️ Structured output parse failed (parse_raw) for {model_object_type.__name__}: {exc}")
-                        parsed_result = text
-            except (ValidationError, json.JSONDecodeError) as exc:
-                manual = _manual_parse_structured_output(text, model_object_type)
-                if manual is not None:
-                    parsed_result = manual
-                else:
-                    dprint(f"⚠️ Structured output parse failed for {model_object_type.__name__}: {exc}")
-                    parsed_result = text
-            except Exception as exc:
-                manual = _manual_parse_structured_output(text, model_object_type)
-                if manual is not None:
-                    parsed_result = manual
-                else:
-                    dprint(f"⚠️ Unexpected error parsing structured output for {model_object_type.__name__}: {exc}")
-                    parsed_result = text
-
-    return parsed_result, cost_usd, usage
+            # Yield intermediate chunks
+            yield chunk
 
 
-def generate_model_gpt_with_cost(
+# ============================================================================
+# PUBLIC API - FUNCTION CALLING
+# ============================================================================
+
+
+def generate_action_with_tools(
     prompt: str,
-    model_object_type: Optional[Type[BaseModel]] = None,
+    tools: list[dict],
     system_prompt: str = "",
-    image: Union[bytes, bytearray, str, None] = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
+    image: bytes | bytearray | str | None = None,
+    multi_image: Optional[list[bytes]] = None,
+    image_detail: str = "high",
     model: str | None = None,
     reasoning_level: Union[ReasoningLevel, str, None] = None,
-) -> Tuple[Any, float, dict[str, Any]]:
-    """Backward-compatible alias around `generate_model_with_cost`."""
-    return generate_model_with_cost(
-        prompt=prompt,
-        model_object_type=model_object_type,
-        system_prompt=system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
-        model=model,
-        reasoning_level=reasoning_level,
-    )
+    temperature: Optional[float] = None,
+    tool_choice: str = "required",
+) -> list[dict]:
+    """
+    Generate action using OpenAI function calling.
 
+    Args:
+        prompt: The prompt for the model
+        tools: List of function tool definitions (OpenAI format)
+        system_prompt: System prompt
+        image: Optional image input
+        multi_image: Optional multiple images
+        image_detail: Image detail level
+        model: Model to use (defaults to agent model)
+        reasoning_level: Reasoning level
+        temperature: Temperature setting
+        tool_choice: "auto", "required", or "none"
 
-def generate_model_gpt(
-    prompt: str,
-    model_object_type: Optional[Type[BaseModel]] = None,
-    system_prompt: str = "",
-    image: Union[bytes, bytearray, str, None] = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
-    reasoning_level: Union[ReasoningLevel, str, None] = None,
-    model: str | None = None,
-) -> Any:
-    """Convenience helper returning only the parsed structured output."""
-    return generate_model_gpt_with_cost(
-        prompt,
-        model_object_type=model_object_type,
-        system_prompt=system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
-        model=model,
-        reasoning_level=reasoning_level,
-    )[0]
+    Returns:
+        dict with:
+        - 'function_name': name of function to call
+        - 'arguments': dict of function arguments
+        - 'usage': token usage dict
+        - 'cost_usd': cost in USD
+    """
+    if model is None:
+        model = get_default_agent_model()
 
+    _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
-def generate_model(
-    prompt: str,
-    model_object_type: Optional[Type[BaseModel]] = None,
-    system_prompt: str = "",
-    image: Union[bytes, bytearray, str, None] = None,
-    multi_image: Optional[Sequence[bytes]] = None,
-    image_detail: str = "low",
-    reasoning_level: Union[ReasoningLevel, str, None] = None,
-    model: str | None = None,
-) -> Any:
-    """Public entry-point mirroring previous API semantics."""
-    return generate_model_gpt(
-        prompt=prompt,
-        model_object_type=model_object_type,
-        system_prompt=system_prompt,
-        image=image,
-        multi_image=multi_image,
-        image_detail=image_detail,
-        reasoning_level=reasoning_level,
-        model=model,
-    )
+    if temperature is None:
+        temperature = get_default_temperature()
+
+    # Build messages
+    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+
+    # Get OpenAI client
+    provider = get_provider(model)
+    if not isinstance(provider, OpenAIProvider):
+        raise UnsupportedModelError(
+            "Function calling is only supported with OpenAI models"
+        )
+
+    # Convert messages to OpenAI chat format
+    openai_messages = []
+    for msg in messages:
+        if isinstance(msg.get("content"), list):
+            # Handle multi-part content (text + images)
+            parts = []
+            for part in msg["content"]:
+                if part.get("type") == "input_text":
+                    parts.append({"type": "text", "text": part["text"]})
+                elif part.get("type") == "input_image":
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": part["image_url"]["url"],
+                            "detail": part["image_url"].get("detail", "high")
+                        }
+                    })
+            openai_messages.append({"role": msg["role"], "content": parts})
+        else:
+            openai_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    # Call OpenAI with function calling
+    try:
+        kwargs = {}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        response = provider.client.chat.completions.create(
+            model=model,
+            messages=openai_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            **kwargs,
+        )
+
+        message = response.choices[0].message
+
+        # Extract usage and calculate cost
+        usage = {
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+        cost = provider.calculate_cost(usage, model)
+
+        # Log cost
+        try:
+            from utils.event_logger import get_event_logger
+            get_event_logger().llm_cost(
+                cost_usd=cost,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                total_tokens=usage["total_tokens"],
+                model=model,
+            )
+        except Exception:
+            pass
+
+        # Extract tool call
+        if not message.tool_calls:
+            # Model didn't call a function
+            if tool_choice == "required":
+                raise ProviderAPIError("Model did not call any function despite tool_choice='required'")
+            return [{
+                "function_name": None,
+                "arguments": None,
+                "reasoning": message.content or "",
+                "usage": usage,
+                "cost_usd": cost,
+            }]
+
+        tool_calls = message.tool_calls
+        actions = []
+        for tool_call in tool_calls:
+            actions.append({
+                "function_name": tool_call.function.name,
+                "arguments": json.loads(tool_call.function.arguments),
+                "usage": usage,
+                "cost_usd": cost,
+            })
+
+        return actions
+
+    except Exception as e:
+        dprint(f"❌ Function calling error: {e}")
+        raise ProviderAPIError(f"Function calling failed: {e}")

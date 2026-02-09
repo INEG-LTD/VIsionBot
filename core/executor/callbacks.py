@@ -57,28 +57,6 @@ def clear_scroll_tracking(executor) -> None:
     executor.last_scroll_reason = None
 
 
-def register_post_action_callback(executor, callback: Callable[[PostActionContext], None]) -> None:
-    """
-    Register a callback to run after every action.
-
-    Args:
-        callback: Function that takes PostActionContext with complete action information
-
-    Example:
-        def my_callback(ctx: PostActionContext):
-            if ctx.success and ctx.action_type == ActionType.CLICK:
-                dprint(f"Clicked at {ctx.coordinates}")
-                # Run custom action: ctx.page.mouse.click(100, 100)
-
-        executor.register_post_action_callback(my_callback)
-    """
-    executor.post_action_callbacks.append(callback)
-    try:
-        executor.event_logger.system_debug(f"Registered post-action callback: {callback.__name__}")
-    except Exception:
-        pass
-
-
 def unregister_post_action_callback(executor, callback: Callable[[PostActionContext], None]) -> None:
     """Remove a registered callback"""
     if callback in executor.post_action_callbacks:
