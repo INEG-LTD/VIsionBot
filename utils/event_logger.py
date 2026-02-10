@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
-from models import Sequence, SequenceDecision
 from models.models import ActionStep, NotebookEntryType, TaskDefinition
 from utils.debug_print import dprint
 import simplejson as json
@@ -100,13 +99,10 @@ class EventType(str, Enum):
     TASK_FAIL = "task_fail"
     UNKNOWN_TASK_TYPE = "unknown_task_type"
 
-    # Sequential task events
-    SEQUENTIAL_TASK_GENERATION_ERROR = "sequential_task_generation_error"
-    SEQUENTIAL_START = "sequential_start"
-    SEQUENTIAL_COMPLETE = "sequential_complete"
-    SEQUENTIAL_FAIL = "sequential_fail"
-    SEQUENTIAL_ITERATION_COMPLETE = "sequential_iteration_complete"
-    SEQUENTIAL_ITERATION_FAIL = "sequential_iteration_fail"
+    # Progress-based task events
+    PROGRESS_MARKED = "progress_marked"
+    TARGET_REVISED = "target_revised"
+    STUCK_DETECTED = "stuck_detected"
     SUBTASK_START = "subtask_start"
     SUBTASK_COMPLETE = "subtask_complete"
     SUBTASK_FAIL = "subtask_fail"
@@ -131,10 +127,6 @@ class EventType(str, Enum):
     EXTRACTION_RETRY = "extraction_retry"
     EXTRACTION_EMPTY = "extraction_empty"
 
-    # Sequence planner events
-    SEQUENCE_DECISION = "sequence_decision"
-    SEQUENCE_RETRY = "sequence_retry"
-    SEQUENCE_END = "sequence_end"
 
 
     # Agent lifecycle events
@@ -588,48 +580,6 @@ class EventLogger:
         except Exception:
             pass
 
-    def sequential_task_generation_error(self, error: str, **details):
-        try:
-            self.emit(EventType.SEQUENTIAL_TASK_GENERATION_ERROR, f"Error generating sequential task: {error}", LogLevel.ERROR, error=error, **details)
-        except Exception:
-            pass
-
-    def sequential_task_start(self, sequential_task: Sequence, **details):
-        try:
-            self.emit(EventType.SEQUENTIAL_START, f"Sequential task start: {sequential_task.task}", LogLevel.INFO, sequential_task=sequential_task, **details)
-        except Exception:
-            pass
-
-    def sequential_task_complete(self, sequential_task: Sequence, **details):
-        try:
-            self.emit(EventType.SEQUENTIAL_COMPLETE, f"Sequential task complete: {sequential_task.task}", LogLevel.SUCCESS, sequential_task=sequential_task, **details)
-        except Exception:
-            pass
-
-    def sequential_task_fail(self, sequential_task: Sequence, error: str = None, **details):
-        try:
-            msg = f"Sequential task failed: {sequential_task.task}"
-            if error:
-                msg += f" - {error}"
-            self.emit(EventType.SEQUENTIAL_FAIL, msg, LogLevel.ERROR, sequential_task=sequential_task, error=error, **details)
-        except Exception:
-            pass
-
-    def sequential_iteration_complete(self, task_id: str, iteration: int, **details):
-        try:
-            self.emit(EventType.SEQUENTIAL_ITERATION_COMPLETE, f"Sequential iteration complete: {iteration}", LogLevel.SUCCESS, task_id=task_id, iteration=iteration, **details)
-        except Exception:
-            pass
-
-    def sequential_iteration_fail(self, task_id: str, iteration: int, error: str = None, **details):
-        try:
-            msg = f"Sequential iteration failed: {iteration}"
-            if error:
-                msg += f" - {error}"
-            self.emit(EventType.SEQUENTIAL_ITERATION_FAIL, msg, LogLevel.ERROR, task_id=task_id, iteration=iteration, error=error, **details)
-        except Exception:
-            pass
-
     def subtask_start(self, instruction: str, **details):
         try:
             self.emit(EventType.SUBTASK_START, f"Subtask start: {instruction}", LogLevel.INFO, instruction=instruction, **details)
@@ -726,24 +676,6 @@ class EventLogger:
     def extraction_empty(self, prompt: str, **details):
         try:
             self.emit(EventType.EXTRACTION_EMPTY, f"Extraction empty: {prompt}", LogLevel.WARNING, prompt=prompt, **details)
-        except Exception:
-            pass
-
-    def sequence_decision(self, decision: str, **details):
-        try:
-            self.emit(EventType.SEQUENCE_DECISION, f"Sequence decision: {decision}", LogLevel.INFO, decision=decision, **details)
-        except Exception:
-            pass
-
-    def sequence_retry(self, iteration: int, **details):
-        try:
-            self.emit(EventType.SEQUENCE_RETRY, f"Sequence retry iteration {iteration}", LogLevel.WARNING, iteration=iteration, **details)
-        except Exception:
-            pass
-
-    def sequence_end(self, reason: str, **details):
-        try:
-            self.emit(EventType.SEQUENCE_END, f"Sequence end: {reason}", LogLevel.INFO, reason=reason, **details)
         except Exception:
             pass
 

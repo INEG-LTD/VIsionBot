@@ -627,11 +627,6 @@ class Agent:
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
                 image_detail=self.config.model.image_detail,
-                max_actions_per_plan=self.config.execution.max_actions_per_plan,
-                task_target=task.target,
-                task_progress=task.progress,
-                task_history=task.history,
-                force_think=force_think,
                 current_iteration=self._current_iteration,
             )
 
@@ -683,13 +678,8 @@ class Agent:
 
                         self.event_logger.system_info(f"✓ Progress: {description} ({task.progress}/{task.target})")
 
-                        # Check completion — only finish when target is actually reached
-                        # For numeric targets: ignore done flag, trust the counter
-                        # For "all" targets: done flag is the only way to signal completion
-                        target_reached = numeric_target and task.progress >= numeric_target
-                        done_with_open_target = done and numeric_target is None
-
-                        if target_reached or done_with_open_target:
+                        # Check completion
+                        if done or (numeric_target and task.progress >= numeric_target):
                             return TaskResult(
                                 success=True,
                                 completion_status=TaskCompletionStatus.COMPLETED,
@@ -718,73 +708,9 @@ class Agent:
                         self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
                         continue
 
-                    # Handle think (with next_action decision)
-                    if current_action and current_action.lower().startswith("think:"):
-                        # Execute via executor (records in session tracker)
-                        self.action_executor.act(
-                            action_step=action_step,
-                            detected_elements=detected_elements,
-                            page_info=page_info,
-                            environment_state=environment_state,
-                            current_iteration=self._current_iteration,
-                        )
-                        actions_since_progress += 1
-
-                        # Parse next_action from think command
-                        # Format: "think: reasoning text | next_action=done"
-                        think_next_action = "continue"
-                        if "| next_action=" in current_action:
-                            think_next_action = current_action.split("| next_action=")[-1].strip().lower()
-
-                        if think_next_action in ("mark_progress", "done"):
-                            reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Completed"
-                            task.progress += 1
-                            task.history.append(reasoning)
-                            actions_since_progress = 0
-                            self.event_logger.system_info(f"✓ Progress (via think): {reasoning} ({task.progress}/{task.target})")
-
-                            # Complete if target reached
-                            if numeric_target and task.progress >= numeric_target:
-                                return TaskResult(
-                                    success=True,
-                                    completion_status=TaskCompletionStatus.COMPLETED,
-                                    progress=task.progress,
-                                    target=task.target,
-                                    history=task.history,
-                                    reasoning=f"Completed: {task.progress}/{task.target}",
-                                )
-
-                            # For "done": only actually finish if target is "all" (non-numeric)
-                            # For numeric targets, treat done same as mark_progress — the agent
-                            # can't prematurely end a task that hasn't reached its target
-                            if think_next_action == "done" and numeric_target is None:
-                                return TaskResult(
-                                    success=True,
-                                    completion_status=TaskCompletionStatus.COMPLETED,
-                                    progress=task.progress,
-                                    target=task.target,
-                                    history=task.history,
-                                    reasoning=reasoning,
-                                )
-
-                        elif think_next_action == "stuck":
-                            # Agent decided it's stuck
-                            reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Stuck"
-                            self.event_logger.system_info(f"✗ Agent stuck: {reasoning}")
-                            return TaskResult(
-                                success=False,
-                                completion_status=TaskCompletionStatus.STUCK,
-                                progress=task.progress,
-                                target=task.target,
-                                history=task.history,
-                                reasoning=reasoning,
-                            )
-
-                        # "continue" → just keep looping
-                        continue
-
-                    # Handle assert/flag (non-browser actions)
-                    if current_action and (current_action.lower().startswith("assert:") or
+                    # Handle think/assert/flag (non-browser actions)
+                    if current_action and (current_action.lower().startswith("think:") or
+                                          current_action.lower().startswith("assert:") or
                                           current_action.lower().startswith("flag:")):
                         # Execute via executor (records in session tracker)
                         self.action_executor.act(
@@ -919,6 +845,188 @@ class Agent:
             "actual_fields": actual_fields,
         }
 
+    def _execute_normal_task(
+        self,
+        task: Task,
+        user_mission: str,
+        current_sequence_task: Optional[str] = None,
+    ) -> TaskResult:
+        """
+        Execute a Normal Task using the existing ActionPlanner.
+
+        Args:
+            task: The normal task to execute
+            user_mission: Original user mission (for context)
+
+        Returns:
+            True if task completed successfully, False otherwise
+        """
+        task.status = TaskStatus.IN_PROGRESS
+
+        # Execute using shared task loop
+        result = self.run_task_loop(
+            task_instruction=task.goal,
+            original_prompt=user_mission,
+            extraction_schema=getattr(task, 'extraction_schema', None),
+            current_sequence_task=current_sequence_task,
+        )
+
+        if not result.success:
+            self.event_logger.task_fail(task.task_id, error=result.reasoning)
+            
+        return result
+
+    def _ordinal_suffix(self, n: int) -> str:
+        """
+        Returns the ordinal suffix for a number (st, nd, rd, th).
+
+        Args:
+            n: The number
+
+        Returns:
+            Ordinal suffix string
+        """
+        if 10 <= n % 100 <= 20:
+            return "th"
+        else:
+            return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+    def _execute_sequential_task(
+        self,
+        sequential_task: Sequence,
+        user_mission: str,
+    ) -> TaskResult:
+        """
+        Execute a Sequential Task using the Sequence Planner.
+
+        Args:
+            sequential_task: The sequential task to execute
+            user_mission: Original user mission (for context)
+
+        Returns:
+            True if task completed successfully (based on completion strategy)
+        """
+        sequential_task.status = TaskStatus.IN_PROGRESS
+
+        self.event_logger.sequential_task_start(sequential_task)
+        task_format = self.sequence_planner.decide_sequence_task_format(sequential_task) or ""
+
+        # Sequential execution loop
+        while True:
+            should_end, reason = self.sequence_planner.should_end_sequence(sequential_task)
+            print(f"should_end: {should_end}, reason: {reason}, _temp_end_sequence: {self._temp_end_sequence}")
+            # Check if we should end based on hard limits
+            if should_end:
+                self.event_logger.system_info(f"Sequential task ending: {reason}")
+                self.event_logger.sequence_end(reason)
+                break
+
+            # Capture current state
+            if hasattr(self, "_maybe_wait_for_turn_load"):
+                self._maybe_wait_for_turn_load(reason="sequential turn")
+            
+            task = f"{task_format}"
+            self.event_logger.sequence_decision(task)
+
+            # Handle decision
+            if self._temp_end_sequence:
+                self._temp_end_sequence = False
+                self._temp_end_sequence_reasoning = None
+                self._current_sequential_iteration += 1
+                print(f"current_sequential_iteration: {self._current_sequential_iteration}")
+
+            # Execute the generated task
+            generated_task_instruction = task
+            sequential_task.current_subtask = generated_task_instruction
+            self.event_logger.subtask_start(generated_task_instruction)
+            subtask_task_id = f"{sequential_task.task_id}-{sequential_task.state.current_turn}"
+            # Execute the generated task (using existing ActionPlanner)
+            result: TaskResult = self._execute_normal_task(
+                task=Task(
+                    task_id=subtask_task_id,
+                    goal=generated_task_instruction,
+                    created_at=time.time(),
+                    completed_at=None,
+                    status=TaskStatus.IN_PROGRESS,
+                ),
+                user_mission=user_mission,
+                current_sequence_task=sequential_task.task,
+            )
+
+            # Handle result
+            if result.success:
+                self.event_logger.subtask_complete(generated_task_instruction)
+                # Record successful iteration
+                self._record_subtask_success(subtask_task_id, sequential_task, result)
+
+            else:
+                # Max retries reached, record failure and move to next iteration
+                self._record_subtask_failure(subtask_task_id, sequential_task, result)
+                self.event_logger.subtask_fail(generated_task_instruction, error=result.reasoning)
+
+            # Move to next iteration
+            sequential_task.state.current_turn += 1
+                
+        self.event_logger.sequential_task_complete(sequential_task)
+
+        # Determine success based on completion strategy
+        cfg = self.sequential_task_config
+        strategy = cfg.completion_strategy
+
+        success = False
+        reasoning = None
+        if strategy == CompletionStrategy.BEST_EFFORT:
+            success = True
+            reasoning = "Sequential task completed: best effort"
+
+        if strategy == CompletionStrategy.STRICT:
+            # If target_count is set, require >= target successes.
+            # If indefinite, succeed if we got at least one success.
+            target = sequential_task.target_count
+            success = (sequential_task.state.total_success_count >= target) if target != -1 else (sequential_task.state.total_success_count > 0)
+            reasoning = f"Sequential task completed: {sequential_task.state.total_success_count} / {target}"
+            if not success:
+                target_display = sequential_task.target_count if sequential_task.target_count != -1 else "indefinite"
+                self.event_logger.sequential_task_fail(
+                    sequential_task, 
+                    error=f"Target not reached: {sequential_task.state.total_success_count} / {target_display}"
+                )
+                reasoning = f"Target not reached: {sequential_task.state.total_success_count} / {target_display}"
+
+        # THRESHOLD
+        target = sequential_task.target_count
+        total = sequential_task.state.total_success_count + sequential_task.state.total_failure_count
+        if target == -1:
+            # For indefinite sequences, use success rate of all attempts
+            if total == 0:
+                self.event_logger.sequential_task_fail(sequential_task, error="No attempts made (indefinite sequence)")
+                reasoning = "No attempts made (indefinite sequence)"
+                success = False
+            success_rate = sequential_task.state.total_success_count / total
+            success = success_rate >= cfg.success_threshold
+            if not success:
+                self.event_logger.sequential_task_fail(
+                    sequential_task, 
+                    error=f"Success rate below threshold: {success_rate:.1%} < {cfg.success_threshold:.1%}"
+                )
+                reasoning = f"Success rate below threshold: {success_rate:.1%} < {cfg.success_threshold:.1%}"
+
+        
+        if total == 0:
+            self.event_logger.sequential_task_fail(sequential_task, error="No attempts made (finite sequence)")
+            reasoning = "No attempts made (finite sequence)"
+            success = False
+            return TaskResult(success=success, reasoning=reasoning)
+
+        success_rate = sequential_task.state.total_success_count / total
+        success = success_rate >= cfg.success_threshold
+        reasoning = f"Sequential task completed: {success_rate:.1%} >= {cfg.success_threshold:.1%}"
+    
+        if not success:
+            self.event_logger.sequential_task_fail(sequential_task, error=f"Success rate below threshold: {success_rate:.1%} < {cfg.success_threshold:.1%}")
+            reasoning = f"Success rate below threshold: {success_rate:.1%} < {cfg.success_threshold:.1%}"
+        return TaskResult(success=success, reasoning=reasoning)
+
     def run_task_loop(
         self,
         task_instruction: str,
@@ -1013,6 +1121,9 @@ class Agent:
                 reasoning_level=self.agent_reasoning_level,
                 image_detail=self.config.model.image_detail,
                 interaction_summary_limit=None,
+                extraction_schema=extraction_schema,
+                current_sequential_iteration=self._current_sequential_iteration,
+                current_sequence_task=current_sequence_task,
                 current_iteration=iteration,
             )
 
@@ -1284,3 +1395,78 @@ class Agent:
             evidence={"max_iterations": self.max_iterations, "task_instruction": task_instruction},
         )
 
+    def _record_subtask_success(
+        self,
+        task_id: str,
+        sequential_task: Sequence,
+        result: TaskResult,
+    ) -> None:
+        """
+        Record a successful subtask in sequential task.
+
+        Args:
+            sequential_task: The sequential task
+            result: The successful action result
+        """
+        turn_idx = sequential_task.state.current_turn
+        extracted_data = {}
+        if result.evidence and "extracted_data" in result.evidence:
+            extracted_data = result.evidence.get("extracted_data", {})
+            
+        # Create subtask result
+        sub_task_result = SequenceSubTaskResult(
+            turn=turn_idx,
+            status="success",
+            result=extracted_data,
+            task_attempted=sequential_task.current_subtask,
+        )
+
+        # Add to completed subtasks
+        sequential_task.state.completed_turns.append(sub_task_result)
+        sequential_task.state.total_success_count += 1
+
+        self.notebook.add_subtask_result(
+            task_id=task_id,
+            description=sequential_task.current_subtask,
+            data=extracted_data,
+            entry_type=NotebookEntryType.SEQUENTIAL_SUBTASK_RESULT,
+            subtask_turn=turn_idx,
+        )
+            
+    def _record_subtask_failure(
+        self,
+        task_id: str,
+        sequential_task: Sequence,
+        result: TaskResult,
+    ) -> None:
+        """
+        Record a failed subtask in sequential task.
+
+        Args:
+            sequential_task: The sequential task
+            result: The failed action result
+        """
+        turn_idx = sequential_task.state.current_turn
+        extracted_data = {}
+        if result.evidence and "extracted_data" in result.evidence:
+            extracted_data = result.evidence.get("extracted_data", {})
+            
+        # Create subtask result
+        sub_task_result = SequenceSubTaskResult(
+            turn=turn_idx,
+            status="failed",
+            error=result.reasoning,
+            task_attempted=sequential_task.current_subtask,
+        )
+
+        # Add to completed subtasks
+        sequential_task.state.completed_turns.append(sub_task_result)
+        sequential_task.state.total_failure_count += 1
+
+        self.notebook.add_subtask_result(
+            task_id=task_id,
+            description=sequential_task.current_subtask,
+            data=extracted_data,
+            entry_type=NotebookEntryType.SEQUENTIAL_SUBTASK_RESULT,
+            subtask_turn=turn_idx,
+        )

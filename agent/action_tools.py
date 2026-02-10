@@ -331,7 +331,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     },
 
     # ========================================================================
-    # DATA EXTRACTION & COMPLETION
+    # DATA EXTRACTION
     # ========================================================================
     {
         "type": "function",
@@ -361,24 +361,29 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             }
         }
     },
+
+    # ========================================================================
+    # COGNITIVE TOOLS - Thinking, progress, and communication
+    # ========================================================================
     {
         "type": "function",
         "function": {
-            "name": "remember_data",
-            "description": "Remember data for later use",
+            "name": "think",
+            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next steps, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. No browser action is taken.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "data": {
-                        "type": "string",
-                        "description": "The data to remember"
-                    },
                     "reasoning": {
                         "type": "string",
-                        "description": "Reasoning for remembering the data"
+                        "description": "Your internal reasoning — what you're thinking about, what you've noticed, what you plan to do next"
+                    },
+                    "next_action": {
+                        "type": "string",
+                        "enum": ["continue", "mark_progress", "done", "stuck"],
+                        "description": "What to do after thinking. 'continue' = keep working with browser actions. 'mark_progress' = I just completed a unit of work, record it. 'done' = the task is fully complete, nothing left to do. 'stuck' = I can't make progress, stop."
                     }
                 },
-                "required": ["data", "reasoning"],
+                "required": ["reasoning", "next_action"],
                 "additionalProperties": False
             }
         }
@@ -386,25 +391,21 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "complete_task",
-            "description": "Mark the task as successfully completed",
+            "name": "assert_condition",
+            "description": "Check whether something you expect to be true actually is. Use this after an action to verify it worked — like checking that a button changed state, a page loaded, or text appeared.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {
+                    "condition": {
                         "type": "string",
-                        "description": "Brief summary of what was accomplished (e.g., 'Successfully logged in and navigated to dashboard', 'Extracted all job listings')"
-                    },
-                    "details": {
-                        "type": "string",
-                        "description": "Detailed explanation of the completion, including any important context or results"
+                        "description": "What you're checking (e.g., 'The like button changed to filled/red', 'The search results page loaded')"
                     },
                     "reasoning": {
                         "type": "string",
-                        "description": "Reasoning for completing the task"
+                        "description": "Why you believe this condition is true or false based on what you see"
                     }
                 },
-                "required": ["summary", "details", "reasoning"],
+                "required": ["condition", "reasoning"],
                 "additionalProperties": False
             }
         }
@@ -412,24 +413,113 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "complete_sequence",
-            "description": "Mark the sequence as successfully completed and end the sequence",
+            "name": "mark_progress",
+            "description": "Record that you completed a unit of work. Call this every time you finish one iteration of a repeating task (e.g., liked a post, extracted a listing, filled a form). Set done=true when you've finished everything.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "What you just accomplished (e.g., 'Liked the post about machine learning by @alice', 'Extracted job listing for Software Engineer at Google')"
+                    },
                     "reasoning": {
                         "type": "string",
-                        "description": "Reasoning for completing the sequence and ending the sequence"
+                        "description": "Brief explanation of why this counts as progress"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "How many units of work this represents (default: 1)",
+                        "default": 1,
+                        "minimum": 1
+                    },
+                    "done": {
+                        "type": "boolean",
+                        "description": "Only relevant for open-ended tasks (target='all'). Set to true when there's nothing left to do. For numeric targets, the system auto-completes when the count is reached — keep this false.",
+                        "default": False
                     }
                 },
-                "required": ["reasoning"],
+                "required": ["description", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "revise_target",
+            "description": "Adjust how many times you need to do something. Use this if you discover the actual number differs from the original target (e.g., there are only 3 items when asked for 5).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "new_target": {
+                        "type": "integer",
+                        "description": "The revised target count",
+                        "minimum": 1
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the target needs to change (e.g., 'Only 3 job listings are visible on the page, not 5')"
+                    }
+                },
+                "required": ["new_target", "reason"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "flag",
+            "description": "Send a heads-up to the user about something you noticed. This doesn't stop your work — it's just a notification. Use it for things like login walls, CAPTCHAs, unexpected states, or anything the user should know about.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "What you want to tell the user (e.g., 'Heads up — this site is asking me to log in before I can continue')"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why this is worth flagging"
+                    }
+                },
+                "required": ["message", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wait_for",
+            "description": "Wait for something to happen on the page before continuing. Use this when you can see the page is loading, an animation is playing, or content hasn't appeared yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "condition": {
+                        "type": "string",
+                        "description": "What you're waiting for (e.g., 'the search results to load', 'the spinner to disappear', 'the modal to close')"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Maximum seconds to wait (default: 10)",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 30
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why you need to wait"
+                    }
+                },
+                "required": ["condition", "reasoning"],
                 "additionalProperties": False
             }
         }
     },
 
     # ========================================================================
-    # COMMUNICATION & CONTROL
+    # COMMUNICATION
     # ========================================================================
     {
         "type": "function",
@@ -458,54 +548,6 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "talk_to_user",
-            "description": "Send a message to the user (for updates, explanations, or notifications).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Message to send to the user. This should be in a conversational tone and not a command. This is purely for communication with the user and does not advance the task."
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Reasoning for talking to the user"
-                    }
-                },
-                "required": ["message", "reasoning"],
-                "additionalProperties": False
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "defer_action",
-            "description": "Defer an action for later execution (use when page is still loading or not ready)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Why this action needs to be deferred (e.g., 'page still loading', 'waiting for element to appear')"
-                    },
-                    "intended_action": {
-                        "type": "string",
-                        "description": "Description of the action that will be performed once ready"
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Reasoning for deferring the action"
-                    }
-                },
-                "required": ["reason", "intended_action", "reasoning"],
-                "additionalProperties": False
-            }
-        }
-    },
 ]
 
 
@@ -519,23 +561,12 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
     Convert OpenAI function call to keyword action string format.
 
     This maintains compatibility with existing _execute_keyword_command infrastructure.
-
-    Args:
-        function_name: Name of the function called
-        arguments: Dictionary of function arguments
-
-    Returns:
-        Keyword action string (e.g., "click: button search")
-
-    Raises:
-        ValueError: If function name is unknown
     """
 
     if function_name == "click":
         return f"click: {arguments['element_type']} {arguments['description']}"
 
     elif function_name == "type_text":
-        # Escape single quotes in text
         text = arguments['text']
         return f"type: '{text}' : {arguments['field_description']}"
 
@@ -543,7 +574,6 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
         return f"clear_text: {arguments['field_description']}"
 
     elif function_name == "select_option":
-        # Escape single quotes in option
         option = arguments['option'].replace("'", "\\'")
         return f"select: '{option}' in {arguments['dropdown_description']}"
 
@@ -569,32 +599,40 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
 
     elif function_name == "scroll_page":
         direction = arguments['direction']
-        # amount = arguments.get('amount', 'medium')
-        # if amount != 'medium':
-        #     return f"scroll: {direction} {amount}"
         return f"scroll: {direction}"
 
     elif function_name == "extract_data":
         return f"extract: {arguments['data_description']}"
-    elif function_name == "remember_data":
-        return f"remember: {arguments['data']}"
-    elif function_name == "complete_task":
-        # Use details as the main content, summary as prefix
-        return f"complete: {arguments['details']}"
-    elif function_name == "complete_sequence":
-        return f"complete_sequence: {arguments['reasoning']}"
+
+    # New cognitive tools
+    elif function_name == "think":
+        next_action = arguments.get('next_action', 'continue')
+        return f"think: {arguments['reasoning']} | next_action={next_action}"
+
+    elif function_name == "assert_condition":
+        return f"assert: {arguments['condition']} | {arguments['reasoning']}"
+
+    elif function_name == "mark_progress":
+        count = arguments.get('count', 1)
+        done = arguments.get('done', False)
+        return f"mark_progress: {arguments['description']} | count={count} | done={done}"
+
+    elif function_name == "revise_target":
+        return f"revise_target: {arguments['new_target']} | {arguments['reason']}"
+
+    elif function_name == "flag":
+        return f"flag: {arguments['message']}"
+
+    elif function_name == "wait_for":
+        timeout = arguments.get('timeout_seconds', 10)
+        return f"wait_for: {arguments['condition']} | timeout={timeout}"
+
     elif function_name == "ask_user":
         context = arguments.get('context', '')
         question = arguments['question']
         if context:
             return f"ask: {question} (Context: {context})"
         return f"ask: {question}"
-
-    elif function_name == "talk_to_user":
-        return f"talk: {arguments['message']}"
-
-    elif function_name == "defer_action":
-        return f"defer: {arguments['reason']}"
 
     else:
         raise ValueError(f"Unknown function: {function_name}")

@@ -18,12 +18,23 @@ from browser.provider import BrowserConfig as BrowserProviderConfig
 BrowserConfig = BrowserProviderConfig
 
 
-class CompletionStrategy(str, Enum):
-    """Completion strategy for sequential task execution."""
-    
-    STRICT = "strict"
-    BEST_EFFORT = "best_effort"
-    THRESHOLD = "threshold"
+class TaskExecutionConfig(BaseModel):
+    """Configuration for unified task execution."""
+
+    max_actions_per_task: int = Field(
+        default=200,
+        ge=1,
+        description="Maximum number of actions before a task is forced to end"
+    )
+    stuck_threshold: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Number of actions without progress before forcing a think step"
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class ModelConfig(BaseModel):
@@ -292,86 +303,6 @@ class HistoryConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class SequentialTaskConfig(BaseModel):
-    """Configuration for sequential task execution."""
-
-    # Retry behavior
-    max_attempts_per_iteration: int = Field(
-        default=3,
-        ge=1,
-        le=10,
-        description="Maximum task generation attempts per iteration before marking as failed"
-    )
-
-    # Completion strategy
-    completion_strategy: CompletionStrategy = Field(
-        default=CompletionStrategy.BEST_EFFORT,
-        description="Completion strategy: 'strict' (only complete when target count reached with all successes), 'best_effort' (complete after attempting all iterations regardless of failures), 'threshold' (complete when success_threshold percentage is met)"
-    )
-
-    success_threshold: float = Field(
-        default=0.6,
-        ge=0.0,
-        le=1.0,
-        description="Minimum success rate (0.0-1.0) for threshold completion strategy"
-    )
-
-    # Safety limits
-    max_total_iterations: int = Field(
-        default=50,
-        ge=1,
-        le=1000,
-        description="Absolute maximum iterations to prevent runaway sequences"
-    )
-
-    fail_fast: bool = Field(
-        default=False,
-        description="End entire sequence on first failed iteration (after all retry attempts)"
-    )
-
-    # Model configuration
-    sequence_planner_model: Optional[str] = Field(
-        default=None,
-        description="Override model for Sequence Planner (None = use agent_model)"
-    )
-
-    sequence_planner_reasoning_level: Optional[ReasoningLevel] = Field(
-        default=None,
-        description="Override reasoning level for Sequence Planner (None = use agent_reasoning_level)"
-    )
-
-    # Context configuration
-    include_iteration_history: bool = Field(
-        default=True,
-        description="Include completed iteration history in Sequence Planner prompts"
-    )
-
-    max_history_in_prompt: int = Field(
-        default=10,
-        ge=1,
-        le=100,
-        description="Maximum iteration results to include in Sequence Planner context"
-    )
-
-    # Partial results handling
-    allow_partial_results: bool = Field(
-        default=True,
-        description="Allow dependent tasks to execute with partial results from failed sequential tasks"
-    )
-
-    ask_on_partial_failure: bool = Field(
-        default=True,
-        description="Ask user for guidance when sequential task completes with failures"
-    )
-
-    # Task Orchestrator validation
-    enable_plan_validation: bool = Field(
-        default=False,
-        description="Enable user validation of task decomposition before execution"
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class Config(BaseModel):
@@ -422,9 +353,9 @@ class Config(BaseModel):
         default_factory=HistoryConfig,
         description="History management configuration"
     )
-    sequential_tasks: SequentialTaskConfig = Field(
-        default_factory=SequentialTaskConfig,
-        description="Sequential task execution configuration"
+    task_execution: TaskExecutionConfig = Field(
+        default_factory=TaskExecutionConfig,
+        description="Unified task execution configuration"
     )
 
     class Config:

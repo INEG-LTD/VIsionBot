@@ -45,9 +45,10 @@ class ActionPlanner:
         interaction_summary_limit: Optional[int] = None,
         include_visible_text_in_agent_context: bool = False,
         max_actions_per_plan: int = 6,
-        extraction_schema: Optional[Dict[str, Any]] = None,
-        current_sequence_task: Optional[str] = None,
-        current_sequential_iteration: int = 0,
+        task_target: Union[int, str] = 1,
+        task_progress: int = 0,
+        task_history: Optional[List[str]] = None,
+        force_think: bool = False,
         current_iteration: int = 0,
     ):
         self.user_prompt = user_prompt
@@ -64,9 +65,10 @@ class ActionPlanner:
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.session_tracker: SessionTracker = session_tracker
         self.max_actions_per_plan = max_actions_per_plan
-        self.extraction_schema = extraction_schema
-        self.current_sequential_iteration = current_sequential_iteration
-        self.current_sequence_task = current_sequence_task
+        self.task_target = task_target
+        self.task_progress = task_progress
+        self.task_history = task_history or []
+        self.force_think = force_think
         self.current_iteration = current_iteration
    
     def get_next_actions_with_function_calling(
@@ -118,14 +120,17 @@ class ActionPlanner:
             )
 
             actions = []
-            for action in result:
+            # Limit to max_actions_per_plan to prevent excessive batching
+            limited_result = result[:self.max_actions_per_plan]
+
+            for action in limited_result:
                 # Check if function was called
                 if not action["function_name"]:
                     return None, "Model did not call any function"
-                
+
                 get_event_logger().system_debug(f"Function name: {action['function_name']}")
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
-                
+
                 # Create ActionStep from function call
                 action_step = ActionStep.from_function_call(
                     function_name=action["function_name"],
@@ -166,66 +171,57 @@ class ActionPlanner:
             getattr(state, "url_pointer", None)
         )
 
-        # Build sequential task section ONLY if actually in a sequence
-        sequence_info = ""
-        if self.current_sequence_task is not None:
-            get_event_logger().system_debug("Building sequential task prompt section")
-            sequence_info = f"""
+        # Build progress context
+        progress_info = ""
+        if self.task_target != 1 or self.task_progress > 0 or self.task_history:
+            # Format target display
+            target_display = self.task_target if isinstance(self.task_target, str) else f"{self.task_target}"
+
+            progress_info = f"""
 ═══════════════════════════════════════════════════════════════
-🔄 SEQUENTIAL TASK MODE (PRIORITY CONTEXT)
+📊 TASK PROGRESS
 ═══════════════════════════════════════════════════════════════
 
-You are executing a multi-turn sequential task.
+What you're doing: {self.user_prompt}
+Progress: {self.task_progress}/{target_display}
 
-Main task: {self.current_sequence_task}
-Current turn: {self.current_sequential_iteration}
+What you've completed so far:
+"""
+            if self.task_history:
+                for i, item in enumerate(self.task_history, 1):
+                    progress_info += f"{i}. {item}\n"
+            else:
+                progress_info += "(Nothing yet - just getting started)\n"
 
-HOW SEQUENTIAL TASKS WORK:
-1. Each turn requires specific action(s)
-2. After completing actions for your turn → call complete_task
-3. After completing the FINAL turn → call complete_sequence
-
-EXAMPLES:
-• "click a button 3 times":
-  Turn 1: Click button → complete_task
-  Turn 2: Click button → complete_task
-  Turn 3: Click button → complete_task → complete_sequence
-
-• "type 'hello' in field A and field B for 3 turns":
-  Turn 1: Type in A → Type in B → complete_task
-  Turn 2: Type in A → Type in B → complete_task
-  Turn 3: Type in A → Type in B → complete_task → complete_sequence
-
-CRITICAL RULES:
-✓ Check "Turn {self.current_sequential_iteration} actions so far" below
-✓ Count ONLY current turn actions (ignore previous turns)
-✓ If required action(s) succeeded this turn → call complete_task
-✓ DO NOT repeat actions endlessly (if it worked once, you're done)
-✓ After final turn → call complete_sequence
+            progress_info += f"""
+IMPORTANT:
+• After you complete each unit of work, call mark_progress to record it
+• The 'description' should be natural: "Liked the post about AI" not "Executed like action"
+• For numeric targets: the system auto-completes when progress reaches {target_display} — just keep calling mark_progress with done=false
+• Only use done=true for open-ended tasks (target="all") when there's nothing left to do
 
 """
-            # Add previous turn results
-            for notebook_entry in notebook.to_list():
-                if notebook_entry.type == NotebookEntryType.SEQUENTIAL_SUBTASK_RESULT:
-                    prev_turn_history = self._get_history_block(
-                        sequential_iteration=notebook_entry.subtask_turn,
-                        just_data=True
-                    )
-                    sequence_info += f"""
-Turn {notebook_entry.subtask_turn} completed:
-{prev_turn_history}
-"""
 
-            # Add current turn progress
-            current_turn_history = self._get_history_block(
-                sequential_iteration=self.current_sequential_iteration,
-                just_data=True
-            )
-            sequence_info += f"""
-Turn {self.current_sequential_iteration} actions so far:
-{current_turn_history if current_turn_history else "No actions yet this turn."}
-
+        # Add forced think prompt if stuck
+        forced_think_prompt = ""
+        if self.force_think:
+            forced_think_prompt = """
 ═══════════════════════════════════════════════════════════════
+⚠️ STUCK DETECTION - THINK FIRST
+═══════════════════════════════════════════════════════════════
+
+You've been working for a while without making progress.
+
+Before doing anything else, call think() and reason about:
+• What's going wrong? Am I stuck in a loop?
+• Is there a different approach I should try?
+• Should I scroll to find more content?
+• Should I stop and report what I've accomplished so far?
+
+After thinking, either:
+• Try a different approach
+• Call mark_progress with done=true if you're truly stuck
+
 """
 
         # Build overlay list
@@ -249,9 +245,12 @@ Turn {self.current_sequential_iteration} actions so far:
 
         overlays = "\n".join(candidate_lines) if candidate_lines else "No interactive elements found."
 
-        return f"""You are a browser automation agent. Your job: determine the next action to accomplish the user's task.
+        return f"""You are controlling a web browser. You can see the current page as a screenshot.
+Look at what's on screen, decide what to do, and do it — just like a person would.
 
-{sequence_info}
+{forced_think_prompt}
+
+{progress_info}
 
 ═══════════════════════════════════════════════════════════════
 WHAT YOU'VE DONE SO FAR
@@ -268,35 +267,19 @@ AVAILABLE ELEMENTS (Overlays)
 
 Format: Overlay <#> type=<button|input|link|...> [subtype=<text|email|...>] label="<text>" focused=<true|false>
 
-FOCUS STATE EXPLAINED:
-• focused=true → Element has keyboard focus
+FOCUS STATE:
+• focused=true → Element already has keyboard focus
 • If you need to type and input is focused=true → Just call type_text (don't click first)
 • Clicking an already-focused element usually does nothing
-• Don't click elements just to focus them if they're already focused
-
-═══════════════════════════════════════════════════════════════
-WHEN TO CALL complete_task
-═══════════════════════════════════════════════════════════════
-Call complete_task when:
-✓ User's request is fulfilled (e.g., "click login" → you clicked login successfully)
-✓ Data extraction done and stored in notebook
-✓ Navigation completed successfully
-✓ Form filled and submitted successfully
-
-Do NOT call complete_task when:
-✗ An action just failed
-✗ You're waiting for a page to load (use defer_action instead)
-✗ You're stuck and need help (use ask_user instead)
-✗ You're in the middle of a multi-step process
 
 {self._format_notebook(notebook)}
 
-{self._format_extraction_schema() if self.extraction_schema else ""}
+═══════════════════════════════════════════════════════════════
+AVAILABLE FUNCTIONS
+═══════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════════════════
-FUNCTIONS AVAILABLE
-═══════════════════════════════════════════════════════════════
-• click - Click an element (provide overlay index in overlay_index parameter)
+BROWSER ACTIONS:
+• click - Click an element
 • type_text - Type text into an input
 • clear_text - Clear text from an input field
 • select_option - Select option from dropdown
@@ -306,49 +289,61 @@ FUNCTIONS AVAILABLE
 • scroll_page - Scroll up/down
 • open_url - Navigate to URL
 • go_back / go_forward - Browser navigation
+
+DATA & COMMUNICATION:
 • extract_data - Extract and store data in notebook
-• remember_data - Store information for later use
-• complete_task - Mark current task as complete
-• complete_sequence - End sequential task (call after final turn)
 • ask_user - Ask user for clarification
-• talk_to_user - Send message to user (doesn't advance task)
-• defer_action - Wait for page to load/element to appear
+• flag - Send non-blocking notification to user
+
+COGNITIVE ACTIONS:
+• think - Stop and reason about your situation (no browser action)
+• assert_condition - Check if something is true from the screenshot
+• mark_progress - Record completion of a unit of work
+• revise_target - Adjust your target mid-execution
+• wait_for - Wait for a condition with timeout
 
 ═══════════════════════════════════════════════════════════════
-ERROR RECOVERY ESCALATION
+HOW TO USE mark_progress
 ═══════════════════════════════════════════════════════════════
-After 1 failed attempt → Try different element or approach
-After 2 failed attempts → Try scrolling or navigation
-After 3 failed attempts → Use ask_user to get help
-NEVER retry the exact same action that just failed
+
+After you complete each unit of work, call mark_progress:
+• description: Natural language (e.g., "Liked the post about AI")
+• count: How many units (default 1)
+• done: Set to true when finished or can't find more
+
+Examples:
+• mark_progress(description="Liked the post about machine learning", count=1, done=false)
+• mark_progress(description="Extracted company name: TechCorp", count=1, done=false)
+• mark_progress(description="No more posts visible", count=0, done=true)
 
 ═══════════════════════════════════════════════════════════════
-SPECIAL CASES
+ERROR RECOVERY
 ═══════════════════════════════════════════════════════════════
-• Modal blocking page → Close modal first
-• No elements found → Try scrolling
-• CAPTCHA appears → Use ask_user
-• Page still loading → Use defer_action
-• Element list changed after scroll → This is normal
+If something isn't working:
+• Try a different element or approach
+• Scroll if you can't find what you need
+• Use think() to reason about what's wrong
+• Use flag() to notify the user of issues
+• Don't repeat the exact same failed action
 
 ═══════════════════════════════════════════════════════════════
-CRITICAL RULES
+GUIDELINES
 ═══════════════════════════════════════════════════════════════
 1. Only act on elements visible in screenshot
 2. Be specific in element descriptions
 3. type_text REPLACES content (doesn't append)
 4. Check focused=true before clicking to focus
 5. Don't repeat failed actions
-6. For sequential tasks: complete_task after each turn, complete_sequence after final turn
+6. Use natural language when marking progress
 {base_knowledge_section}
 
 Choose the next action to take.
 """
 
-    def _get_history_block(self, sequential_iteration: Optional[int] = None, just_data: bool = False) -> str:
+    def _get_history_block(self, just_data: bool = False) -> str:
         if not self.session_tracker:
             return ""
-        return self.session_tracker.history_block(limit=self.interaction_summary_limit, sequential_iteration=sequential_iteration, just_data=just_data)
+        return self.session_tracker.history_block(limit=self.interaction_summary_limit, just_data=just_data)
 
     def _format_notebook(self, notebook: Notebook) -> str:
         """Format notebook entries for inclusion in the prompt."""
@@ -366,40 +361,8 @@ Choose the next action to take.
 NOTEBOOK (Your Stored Data)
 ═══════════════════════════════════════════════════════════════
 {notebook_str}
-• Use extract_data or remember_data to store information
-• Check notebook to determine if extraction tasks are complete
-• Partial matches OK (extracting "Jan 1, 1990" satisfies "extract birth date")
-"""
-
-    def _format_extraction_schema(self) -> str:
-        """Format extraction schema for inclusion in the prompt."""
-        if not self.extraction_schema:
-            return ""
-
-        import json
-
-        required_fields = self.extraction_schema.get("required", [])
-        properties = self.extraction_schema.get("properties", {})
-
-        field_lines = []
-        for field in required_fields:
-            field_info = properties.get(field, {})
-            description = field_info.get("description", "")
-            field_lines.append(f"  • {field}: {description}")
-
-        example = json.dumps({field: "..." for field in required_fields}, indent=2)
-
-        return f"""
-═══════════════════════════════════════════════════════════════
-EXTRACTION SCHEMA (Use Exact Field Names)
-═══════════════════════════════════════════════════════════════
-Required fields:
-{chr(10).join(field_lines)}
-
-Example correct format:
-{example}
-
-⚠️ Use these EXACT field names when calling extract_data
+• Use extract_data to store information
+• Check notebook to see what you've already collected
 """
 
     def _summarize_navigation_history(self, url_history: List[str], url_pointer: Optional[int]) -> str:

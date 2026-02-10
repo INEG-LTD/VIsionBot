@@ -33,8 +33,11 @@ class InteractionType(str, Enum):
     ELEMENT_DISAPPEAR = "element_disappear"
     CONTEXT_GUARD = "context_guard"
     EXTRACT = "extract"
-    DEFER = "defer"
-    REMEMBER = "remember"
+    THINK = "think"
+    ASSERT = "assert"
+    FLAG = "flag"
+    WAIT_FOR = "wait_for"
+    MARK_PROGRESS = "mark_progress"
 
 
 @dataclass
@@ -91,7 +94,7 @@ class Interaction:
     extracted_data: Optional[Dict[str, Any]] = None
     extraction_prompt: Optional[str] = None
     reasoning: Optional[str] = None  # Why this action was taken
-    sequential_iteration: Optional[int] = None
+    notes: Optional[str] = None  # Executor feedback (e.g., "fill failed, used keyboard")
 
     def __post_init__(self):
         if self.timestamp == 0:
@@ -116,8 +119,11 @@ class Interaction:
             "element_disappear": "wait for element to disappear",
             "context_guard": "guard context",
             "extract": "extract",
-            "defer": "defer",
-            "remember": "remember",
+            "think": "think",
+            "assert": "check",
+            "flag": "flag",
+            "wait_for": "wait for",
+            "mark_progress": "mark progress",
         }
         
         # Get past tense verb for the action
@@ -157,10 +163,13 @@ class Interaction:
         reasoning = (self.reasoning or "").replace("\n", " ").strip()
         reasoning_text = f" — {reasoning}" if reasoning else ""
 
+        # Executor notes (feedback about how the action was executed)
+        notes_text = f" [{self.notes}]" if self.notes else ""
+
         # Format: "1. You successfully clicked ..." or "2. You failed to type ..."
         success_prefix = "successfully" if self.success else "failed to"
-        
-        return f"{step_number}. You {success_prefix} {action_description}{page_info}{reasoning_text}"
+
+        return f"{step_number}. You {success_prefix} {action_description}{notes_text}{page_info}{reasoning_text}"
 
 
 class SessionTracker:
@@ -402,7 +411,7 @@ class SessionTracker:
         Record an interaction that has occurred.
         Simple tracking without goal evaluation.
         """
-    
+
         interaction = Interaction(
             timestamp=time.time(),
             interaction_type=interaction_type,
@@ -422,7 +431,7 @@ class SessionTracker:
             extracted_data=kwargs.get('extracted_data'),
             extraction_prompt=kwargs.get('extraction_prompt'),
             reasoning=kwargs.get('reasoning') or self._current_action_reasoning,  # Why this action was taken
-            sequential_iteration=kwargs.get('sequential_iteration'),
+            notes=kwargs.get('notes'),  # Executor feedback
         )
         
         # Clear reasoning after using it (it's only for the next interaction)
@@ -449,12 +458,13 @@ class SessionTracker:
         except Exception:
             pass
 
-    def history_block(self, limit: Optional[int] = 20, sequential_iteration: Optional[int] = None, just_data: bool = False) -> str:
+    def history_block(self, limit: Optional[int] = 20, just_data: bool = False) -> str:
         """
         Generate a formatted history block for LLM prompts.
 
         Args:
             limit: Maximum number of recent interactions to include (None = all)
+            just_data: If True, return only the interaction lines without the full template
 
         Returns:
             Formatted string suitable for inclusion in LLM prompts
@@ -467,22 +477,8 @@ class SessionTracker:
         if not interactions:
             return "HISTORY: <none yet>"
 
-        lines = []
         lines_str = ""
-        print(f"sequential_iteration: {sequential_iteration}")
-        print(f"just_data: {just_data}")
-        # If sequential_iteration is specified, filter interactions to only those from that iteration
-        if sequential_iteration is not None:
-            filtered_interactions = [
-                interaction
-                for interaction in interactions
-                if getattr(interaction, "sequential_iteration", None) == sequential_iteration
-            ]
-        else:
-            filtered_interactions = interactions
-
-        for i, interaction in enumerate(filtered_interactions, start=1):
-            lines.append(interaction.summary_line(step_number=i))
+        for i, interaction in enumerate(interactions, start=1):
             lines_str += f"{interaction.summary_line(step_number=i)}\n"
         # Build question/answer pairs section if available
         qa_section = ""

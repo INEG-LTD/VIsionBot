@@ -240,7 +240,6 @@ class Executor:
                 target_element_info={"direction": "forward", "from": before_url, "to": after_url},
                 success=success,
                 error_message=error_msg,
-                sequential_iteration=self.current_sequential_iteration,
             )
         except Exception:
             pass
@@ -353,7 +352,6 @@ class Executor:
             } if target_description or overlay_index else None,
             reasoning=step_reasoning,  # Include WHY this action was taken
             success=success,
-            sequential_iteration=self.current_sequential_iteration,
         )
         
         return success
@@ -425,7 +423,6 @@ class Executor:
                     "question": question,
                 },
                 success=ask_result,
-                sequential_iteration=self.current_sequential_iteration,
             )
             
             # Store question/answer pair for agent context if answer was received
@@ -449,17 +446,16 @@ class Executor:
         page_info = before_state.page_info
         failed_elements = before_state.failed_elements
 
-        def clear_input_field(x: Optional[int], y: Optional[int]) -> None:
+        def clear_input_field(x: Optional[int], y: Optional[int]) -> str:
             """
             Clear an input field before typing to ensure previous text is removed.
             Tries multiple methods: JavaScript first, then keyboard select-all+delete.
 
-            Args:
-                x: X coordinate of the input field
-                y: Y coordinate of the input field
+            Returns:
+                Status string: "js" if JS cleared, "keyboard" if keyboard fallback, "failed" if both failed
             """
             if x is None or y is None:
-                return
+                return "failed"
 
             try:
                 # Try to clear using JavaScript first (most reliable)
@@ -482,7 +478,7 @@ class Executor:
                     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                         dprint(f"  ✅ Cleared field using JavaScript")
                     time.sleep(0.1)
-                    return
+                    return "js"
             except Exception as e:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
@@ -499,10 +495,12 @@ class Executor:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                     dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+                return "keyboard"
             except Exception as e:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                     dprint(f"  ⚠️ Keyboard clear failed: {e}")
+                return "failed"
 
         overlay_index = self.select_best_overlay(
             step.action,
@@ -558,7 +556,6 @@ class Executor:
             reasoning=None,
             success=success,
             error_message=error_msg,
-            sequential_iteration=self.current_sequential_iteration,
         )
         
     def execute_type(
@@ -575,18 +572,17 @@ class Executor:
         before_state = self.session_tracker._capture_current_state()
         
         current_screenshot = before_state.screenshot
-        
-        def clear_input_field(x: Optional[int], y: Optional[int]) -> None:
+
+        def clear_input_field(x: Optional[int], y: Optional[int]) -> str:
             """
             Clear an input field before typing to ensure previous text is removed.
             Tries multiple methods: JavaScript first, then keyboard select-all+delete.
 
-            Args:
-                x: X coordinate of the input field
-                y: Y coordinate of the input field
+            Returns:
+                Status string: "js" if JS cleared, "keyboard" if keyboard fallback, "failed" if both failed
             """
             if x is None or y is None:
-                return
+                return "failed"
 
             try:
                 # Try to clear using JavaScript first (most reliable)
@@ -609,7 +605,7 @@ class Executor:
                     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                         dprint(f"  ✅ Cleared field using JavaScript")
                     time.sleep(0.1)
-                    return
+                    return "js"
             except Exception as e:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
@@ -626,10 +622,12 @@ class Executor:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                     dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+                return "keyboard"
             except Exception as e:
                 # Only show in debug mode
                 if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
                     dprint(f"  ⚠️ Keyboard clear failed: {e}")
+                return "failed"
 
         # Extract the text from the type command. eg type: text : field
         split_action = step.action.split(":")
@@ -660,9 +658,10 @@ class Executor:
         except Exception:
             pass
 
+        clear_status = "skipped"
         try:
             # Always clear the field before typing to ensure previous text is removed
-            clear_input_field(x, y)
+            clear_status = clear_input_field(x, y)
 
             # Try to get element selector and use fill() or press_sequentially
             element_selector = None
@@ -694,6 +693,7 @@ class Executor:
 
             # Fallback to keyboard method if fill() didn't work
             if not element_selector:
+                used_keyboard_fallback = True
                 # Ensure element is focused before keyboard typing
                 if x is not None and y is not None:
                     try:
@@ -705,10 +705,23 @@ class Executor:
                 self.browser.page.keyboard.type(text_to_type, delay=50)
                 success = True
                 error_msg = None
+            else:
+                used_keyboard_fallback = False
         except Exception as e:
+            used_keyboard_fallback = False
             success = False
             error_msg = str(e)
             self.event_logger.command_failure(command=step.action, error=f"Typing failed: {e}")
+
+        # Build executor feedback notes
+        type_notes_parts = []
+        if clear_status == "failed":
+            type_notes_parts.append("clear failed — field may still have old text")
+        if used_keyboard_fallback:
+            type_notes_parts.append("fill() failed, used keyboard fallback")
+        if not success:
+            type_notes_parts.append(f"typing failed: {error_msg}" if error_msg else "typing failed")
+        type_notes = "; ".join(type_notes_parts) if type_notes_parts else None
 
         # Build target description from step information
         target_description = None
@@ -748,7 +761,7 @@ class Executor:
             reasoning=step_reasoning,  # Include WHY this action was taken
             success=success,
             error_message=error_msg,
-            sequential_iteration=self.current_sequential_iteration,
+            notes=type_notes,
         )
 
         try:
@@ -826,7 +839,6 @@ class Executor:
             scroll_axis=axis,
             success=success,
             error_message=error_msg,
-            sequential_iteration=self.current_sequential_iteration,
         )
 
         return success
@@ -864,8 +876,7 @@ class Executor:
                     keys_pressed=step_keys,
                     success=False,
                     error_message=str(e),
-                    sequential_iteration=self.current_sequential_iteration,
-                )
+                    )
                 return False
         after_state = self.session_tracker._capture_current_state()
 
@@ -877,7 +888,6 @@ class Executor:
             keys_pressed=step_keys,
             success=True,
             error_message=None,
-            sequential_iteration=self.current_sequential_iteration,
         )
         
         return True
@@ -1076,7 +1086,6 @@ class Executor:
             navigation_url=url if success else None,
             success=success,
             error_message=error_message,
-            sequential_iteration=self.current_sequential_iteration,
         )
 
         return success
@@ -1127,7 +1136,6 @@ class Executor:
                 target_element_info={"direction": "back", "from": before_url, "to": after_url},
                 success=success,
                 error_message=error_msg,
-                sequential_iteration=self.current_sequential_iteration,
             )
         except Exception:
             pass
@@ -1153,7 +1161,6 @@ class Executor:
             coordinates=(x, y) if x is not None and y is not None else None,
             target_description=step.upload_file_path,
             upload_file_path=step.upload_file_path,
-            sequential_iteration=self.current_sequential_iteration,
         )
             
         self.upload_handler.handle_upload_field(step, elements, page_info)
@@ -1180,7 +1187,6 @@ class Executor:
             coordinates=(x, y) if x is not None and y is not None else None,
             target_description=step.datetime_value or "date field",
             datetime_value=step.datetime_value,
-            sequential_iteration=self.current_sequential_iteration,
         )
 
         self.datetime_handler.handle_datetime_field(step, elements, page_info)
@@ -1196,7 +1202,6 @@ class Executor:
             },
             text_input=step.datetime_value,
             success=step_success,
-            sequential_iteration=self.current_sequential_iteration,
         )
         return step_success
     
@@ -1349,44 +1354,42 @@ class Executor:
             except Exception as e:
                 self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing navigate command: {e}")
                 return None
-        elif keyword == "defer":
-            try:
-                result = self.execute_defer(
-                action_step=action_step,
-                payload=payload,
-                confirm_before_interaction=confirm_before_interaction,
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing defer command: {e}")
-                return None
         elif keyword == "extract":
             try:
                 result, err = self.extract(
                     step=action_step,
                     extraction_schema=extraction_schema,
                 )
-                
+
                 if not result:
                     self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing extract command: {err}")
 
             except Exception as e:
                 self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing extract command: {e}")
                 return None
-        elif keyword == "remember":
+        elif keyword == "think":
             try:
-                result = self.remember(
-                    step=action_step,
-                )
+                result = self.execute_think(step=action_step)
             except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing remember command: {e}")
+                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing think command: {e}")
                 return None
-        elif keyword == "talk":
+        elif keyword == "assert":
             try:
-                result = self.execute_talk(
-                    step=action_step,
-            )
+                result = self.execute_assert(step=action_step)
             except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing talk command: {e}")
+                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing assert command: {e}")
+                return None
+        elif keyword == "flag":
+            try:
+                result = self.execute_flag(step=action_step)
+            except Exception as e:
+                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing flag command: {e}")
+                return None
+        elif keyword == "wait_for":
+            try:
+                result = self.execute_wait_for(step=action_step)
+            except Exception as e:
+                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing wait_for command: {e}")
                 return None
         else:
             # Unsupported keyword
@@ -1407,57 +1410,6 @@ class Executor:
             print(f"Keyword command execution failed: {result}")
             self.event_logger.command_failure(command=action_step.action, error="Keyword command execution failed", duration_ms=duration_ms)
         return result
-    
-    def execute_talk(
-        self,
-        step: ActionStep
-    ) -> bool:
-        talk_message = step.action.replace("talk:", "").strip()
-        if not talk_message:
-            self.event_logger.agent_talk_failure(message="No message provided", error="No message provided")
-            return False
-        if not self.agent_talk_callback:
-            self.event_logger.system_warning("No agent talk callback configured. Using default implementation.")
-            print(f"Message to user> {talk_message}")
-            return True
-        else:
-            try:
-                self.agent_talk_callback(talk_message)
-            except Exception as e:
-                self.event_logger.agent_talk_failure(message=talk_message, error=str(e))
-                return False
-            return True
-    
-    def remember(
-        self,
-        step: ActionStep,
-    ) -> bool:
-        remember_data = step.action.replace("remember:", "").strip()
-        if not remember_data:
-            self.event_logger.system_warning("No data to remember provided")
-            return False
-        
-        before_state = self.session_tracker._capture_current_state()
-        try:
-            self.notebook.add_remember(
-                task=step.action,
-                data=remember_data,
-                timestamp=time.time(),
-            )
-        except Exception as e:
-            self.event_logger.system_warning(f"Failed to add remember to notebook: {e}")
-            return False
-    
-        after_state = self.session_tracker._capture_current_state()
-        self.session_tracker.record_interaction(
-            IT.REMEMBER,
-            before_state=before_state,
-            after_state=after_state,
-            remember_data=remember_data,
-            success=True,
-            sequential_iteration=self.current_sequential_iteration,
-        )
-        return True
     
     def extract(
         self,
@@ -1620,8 +1572,7 @@ class Executor:
                     extraction_prompt=extraction_system_prompt,
                     extracted_data=extracted_text,
                     success=True,
-                    sequential_iteration=self.current_sequential_iteration,
-                )
+                    )
                 self.event_logger.extraction_success(extraction_prompt, result={"text": extracted_text})
                 
                 # Add extraction to notebook if available
@@ -1674,8 +1625,7 @@ class Executor:
                     extraction_prompt=extraction_prompt,
                     extracted_data=extracted_dict,
                     success=True,
-                    sequential_iteration=self.current_sequential_iteration,
-                )
+                    )
                 self.event_logger.extraction_success(extraction_prompt, result=extracted_dict)
                 
                 # Add extraction to notebook if available
@@ -1707,11 +1657,126 @@ class Executor:
                 extracted_data=None,
                 success=False,
                 error_message=error_msg,
-                sequential_iteration=self.current_sequential_iteration,
             )
             self.event_logger.extraction_failure(extraction_prompt, error=error_msg)
             
             return False, error_msg
+
+    def execute_think(self, step: ActionStep) -> bool:
+        """Execute a think action - pure reasoning with no browser action."""
+        reasoning = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+
+        if not reasoning:
+            self.event_logger.system_warning("No reasoning provided for think action")
+            return False
+
+        # Capture state for record keeping
+        before_state = self.session_tracker._capture_current_state()
+        after_state = before_state  # No change for think
+
+        # Record the think interaction
+        self.session_tracker.record_interaction(
+            IT.THINK,
+            before_state=before_state,
+            after_state=after_state,
+            reasoning=reasoning,
+            success=True,
+        )
+
+        self.event_logger.system_info(f"🤔 Agent thinking: {reasoning}")
+        return True
+
+    def execute_assert(self, step: ActionStep) -> bool:
+        """Execute an assert action - check a condition from the screenshot."""
+        condition = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+
+        if not condition:
+            self.event_logger.system_warning("No condition provided for assert action")
+            return False
+
+        # Capture state for record keeping
+        before_state = self.session_tracker._capture_current_state()
+        after_state = before_state  # No change for assert
+
+        # Record the assert interaction
+        self.session_tracker.record_interaction(
+            IT.ASSERT,
+            before_state=before_state,
+            after_state=after_state,
+            target_element_info={"condition": condition},
+            success=True,
+        )
+
+        self.event_logger.system_info(f"✓ Agent checking: {condition}")
+        return True
+
+    def execute_flag(self, step: ActionStep) -> bool:
+        """Execute a flag action - non-blocking user notification."""
+        message = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+
+        if not message:
+            self.event_logger.system_warning("No message provided for flag action")
+            return False
+
+        # Capture state for record keeping
+        before_state = self.session_tracker._capture_current_state()
+        after_state = before_state  # No change for flag
+
+        # Record the flag interaction
+        self.session_tracker.record_interaction(
+            IT.FLAG,
+            before_state=before_state,
+            after_state=after_state,
+            target_element_info={"message": message},
+            success=True,
+        )
+
+        self.event_logger.system_warning(f"🚩 {message}")
+        return True
+
+    def execute_wait_for(self, step: ActionStep) -> bool:
+        """Execute a wait_for action - conditional wait with timeout."""
+        # Parse: "wait_for: condition | timeout=10"
+        parts = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+
+        if not parts:
+            self.event_logger.system_warning("No condition provided for wait_for action")
+            return False
+
+        # Split condition and timeout
+        condition = parts
+        timeout_seconds = 10  # default
+
+        if "|" in parts:
+            condition_part, timeout_part = parts.split("|", 1)
+            condition = condition_part.strip()
+            # Parse timeout=N
+            timeout_match = re.search(r'timeout=(\d+)', timeout_part)
+            if timeout_match:
+                timeout_seconds = int(timeout_match.group(1))
+
+        # Capture before state
+        before_state = self.session_tracker._capture_current_state()
+
+        # Perform the wait - use a simple sleep for now
+        # TODO: Could be enhanced with actual page.wait_for_selector or similar
+        import time
+        self.event_logger.system_info(f"⏳ Waiting for: {condition} (timeout: {timeout_seconds}s)")
+        time.sleep(min(timeout_seconds, 5))  # Cap at 5 seconds for safety
+
+        # Capture after state
+        after_state = self.session_tracker._capture_current_state()
+
+        # Record the wait interaction
+        self.session_tracker.record_interaction(
+            IT.WAIT_FOR,
+            before_state=before_state,
+            after_state=after_state,
+            target_element_info={"condition": condition, "timeout": timeout_seconds},
+            success=True,
+        )
+
+        return True
 
     def act(
         self,
@@ -1727,14 +1792,12 @@ class Executor:
         max_attempts: Optional[int] = None,
         base_knowledge: Optional[List[str]] = None,
         current_iteration: Optional[int] = None,
-        current_sequential_iteration: Optional[int] = None,
         **kwargs
     ) -> ActionResult:
         command = action_step.action
-        
-        # Store iteration counters as instance variables for access throughout execution
+
+        # Store iteration counter as instance variable for access throughout execution
         self.current_iteration = current_iteration
-        self.current_sequential_iteration = current_sequential_iteration
         
         # Helper function to create ActionResult
         def _create_result(success: bool, message: str = "", error: Optional[str] = None, 

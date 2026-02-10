@@ -1,13 +1,10 @@
 """
 Agent Results - Consolidated result types for mission, task, and turn execution.
-
-This module contains all result types used throughout the agent system:
-- TaskResult: Result of a single task execution
-- MissionResult: Result of a complete mission (returned to user)
-- TurnDecision: Decision made at each agent turn
 """
-from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Union
+
+from models.models import TaskCompletionStatus
 
 
 @dataclass
@@ -17,6 +14,10 @@ class TaskResult:
     reasoning: str = ""
     confidence: float = 0.0
     evidence: Optional[Dict[str, Any]] = None
+    completion_status: Optional[TaskCompletionStatus] = None
+    progress: int = 0
+    target: Union[int, str] = 1
+    history: Optional[List[str]] = None
 
     @property
     def status(self) -> str:
@@ -31,14 +32,6 @@ class MissionResult:
     reasoning: str = ""
 
     def __init__(self):
-        """
-        Initialize MissionResult from TaskResult.
-
-        Args:
-            task_result: The TaskResult from agent execution
-            extracted_data: Optional dictionary of extracted data
-            orchestration: Optional orchestration metadata
-        """
         self.success = False
         self.task_results = []
         self.reasoning = ""

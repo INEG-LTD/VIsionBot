@@ -220,26 +220,15 @@ def apply_thinking_border(agent: Agent):
             manager.enable_blocking()
     Agent.extract = patched_extract
 
-    original_execute_normal_task = Agent._execute_normal_task
-    def patched_execute_normal_task(self, *args, **kwargs):
+    original_execute_task = Agent._execute_task
+    def patched_execute_task(self, *args, **kwargs):
         manager.enable_blocking()
         try:
-            result = original_execute_normal_task(self, *args, **kwargs)
+            result = original_execute_task(self, *args, **kwargs)
             return result
         finally:
             manager.disable_blocking()
-    Agent._execute_normal_task = patched_execute_normal_task
-
-
-    original_execute_sequential_task = Agent._execute_sequential_task
-    def patched_execute_sequential_task(self, *args, **kwargs):
-        manager.enable_blocking()
-        try:
-            result = original_execute_sequential_task(self, *args, **kwargs)
-            return result
-        finally:
-            manager.disable_blocking()
-    Agent._execute_sequential_task = patched_execute_sequential_task
+    Agent._execute_task = patched_execute_task
 
     return manager
 
@@ -427,7 +416,7 @@ config = Config(
     ),
     execution=ExecutionConfig(
         max_attempts=30,
-        # max_actions_per_plan=1,
+        max_actions_per_plan=1,
         track_ineffective_actions=False,
         wait_for_load_before_turn=True,
         wait_for_load_state="networkidle",

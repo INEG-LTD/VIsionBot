@@ -3,13 +3,13 @@ Consolidated data models for browser-vision-bot.
 
 This module contains all core data models organized by category:
 - Core models: ActionType, PageSection, DetectedElement, etc.
-- Task models: Task, Sequence, MissionPlan
+- Task models: Task, MissionPlan
 - Intent models: ActionIntent
 """
 from __future__ import annotations
 
 from ast import Str
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -49,8 +49,6 @@ class PageSection(str, Enum):
 
 class NotebookEntryType(str, Enum):
     """Types of entries stored in the agent notebook"""
-    NORMAL_TASK_RESULT = "normal_task_result"
-    SEQUENTIAL_SUBTASK_RESULT = "sequential_subtask_result"
     EXTRACTION = "extraction"
     URL_EXTRACTION = "url_extraction"
 
@@ -58,7 +56,6 @@ class NotebookEntryType(str, Enum):
 class DetectedElement(BaseModel):
     """A UI element detected in the screenshot"""
     element_label: Optional[str] = Field(default=None, description="The label of the element")
-    # description: str = Field(description="What this element is (e.g., 'Submit button', 'Email input')")
     element_type: str = Field(description="Type: button, input, link, text, select, upload, date, etc.")
     is_clickable: bool = Field(description="Can this element be clicked?")
     box_2d: List[int] = Field(description="Gemini format: [y_min, x_min, y_max, x_max] normalized 0-1000")
@@ -68,7 +65,7 @@ class DetectedElement(BaseModel):
     requires_special_handling: Optional[bool] = Field(default=False, description="Whether this field requires special multi-step handling")
     overlay_number: Optional[int] = Field(default=None, description="The overlay number from numbered detection system")
     is_focused: Optional[bool] = Field(default=False, description="Is this element currently focused?")
-    
+
 
 
 class PageElements(BaseModel):
@@ -82,11 +79,6 @@ class ActionStep(BaseModel):
     action: str
     reasoning: str | None = None
     keys_to_press: List[str] | None = None
-
-    # Function calling metadata (optional, for tracking structured actions)
-    # These are excluded from JSON schema to avoid OpenAI strict mode conflicts
-    # function_name: str | None = Field(default=None, exclude=True)
-    # function_arguments: Dict[str, Any] | None = Field(default=None, exclude=True)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -202,7 +194,7 @@ class ActionStep(BaseModel):
                 raise ValueError(f"{cmd} requires additional detail")
             return body
 
-        # Commands with optional body: defer, stop, complete, ask
+        # Commands with optional body
         return body
 
 
@@ -224,7 +216,6 @@ class VisionPlan(BaseModel):
 
 class Goal(BaseModel):
     """Goal definition"""
-    # description: str = Field(description="What we want to achieve")
     target_url_contains: List[str] = Field(default_factory=list, description="URL should contain these strings")
     target_page_text: List[str] = Field(default_factory=list, description="Page should contain this text")
     form_should_be_filled: bool = Field(default=False, description="All required form fields should be filled")
@@ -256,14 +247,8 @@ class FailedAction(BaseModel):
 
 
 # ============================================================================
-# TASK MODELS - Mission, Task, and Sequence execution
+# TASK MODELS - Unified task system with targets
 # ============================================================================
-
-class TaskType(str, Enum):
-    """Type of task"""
-    NORMAL = "normal"
-    SEQUENTIAL = "sequential"
-
 
 class TaskStatus(str, Enum):
     """Status of task execution"""
@@ -272,66 +257,46 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+
+class TaskCompletionStatus(str, Enum):
+    """How a task finished"""
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    STUCK = "stuck"
+    BLOCKED = "blocked"
+
+
 @dataclass
 class Task:
-    """A single executable instruction (formerly NormalTask)"""
-    # Must be Literal for Pydantic discriminated union (MissionPlan / MissionPlannerOutput)
+    """A unified task with a target. target=1 for single actions, target=N for repetitive, target='all' for indefinite."""
     goal: str
-    task_id: str
-    status: TaskStatus
-    created_at: float
-    completed_at: Optional[float]
+    target: Union[int, str] = 1  # 1, 5, "all"
+    progress: int = 0
+    history: List[str] = field(default_factory=list)
+    task_id: str = ""
+    status: TaskStatus = TaskStatus.PENDING
+    completion_status: Optional[TaskCompletionStatus] = None
+    created_at: float = 0.0
+    completed_at: Optional[float] = None
 
-class SequenceSubTaskResult(BaseModel):
-    """Result of a single turn within a sequence (formerly IterationResult)"""
-    turn: int = Field(description="Turn number (1-indexed)")
-    status: Literal["success", "failed"] = Field(description="Whether this turn succeeded")
-    result: Optional[Dict[str, Any]] = Field(default=None, description="Data collected in this turn")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    task_attempted: str = Field(description="Task instruction attempted for this turn")
-
-class SequenceState(BaseModel):
-    """Tracks progress through a sequence (formerly SequentialState)"""
-    current_turn: int = 1
-    completed_turns: List[SequenceSubTaskResult] = Field(default_factory=list)
-    total_success_count: int = 0
-    total_failure_count: int = 0
-
-
-class SequenceBlueprint(BaseModel):
-    """A blueprint for a sequence task"""
-    target_count: int = Field(description="Target count, or -1 for indefinite sequences")
-    task: str
-
-class Sequence(BaseModel):
-    """A high-level goal requiring multiple turns (formerly SequentialTask)"""
-    target_count: int = Field(description="Target count, or -1 for indefinite sequences")
-    extraction_schema: Dict[str, Any]
-    task: str
-    task_id: str
-    created_at: float
-    completed_at: float | None = None
-    state: SequenceState | None = None
-    current_subtask: str = None
-    status: TaskStatus = TaskStatus.PENDING 
 
 @dataclass
 class MissionPlan:
-    """Complete plan of tasks for executing a mission (formerly TaskList)"""
-    tasks: List[Union[Task, Sequence]]
+    """Complete plan of tasks for executing a mission"""
+    tasks: List[Task] = field(default_factory=list)
     current_task_index: int = 0
 
-    def get_current_task(self) -> Optional[Union[Task, Sequence]]:
+    def get_current_task(self) -> Optional[Task]:
         """Get the current task being executed"""
         if 0 <= self.current_task_index < len(self.tasks):
             return self.tasks[self.current_task_index]
         return None
 
-    def get_completed_tasks(self) -> List[Union[Task, Sequence]]:
+    def get_completed_tasks(self) -> List[Task]:
         """Get all completed tasks"""
         return [t for t in self.tasks if t.status == TaskStatus.COMPLETED]
 
-    def get_pending_tasks(self) -> List[Union[Task, Sequence]]:
+    def get_pending_tasks(self) -> List[Task]:
         """Get all pending tasks"""
         return [t for t in self.tasks if t.status == TaskStatus.PENDING]
 
@@ -339,7 +304,7 @@ class MissionPlan:
         """Check if all tasks have been completed"""
         return all(t.status == TaskStatus.COMPLETED for t in self.tasks)
 
-    def get_task_by_id(self, task_id: str) -> Optional[Union[Task, Sequence]]:
+    def get_task_by_id(self, task_id: str) -> Optional[Task]:
         """Find a task by its ID"""
         for task in self.tasks:
             if task.task_id == task_id:
@@ -347,25 +312,14 @@ class MissionPlan:
         return None
 
 
-class SequenceDecisionType(str, Enum):
-    """Types of decisions the Sequence Planner can make."""
-    GENERATE_TASK = "generate_task"
-    END_SEQUENCE = "end_sequence"
-
-
-class SequenceDecision(BaseModel):
-    """Output of Sequence Planner decision."""
-    decision: SequenceDecisionType
-    reasoning: str
-    next_task: Optional[str]
-    completion_reason: Optional[str]
-
 class TaskDefinition(BaseModel):
+    """Task definition from the mission planner"""
     task: str
-    type: TaskType
+    target: Union[int, str] = 1  # 1, 5, "all"
+
 
 class MissionPlannerOutput(BaseModel):
-    """Output from Mission Planner decomposition (formerly TaskOrchestratorOutput)"""
+    """Output from Mission Planner decomposition"""
     tasks: list[TaskDefinition]
 
 
