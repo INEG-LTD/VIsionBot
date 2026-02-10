@@ -459,7 +459,7 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "type hello 3 times",
+        "type hello 5 times",
     )
 
     if result:

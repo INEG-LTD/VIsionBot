@@ -1135,6 +1135,7 @@ def generate_action_with_tools(
     reasoning_level: Union[ReasoningLevel, str, None] = None,
     temperature: Optional[float] = None,
     tool_choice: str = "required",
+    parallel_tool_calls: bool = True,
 ) -> list[dict]:
     """
     Generate action using OpenAI function calling.
@@ -1208,6 +1209,7 @@ def generate_action_with_tools(
             messages=openai_messages,
             tools=tools,
             tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
             **kwargs,
         )
 

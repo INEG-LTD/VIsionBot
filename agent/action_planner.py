@@ -50,6 +50,8 @@ class ActionPlanner:
         task_history: Optional[List[str]] = None,
         force_think: bool = False,
         current_iteration: int = 0,
+        browser_actions_in_round: int = 0,
+        checkpoint_mode: bool = False,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -70,6 +72,8 @@ class ActionPlanner:
         self.task_history = task_history or []
         self.force_think = force_think
         self.current_iteration = current_iteration
+        self.browser_actions_in_round = browser_actions_in_round
+        self.checkpoint_mode = checkpoint_mode
    
     def get_next_actions_with_function_calling(
         self,
@@ -92,35 +96,49 @@ class ActionPlanner:
         Returns:
             Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
-        from agent.action_tools import ACTION_TOOLS
+        from agent.action_tools import ACTION_TOOLS, CHECKPOINT_TOOLS
 
         try:
-            user_prompt = f"""
-            You are currently trying to: {self.user_prompt}
+            if self.checkpoint_mode:
+                user_prompt = f"""
+                Task: {self.user_prompt}
 
-            Based on the screenshot and context, what is the best next action to accomplish this task?
-            """
+                You just performed a browser action. Did that complete this round, or do you need to do more?
+                - If the round is done, call mark_progress.
+                - If you need more actions to finish this round, call think with next_action=continue.
+                """
+                tools = CHECKPOINT_TOOLS
+            else:
+                user_prompt = f"""
+                You are currently trying to: {self.user_prompt}
+
+                Based on the screenshot and context, what is the best next action to accomplish this task?
+                """
+                tools = ACTION_TOOLS
+
             system_prompt = self._build_function_calling_system_prompt(
                 self.session_tracker,
                 environment_state,
                 notebook,
                 element_data,
             )
-            
+
             # Generate action using function calling
             result = generate_action_with_tools(
                 prompt=user_prompt,
-                tools=ACTION_TOOLS,
+                tools=tools,
                 system_prompt=system_prompt,
                 image=screenshot,
                 image_detail=self.image_detail,
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
-                tool_choice="required"
+                tool_choice="required",
+                parallel_tool_calls=self.max_actions_per_plan > 1,
             )
 
             actions = []
             # Limit to max_actions_per_plan to prevent excessive batching
+            get_event_logger().system_debug(f"LLM returned {len(result)} tool calls, limiting to {self.max_actions_per_plan}")
             limited_result = result[:self.max_actions_per_plan]
 
             for action in limited_result:
@@ -176,29 +194,93 @@ class ActionPlanner:
         if self.task_target != 1 or self.task_progress > 0 or self.task_history:
             # Format target display
             target_display = self.task_target if isinstance(self.task_target, str) else f"{self.task_target}"
+            numeric_target = self.task_target if isinstance(self.task_target, int) else None
+            current_round = self.task_progress + 1
 
-            progress_info = f"""
-═══════════════════════════════════════════════════════════════
-📊 TASK PROGRESS
-═══════════════════════════════════════════════════════════════
+            if self.task_progress > 0 and self.task_history:
+                # Mid-task: per-iteration reframing
+                last_completed = self.task_history[-1]
+                is_round_start = self.browser_actions_in_round == 0
 
-What you're doing: {self.user_prompt}
-Progress: {self.task_progress}/{target_display}
-
-What you've completed so far:
-"""
-            if self.task_history:
+                history_lines = ""
                 for i, item in enumerate(self.task_history, 1):
-                    progress_info += f"{i}. {item}\n"
-            else:
-                progress_info += "(Nothing yet - just getting started)\n"
+                    history_lines += f"  {i}. {item} ✓\n"
 
-            progress_info += f"""
-IMPORTANT:
-• After you complete each unit of work, call mark_progress to record it
-• The 'description' should be natural: "Liked the post about AI" not "Executed like action"
-• For numeric targets: the system auto-completes when progress reaches {target_display} — just keep calling mark_progress with done=false
-• Only use done=true for open-ended tasks (target="all") when there's nothing left to do
+                if numeric_target:
+                    remaining = numeric_target - self.task_progress
+
+                    # Only show the "do it again" nudge at the start of a new round
+                    round_start_hint = (
+                        f'You just finished: "{last_completed}"\n'
+                        f'What you see on screen is from your previous round — do it again.\n'
+                    ) if is_round_start else ""
+
+                    progress_info = f"""
+═══════════════════════════════════════════════════════════════
+ROUND {current_round} OF {target_display}
+═══════════════════════════════════════════════════════════════
+
+Task: {self.user_prompt}
+
+Completed:
+{history_lines}
+{round_start_hint}{remaining} round{"s" if remaining != 1 else ""} left.
+
+• After each round, call mark_progress to record what you did
+• mark_progress only counts after real browser actions — you must actually do the work each time
+
+"""
+                else:
+                    # Open-ended target ("all")
+                    round_start_hint = (
+                        f'You just finished: "{last_completed}"\n'
+                        f'What you see on screen may include results of your previous work.\n'
+                    ) if is_round_start else ""
+
+                    progress_info = f"""
+═══════════════════════════════════════════════════════════════
+PROGRESS ({self.task_progress} done so far)
+═══════════════════════════════════════════════════════════════
+
+Task: {self.user_prompt}
+
+Completed:
+{history_lines}
+{round_start_hint}Keep going — look for more to do.
+
+• After each unit of work, call mark_progress to record it
+• When there's nothing left to do, call mark_progress with done=true
+
+"""
+            else:
+                # First iteration: no progress yet
+                if numeric_target:
+                    progress_info = f"""
+═══════════════════════════════════════════════════════════════
+ROUND 1 OF {target_display}
+═══════════════════════════════════════════════════════════════
+
+Task: {self.user_prompt}
+
+No rounds completed yet — get started.
+
+• After each round, call mark_progress to record what you did
+• mark_progress only counts after real browser actions — you must actually do the work each time
+
+"""
+                else:
+                    progress_info = f"""
+═══════════════════════════════════════════════════════════════
+TASK PROGRESS
+═══════════════════════════════════════════════════════════════
+
+Task: {self.user_prompt}
+Progress: 0/{target_display}
+
+No progress yet — get started.
+
+• After each unit of work, call mark_progress to record it
+• When there's nothing left to do, call mark_progress with done=true
 
 """
 
@@ -301,20 +383,6 @@ COGNITIVE ACTIONS:
 • mark_progress - Record completion of a unit of work
 • revise_target - Adjust your target mid-execution
 • wait_for - Wait for a condition with timeout
-
-═══════════════════════════════════════════════════════════════
-HOW TO USE mark_progress
-═══════════════════════════════════════════════════════════════
-
-After you complete each unit of work, call mark_progress:
-• description: Natural language (e.g., "Liked the post about AI")
-• count: How many units (default 1)
-• done: Set to true when finished or can't find more
-
-Examples:
-• mark_progress(description="Liked the post about machine learning", count=1, done=false)
-• mark_progress(description="Extracted company name: TechCorp", count=1, done=false)
-• mark_progress(description="No more posts visible", count=0, done=true)
 
 ═══════════════════════════════════════════════════════════════
 ERROR RECOVERY

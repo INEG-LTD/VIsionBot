@@ -551,6 +551,14 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+# Tools available during checkpoint mode (after a browser action in multi-target tasks).
+# Forces the agent to decide about progress before taking another browser action.
+CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
+    tool for tool in ACTION_TOOLS
+    if tool["function"]["name"] in ("mark_progress", "think")
+]
+
+
 # ============================================================================
 # FUNCTION CALL TO KEYWORD CONVERTER
 # ============================================================================

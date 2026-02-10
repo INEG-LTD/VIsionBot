@@ -568,11 +568,14 @@ class Agent:
 
         # Track progress
         actions_since_progress = 0
+        browser_actions_since_progress = 0
         total_actions = 0
         failed_elements: List[FailedAction] = []
+        checkpoint_pending = False  # After a browser action in multi-target tasks, force progress decision
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
+        is_multi_target = task.target != 1
 
         while total_actions < max_actions_per_task:
             total_actions += 1
@@ -633,6 +636,8 @@ class Agent:
                 task_history=task.history,
                 force_think=force_think,
                 current_iteration=self._current_iteration,
+                browser_actions_in_round=browser_actions_since_progress,
+                checkpoint_mode=checkpoint_pending,
             )
 
             # Generate next actions
@@ -660,6 +665,11 @@ class Agent:
 
                     # Handle mark_progress (intercepted by controller, not executor)
                     if current_action and current_action.lower().startswith("mark_progress:"):
+                        # Gate: only count progress if real browser work was done since last mark
+                        if browser_actions_since_progress == 0:
+                            self.event_logger.system_debug(f"⚠ mark_progress ignored — no browser actions since last progress")
+                            continue
+
                         # Parse: "mark_progress: description | count=1 | done=false"
                         parts = current_action.split(":", 1)[1].strip()
                         description = parts
@@ -680,6 +690,8 @@ class Agent:
                         task.progress += count
                         task.history.append(description)
                         actions_since_progress = 0
+                        browser_actions_since_progress = 0
+                        checkpoint_pending = False
 
                         self.event_logger.system_info(f"✓ Progress: {description} ({task.progress}/{task.target})")
 
@@ -737,35 +749,40 @@ class Agent:
                             think_next_action = current_action.split("| next_action=")[-1].strip().lower()
 
                         if think_next_action in ("mark_progress", "done"):
-                            reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Completed"
-                            task.progress += 1
-                            task.history.append(reasoning)
-                            actions_since_progress = 0
-                            self.event_logger.system_info(f"✓ Progress (via think): {reasoning} ({task.progress}/{task.target})")
+                            checkpoint_pending = False
+                            if browser_actions_since_progress == 0:
+                                self.event_logger.system_debug(f"⚠ think next_action={think_next_action} ignored — no browser actions since last progress")
+                            else:
+                                reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Completed"
+                                task.progress += 1
+                                task.history.append(reasoning)
+                                actions_since_progress = 0
+                                browser_actions_since_progress = 0
+                                self.event_logger.system_info(f"✓ Progress (via think): {reasoning} ({task.progress}/{task.target})")
 
-                            # Complete if target reached
-                            if numeric_target and task.progress >= numeric_target:
-                                return TaskResult(
-                                    success=True,
-                                    completion_status=TaskCompletionStatus.COMPLETED,
-                                    progress=task.progress,
-                                    target=task.target,
-                                    history=task.history,
-                                    reasoning=f"Completed: {task.progress}/{task.target}",
-                                )
+                                # Complete if target reached
+                                if numeric_target and task.progress >= numeric_target:
+                                    return TaskResult(
+                                        success=True,
+                                        completion_status=TaskCompletionStatus.COMPLETED,
+                                        progress=task.progress,
+                                        target=task.target,
+                                        history=task.history,
+                                        reasoning=f"Completed: {task.progress}/{task.target}",
+                                    )
 
-                            # For "done": only actually finish if target is "all" (non-numeric)
-                            # For numeric targets, treat done same as mark_progress — the agent
-                            # can't prematurely end a task that hasn't reached its target
-                            if think_next_action == "done" and numeric_target is None:
-                                return TaskResult(
-                                    success=True,
-                                    completion_status=TaskCompletionStatus.COMPLETED,
-                                    progress=task.progress,
-                                    target=task.target,
-                                    history=task.history,
-                                    reasoning=reasoning,
-                                )
+                                # For "done": only actually finish if target is "all" (non-numeric)
+                                # For numeric targets, treat done same as mark_progress — the agent
+                                # can't prematurely end a task that hasn't reached its target
+                                if think_next_action == "done" and numeric_target is None:
+                                    return TaskResult(
+                                        success=True,
+                                        completion_status=TaskCompletionStatus.COMPLETED,
+                                        progress=task.progress,
+                                        target=task.target,
+                                        history=task.history,
+                                        reasoning=reasoning,
+                                    )
 
                         elif think_next_action == "stuck":
                             # Agent decided it's stuck
@@ -780,7 +797,8 @@ class Agent:
                                 reasoning=reasoning,
                             )
 
-                        # "continue" → just keep looping
+                        # "continue" → release checkpoint and keep looping
+                        checkpoint_pending = False
                         continue
 
                     # Handle assert/flag (non-browser actions)
@@ -809,6 +827,11 @@ class Agent:
                     )
 
                     actions_since_progress += 1
+                    if result.success:
+                        browser_actions_since_progress += 1
+                        # In multi-target tasks, force a progress checkpoint after each browser action
+                        if is_multi_target:
+                            checkpoint_pending = True
 
                     # Track failures
                     if not result.success:

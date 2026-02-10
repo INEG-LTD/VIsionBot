@@ -584,50 +584,50 @@ class Executor:
             if x is None or y is None:
                 return "failed"
 
-            try:
-                # Try to clear using JavaScript first (most reliable)
-                element_js = f"""
-                (function() {{
-                    const element = document.elementFromPoint({x}, {y});
-                    if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
-                        element.focus();
-                        element.value = '';
-                        element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        return true;
-                    }}
-                    return false;
-                }})();
-                """
-                cleared = self.browser.page.evaluate(element_js)
-                if cleared:
-                    # Only show in debug mode
-                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        dprint(f"  ✅ Cleared field using JavaScript")
-                    time.sleep(0.1)
-                    return "js"
-            except Exception as e:
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+            # try:
+            #     # Try to clear using JavaScript first (most reliable)
+            #     element_js = f"""
+            #     (function() {{
+            #         const element = document.elementFromPoint({x}, {y});
+            #         if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
+            #             element.focus();
+            #             element.value = '';
+            #             element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            #             element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            #             return true;
+            #         }}
+            #         return false;
+            #     }})();
+            #     """
+            #     cleared = self.browser.page.evaluate(element_js)
+            #     if cleared:
+            #         # Only show in debug mode
+            #         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            #             dprint(f"  ✅ Cleared field using JavaScript")
+            #         time.sleep(0.1)
+            #         return "js"
+            # except Exception as e:
+            #     # Only show in debug mode
+            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            #         dprint(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
 
             # Fallback: click, select all, delete
-            try:
-                self.browser.page.mouse.click(x, y)
-                time.sleep(0.2)
-                self.browser.page.keyboard.press('Control+a')
-                time.sleep(0.1)
-                self.browser.page.keyboard.press('Delete')
-                time.sleep(0.1)
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
-                return "keyboard"
-            except Exception as e:
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ⚠️ Keyboard clear failed: {e}")
-                return "failed"
+            # try:
+            #     self.browser.page.mouse.click(x, y)
+            #     time.sleep(0.2)
+            #     self.browser.page.keyboard.press('Control+a')
+            #     time.sleep(0.1)
+            #     self.browser.page.keyboard.press('Delete')
+            #     time.sleep(0.1)
+            #     # Only show in debug mode
+            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            #         dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
+            #     return "keyboard"
+            # except Exception as e:
+            #     # Only show in debug mode
+            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
+            #         dprint(f"  ⚠️ Keyboard clear failed: {e}")
+            #     return "failed"
 
         # Extract the text from the type command. eg type: text : field
         split_action = step.action.split(":")
