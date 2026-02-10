@@ -52,6 +52,7 @@ class ActionPlanner:
         current_iteration: int = 0,
         browser_actions_in_round: int = 0,
         checkpoint_mode: bool = False,
+        suppress_mark_progress: bool = False,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -74,6 +75,7 @@ class ActionPlanner:
         self.current_iteration = current_iteration
         self.browser_actions_in_round = browser_actions_in_round
         self.checkpoint_mode = checkpoint_mode
+        self.suppress_mark_progress = suppress_mark_progress
    
     def get_next_actions_with_function_calling(
         self,
@@ -96,7 +98,7 @@ class ActionPlanner:
         Returns:
             Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
-        from agent.action_tools import ACTION_TOOLS, CHECKPOINT_TOOLS
+        from agent.action_tools import get_filtered_tools
 
         try:
             if self.checkpoint_mode:
@@ -107,14 +109,18 @@ class ActionPlanner:
                 - If the round is done, call mark_progress.
                 - If you need more actions to finish this round, call think with next_action=continue.
                 """
-                tools = CHECKPOINT_TOOLS
             else:
                 user_prompt = f"""
                 You are currently trying to: {self.user_prompt}
 
                 Based on the screenshot and context, what is the best next action to accomplish this task?
                 """
-                tools = ACTION_TOOLS
+            
+            # Get filtered tools based on checkpoint mode and whether mark_progress was just called
+            tools = get_filtered_tools(
+                suppress_mark_progress=self.suppress_mark_progress,
+                checkpoint_mode=self.checkpoint_mode
+            )
 
             system_prompt = self._build_function_calling_system_prompt(
                 self.session_tracker,

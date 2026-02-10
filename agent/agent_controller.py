@@ -571,7 +571,8 @@ class Agent:
         browser_actions_since_progress = 0
         total_actions = 0
         failed_elements: List[FailedAction] = []
-        checkpoint_pending = False  # After a browser action in multi-target tasks, force progress decision
+        checkpoint_pending = False  # After every browser action, force next action to be think or mark_progress
+        suppress_mark_progress = False  # After mark_progress is called, suppress it until next browser action
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
@@ -638,6 +639,7 @@ class Agent:
                 current_iteration=self._current_iteration,
                 browser_actions_in_round=browser_actions_since_progress,
                 checkpoint_mode=checkpoint_pending,
+                suppress_mark_progress=suppress_mark_progress,
             )
 
             # Generate next actions
@@ -691,7 +693,8 @@ class Agent:
                         task.history.append(description)
                         actions_since_progress = 0
                         browser_actions_since_progress = 0
-                        checkpoint_pending = False
+                        checkpoint_pending = False  # Exit checkpoint mode
+                        suppress_mark_progress = True  # Suppress mark_progress until next browser action
 
                         self.event_logger.system_info(f"✓ Progress: {description} ({task.progress}/{task.target})")
 
@@ -829,9 +832,9 @@ class Agent:
                     actions_since_progress += 1
                     if result.success:
                         browser_actions_since_progress += 1
-                        # In multi-target tasks, force a progress checkpoint after each browser action
-                        if is_multi_target:
-                            checkpoint_pending = True
+                        suppress_mark_progress = False  # Reset suppression - browser action completed
+                        # Force checkpoint mode after every browser action
+                        checkpoint_pending = True
 
                     # Track failures
                     if not result.success:

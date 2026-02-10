@@ -559,6 +559,25 @@ CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+def get_filtered_tools(suppress_mark_progress: bool = False, checkpoint_mode: bool = False) -> List[Dict[str, Any]]:
+    """
+    Get the appropriate tool list, optionally suppressing mark_progress.
+    
+    Args:
+        suppress_mark_progress: If True, remove mark_progress from available tools
+        checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of ACTION_TOOLS
+        
+    Returns:
+        Filtered list of tools available to the agent
+    """
+    base_tools = CHECKPOINT_TOOLS if checkpoint_mode else ACTION_TOOLS
+    
+    if suppress_mark_progress:
+        return [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
+    
+    return base_tools
+
+
 # ============================================================================
 # FUNCTION CALL TO KEYWORD CONVERTER
 # ============================================================================
