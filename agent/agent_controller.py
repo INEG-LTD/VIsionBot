@@ -546,6 +546,62 @@ class Agent:
 
         return result
 
+    @staticmethod
+    def _build_action_summary(action_step, result_str: str) -> str:
+        """Build a natural-language summary of an action for the reflection block.
+
+        Uses the action_step's function_name and arguments to produce a brief,
+        first-person description of what happened.
+        """
+        fn = getattr(action_step, "function_name", None)
+        args = getattr(action_step, "function_arguments", {}) or {}
+
+        if fn == "click":
+            elem = args.get("element_type", "element")
+            desc = args.get("description", "")
+            return f"You clicked the {elem} \"{desc}\". Result: {result_str}."
+        elif fn == "type_text":
+            text = args.get("text", "")
+            field = args.get("field_description", "input field")
+            return f"You typed \"{text}\" into {field}. Result: {result_str}."
+        elif fn == "clear_text":
+            field = args.get("field_description", "input field")
+            return f"You cleared the text in {field}. Result: {result_str}."
+        elif fn == "select_option":
+            option = args.get("option", "")
+            dropdown = args.get("dropdown_description", "dropdown")
+            return f"You selected \"{option}\" in {dropdown}. Result: {result_str}."
+        elif fn == "scroll_page":
+            direction = args.get("direction", "down")
+            return f"You scrolled {direction}. Result: {result_str}."
+        elif fn == "press_key":
+            key = args.get("key", "")
+            return f"You pressed {key}. Result: {result_str}."
+        elif fn == "open_url":
+            url = args.get("url", "")
+            return f"You navigated to {url}. Result: {result_str}."
+        elif fn == "go_back":
+            return f"You went back in browser history. Result: {result_str}."
+        elif fn == "go_forward":
+            return f"You went forward in browser history. Result: {result_str}."
+        elif fn == "upload_file":
+            file_path = args.get("file_path", "")
+            return f"You uploaded file \"{file_path}\". Result: {result_str}."
+        elif fn == "set_datetime":
+            value = args.get("value", "")
+            picker = args.get("picker_description", "date picker")
+            return f"You set {picker} to \"{value}\". Result: {result_str}."
+        elif fn == "extract_data":
+            desc = args.get("data_description", "data")
+            return f"You extracted: \"{desc}\". Result: {result_str}."
+        elif fn == "wait_for":
+            condition = args.get("condition", "")
+            return f"You waited for: \"{condition}\". Result: {result_str}."
+        else:
+            # Fallback: use the action string
+            action_str = getattr(action_step, "action", str(action_step))
+            return f"You performed: {action_str}. Result: {result_str}."
+
     def _run_unified_task_loop(self, task: Task, original_prompt: str) -> TaskResult:
         """
         Unified task execution loop - handles both single and repetitive tasks.
@@ -573,10 +629,11 @@ class Agent:
         failed_elements: List[FailedAction] = []
         checkpoint_pending = False  # After every browser action, force next action to be think or mark_progress
         suppress_mark_progress = False  # After mark_progress is called, suppress it until next browser action
+        active_strategy: Optional[str] = None  # Persistent reasoning from think(continue), shown every turn
+        last_action_summary: Optional[str] = None  # Brief description of last action + result
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
-        is_multi_target = task.target != 1
 
         while total_actions < max_actions_per_task:
             total_actions += 1
@@ -640,6 +697,8 @@ class Agent:
                 browser_actions_in_round=browser_actions_since_progress,
                 checkpoint_mode=checkpoint_pending,
                 suppress_mark_progress=suppress_mark_progress,
+                active_strategy=active_strategy,
+                last_action_summary=last_action_summary,
             )
 
             # Generate next actions
@@ -669,7 +728,7 @@ class Agent:
                     if current_action and current_action.lower().startswith("mark_progress:"):
                         # Gate: only count progress if real browser work was done since last mark
                         if browser_actions_since_progress == 0:
-                            self.event_logger.system_debug(f"⚠ mark_progress ignored — no browser actions since last progress")
+                            self.event_logger.system_debug("⚠ mark_progress ignored — no browser actions since last progress")
                             continue
 
                         # Parse: "mark_progress: description | count=1 | done=false"
@@ -695,6 +754,8 @@ class Agent:
                         browser_actions_since_progress = 0
                         checkpoint_pending = False  # Exit checkpoint mode
                         suppress_mark_progress = True  # Suppress mark_progress until next browser action
+                        active_strategy = None  # Strategy fulfilled, clear it
+                        last_action_summary = f"You marked progress: \"{description}\" ({task.progress}/{task.target})"
 
                         self.event_logger.system_info(f"✓ Progress: {description} ({task.progress}/{task.target})")
 
@@ -731,6 +792,7 @@ class Agent:
                             numeric_target = task.target
 
                         self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
+                        last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
                         continue
 
                     # Handle think (with next_action decision)
@@ -745,6 +807,9 @@ class Agent:
                         )
                         actions_since_progress += 1
 
+                        # Extract the reasoning text (before any | params)
+                        think_reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else ""
+
                         # Parse next_action from think command
                         # Format: "think: reasoning text | next_action=done"
                         think_next_action = "continue"
@@ -753,15 +818,18 @@ class Agent:
 
                         if think_next_action in ("mark_progress", "done"):
                             checkpoint_pending = False
+                            active_strategy = None  # Strategy fulfilled
                             if browser_actions_since_progress == 0:
                                 self.event_logger.system_debug(f"⚠ think next_action={think_next_action} ignored — no browser actions since last progress")
+                                last_action_summary = f"You thought: \"{think_reasoning}\" (progress not recorded — no browser actions yet)"
                             else:
-                                reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Completed"
+                                reasoning = think_reasoning or "Completed"
                                 task.progress += 1
                                 task.history.append(reasoning)
                                 actions_since_progress = 0
                                 browser_actions_since_progress = 0
                                 self.event_logger.system_info(f"✓ Progress (via think): {reasoning} ({task.progress}/{task.target})")
+                                last_action_summary = f"You marked progress via think: \"{reasoning}\" ({task.progress}/{task.target})"
 
                                 # Complete if target reached
                                 if numeric_target and task.progress >= numeric_target:
@@ -789,7 +857,8 @@ class Agent:
 
                         elif think_next_action == "stuck":
                             # Agent decided it's stuck
-                            reasoning = current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "Stuck"
+                            active_strategy = None  # Clear strategy
+                            reasoning = think_reasoning or "Stuck"
                             self.event_logger.system_info(f"✗ Agent stuck: {reasoning}")
                             return TaskResult(
                                 success=False,
@@ -800,7 +869,12 @@ class Agent:
                                 reasoning=reasoning,
                             )
 
-                        # "continue" → release checkpoint and keep looping
+                        elif think_next_action == "continue":
+                            # Set active strategy from the think reasoning
+                            active_strategy = think_reasoning
+                            last_action_summary = f"You thought: \"{think_reasoning}\""
+
+                        # Release checkpoint and keep looping
                         checkpoint_pending = False
                         continue
 
@@ -815,6 +889,9 @@ class Agent:
                             environment_state=environment_state,
                             current_iteration=self._current_iteration,
                         )
+                        action_type = "assert" if current_action.lower().startswith("assert:") else "flag"
+                        action_content = current_action.split(":", 1)[1].split("|")[0].strip() if ":" in current_action else ""
+                        last_action_summary = f"You called {action_type}: \"{action_content}\""
                         actions_since_progress += 1
                         continue
 
@@ -830,11 +907,19 @@ class Agent:
                     )
 
                     actions_since_progress += 1
+
+                    # Build last_action_summary from the action
+                    result_str = "success" if result.success else "failed"
+                    last_action_summary = self._build_action_summary(action_step, result_str)
+
+                    # Force checkpoint after any browser action (success or failure)
+                    # On failure: browser_actions_since_progress stays 0, so mark_progress is blocked
+                    # — the agent can only think, forcing it to reason about the failure
+                    checkpoint_pending = True
+
                     if result.success:
                         browser_actions_since_progress += 1
                         suppress_mark_progress = False  # Reset suppression - browser action completed
-                        # Force checkpoint mode after every browser action
-                        checkpoint_pending = True
 
                     # Track failures
                     if not result.success:

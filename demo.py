@@ -455,11 +455,11 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     agent.event_logger.register_callback(
         create_event_callback(agent, debug_mode=config.logging.debug_mode))
-    agent.browser.page.goto("https://hypernotepad.com/")
+    agent.browser.page.goto("https://www.google.com/search?q=ios%20jobs%20uk&sourceid=chrome&ie=UTF-8&jbr=sep:0&udm=8&ved=2ahUKEwjO1LCojNGSAxUtWkEAHbxMGo4Q3L8LegQIKRAM#sv=CAMStwIa_gEKzwESzAEKjAFBTW4zLXlSWWI0cFNZdWxJYlRuWlRPMFI3Wl81OUJCS2V4ZXpaWkttelVIRnRmblJLTHlQbVVOOHcycVRIbFBFdFFIdnd3WkthMnFfN2VlV0lFSWNKMDZxSnItTnpxb0VCX2hIWTkxdTBoWlkzM1U2RnNUYmJpQjJoRkFNVEVSM2d6WEZtQTIzS3BGUxIXWkVpTWFabUFPZkNkaGJJUDFaVEd1QTQaIkFKS0xGbUlPTl9kLS10WmlZZGQ4U3YybWIwOG9vMTVualESBDgxNjYaATMqG19aRWlNYVptQU9mQ2RoYklQMVpUR3VBNF82NjAAOAFAACABKjAKEmpvYnMtZGV0YWlsLXZpZXdlchIYalJrWWYzSkVOalNDN2FJNUFBQUFBQT09GAAwASD1ir_lAjAC")
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "type hello 5 times",
+        "click the first 7 jobs on the page. you are not allowed to click the same job twice.",
     )
 
     if result:

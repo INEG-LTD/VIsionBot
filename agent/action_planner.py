@@ -53,6 +53,8 @@ class ActionPlanner:
         browser_actions_in_round: int = 0,
         checkpoint_mode: bool = False,
         suppress_mark_progress: bool = False,
+        active_strategy: Optional[str] = None,
+        last_action_summary: Optional[str] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -76,7 +78,29 @@ class ActionPlanner:
         self.browser_actions_in_round = browser_actions_in_round
         self.checkpoint_mode = checkpoint_mode
         self.suppress_mark_progress = suppress_mark_progress
-   
+        self.active_strategy = active_strategy
+        self.last_action_summary = last_action_summary
+
+    def _build_reflection_block(self) -> str:
+        """Build the reflection block for the user prompt.
+
+        Contains two parts:
+        - ACTIVE STRATEGY: persistent reasoning from the last think(continue), shown every turn until cleared
+        - LAST ACTION: what the agent just did and the result
+        """
+        parts = []
+
+        if self.active_strategy:
+            parts.append(f"ACTIVE STRATEGY:\n{self.active_strategy}\n")
+
+        if self.last_action_summary:
+            parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
+
+        if not parts:
+            return ""
+
+        return "\n".join(parts) + "\n"
+
     def get_next_actions_with_function_calling(
         self,
         environment_state: EnvironmentState,
@@ -101,20 +125,21 @@ class ActionPlanner:
         from agent.action_tools import get_filtered_tools
 
         try:
+            # Build reflection block (active strategy + last action)
+            reflection = self._build_reflection_block()
+
             if self.checkpoint_mode:
-                user_prompt = f"""
-                Task: {self.user_prompt}
+                user_prompt = f"""{reflection}Task: {self.user_prompt}
+Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.
 
-                You just performed a browser action. Did that complete this round, or do you need to do more?
-                - If the round is done, call mark_progress.
-                - If you need more actions to finish this round, call think with next_action=continue.
-                """
+If your last action completed a unit of work, call mark_progress to record it.
+If you need more actions before this counts as progress, call think with next_action=continue.
+"""
             else:
-                user_prompt = f"""
-                You are currently trying to: {self.user_prompt}
+                user_prompt = f"""{reflection}You are currently trying to: {self.user_prompt}
 
-                Based on the screenshot and context, what is the best next action to accomplish this task?
-                """
+Based on the screenshot, what is the best next action?
+"""
             
             # Get filtered tools based on checkpoint mode and whether mark_progress was just called
             tools = get_filtered_tools(
