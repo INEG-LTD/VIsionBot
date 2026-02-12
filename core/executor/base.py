@@ -163,6 +163,17 @@ class Executor:
         # Maybe just a small random delay after move
         time.sleep(random.uniform(0.05, 0.15))
 
+    def _get_agent_overlay_index(self, step: ActionStep) -> Optional[int]:
+        """Extract the agent's overlay_index from function_arguments if config allows it."""
+        if not self.browser.config.execution.use_agent_overlay_index:
+            return None
+        args = getattr(step, 'function_arguments', None)
+        if args and isinstance(args, dict):
+            idx = args.get('overlay_index')
+            if isinstance(idx, int):
+                return idx
+        return None
+
     def set_page(self, page: Page) -> None:
         """Update internal references when the active page changes."""
         if not page or page is self.browser.page:
@@ -173,16 +184,6 @@ class Executor:
                 self.page_utils.set_page(page)
             else:
                 self.page_utils.page = page
-        if self.datetime_handler:
-            if hasattr(self.datetime_handler, "set_page"):
-                self.datetime_handler.set_page(page)
-            else:
-                self.datetime_handler.page = page
-        if self.upload_handler:
-            if hasattr(self.upload_handler, "set_page"):
-                self.upload_handler.set_page(page)
-            else:
-                self.upload_handler.page = page
         if self.selector_utils:
             if hasattr(self.selector_utils, "set_page"):
                 self.selector_utils.set_page(page)
@@ -258,9 +259,15 @@ class Executor:
         # Figure out the overlay to use for the click
         # Capture state BEFORE performing the click (critical for accurate before_state)
         before_state = self.session_tracker._capture_current_state()
-        
+
         current_screenshot = before_state.screenshot
-        overlay_index = self.select_best_overlay(step.action, elements, failed_elements, screenshot=current_screenshot, base_knowledge=self.session_tracker.base_knowledge)
+
+        # Use agent's overlay_index if available and config allows it
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is not None:
+            self.event_logger.system_debug(f"Using agent's overlay_index: {overlay_index}")
+        else:
+            overlay_index = self.select_best_overlay(step.action, elements, failed_elements, screenshot=current_screenshot, base_knowledge=self.session_tracker.base_knowledge)
         
         if overlay_index is None:
             self.event_logger.command_failure(step.action, error="Could not determine best overlay")
@@ -502,17 +509,20 @@ class Executor:
                     dprint(f"  ⚠️ Keyboard clear failed: {e}")
                 return "failed"
 
-        overlay_index = self.select_best_overlay(
-            step.action,
-            elements,
-            failed_elements,
-            screenshot=current_screenshot,
-            base_knowledge=self.session_tracker.base_knowledge
-        )
+        # Use agent's overlay_index if available and config allows it
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is None:
+            overlay_index = self.select_best_overlay(
+                step.action,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.session_tracker.base_knowledge
+            )
 
         # Get coordinates for the element to type into
         x, y = self.get_click_coordinates(overlay_index, elements, page_info)
-        
+
         # Click first to focus the element
         if x is not None and y is not None:
             self._human_mouse_move(x, y)
@@ -636,13 +646,17 @@ class Executor:
         if not text_to_type:
             dprint("⚠️ No text specified for TYPE action")
             return False
-        overlay_index = self.select_best_overlay(
-            step.action,
-            elements,
-            failed_elements,
-            screenshot=current_screenshot,
-            base_knowledge=self.session_tracker.base_knowledge
-        )
+
+        # Use agent's overlay_index if available and config allows it
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is None:
+            overlay_index = self.select_best_overlay(
+                step.action,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.session_tracker.base_knowledge
+            )
 
         # Get coordinates for the element to type into
         x, y = self.get_click_coordinates(overlay_index, elements, page_info)
@@ -1163,7 +1177,6 @@ class Executor:
             upload_file_path=step.upload_file_path,
         )
             
-        self.upload_handler.handle_upload_field(step, elements, page_info)
         step_success = True  # Assume success for handlers that don't return values yet
         return step_success
 
@@ -1189,7 +1202,6 @@ class Executor:
             datetime_value=step.datetime_value,
         )
 
-        self.datetime_handler.handle_datetime_field(step, elements, page_info)
         step_success = True  # Assume success for handlers that don't return values yet
 
         # Record the datetime interaction
@@ -1224,6 +1236,19 @@ class Executor:
             return None
         keyword, payload, helper = parsed
         keyword = (keyword or "").strip().lower()
+
+        # Safety gate: block browser actions when a dialog is pending
+        if self.browser.tab_manager and self.browser.tab_manager.has_pending_dialog_on_active():
+            browser_keywords = {
+                "click", "type", "clear_text", "select", "scroll", "press",
+                "open", "back", "forward", "upload", "datetime", "extract",
+            }
+            if keyword in browser_keywords:
+                self.event_logger.command_execution_failure(
+                    command=action_step.action,
+                    error="Cannot interact with page — a dialog is blocking. Use dismiss_dialog first."
+                )
+                return False
 
         self.event_logger.command_start(command=action_step.action)
         if keyword == "complete_sequence":

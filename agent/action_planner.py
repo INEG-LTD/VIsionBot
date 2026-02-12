@@ -55,6 +55,10 @@ class ActionPlanner:
         suppress_mark_progress: bool = False,
         active_strategy: Optional[str] = None,
         last_action_summary: Optional[str] = None,
+        tab_bar: Optional[str] = None,
+        dialog_notice: Optional[str] = None,
+        tab_events: Optional[List[str]] = None,
+        dialog_pending: bool = False,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -80,13 +84,18 @@ class ActionPlanner:
         self.suppress_mark_progress = suppress_mark_progress
         self.active_strategy = active_strategy
         self.last_action_summary = last_action_summary
+        self.tab_bar = tab_bar
+        self.dialog_notice = dialog_notice
+        self.tab_events = tab_events or []
+        self.dialog_pending = dialog_pending
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
 
-        Contains two parts:
+        Contains:
         - ACTIVE STRATEGY: persistent reasoning from the last think(continue), shown every turn until cleared
         - LAST ACTION: what the agent just did and the result
+        - TAB EVENTS: tab opens/closes/dialog events since last turn
         """
         parts = []
 
@@ -95,6 +104,10 @@ class ActionPlanner:
 
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
+
+        if self.tab_events:
+            events_str = "\n".join(f"- {e}" for e in self.tab_events)
+            parts.append(f"TAB EVENTS:\n{events_str}\n")
 
         if not parts:
             return ""
@@ -125,26 +138,32 @@ class ActionPlanner:
         from agent.action_tools import get_filtered_tools
 
         try:
-            # Build reflection block (active strategy + last action)
+            # Build reflection block (active strategy + last action + tab events)
             reflection = self._build_reflection_block()
 
+            # Dialog notice goes at the very top of user prompt (highest attention)
+            dialog_prefix = ""
+            if self.dialog_notice:
+                dialog_prefix = f"{self.dialog_notice}\n"
+
             if self.checkpoint_mode:
-                user_prompt = f"""{reflection}Task: {self.user_prompt}
+                user_prompt = f"""{dialog_prefix}{reflection}Task: {self.user_prompt}
 Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.
 
 If your last action completed a unit of work, call mark_progress to record it.
 If you need more actions before this counts as progress, call think with next_action=continue.
 """
             else:
-                user_prompt = f"""{reflection}You are currently trying to: {self.user_prompt}
+                user_prompt = f"""{dialog_prefix}{reflection}You are currently trying to: {self.user_prompt}
 
 Based on the screenshot, what is the best next action?
 """
-            
-            # Get filtered tools based on checkpoint mode and whether mark_progress was just called
+
+            # Get filtered tools based on current state
             tools = get_filtered_tools(
                 suppress_mark_progress=self.suppress_mark_progress,
-                checkpoint_mode=self.checkpoint_mode
+                checkpoint_mode=self.checkpoint_mode,
+                dialog_pending=self.dialog_pending,
             )
 
             system_prompt = self._build_function_calling_system_prompt(
@@ -358,13 +377,24 @@ After thinking, either:
 
         overlays = "\n".join(candidate_lines) if candidate_lines else "No interactive elements found."
 
+        # Build tab bar section (only shown when 2+ tabs are open)
+        tab_section = ""
+        if self.tab_bar:
+            tab_section = f"""
+═══════════════════════════════════════════════════════════════
+OPEN TABS
+═══════════════════════════════════════════════════════════════
+{self.tab_bar}
+
+"""
+
         return f"""You are controlling a web browser. You can see the current page as a screenshot.
 Look at what's on screen, decide what to do, and do it — just like a person would.
 
 {forced_think_prompt}
 
 {progress_info}
-
+{tab_section}
 ═══════════════════════════════════════════════════════════════
 WHAT YOU'VE DONE SO FAR
 ═══════════════════════════════════════════════════════════════
@@ -407,6 +437,12 @@ DATA & COMMUNICATION:
 • extract_data - Extract and store data in notebook
 • ask_user - Ask user for clarification
 • flag - Send non-blocking notification to user
+
+TAB MANAGEMENT:
+• switch_tab - Switch to a different browser tab
+• close_tab - Close a browser tab
+• open_tab - Open a new tab (optionally with URL)
+• dismiss_dialog - Accept or dismiss a JavaScript dialog
 
 COGNITIVE ACTIONS:
 • think - Stop and reason about your situation (no browser action)

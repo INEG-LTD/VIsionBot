@@ -200,6 +200,9 @@ class Agent:
         
         self.interceptor_manager = InterceptorManager(self.browser)
 
+        # Tab manager for multi-tab support
+        self.tab_manager = self.browser.tab_manager
+
         # Plan generator for AI planning prompts
         self.started = True
       
@@ -679,6 +682,18 @@ class Agent:
                 url_pointer=self.session_tracker.url_pointer
             )
 
+            # Gather tab state for prompt injection
+            tab_bar = None
+            dialog_notice = None
+            tab_events = []
+            dialog_pending = False
+            if self.tab_manager:
+                self.tab_manager.refresh_metadata()
+                tab_bar = self.tab_manager.build_tab_bar()
+                dialog_notice = self.tab_manager.build_dialog_notice()
+                tab_events = self.tab_manager.drain_events()
+                dialog_pending = self.tab_manager.has_pending_dialog_on_active()
+
             # Create action planner with force_think if stuck
             force_think = (actions_since_progress >= stuck_threshold)
             action_planner = ActionPlanner(
@@ -699,6 +714,10 @@ class Agent:
                 suppress_mark_progress=suppress_mark_progress,
                 active_strategy=active_strategy,
                 last_action_summary=last_action_summary,
+                tab_bar=tab_bar,
+                dialog_notice=dialog_notice,
+                tab_events=tab_events,
+                dialog_pending=dialog_pending,
             )
 
             # Generate next actions
@@ -905,6 +924,86 @@ class Agent:
                         actions_since_progress += 1
                         continue
 
+                    # Handle tab management actions (intercepted by controller)
+                    if current_action and current_action.lower().startswith("switch_tab:"):
+                        if self.tab_manager:
+                            tab_id = current_action.split(":", 1)[1].strip()
+                            try:
+                                new_page = self.tab_manager.switch_to(tab_id)
+                                self.action_executor.set_page(new_page)
+                                title = ""
+                                try:
+                                    title = new_page.title()
+                                except Exception:
+                                    pass
+                                last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
+                                browser_actions_since_progress += 1
+                                suppress_mark_progress = False
+                                checkpoint_pending = True
+                            except ValueError as e:
+                                last_action_summary = f"switch_tab FAILED: {e}"
+                        else:
+                            last_action_summary = "switch_tab FAILED: Tab management not available"
+                        actions_since_progress += 1
+                        continue
+
+                    if current_action and current_action.lower().startswith("close_tab:"):
+                        if self.tab_manager:
+                            tab_id = current_action.split(":", 1)[1].strip()
+                            try:
+                                new_page = self.tab_manager.close_tab(tab_id)
+                                self.action_executor.set_page(new_page)
+                                active = self.tab_manager.get_active()
+                                active_id = active.id if active else "?"
+                                last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
+                                browser_actions_since_progress += 1
+                                suppress_mark_progress = False
+                                checkpoint_pending = True
+                            except ValueError as e:
+                                last_action_summary = f"close_tab FAILED: {e}"
+                        else:
+                            last_action_summary = "close_tab FAILED: Tab management not available"
+                        actions_since_progress += 1
+                        continue
+
+                    if current_action and current_action.lower().startswith("open_tab:"):
+                        if self.tab_manager:
+                            url = current_action.split(":", 1)[1].strip() or None
+                            try:
+                                new_page = self.tab_manager.open_tab(url)
+                                self.action_executor.set_page(new_page)
+                                active = self.tab_manager.get_active()
+                                active_id = active.id if active else "?"
+                                last_action_summary = f"Opened new tab [{active_id}]"
+                                if url:
+                                    last_action_summary += f" at {url}"
+                                browser_actions_since_progress += 1
+                                suppress_mark_progress = False
+                                checkpoint_pending = True
+                            except Exception as e:
+                                last_action_summary = f"open_tab FAILED: {e}"
+                        else:
+                            last_action_summary = "open_tab FAILED: Tab management not available"
+                        actions_since_progress += 1
+                        continue
+
+                    if current_action and current_action.lower().startswith("dismiss_dialog:"):
+                        if self.tab_manager and self.tab_manager.pending_dialog:
+                            # Parse: "dismiss_dialog: accept=True | input_text=..."
+                            parts_str = current_action.split(":", 1)[1].strip()
+                            accept = "accept=true" in parts_str.lower()
+                            input_text = None
+                            if "input_text=" in parts_str:
+                                input_text = parts_str.split("input_text=", 1)[1].strip()
+                            self.tab_manager.dismiss_dialog(accept, input_text)
+                            action_word = "accepted" if accept else "dismissed"
+                            last_action_summary = f"Dialog {action_word}"
+                            checkpoint_pending = False  # Unblock the agent
+                        else:
+                            last_action_summary = "dismiss_dialog: No dialog pending"
+                        actions_since_progress += 1
+                        continue
+
                     # Execute browser action
                     result = self.action_executor.act(
                         action_step=action_step,
@@ -930,6 +1029,12 @@ class Agent:
                     if result.success:
                         browser_actions_since_progress += 1
                         suppress_mark_progress = False  # Reset suppression - browser action completed
+
+                    # Sync tab manager after browser actions (click may have opened a new tab)
+                    if result.success and self.tab_manager:
+                        active_tab = self.tab_manager.get_active()
+                        if active_tab and self.browser.page is not active_tab.page:
+                            self.action_executor.set_page(active_tab.page)
 
                     # Track failures
                     if not result.success:

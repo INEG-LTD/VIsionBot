@@ -519,6 +519,102 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     },
 
     # ========================================================================
+    # TAB MANAGEMENT
+    # ========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "switch_tab",
+            "description": "Switch to a different browser tab. Check the OPEN TABS section to see available tab IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "string",
+                        "description": "Tab ID to switch to (e.g., 't2')"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for switching tabs"
+                    }
+                },
+                "required": ["tab_id", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_tab",
+            "description": "Close a browser tab. Cannot close the last remaining tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "string",
+                        "description": "Tab ID to close (e.g., 't2')"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for closing the tab"
+                    }
+                },
+                "required": ["tab_id", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_tab",
+            "description": "Open a new browser tab, optionally navigating to a URL",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to navigate to in the new tab (optional — omit for a blank tab)"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for opening a new tab"
+                    }
+                },
+                "required": ["reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dismiss_dialog",
+            "description": "Dismiss the JavaScript dialog currently blocking the page. Must be called before any other browser action can proceed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "accept": {
+                        "type": "boolean",
+                        "description": "true = OK/Accept, false = Cancel/Dismiss"
+                    },
+                    "input_text": {
+                        "type": "string",
+                        "description": "Text to enter (only for prompt() dialogs, ignored otherwise)"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for accepting or dismissing the dialog"
+                    }
+                },
+                "required": ["accept", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+
+    # ========================================================================
     # COMMUNICATION
     # ========================================================================
     {
@@ -558,23 +654,39 @@ CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
     if tool["function"]["name"] in ("mark_progress", "think")
 ]
 
+# Tools available when a dialog is blocking the active tab.
+# Only dismiss_dialog and think — all browser actions are blocked.
+DIALOG_TOOLS: List[Dict[str, Any]] = [
+    tool for tool in ACTION_TOOLS
+    if tool["function"]["name"] in ("dismiss_dialog", "think")
+]
 
-def get_filtered_tools(suppress_mark_progress: bool = False, checkpoint_mode: bool = False) -> List[Dict[str, Any]]:
+
+def get_filtered_tools(
+    suppress_mark_progress: bool = False,
+    checkpoint_mode: bool = False,
+    dialog_pending: bool = False,
+) -> List[Dict[str, Any]]:
     """
-    Get the appropriate tool list, optionally suppressing mark_progress.
-    
+    Get the appropriate tool list based on current state.
+
     Args:
         suppress_mark_progress: If True, remove mark_progress from available tools
         checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of ACTION_TOOLS
-        
+        dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
+
     Returns:
         Filtered list of tools available to the agent
     """
+    # Dialog takes highest priority — blocks all browser actions
+    if dialog_pending:
+        return DIALOG_TOOLS
+
     base_tools = CHECKPOINT_TOOLS if checkpoint_mode else ACTION_TOOLS
-    
+
     if suppress_mark_progress:
         return [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
-    
+
     return base_tools
 
 
@@ -660,6 +772,25 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
         if context:
             return f"ask: {question} (Context: {context})"
         return f"ask: {question}"
+
+    # Tab management tools
+    elif function_name == "switch_tab":
+        return f"switch_tab: {arguments['tab_id']}"
+
+    elif function_name == "close_tab":
+        return f"close_tab: {arguments['tab_id']}"
+
+    elif function_name == "open_tab":
+        url = arguments.get('url', '')
+        return f"open_tab: {url}" if url else "open_tab:"
+
+    elif function_name == "dismiss_dialog":
+        accept = arguments['accept']
+        input_text = arguments.get('input_text', '')
+        parts = f"dismiss_dialog: accept={accept}"
+        if input_text:
+            parts += f" | input_text={input_text}"
+        return parts
 
     else:
         raise ValueError(f"Unknown function: {function_name}")

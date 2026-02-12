@@ -15,7 +15,7 @@ import os
 import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
-from playwright.sync_api import Page, Browser, Playwright, sync_playwright
+from playwright.sync_api import Page, Browser, BrowserContext, Playwright, sync_playwright
 # Compatible import for playwright_stealth across versions
 try:
     from playwright_stealth import Stealth
@@ -126,10 +126,19 @@ class BrowserProvider(ABC):
         """
         pass
     
+    def get_context(self) -> Optional[BrowserContext]:
+        """
+        Get the BrowserContext for multi-tab support.
+
+        Returns:
+            BrowserContext if available, None otherwise (e.g., mock provider)
+        """
+        return None
+
     def is_ready(self) -> bool:
         """
         Check if the provider is ready to provide pages.
-        
+
         Returns:
             bool: True if provider is ready
         """
@@ -197,9 +206,13 @@ class LocalPlaywrightProvider(BrowserProvider):
         # Apply stealth if enabled
         if self.config.apply_stealth:
             stealth_sync(self._page)
-        
+
         return self._page
-    
+
+    def get_context(self) -> Optional[BrowserContext]:
+        # launch_persistent_context returns a BrowserContext
+        return self._browser
+
     def close(self) -> None:
         """Close browser and cleanup."""
         if self._browser:
@@ -253,28 +266,31 @@ class RemoteBrowserProvider(BrowserProvider):
         # Get default context and page
         contexts = self._browser.contexts
         if contexts:
-            context = contexts[0]
-            pages = context.pages
+            self._remote_context = contexts[0]
+            pages = self._remote_context.pages
             if pages:
                 self._page = pages[0]
             else:
-                self._page = context.new_page()
+                self._page = self._remote_context.new_page()
         else:
             # Create new context
-            context = self._browser.new_context(
+            self._remote_context = self._browser.new_context(
                 viewport={
                     "width": self.config.viewport_width,
                     "height": self.config.viewport_height
                 }
             )
-            self._page = context.new_page()
-        
+            self._page = self._remote_context.new_page()
+
         # Apply stealth if enabled
         if self.config.apply_stealth:
             stealth_sync(self._page)
-        
+
         return self._page
-    
+
+    def get_context(self) -> Optional[BrowserContext]:
+        return getattr(self, "_remote_context", None)
+
     def close(self) -> None:
         """Disconnect from remote browser."""
         if self._browser:
@@ -351,9 +367,13 @@ class PersistentContextProvider(BrowserProvider):
         # Apply stealth if enabled
         if self.config.apply_stealth:
             stealth_sync(self._page)
-        
+
         return self._page
-    
+
+    def get_context(self) -> Optional[BrowserContext]:
+        # launch_persistent_context returns a BrowserContext
+        return self._browser
+
     def close(self) -> None:
         """Close browser but preserve profile."""
         if self._browser:

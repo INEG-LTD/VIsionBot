@@ -5,6 +5,7 @@ from time import sleep
 import sys
 import threading
 import os
+import chime
 
 from pydantic import BaseModel
 from pathlib import Path
@@ -458,12 +459,14 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "search for hackernews and summarize what the posts are about",
+        "search for hackernews go to first 10 articles and in each article page, create a summary of what the article is about",
     )
 
     if result:
         print("\n✅ Task completed")
+        chime.success()
     else:
         print("\n❌ Task failed")
+        chime.error()
 
     input("Press Enter to continue...")

@@ -99,6 +99,11 @@ class ExecutionConfig(BaseModel):
         default=True,
         description="If True, track and avoid repeating actions that didn't yield page changes. When disabled, the agent may retry failed actions."
     )
+    use_agent_overlay_index: bool = Field(
+        default=True,
+        description="If True, trust the agent's overlay_index from function calling instead of re-selecting via a separate LLM call. "
+                    "Saves an API call per click/type/clear and avoids the overlay selector overriding the agent's correct choice."
+    )
 
     class Config:
         arbitrary_types_allowed = True

@@ -75,10 +75,11 @@ class PageElements(BaseModel):
 
 class ActionStep(BaseModel):
     """One viewport-safe action"""
-    # Allow extra attributes (like overlay_metadata) without including them in the schema
     action: str
     reasoning: str | None = None
     keys_to_press: List[str] | None = None
+    function_name: str | None = None
+    function_arguments: dict | None = None
 
     def __init__(self, **data):
         super().__init__(**data)

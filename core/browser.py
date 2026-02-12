@@ -25,6 +25,7 @@ from models.models import PageInfo
 from utils.debug_print import dprint
 from core.config import Config
 from browser.provider import BrowserProvider, create_browser_provider
+from core.tab_manager import TabManager
 from lib.errors import (
     BotNotStartedError,
     BotTerminatedError,
@@ -256,8 +257,15 @@ class Browser:
             # Create provider from config
             self.browser_provider = create_browser_provider(self.config.browser)
         
-        self.page = self.browser_provider.get_page() 
-        
+        self.page = self.browser_provider.get_page()
+
+        # Initialize tab manager for multi-tab support
+        context = self.browser_provider.get_context()
+        if context:
+            self.tab_manager: Optional[TabManager] = TabManager(context, self.page)
+        else:
+            self.tab_manager = None
+
         # Set the centralized model configuration
         self.started = False
         
@@ -283,6 +291,13 @@ class Browser:
         except Exception:
             pass
         
+        # Clean up tab manager
+        try:
+            if hasattr(self, 'tab_manager') and self.tab_manager:
+                self.tab_manager = None
+        except Exception:
+            pass
+
         # Close browser provider and cleanup
         try:
             if hasattr(self, 'browser_provider') and self.browser_provider:
