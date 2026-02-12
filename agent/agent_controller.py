@@ -85,7 +85,6 @@ class Agent:
         self.event_logger = EventLogger(debug_mode=True, show_overlay_candidates=config.logging.show_overlay_candidates, show_llm_costs=config.logging.show_llm_costs)
         set_event_logger(self.event_logger)  # Set as global
         
-        self.max_iterations = 50
         self.iteration_delay = 0.5
         self.task_start_url: Optional[str] = None
         self.task_start_time: Optional[float] = None
@@ -114,6 +113,7 @@ class Agent:
         self.command_model_name: str = self.config.model.command_model
         self.command_reasoning_level: ReasoningLevel = self.config.model.command_reasoning_level
         self.image_detail: str = config.model.image_detail
+        self.max_iterations = config.execution.max_iterations
         set_default_model(self.command_model_name)
         set_default_reasoning_level(self.command_reasoning_level)
         set_default_agent_model(self.agent_model_name)
@@ -729,6 +729,12 @@ class Agent:
                         # Gate: only count progress if real browser work was done since last mark
                         if browser_actions_since_progress == 0:
                             self.event_logger.system_debug("⚠ mark_progress ignored — no browser actions since last progress")
+                            last_action_summary = (
+                                f"mark_progress BLOCKED: No browser actions since your last progress mark "
+                                f"({task.progress}/{task.target}). Do a browser action first "
+                                f"(click, type, go_back, etc.) before marking progress again."
+                            )
+                            actions_since_progress += 1
                             continue
 
                         # Parse: "mark_progress: description | count=1 | done=false"
@@ -821,7 +827,11 @@ class Agent:
                             active_strategy = None  # Strategy fulfilled
                             if browser_actions_since_progress == 0:
                                 self.event_logger.system_debug(f"⚠ think next_action={think_next_action} ignored — no browser actions since last progress")
-                                last_action_summary = f"You thought: \"{think_reasoning}\" (progress not recorded — no browser actions yet)"
+                                last_action_summary = (
+                                    f"mark_progress BLOCKED: No browser actions since your last progress mark "
+                                    f"({task.progress}/{task.target}). Do a browser action first "
+                                    f"(click, type, go_back, etc.) before marking progress again."
+                                )
                             else:
                                 reasoning = think_reasoning or "Completed"
                                 task.progress += 1

@@ -67,15 +67,10 @@ class ModelConfig(BaseModel):
 
 class ExecutionConfig(BaseModel):
     """Runtime execution behavior configuration."""
-    
-    max_attempts: int = Field(
-        default=10,
+    max_iterations: int = Field(
+        default=500,
         ge=1,
-        description="Maximum number of attempts for task completion"
-    )
-    parallel_completion_and_action: bool = Field(
-        default=True,
-        description="Run completion check and next action in parallel"
+        description="Maximum number of iterations for task completion"
     )
     auto_complete_extract_commands: bool = Field(
         default=True,
@@ -362,21 +357,6 @@ class Config(BaseModel):
         arbitrary_types_allowed = True
     
     @classmethod
-    def debug(cls) -> Config:
-        """
-        Create a configuration optimized for debugging.
-        
-        Returns:
-            Config with debug mode enabled
-        """
-        return cls(
-            logging=DebugConfig(debug_mode=True),
-            execution=ExecutionConfig(
-                parallel_completion_and_action=False  # Sequential for easier debugging
-            )
-        )
-    
-    @classmethod
     def production(cls) -> Config:
         """
         Create a configuration optimized for production use.
@@ -386,7 +366,7 @@ class Config(BaseModel):
         """
         return cls(
             execution=ExecutionConfig(
-                max_attempts=15
+                max_iterations=1500
             ),
             logging=DebugConfig(debug_mode=False)
         )

@@ -396,7 +396,7 @@ def create_event_callback(agent: Agent, debug_mode: bool = True):
 
 def ask_user_for_help(question: str, context: dict) -> str:
     print(f"\n❓ Agent asks: {question}")
-    print(f"   (Press Enter to skip, or type your answer)")
+    print("   (Press Enter to skip, or type your answer)")
 
     try:
         answer = input("   Your answer: ").strip()
@@ -410,12 +410,11 @@ def ask_user_for_help(question: str, context: dict) -> str:
 config = Config(
     model=ModelConfig(
         agent_model="gpt-5-mini",
-        # agent_model="groq/meta-llama/llama-4-maverick-17b-128e-instruct",
         command_model="gpt-5-mini",
         agent_reasoning_level=ReasoningLevel.HIGH
     ),
     execution=ExecutionConfig(
-        max_attempts=30,
+        max_iterations=500,
         max_actions_per_plan=1,
         track_ineffective_actions=False,
         wait_for_load_before_turn=True,
@@ -455,11 +454,11 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     agent.event_logger.register_callback(
         create_event_callback(agent, debug_mode=config.logging.debug_mode))
-    agent.browser.page.goto("https://www.google.com/search?q=ios%20jobs%20uk&sourceid=chrome&ie=UTF-8&jbr=sep:0&udm=8&ved=2ahUKEwjO1LCojNGSAxUtWkEAHbxMGo4Q3L8LegQIKRAM#sv=CAMStwIa_gEKzwESzAEKjAFBTW4zLXlSWWI0cFNZdWxJYlRuWlRPMFI3Wl81OUJCS2V4ZXpaWkttelVIRnRmblJLTHlQbVVOOHcycVRIbFBFdFFIdnd3WkthMnFfN2VlV0lFSWNKMDZxSnItTnpxb0VCX2hIWTkxdTBoWlkzM1U2RnNUYmJpQjJoRkFNVEVSM2d6WEZtQTIzS3BGUxIXWkVpTWFabUFPZkNkaGJJUDFaVEd1QTQaIkFKS0xGbUlPTl9kLS10WmlZZGQ4U3YybWIwOG9vMTVualESBDgxNjYaATMqG19aRWlNYVptQU9mQ2RoYklQMVpUR3VBNF82NjAAOAFAACABKjAKEmpvYnMtZGV0YWlsLXZpZXdlchIYalJrWWYzSkVOalNDN2FJNUFBQUFBQT09GAAwASD1ir_lAjAC")
+    agent.browser.page.goto("https://www.google.com/")
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "click the first 7 jobs on the page. you are not allowed to click the same job twice.",
+        "search for hackernews and summarize what the posts are about",
     )
 
     if result:

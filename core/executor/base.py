@@ -1102,9 +1102,9 @@ class Executor:
         except Exception:
             pass
 
-        num_back = step.action.split(":", 1)[1].strip()
-        if num_back.isdigit():
-            num_back = int(num_back)
+        if ":" in step.action:
+            num_back = step.action.split(":", 1)[1].strip()
+            num_back = int(num_back) if num_back.isdigit() else 1
         else:
             num_back = 1
 
