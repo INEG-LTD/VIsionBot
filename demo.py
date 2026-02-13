@@ -459,7 +459,7 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "search for hackernews go to first 10 articles and in each article page, create a summary of what the article is about",
+        "go to yahoo finance, search for apple and extract the stock price",
     )
 
     if result:

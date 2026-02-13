@@ -272,6 +272,7 @@ class Task:
     """A unified task with a target. target=1 for single actions, target=N for repetitive, target='all' for indefinite."""
     goal: str
     target: Union[int, str] = 1  # 1, 5, "all"
+    start_hint: Optional[str] = None
     progress: int = 0
     history: List[str] = field(default_factory=list)
     task_id: str = ""
@@ -317,6 +318,7 @@ class TaskDefinition(BaseModel):
     """Task definition from the mission planner"""
     task: str
     target: Union[int, str] = 1  # 1, 5, "all"
+    start_hint: Optional[str] = None
 
 
 class MissionPlannerOutput(BaseModel):

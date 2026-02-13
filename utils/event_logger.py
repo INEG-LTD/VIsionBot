@@ -99,6 +99,10 @@ class EventType(str, Enum):
     TASK_FAIL = "task_fail"
     UNKNOWN_TASK_TYPE = "unknown_task_type"
 
+    # Incremental planning events
+    PLANNING_TURN_START = "planning_turn_start"
+    PLANNING_TURN_COMPLETE = "planning_turn_complete"
+
     # Progress-based task events
     PROGRESS_MARKED = "progress_marked"
     TARGET_REVISED = "target_revised"
@@ -571,6 +575,22 @@ class EventLogger:
             if error:
                 msg += f" - {error}"
             self.emit(EventType.TASK_FAIL, msg, LogLevel.ERROR, task_id=task_id, error=error, **details)
+        except Exception:
+            pass
+
+    def planning_turn_start(self, turn_number: int, mission: str, **details):
+        try:
+            self.emit(EventType.PLANNING_TURN_START, f"Planning turn {turn_number}", LogLevel.INFO, turn_number=turn_number, mission=mission, **details)
+        except Exception:
+            pass
+
+    def planning_turn_complete(self, turn_number: int, task: str = "", mission_complete: bool = False, **details):
+        try:
+            if mission_complete:
+                msg = f"Planning turn {turn_number}: mission complete"
+            else:
+                msg = f"Planning turn {turn_number}: next task = {task}"
+            self.emit(EventType.PLANNING_TURN_COMPLETE, msg, LogLevel.SUCCESS if mission_complete else LogLevel.INFO, turn_number=turn_number, task=task, mission_complete=mission_complete, **details)
         except Exception:
             pass
 

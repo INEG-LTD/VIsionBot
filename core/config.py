@@ -32,6 +32,11 @@ class TaskExecutionConfig(BaseModel):
         le=50,
         description="Number of actions without progress before forcing a think step"
     )
+    max_tasks_per_mission: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum number of tasks the planner can create per mission (safety limit)"
+    )
 
     class Config:
         arbitrary_types_allowed = True

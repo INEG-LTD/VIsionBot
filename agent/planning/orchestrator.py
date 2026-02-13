@@ -102,54 +102,23 @@ class TaskOrchestrator:
         return task_list
 
     def _build_system_prompt(self) -> str:
-        return """
-            You are a Task Orchestrator providing instructions to a browser automation agent.
+        return """You are a Task Orchestrator for a browser automation agent.
 
-            Your role is to analyze a user's request and break it down into an ordered list of tasks.
+Break the user's request into an ordered list of tasks. Each task has:
+- **task**: Clear, actionable instruction the agent can execute
+- **target**: 1 (default), N (repeat N times), or "all" (until exhausted)
+- **start_hint**: One-line orientation — where to look, what the target element looks like
 
-            Each task has two components:
-            1. **task** (string): What to do - a clear, actionable instruction
-            2. **target** (int or "all"): How many times to do it
-               - target=1: Single action (default)
-               - target=N: Repeat N times (e.g., target=5 means do it 5 times)
-               - target="all": Keep doing it until exhausted/no more items
+PRINCIPLES:
+1. **Stick to what the user asked.** Don't add tasks they didn't request.
+2. **Use common sense about context.** If the user is already on amazon.com and says "search for wireless mouse", don't add a "navigate to Amazon" task.
+3. **Right granularity.** "Search for wireless mouse" is one task, not "click search bar" + "type wireless mouse" + "press Enter". But "search for X and add the first result to cart" is two tasks.
+4. **Actionable language.** Use verbs the agent supports: click, type, scroll, press, open, back, forward, extract. Don't use "identify", "review", "verify".
 
-            EXAMPLES:
-
-            Single action (target=1):
-            - "Click the login button" → target=1
-            - "Navigate to linkedin.com" → target=1
-            - "Type 'hello' in the search box" → target=1
-
-            Repetitive action (target=N):
-            - "Type 'hello' 3 times" → target=3
-            - "Like the first 5 posts" → target=5
-            - "Extract company names from 10 job listings" → target=10
-
-            Indefinite action (target="all"):
-            - "Extract all product prices" → target="all"
-            - "Click every 'Save' button on the page" → target="all"
-            - "Scroll until the end of the page" → target="all"
-
-            DETECTION PATTERNS:
-            Look for these patterns to determine target:
-            - Numbers: "3 times", "first 5", "top 10" → extract the number
-            - Quantifiers: "all", "every", "each" → target="all"
-            - No quantifier: default → target=1
-
-            IMPORTANT RULES:
-            - Ensure tasks are in logical execution order
-            - Each task should be atomic and specific
-            - Use plain English that maps to supported commands:
-              * click, type, scroll, press, open, back, forward, extract
-            - DO NOT use unsupported verbs like "identify", "summarize", "review"
-            - Consider dependencies (e.g., navigate before extracting data)
-
-            Example breakdown:
-            User: "Go to LinkedIn and like the first 3 posts"
-            →
-            Task 1: "Navigate to linkedin.com" (target=1)
-            Task 2: "Like posts" (target=3)
+TARGET PATTERNS:
+- "first 5 posts" → target=5
+- "all products" → target="all"
+- No quantifier → target=1
 """
 
     def _build_user_prompt(
@@ -194,89 +163,48 @@ class TaskOrchestrator:
 
 EXAMPLES:
 
-Example 1: Repetitive task with count
-Request: "Type 'hello' 3 times"
-Response:
-{
-  "tasks": [
-    {
-      "task": "Type 'hello'",
-      "target": 3
-    }
-  ],
-  "reasoning": "User wants to type 'hello' exactly 3 times. Simple repetitive action.",
-  "confidence": 0.95
-}
-
-Example 2: Complex multi-step with repetition
+Example 1 — Navigation + repetitive action:
 Request: "Go to LinkedIn and like the first 5 posts"
-Response:
 {
   "tasks": [
     {
       "task": "Navigate to linkedin.com",
-      "target": 1
+      "target": 1,
+      "start_hint": "Type linkedin.com in the address bar or use open_url"
     },
     {
-      "task": "Like posts",
-      "target": 5
+      "task": "Like a post in the feed",
+      "target": 5,
+      "start_hint": "The Like button is a thumbs-up icon below each post. Scroll between posts."
     }
-  ],
-  "reasoning": "Two tasks: (1) navigate once (target=1), (2) like posts 5 times (target=5).",
-  "confidence": 0.9
+  ]
 }
 
-Example 3: Indefinite repetition
+Example 2 — Simple search (already on the site):
+Context: User is on amazon.com
+Request: "Search for wireless mouse"
+{
+  "tasks": [
+    {
+      "task": "Search for 'wireless mouse' using the search bar",
+      "target": 1,
+      "start_hint": "The search bar is at the top of the page"
+    }
+  ]
+}
+Note: No "navigate to Amazon" task — user is already there.
+
+Example 3 — Extract all:
 Request: "Extract all product prices from this page"
-Response:
 {
   "tasks": [
     {
-      "task": "Extract product prices",
-      "target": "all"
+      "task": "Extract product prices from listings",
+      "target": "all",
+      "start_hint": "Prices are typically near each product title, prefixed with $"
     }
-  ],
-  "reasoning": "Extract prices until exhausted. Using target='all' since count is unknown.",
-  "confidence": 0.85
+  ]
 }
-
-Example 4: No repetition needed
-Request: "Click the login button and enter my credentials"
-Response:
-{
-  "tasks": [
-    {
-      "task": "Click the login button",
-      "target": 1
-    },
-    {
-      "task": "Enter username and password in the login form",
-      "target": 1
-    }
-  ],
-  "reasoning": "Two single actions, each done once.",
-  "confidence": 0.95
-}
-
-Example 5: Use supported commands
-Request: "Open the 5th article and give me a summary"
-Good Response:
-{
-  "tasks": [
-    {
-      "task": "Click the 5th article link",
-      "target": 1
-    },
-    {
-      "task": "Extract article content and key summary points",
-      "target": 1
-    }
-  ],
-  "reasoning": "Using 'click' and 'extract' - both supported commands."
-}
-Bad Response (DO NOT DO THIS):
-- "Identify the 5th article link" (use 'click' instead)
-- "Summarize the article" (use 'extract' instead)
 """
 
         return f"""USER REQUEST:
@@ -303,6 +231,7 @@ Now analyze the user request and generate the task decomposition in the specifie
             new_task = Task(
                 goal=task_def.task,
                 target=task_def.target,
+                start_hint=task_def.start_hint,
                 task_id=task_id,
                 status=TaskStatus.PENDING,
                 created_at=time.time(),

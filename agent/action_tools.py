@@ -337,7 +337,21 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "extract_data",
-            "description": "Extract specific data from the current page and store it",
+            "description": """
+            Extract specific data from the current page and store it.
+            This can also be used to 'read' a webpage and also simultaneously 'write' the data to the notebook.
+            
+            You should use this tool when you want to:
+            - Read the content of the page
+            - Extract specific data from the page
+            - Summarize the content of the page
+            - Store the data in the notebook
+            - Use the data in the next actions
+            - Create a summary of the page
+            - Create a list of the page
+            - Create a table of the page
+            - Create a structured data of the page
+            """,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -369,7 +383,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "think",
-            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next steps, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. No browser action is taken.",
+            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next step, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. If the current unit is complete, prefer next_action=mark_progress. No browser action is taken.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -380,7 +394,18 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "next_action": {
                         "type": "string",
                         "enum": ["continue", "mark_progress", "done", "stuck"],
-                        "description": "What to do after thinking. 'continue' = keep working with browser actions. 'mark_progress' = I just completed a unit of work, record it. 'done' = the task is fully complete, nothing left to do. 'stuck' = I can't make progress, stop."
+                        "description": "What to do after thinking. 'continue' = there is still a concrete unfinished requirement and you need another browser action. 'mark_progress' = the current unit is complete and should be counted now. 'done' = the task is fully complete, nothing left to do. 'stuck' = I can't make progress, stop."
+                    },
+                    "recommended_next_step": {
+                        "type": "string",
+                        "description": """
+                            Optional one-step recommendation for the very next action. 
+                            Format as a concrete action hint such as 'extract_data: summarize current page' or 'click: top article title'. 
+                            Used only on the next planning turn. 
+                            
+                            If there are missing requirements include the most important one as the recommended next step.
+                            Example: "You haven't yet done action A and action B, the most important one is action A, so the recommended next step is 'action_A: ...'."
+                            """
                     }
                 },
                 "required": ["reasoning", "next_action"],
@@ -648,10 +673,13 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
 
 
 # Tools available during checkpoint mode (after a browser action in multi-target tasks).
-# Forces the agent to decide about progress before taking another browser action.
+# Keep order explicit to bias completion first: mark progress before more thinking.
+_ACTION_TOOLS_BY_NAME: Dict[str, Dict[str, Any]] = {
+    tool["function"]["name"]: tool for tool in ACTION_TOOLS
+}
 CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
-    tool for tool in ACTION_TOOLS
-    if tool["function"]["name"] in ("mark_progress", "think")
+    _ACTION_TOOLS_BY_NAME["mark_progress"],
+    _ACTION_TOOLS_BY_NAME["think"],
 ]
 
 # Tools available when a dialog is blocking the active tab.
@@ -659,6 +687,52 @@ CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 DIALOG_TOOLS: List[Dict[str, Any]] = [
     tool for tool in ACTION_TOOLS
     if tool["function"]["name"] in ("dismiss_dialog", "think")
+]
+
+
+# ============================================================================
+# PLANNING TOOLS SCHEMA (used by incremental mission planner)
+# ============================================================================
+
+PLANNING_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_next",
+            "description": (
+                "Decide the next task to execute for this mission, or declare the mission complete. "
+                "Each task should be a self-contained piece of work the browser agent can accomplish. "
+                "Set task to an empty string when the mission is fully complete."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Your reasoning about what to do next — what's been done, what's left, and why this task is the right next step"
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "The next task to execute. Leave empty (\"\") if the mission is complete."
+                    },
+                    "target": {
+                        "oneOf": [
+                            {"type": "integer", "minimum": 1},
+                            {"type": "string", "enum": ["all"]}
+                        ],
+                        "description": "How many times to repeat this task. Use an integer (e.g. 3) for specific counts, or \"all\" for open-ended. Default: 1",
+                        "default": 1
+                    },
+                    "start_hint": {
+                        "type": "string",
+                        "description": "Optional hint for how to begin this task (e.g., 'click the search bar first')"
+                    }
+                },
+                "required": ["reasoning", "task"],
+                "additionalProperties": False
+            }
+        }
+    }
 ]
 
 
@@ -792,6 +866,12 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
             parts += f" | input_text={input_text}"
         return parts
 
+    elif function_name == "plan_next":
+        task = arguments.get('task', '')
+        target = arguments.get('target', 1)
+        start_hint = arguments.get('start_hint', '')
+        return f"plan_next: {task} | target={target} | start_hint={start_hint}"
+
     else:
         raise ValueError(f"Unknown function: {function_name}")
 
@@ -802,5 +882,6 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
 
 __all__ = [
     "ACTION_TOOLS",
+    "PLANNING_TOOLS",
     "function_call_to_keyword_action",
 ]

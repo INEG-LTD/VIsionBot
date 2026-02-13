@@ -59,6 +59,8 @@ class ActionPlanner:
         dialog_notice: Optional[str] = None,
         tab_events: Optional[List[str]] = None,
         dialog_pending: bool = False,
+        start_hint: Optional[str] = None,
+        recommended_next_step: Optional[str] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -88,6 +90,8 @@ class ActionPlanner:
         self.dialog_notice = dialog_notice
         self.tab_events = tab_events or []
         self.dialog_pending = dialog_pending
+        self.start_hint = start_hint
+        self.recommended_next_step = recommended_next_step
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -104,6 +108,17 @@ class ActionPlanner:
 
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
+
+        if self.recommended_next_step:
+            parts.append(f"RECOMMENDED NEXT STEP (ONE SHOT):\n{self.recommended_next_step}\n")
+
+        if self.checkpoint_mode and self.browser_actions_in_round > 0:
+            parts.append(
+                "CHECKPOINT HINT:\n"
+                "You already have uncounted browser work in the current unit.\n"
+                "If no requirement remains, prefer mark_progress now "
+                "(or think with next_action=mark_progress).\n"
+            )
 
         if self.tab_events:
             events_str = "\n".join(f"- {e}" for e in self.tab_events)
@@ -146,17 +161,69 @@ class ActionPlanner:
             if self.dialog_notice:
                 dialog_prefix = f"{self.dialog_notice}\n"
 
-            if self.checkpoint_mode:
-                user_prompt = f"""{dialog_prefix}{reflection}Task: {self.user_prompt}
-Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.
+            continuation_mode = ""
+            if self.active_strategy:
+                continuation_mode = """
+ACTIVE STRATEGY CONTINUATION MODE
+You already have an ACTIVE STRATEGY. Continue it.
 
-If your last action completed a unit of work, call mark_progress to record it.
-If you need more actions before this counts as progress, call think with next_action=continue.
+Rules:
+1. Do not create a new plan unless:
+   - you are stuck, or
+   - the page changed enough that ACTIVE STRATEGY no longer applies.
+2. Do not restate the full plan.
+3. If you call think with next_action=continue, only provide:
+   - one short status update in natural first-person language
+   - one short immediate next step (for example: "I'm now going to ...", "Next I'll ...")
+   - avoid robotic labels
+4. If the unit of work is complete, choose mark_progress (or think with next_action=mark_progress) instead of extending reasoning.
+5. If nothing meaningful changed and you have no concrete next step, choose next_action=stuck (do not invent a new strategy).
+"""
+
+            if self.checkpoint_mode:
+                cap_rule_line = ""
+                if isinstance(self.task_target, int):
+                    remaining = max(self.task_target - self.task_progress, 0)
+                    cap_rule_line = (
+                        f"\nHard cap for this task: {self.task_target} total units.\n"
+                        f"Progress: {self.task_progress}/{self.task_target} recorded ({remaining} remaining).\n"
+                        f"Do not exceed this cap. If remaining is 0, do not start a new unit of work.\n"
+                    )
+                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Task: {self.user_prompt}
+Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.{cap_rule_line}
+Unit complete means: one full pass of the task above is done for the current item (including required end state like returning to the source page, if the task asks for it).
+
+CHECKPOINT DECISION (choose exactly one):
+1) If the current unit is complete now, call mark_progress immediately
+   OR call think with next_action=mark_progress.
+2) Only if the unit is NOT complete, call think with next_action=continue and include exactly:
+   - one short first-person status sentence naming one specific unfinished requirement from the Task text
+     (example styles: "I haven't ... yet.", "I have ... but still need to ...")
+   - one short first-person immediate next-step sentence with one concrete browser action
+     (example styles: "Next I'll ...", "I'll now ...")
+3) Do not use think(next_action=continue) to move to the next item/article/record.
+   First record completion for the current unit.
+4) Do not re-attempt an already completed unit.
+   Only re-attempt if the user explicitly asks, or if prior completion is invalid
+   (failed, missing required evidence, or no longer true after page/state changes).
+
+Do NOT start a new unit (next item/article/record) before mark_progress is recorded for the current one.
 """
             else:
-                user_prompt = f"""{dialog_prefix}{reflection}You are currently trying to: {self.user_prompt}
+                # For single-target tasks, include hint directly
+                hint_line = f"\nHint: {self.start_hint}" if self.start_hint and self.task_target == 1 else ""
+                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}You are currently trying to: {self.user_prompt}{hint_line}
 
 Based on the screenshot, what is the best next action?
+"""
+
+            if self.recommended_next_step:
+                user_prompt += f"""
+
+RECOMMENDED NEXT STEP (from prior think, apply now if valid):
+{self.recommended_next_step}
+
+Use this as your next action unless it is invalid/impossible with the current page or available tools.
 """
 
             # Get filtered tools based on current state
@@ -259,11 +326,12 @@ Based on the screenshot, what is the best next action?
                 if numeric_target:
                     remaining = numeric_target - self.task_progress
 
-                    # Only show the "do it again" nudge at the start of a new round
+                    # Only show the "do it again" nudge and hint at the start of a new round
                     round_start_hint = (
                         f'You just finished: "{last_completed}"\n'
                         f'What you see on screen is from your previous round — do it again.\n'
                     ) if is_round_start else ""
+                    hint_at_round_start = f"Hint: {self.start_hint}\n" if self.start_hint and is_round_start else ""
 
                     progress_info = f"""
 ═══════════════════════════════════════════════════════════════
@@ -271,7 +339,7 @@ ROUND {current_round} OF {target_display}
 ═══════════════════════════════════════════════════════════════
 
 Task: {self.user_prompt}
-
+{hint_at_round_start}
 Completed:
 {history_lines}
 {round_start_hint}{remaining} round{"s" if remaining != 1 else ""} left.
@@ -286,6 +354,7 @@ Completed:
                         f'You just finished: "{last_completed}"\n'
                         f'What you see on screen may include results of your previous work.\n'
                     ) if is_round_start else ""
+                    hint_at_round_start = f"Hint: {self.start_hint}\n" if self.start_hint and is_round_start else ""
 
                     progress_info = f"""
 ═══════════════════════════════════════════════════════════════
@@ -293,7 +362,7 @@ PROGRESS ({self.task_progress} done so far)
 ═══════════════════════════════════════════════════════════════
 
 Task: {self.user_prompt}
-
+{hint_at_round_start}
 Completed:
 {history_lines}
 {round_start_hint}Keep going — look for more to do.
@@ -305,13 +374,14 @@ Completed:
             else:
                 # First iteration: no progress yet
                 if numeric_target:
+                    hint_line = f"Hint: {self.start_hint}\n" if self.start_hint else ""
                     progress_info = f"""
 ═══════════════════════════════════════════════════════════════
 ROUND 1 OF {target_display}
 ═══════════════════════════════════════════════════════════════
 
 Task: {self.user_prompt}
-
+{hint_line}
 No rounds completed yet — get started.
 
 • After each round, call mark_progress to record what you did
@@ -319,13 +389,14 @@ No rounds completed yet — get started.
 
 """
                 else:
+                    hint_line = f"Hint: {self.start_hint}\n" if self.start_hint else ""
                     progress_info = f"""
 ═══════════════════════════════════════════════════════════════
 TASK PROGRESS
 ═══════════════════════════════════════════════════════════════
 
 Task: {self.user_prompt}
-Progress: 0/{target_display}
+{hint_line}Progress: 0/{target_display}
 
 No progress yet — get started.
 
@@ -470,6 +541,8 @@ GUIDELINES
 4. Check focused=true before clicking to focus
 5. Don't repeat failed actions
 6. Use natural language when marking progress
+7. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
+8. In checkpoint mode, finish/record the current unit with mark_progress before starting the next unit
 {base_knowledge_section}
 
 Choose the next action to take.
