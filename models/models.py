@@ -100,21 +100,14 @@ class ActionStep(BaseModel):
         """
         Create ActionStep from function call.
 
-        Converts function call to keyword action string format for backward
-        compatibility with existing executor infrastructure.
-
         Args:
             function_name: Name of the function called
             arguments: Dictionary of function arguments
-            reasoning: Optional reasoning for the action
 
         Returns:
-            ActionStep instance with both keyword and function call data
+            ActionStep instance with both readable action text and function call data.
         """
-        from agent.action_tools import function_call_to_keyword_action
-
-        # Convert to keyword format for backward compatibility
-        action_string = function_call_to_keyword_action(function_name, arguments)
+        action_string = cls._render_action_text(function_name, arguments)
 
         return cls(
             action=action_string,
@@ -122,6 +115,68 @@ class ActionStep(BaseModel):
             function_name=function_name,
             function_arguments=arguments
         )
+
+    @staticmethod
+    def _render_action_text(function_name: str, arguments: dict) -> str:
+        """Render a concise readable command string for logs/history."""
+        if function_name == "click":
+            return f"click: {arguments.get('element_type', 'element')} {arguments.get('description', '')}".strip()
+        if function_name == "type_text":
+            return f"type: {arguments.get('text', '')} : {arguments.get('field_description', '')}".strip()
+        if function_name == "clear_text":
+            return f"clear_text: {arguments.get('field_description', '')}".strip()
+        if function_name == "select_option":
+            return f"select_option: {arguments.get('option', '')} in {arguments.get('dropdown_description', '')}".strip()
+        if function_name == "upload_file":
+            return f"upload_file: {arguments.get('file_path', '')} in {arguments.get('target_description', '')}".strip()
+        if function_name == "set_datetime":
+            return f"set_datetime: {arguments.get('value', '')} in {arguments.get('picker_description', '')}".strip()
+        if function_name == "press_key":
+            return f"press: {arguments.get('key', '')}".strip()
+        if function_name == "open_url":
+            return f"open: {arguments.get('url', '')}".strip()
+        if function_name == "go_back":
+            return f"go_back: {arguments.get('steps', 1)}"
+        if function_name == "go_forward":
+            return f"go_forward: {arguments.get('steps', 1)}"
+        if function_name == "scroll_page":
+            return f"scroll: {arguments.get('direction', 'down')}"
+        if function_name == "extract_data":
+            return f"extract: {arguments.get('data_description', '')}".strip()
+        if function_name == "think":
+            return (
+                f"think: {arguments.get('reasoning', '')} | "
+                f"next_action={arguments.get('next_action', 'continue')}"
+            ).strip()
+        if function_name == "assert_condition":
+            return f"assert: {arguments.get('condition', '')}".strip()
+        if function_name == "mark_progress":
+            return (
+                f"mark_progress: {arguments.get('description', '')} | "
+                f"count={arguments.get('count', 1)} | done={arguments.get('done', False)}"
+            ).strip()
+        if function_name == "revise_target":
+            return f"revise_target: {arguments.get('new_target', '')} | {arguments.get('reason', '')}".strip()
+        if function_name == "flag":
+            return f"flag: {arguments.get('message', '')}".strip()
+        if function_name == "wait_for":
+            return f"wait_for: {arguments.get('condition', '')} | timeout={arguments.get('timeout_seconds', 10)}".strip()
+        if function_name == "ask_user":
+            return f"ask: {arguments.get('question', '')}".strip()
+        if function_name == "switch_tab":
+            return f"switch_tab: {arguments.get('tab_id', '')}".strip()
+        if function_name == "close_tab":
+            return f"close_tab: {arguments.get('tab_id', '')}".strip()
+        if function_name == "open_tab":
+            return f"open_tab: {arguments.get('url', '')}".strip()
+        if function_name == "dismiss_dialog":
+            return (
+                f"dismiss_dialog: accept={arguments.get('accept', False)}"
+                + (f" | input_text={arguments.get('input_text', '')}" if arguments.get("input_text") else "")
+            ).strip()
+        if function_name == "plan_next":
+            return f"plan_next: {arguments.get('task', '')}".strip()
+        return f"{function_name}: {arguments}"
 
     def _parse_action(text: str) -> tuple[str, str]:
         """Parse action text into (command, body). Raises ValueError if invalid."""

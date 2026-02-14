@@ -2,8 +2,7 @@
 Action tools schema for OpenAI function calling.
 
 This module defines the complete set of actions available to the agent as
-OpenAI function calling tools, along with conversion utilities to maintain
-backward compatibility with the keyword command format.
+OpenAI function calling tools.
 """
 
 from typing import Dict, Any, List, Optional
@@ -851,118 +850,6 @@ def validate_memory_evidence(function_name: str, arguments: Dict[str, Any]) -> O
 
 
 # ============================================================================
-# FUNCTION CALL TO KEYWORD CONVERTER
-# ============================================================================
-
-
-def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any]) -> str:
-    """
-    Convert OpenAI function call to keyword action string format.
-
-    This maintains compatibility with existing _execute_keyword_command infrastructure.
-    """
-
-    if function_name == "click":
-        return f"click: {arguments['element_type']} {arguments['description']}"
-
-    elif function_name == "type_text":
-        text = arguments['text']
-        return f"type: {text} : {arguments['field_description']}"
-
-    elif function_name == "clear_text":
-        return f"clear_text: {arguments['field_description']}"
-
-    elif function_name == "select_option":
-        option = arguments['option'].replace("'", "\\'")
-        return f"select: '{option}' in {arguments['dropdown_description']}"
-
-    elif function_name == "upload_file":
-        return f"upload: {arguments['file_path']} in {arguments['target_description']}"
-
-    elif function_name == "set_datetime":
-        return f"datetime: {arguments['value']} in {arguments['picker_description']}"
-
-    elif function_name == "press_key":
-        return f"press: {arguments['key']}"
-
-    elif function_name == "open_url":
-        return f"open: {arguments['url']}"
-
-    elif function_name == "go_back":
-        steps = arguments.get('steps', 1)
-        return f"back: {steps}" if steps > 1 else "back"
-
-    elif function_name == "go_forward":
-        steps = arguments.get('steps', 1)
-        return f"forward: {steps}" if steps > 1 else "forward"
-
-    elif function_name == "scroll_page":
-        direction = arguments['direction']
-        return f"scroll: {direction}"
-
-    elif function_name == "extract_data":
-        return f"extract: {arguments['data_description']}"
-
-    # New cognitive tools
-    elif function_name == "think":
-        next_action = arguments.get('next_action', 'continue')
-        return f"think: {arguments['reasoning']} | next_action={next_action}"
-
-    elif function_name == "assert_condition":
-        return f"assert: {arguments['condition']} | {arguments['reasoning']}"
-
-    elif function_name == "mark_progress":
-        count = arguments.get('count', 1)
-        done = arguments.get('done', False)
-        return f"mark_progress: {arguments['description']} | count={count} | done={done}"
-
-    elif function_name == "revise_target":
-        return f"revise_target: {arguments['new_target']} | {arguments['reason']}"
-
-    elif function_name == "flag":
-        return f"flag: {arguments['message']}"
-
-    elif function_name == "wait_for":
-        timeout = arguments.get('timeout_seconds', 10)
-        return f"wait_for: {arguments['condition']} | timeout={timeout}"
-
-    elif function_name == "ask_user":
-        context = arguments.get('context', '')
-        question = arguments['question']
-        if context:
-            return f"ask: {question} (Context: {context})"
-        return f"ask: {question}"
-
-    # Tab management tools
-    elif function_name == "switch_tab":
-        return f"switch_tab: {arguments['tab_id']}"
-
-    elif function_name == "close_tab":
-        return f"close_tab: {arguments['tab_id']}"
-
-    elif function_name == "open_tab":
-        url = arguments.get('url', '')
-        return f"open_tab: {url}" if url else "open_tab:"
-
-    elif function_name == "dismiss_dialog":
-        accept = arguments['accept']
-        input_text = arguments.get('input_text', '')
-        parts = f"dismiss_dialog: accept={accept}"
-        if input_text:
-            parts += f" | input_text={input_text}"
-        return parts
-
-    elif function_name == "plan_next":
-        task = arguments.get('task', '')
-        target = arguments.get('target', 1)
-        start_hint = arguments.get('start_hint', '')
-        return f"plan_next: {task} | target={target} | start_hint={start_hint}"
-
-    else:
-        raise ValueError(f"Unknown function: {function_name}")
-
-
-# ============================================================================
 # EXPORTS
 # ============================================================================
 
@@ -970,5 +857,4 @@ __all__ = [
     "ACTION_TOOLS",
     "PLANNING_TOOLS",
     "validate_memory_evidence",
-    "function_call_to_keyword_action",
 ]

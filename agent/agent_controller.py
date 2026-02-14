@@ -1,5 +1,6 @@
 import time
 import threading
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
 import hashlib
 
@@ -45,6 +46,18 @@ from core.browser import Browser
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
 UserQuestionCallback = Callable[[str, dict], str]
 
+
+@dataclass
+class TaskExecutionState:
+    """Mutable per-task execution state for the unified loop."""
+    total_actions: int = 0
+    actions_since_progress: int = 0
+    browser_actions_since_progress: int = 0
+    checkpoint_pending: bool = False
+    suppress_mark_progress: bool = False
+    last_action_summary: Optional[str] = None
+    progress_notes: List[str] = field(default_factory=list)
+    failed_elements: List[FailedAction] = field(default_factory=list)
 
 
 """
@@ -928,15 +941,9 @@ Call `plan_next` with:
         # Get config values
         max_actions_per_task = self.config.task_execution.max_actions_per_task
 
-        # Track progress
-        actions_since_progress = 0
-        browser_actions_since_progress = 0
-        total_actions = 0
-        failed_elements: List[FailedAction] = []
-        progress_notes: List[str] = []
-        checkpoint_pending = bool(start_in_checkpoint)  # Mission-level checkpoint start; browser actions still re-enable checkpoints
-        suppress_mark_progress = False  # After mark_progress is called, suppress it until next browser action
-        last_action_summary: Optional[str] = None  # Brief description of last action + result
+        state = TaskExecutionState(
+            checkpoint_pending=bool(start_in_checkpoint),
+        )
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
@@ -952,17 +959,11 @@ Call `plan_next` with:
             Record unit completion consistently for both direct mark_progress and think(next_action=mark_progress).
             Returns (recorded, completion_result). completion_result is set when task finishes immediately.
             """
-            nonlocal actions_since_progress
-            nonlocal browser_actions_since_progress
-            nonlocal checkpoint_pending
-            nonlocal suppress_mark_progress
-            nonlocal last_action_summary
-
-            if browser_actions_since_progress == 0:
+            if state.browser_actions_since_progress == 0:
                 self.event_logger.system_debug(
                     f"⚠ {source} ignored — no browser actions since last progress"
                 )
-                last_action_summary = (
+                state.last_action_summary = (
                     f"mark_progress BLOCKED: No browser actions since your last progress mark "
                     f"({task.progress}/{task.target}). Do a browser action first "
                     f"(click, type, go_back, etc.) before marking progress again."
@@ -970,17 +971,17 @@ Call `plan_next` with:
                 return False, None
 
             task.progress += count
-            progress_notes.append(description)
-            actions_since_progress = 0
-            browser_actions_since_progress = 0
-            checkpoint_pending = False
-            suppress_mark_progress = True
+            state.progress_notes.append(description)
+            state.actions_since_progress = 0
+            state.browser_actions_since_progress = 0
+            state.checkpoint_pending = False
+            state.suppress_mark_progress = True
 
             if source == "think":
                 self.event_logger.system_info(
                     f"✓ Progress (via think): {description} ({task.progress}/{task.target})"
                 )
-                last_action_summary = (
+                state.last_action_summary = (
                     f"You marked progress via think: \"{description}\" "
                     f"({task.progress}/{task.target})"
                 )
@@ -988,7 +989,7 @@ Call `plan_next` with:
                 self.event_logger.system_info(
                     f"✓ Progress: {description} ({task.progress}/{task.target})"
                 )
-                last_action_summary = (
+                state.last_action_summary = (
                     f"You marked progress: \"{description}\" "
                     f"({task.progress}/{task.target})"
                 )
@@ -1006,8 +1007,8 @@ Call `plan_next` with:
 
             return True, None
 
-        while total_actions < max_actions_per_task:
-            total_actions += 1
+        while state.total_actions < max_actions_per_task:
+            state.total_actions += 1
             self._current_iteration += 1
 
             # Check if target reached
@@ -1076,14 +1077,14 @@ Call `plan_next` with:
                 max_actions_per_plan=self.config.execution.max_actions_per_plan,
                 task_target=task.target,
                 task_progress=task.progress,
-                task_history=progress_notes,
+                task_history=state.progress_notes,
                 force_think=force_think,
                 current_iteration=self._current_iteration,
-                browser_actions_in_round=browser_actions_since_progress,
-                checkpoint_mode=checkpoint_pending,
-                suppress_mark_progress=suppress_mark_progress,
+                browser_actions_in_round=state.browser_actions_since_progress,
+                checkpoint_mode=state.checkpoint_pending,
+                suppress_mark_progress=state.suppress_mark_progress,
                 active_strategy=active_strategy,
-                last_action_summary=last_action_summary,
+                last_action_summary=state.last_action_summary,
                 tab_bar=tab_bar,
                 dialog_notice=dialog_notice,
                 tab_events=tab_events,
@@ -1112,26 +1113,22 @@ Call `plan_next` with:
 
                 # Execute each action
                 for action_step in actions_list:
-                    current_action = action_step.action
+                    function_name = (getattr(action_step, "function_name", None) or "").strip()
+                    action_args = getattr(action_step, "function_arguments", {}) or {}
+                    current_action = getattr(action_step, "action", "") or function_name
 
                     # Handle mark_progress (intercepted by controller, not executor)
-                    if current_action and current_action.lower().startswith("mark_progress:"):
+                    if function_name == "mark_progress":
                         before_state = self.memory_store._capture_current_state()
-                        # Parse: "mark_progress: description | count=1 | done=false"
-                        parts = current_action.split(":", 1)[1].strip()
-                        description = parts
-                        count = 1
-                        done = False
-
-                        # Parse parameters
-                        if "|" in parts:
-                            desc_part = parts.split("|")[0].strip()
-                            description = desc_part
-                            for param in parts.split("|")[1:]:
-                                if "count=" in param:
-                                    count = int(param.split("=")[1].strip())
-                                elif "done=" in param:
-                                    done = param.split("=")[1].strip().lower() == "true"
+                        description = str(action_args.get("description", "")).strip() or "Completed one unit"
+                        count_raw = action_args.get("count", 1)
+                        done = bool(action_args.get("done", False))
+                        try:
+                            count = int(count_raw)
+                        except Exception:
+                            count = 1
+                        if count < 1:
+                            count = 1
 
                         recorded, maybe_completion = _record_progress(
                             description,
@@ -1154,32 +1151,29 @@ Call `plan_next` with:
                             after_state=after_state,
                         )
                         if not recorded:
-                            actions_since_progress += 1
-                            checkpoint_pending = False
+                            state.actions_since_progress += 1
+                            state.checkpoint_pending = False
                             continue
                         if maybe_completion:
                             return maybe_completion
                         continue
 
                     # Handle revise_target (intercepted by controller)
-                    if current_action and current_action.lower().startswith("revise_target:"):
+                    if function_name == "revise_target":
                         before_state = self.memory_store._capture_current_state()
-                        # Parse: "revise_target: new_target | reason"
-                        parts = current_action.split(":", 1)[1].strip()
-                        new_target_str = parts.split("|")[0].strip()
-                        reason = parts.split("|")[1].strip() if "|" in parts else "Target revised"
+                        new_target_raw = action_args.get("new_target", task.target)
+                        reason = str(action_args.get("reason", "Target revised")).strip() or "Target revised"
 
-                        # Parse new target
-                        if new_target_str.lower() == "all":
+                        if isinstance(new_target_raw, str) and new_target_raw.strip().lower() == "all":
                             task.target = "all"
                             numeric_target = None
                         else:
-                            task.target = int(new_target_str)
+                            task.target = int(new_target_raw)
                             numeric_target = task.target
 
                         self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
-                        last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
-                        checkpoint_pending = True
+                        state.last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
+                        state.checkpoint_pending = True
                         self._record_controller_action(
                             action_type="revise_target",
                             action_step=action_step,
@@ -1194,8 +1188,7 @@ Call `plan_next` with:
                         continue
 
                     # Handle think (with next_action decision)
-                    if current_action and current_action.lower().startswith("think:"):
-                        # Execute via executor (records in session tracker)
+                    if function_name == "think":
                         self.action_executor.act(
                             action_step=action_step,
                             detected_elements=detected_elements,
@@ -1203,18 +1196,11 @@ Call `plan_next` with:
                             environment_state=environment_state,
                             current_iteration=self._current_iteration,
                         )
-                        actions_since_progress += 1
+                        state.actions_since_progress += 1
 
-                        # Prefer structured function args when available
-                        think_args = getattr(action_step, "function_arguments", {}) or {}
-                        think_reasoning = str(
-                            think_args.get(
-                                "reasoning",
-                                current_action.split("|")[0].split(":", 1)[1].strip() if ":" in current_action else "",
-                            )
-                        ).strip()
-                        think_next_action = str(think_args.get("next_action", "continue")).strip().lower()
-                        recommended_next_step = str(think_args.get("recommended_next_step", "")).strip()
+                        think_reasoning = str(action_args.get("reasoning", "")).strip()
+                        think_next_action = str(action_args.get("next_action", "continue")).strip().lower()
+                        recommended_next_step = str(action_args.get("recommended_next_step", "")).strip()
 
                         if think_next_action in ("mark_progress", "done"):
                             reasoning = think_reasoning or "Completed"
@@ -1224,43 +1210,32 @@ Call `plan_next` with:
                                 done=(think_next_action == "done"),
                                 source="think",
                             )
-                            # If progress is blocked here, allow a browser action next turn.
                             if not recorded:
-                                checkpoint_pending = False
+                                state.checkpoint_pending = False
                             if maybe_completion:
                                 return maybe_completion
-
                         elif think_next_action == "stuck":
-                            # Agent detected the current strategy is stuck and proposes a replacement strategy.
                             replacement_strategy = think_reasoning or "I'm stuck with my prior approach, so I'll try a different strategy."
-                            checkpoint_pending = False
-                            last_action_summary = (
-                                f"Strategy switch (stuck): \"{replacement_strategy}\""
-                            )
+                            state.checkpoint_pending = False
+                            state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
                             if recommended_next_step:
-                                last_action_summary += f" | recommended_next_step={recommended_next_step}"
+                                state.last_action_summary += f" | recommended_next_step={recommended_next_step}"
                             else:
-                                last_action_summary += " | recommended_next_step=<none acknowledged>"
-                            self.event_logger.system_info(
-                                f"↺ Strategy switched via stuck: {replacement_strategy}"
-                            )
-
+                                state.last_action_summary += " | recommended_next_step=<none acknowledged>"
+                            self.event_logger.system_info(f"↺ Strategy switched via stuck: {replacement_strategy}")
                         elif think_next_action == "continue":
-                            last_action_summary = f"You thought: \"{think_reasoning}\""
+                            state.last_action_summary = f"You thought: \"{think_reasoning}\""
                             if recommended_next_step:
-                                last_action_summary += f" | recommended_next_step={recommended_next_step}"
+                                state.last_action_summary += f" | recommended_next_step={recommended_next_step}"
                             else:
-                                last_action_summary += " | recommended_next_step=<none acknowledged>"
-                            checkpoint_pending = False
+                                state.last_action_summary += " | recommended_next_step=<none acknowledged>"
+                            state.checkpoint_pending = False
                         else:
-                            checkpoint_pending = False
-
+                            state.checkpoint_pending = False
                         continue
 
                     # Handle assert/flag (non-browser actions)
-                    if current_action and (current_action.lower().startswith("assert:") or
-                                          current_action.lower().startswith("flag:")):
-                        # Execute via executor (records in session tracker)
+                    if function_name in {"assert_condition", "flag"}:
                         self.action_executor.act(
                             action_step=action_step,
                             detected_elements=detected_elements,
@@ -1268,19 +1243,21 @@ Call `plan_next` with:
                             environment_state=environment_state,
                             current_iteration=self._current_iteration,
                         )
-                        action_type = "assert" if current_action.lower().startswith("assert:") else "flag"
-                        action_content = current_action.split(":", 1)[1].split("|")[0].strip() if ":" in current_action else ""
-                        last_action_summary = f"You called {action_type}: \"{action_content}\""
-                        actions_since_progress += 1
-                        checkpoint_pending = True
+                        action_type = "assert" if function_name == "assert_condition" else "flag"
+                        action_content = str(
+                            action_args.get("condition") if function_name == "assert_condition" else action_args.get("message", "")
+                        ).strip()
+                        state.last_action_summary = f"You called {action_type}: \"{action_content}\""
+                        state.actions_since_progress += 1
+                        state.checkpoint_pending = True
                         continue
 
                     # Handle tab management actions (intercepted by controller)
-                    if current_action and current_action.lower().startswith("switch_tab:"):
+                    if function_name == "switch_tab":
                         before_state = self.memory_store._capture_current_state()
                         action_success = False
                         action_error: Optional[str] = None
-                        tab_id = current_action.split(":", 1)[1].strip()
+                        tab_id = str(action_args.get("tab_id", "")).strip()
                         if self.tab_manager:
                             try:
                                 new_page = self.tab_manager.switch_to(tab_id)
@@ -1290,16 +1267,16 @@ Call `plan_next` with:
                                     title = new_page.title()
                                 except Exception:
                                     pass
-                                last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
-                                browser_actions_since_progress += 1
-                                suppress_mark_progress = False
-                                checkpoint_pending = True
+                                state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
+                                state.browser_actions_since_progress += 1
+                                state.suppress_mark_progress = False
+                                state.checkpoint_pending = True
                                 action_success = True
                             except ValueError as e:
-                                last_action_summary = f"switch_tab FAILED: {e}"
+                                state.last_action_summary = f"switch_tab FAILED: {e}"
                                 action_error = str(e)
                         else:
-                            last_action_summary = "switch_tab FAILED: Tab management not available"
+                            state.last_action_summary = "switch_tab FAILED: Tab management not available"
                             action_error = "Tab management not available"
                         self._record_controller_action(
                             action_type=InteractionType.NAVIGATION.value,
@@ -1310,30 +1287,30 @@ Call `plan_next` with:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-                        actions_since_progress += 1
+                        state.actions_since_progress += 1
                         continue
 
-                    if current_action and current_action.lower().startswith("close_tab:"):
+                    if function_name == "close_tab":
                         before_state = self.memory_store._capture_current_state()
                         action_success = False
                         action_error: Optional[str] = None
-                        tab_id = current_action.split(":", 1)[1].strip()
+                        tab_id = str(action_args.get("tab_id", "")).strip()
                         if self.tab_manager:
                             try:
                                 new_page = self.tab_manager.close_tab(tab_id)
                                 self.action_executor.set_page(new_page)
                                 active = self.tab_manager.get_active()
                                 active_id = active.id if active else "?"
-                                last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
-                                browser_actions_since_progress += 1
-                                suppress_mark_progress = False
-                                checkpoint_pending = True
+                                state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
+                                state.browser_actions_since_progress += 1
+                                state.suppress_mark_progress = False
+                                state.checkpoint_pending = True
                                 action_success = True
                             except ValueError as e:
-                                last_action_summary = f"close_tab FAILED: {e}"
+                                state.last_action_summary = f"close_tab FAILED: {e}"
                                 action_error = str(e)
                         else:
-                            last_action_summary = "close_tab FAILED: Tab management not available"
+                            state.last_action_summary = "close_tab FAILED: Tab management not available"
                             action_error = "Tab management not available"
                         self._record_controller_action(
                             action_type=InteractionType.NAVIGATION.value,
@@ -1344,32 +1321,32 @@ Call `plan_next` with:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-                        actions_since_progress += 1
+                        state.actions_since_progress += 1
                         continue
 
-                    if current_action and current_action.lower().startswith("open_tab:"):
+                    if function_name == "open_tab":
                         before_state = self.memory_store._capture_current_state()
                         action_success = False
                         action_error: Optional[str] = None
-                        url = current_action.split(":", 1)[1].strip() or None
+                        url = str(action_args.get("url", "")).strip() or None
                         if self.tab_manager:
                             try:
                                 new_page = self.tab_manager.open_tab(url)
                                 self.action_executor.set_page(new_page)
                                 active = self.tab_manager.get_active()
                                 active_id = active.id if active else "?"
-                                last_action_summary = f"Opened new tab [{active_id}]"
+                                state.last_action_summary = f"Opened new tab [{active_id}]"
                                 if url:
-                                    last_action_summary += f" at {url}"
-                                browser_actions_since_progress += 1
-                                suppress_mark_progress = False
-                                checkpoint_pending = True
+                                    state.last_action_summary += f" at {url}"
+                                state.browser_actions_since_progress += 1
+                                state.suppress_mark_progress = False
+                                state.checkpoint_pending = True
                                 action_success = True
                             except Exception as e:
-                                last_action_summary = f"open_tab FAILED: {e}"
+                                state.last_action_summary = f"open_tab FAILED: {e}"
                                 action_error = str(e)
                         else:
-                            last_action_summary = "open_tab FAILED: Tab management not available"
+                            state.last_action_summary = "open_tab FAILED: Tab management not available"
                             action_error = "Tab management not available"
                         self._record_controller_action(
                             action_type=InteractionType.NAVIGATION.value,
@@ -1380,29 +1357,25 @@ Call `plan_next` with:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-                        actions_since_progress += 1
+                        state.actions_since_progress += 1
                         continue
 
-                    if current_action and current_action.lower().startswith("dismiss_dialog:"):
+                    if function_name == "dismiss_dialog":
                         before_state = self.memory_store._capture_current_state()
                         action_success = False
                         action_error: Optional[str] = None
-                        accept = False
-                        input_text = None
+                        accept = bool(action_args.get("accept", False))
+                        input_text_raw = action_args.get("input_text")
+                        input_text = str(input_text_raw).strip() if input_text_raw not in (None, "") else None
                         if self.tab_manager and self.tab_manager.pending_dialog:
-                            # Parse: "dismiss_dialog: accept=True | input_text=..."
-                            parts_str = current_action.split(":", 1)[1].strip()
-                            accept = "accept=true" in parts_str.lower()
-                            if "input_text=" in parts_str:
-                                input_text = parts_str.split("input_text=", 1)[1].strip()
                             self.tab_manager.dismiss_dialog(accept, input_text)
                             action_word = "accepted" if accept else "dismissed"
-                            last_action_summary = f"Dialog {action_word}"
-                            checkpoint_pending = True
+                            state.last_action_summary = f"Dialog {action_word}"
+                            state.checkpoint_pending = True
                             action_success = True
                         else:
-                            last_action_summary = "dismiss_dialog: No dialog pending"
-                            checkpoint_pending = True
+                            state.last_action_summary = "dismiss_dialog: No dialog pending"
+                            state.checkpoint_pending = True
                             action_error = "No dialog pending"
                         self._record_controller_action(
                             action_type="dismiss_dialog",
@@ -1413,7 +1386,7 @@ Call `plan_next` with:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-                        actions_since_progress += 1
+                        state.actions_since_progress += 1
                         continue
 
                     # Execute browser action
@@ -1426,20 +1399,14 @@ Call `plan_next` with:
                         current_iteration=self._current_iteration,
                     )
 
-                    actions_since_progress += 1
-
-                    # Build last_action_summary from the action
+                    state.actions_since_progress += 1
                     result_str = "success" if result.success else "failed"
-                    last_action_summary = self._build_action_summary(action_step, result_str)
-
-                    # Force checkpoint after any browser action (success or failure)
-                    # On failure: browser_actions_since_progress stays 0, so mark_progress is blocked
-                    # — the agent can only think, forcing it to reason about the failure
-                    checkpoint_pending = True
+                    state.last_action_summary = self._build_action_summary(action_step, result_str)
+                    state.checkpoint_pending = True
 
                     if result.success:
-                        browser_actions_since_progress += 1
-                        suppress_mark_progress = False  # Reset suppression - browser action completed
+                        state.browser_actions_since_progress += 1
+                        state.suppress_mark_progress = False
 
                     # Sync tab manager after browser actions (click may have opened a new tab)
                     if result.success and self.tab_manager:
@@ -1447,17 +1414,19 @@ Call `plan_next` with:
                         if active_tab and self.browser.page is not active_tab.page:
                             self.action_executor.set_page(active_tab.page)
 
-                    # Track failures
                     if not result.success:
                         try:
+                            overlay_index = result.metadata.get("overlay_index") if result.metadata else None
+                            if overlay_index is None:
+                                overlay_index = action_args.get("overlay_index")
                             failed_action = FailedAction(
                                 action=current_action,
-                                overlay_index=result.metadata.get("overlay_index") if result.metadata else None,
+                                overlay_index=overlay_index,
                                 url=page_info.url if page_info else "",
                                 page_title=page_info.title if page_info else None,
                                 timestamp=time.time()
                             )
-                            failed_elements.append(failed_action)
+                            state.failed_elements.append(failed_action)
                         except Exception:
                             pass
 

@@ -188,9 +188,6 @@ Rules:
 8. You should keep working after next_action=stuck. It is a strategy switch, not task completion.
 9. For every non-think tool call, the reasoning must follow ACTIVE STRATEGY and explain in first-person
    how the action advances that strategy.
-10. If a RECOMMENDED NEXT STEP is present, either follow it or explicitly explain deviation in reasoning:
-   - "Following recommendation: ..."
-   - "Deviating from recommendation because ..."
 """
 
             if self.checkpoint_mode:

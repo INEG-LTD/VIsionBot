@@ -20,12 +20,10 @@ from core.executor.ui_feedback import highlight_click_location
 from models import ActionStep, ActionType, PageElements, PageInfo
 from models.models import FailedAction
 from utils import SelectorUtils
-from utils.intent_parsers import parse_keyword_command
 from utils.page_utils import PageUtils
 from agent.memory import NarrativeMemory, InteractionType
 from utils.debug_print import dprint
 from execution.result import ActionResult
-from lib.ai import generate_text
 from lib.ai import generate_text, generate_model
 from agent.memory import InteractionType as IT
 
@@ -286,6 +284,20 @@ class Executor:
                 return idx
         return None
 
+    @staticmethod
+    def _get_action_args(step: ActionStep) -> Dict[str, Any]:
+        """Return normalized function arguments for a step."""
+        args = getattr(step, "function_arguments", None)
+        return args if isinstance(args, dict) else {}
+
+    def _get_action_command(self, step: ActionStep) -> str:
+        """Human-readable command string for logging/history."""
+        command = getattr(step, "action", None)
+        if isinstance(command, str) and command.strip():
+            return command.strip()
+        function_name = getattr(step, "function_name", None) or "unknown_action"
+        return f"{function_name}: {self._get_action_args(step)}"
+
     def set_page(self, page: Page) -> None:
         """Update internal references when the active page changes."""
         if not page or page is self.browser.page:
@@ -317,10 +329,13 @@ class Executor:
         except Exception:
             pass
 
-        num_forward = step.action.split(":", 1)[1].strip()
-        if num_forward.isdigit():
-            num_forward = int(num_forward)
-        else:
+        args = self._get_action_args(step)
+        raw_steps = args.get("steps", 1)
+        try:
+            num_forward = int(raw_steps)
+        except Exception:
+            num_forward = 1
+        if num_forward < 1:
             num_forward = 1
 
         for _ in range(num_forward):
@@ -375,11 +390,19 @@ class Executor:
         current_screenshot = before_state.screenshot
 
         # Use agent's overlay_index if available and config allows it
+        args = self._get_action_args(step)
         overlay_index = self._get_agent_overlay_index(step)
         if overlay_index is not None:
             self.event_logger.system_debug(f"Using agent's overlay_index: {overlay_index}")
         else:
-            overlay_index = self.select_best_overlay(step.action, elements, failed_elements, screenshot=current_screenshot, base_knowledge=self.memory_store.base_knowledge)
+            click_intent = str(args.get("description", "")).strip() or step.action
+            overlay_index = self.select_best_overlay(
+                click_intent,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.memory_store.base_knowledge,
+            )
         
         if overlay_index is None:
             self.event_logger.command_failure(step.action, error="Could not determine best overlay")
@@ -440,12 +463,7 @@ class Executor:
         #             pass
 
         # Build target description from step information
-        target_description = None
-        if step.action:
-            # Extract target from action string (e.g., "click: Submit button" -> "Submit button")
-            action_str = step.action
-            if ":" in action_str:
-                target_description = action_str.split(":", 1)[1].strip()
+        target_description = str(args.get("description", "")).strip() or None
         print(f"Target description: {target_description}")
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
@@ -520,7 +538,10 @@ class Executor:
                 self.event_logger.ask_command_failure(question=question, error=str(e), details=context)
                 return None
 
-        question = step.action.split(":", 1)[1].strip() if ":" in step.action else "Need assistance"
+        args = self._get_action_args(step)
+        question = str(args.get("question", "")).strip()
+        if not question:
+            question = step.action.split(":", 1)[1].strip() if ":" in step.action else "Need assistance"
         try:
             self.event_logger.ask_requested(question)
         except Exception:
@@ -601,10 +622,11 @@ class Executor:
             except Exception:
                 return False
 
+        args = self._get_action_args(step)
         overlay_index = self._get_agent_overlay_index(step)
         if overlay_index is None:
             overlay_index = self.select_best_overlay(
-                step.action,
+                str(args.get("field_description", "")).strip() or step.action,
                 elements,
                 failed_elements,
                 screenshot=current_screenshot,
@@ -626,11 +648,7 @@ class Executor:
                 success = False
                 error_msg = str(e)
 
-        target_description = None
-        if step.action and ":" in step.action:
-            parts = step.action.split(":")
-            if len(parts) >= 2:
-                target_description = parts[-1].strip()
+        target_description = str(args.get("field_description", "")).strip() or None
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
 
@@ -722,9 +740,13 @@ class Executor:
             #         dprint(f"  ⚠️ Keyboard clear failed: {e}")
             #     return "failed"
 
-        # Extract the text from the type command. eg type: text : field
-        split_action = step.action.split(":")
-        text_to_type = split_action[1].strip()
+        args = self._get_action_args(step)
+        text_to_type = str(args.get("text", "")).strip()
+        field_description = str(args.get("field_description", "")).strip()
+        if not text_to_type:
+            # Fallback parser for non-function inputs
+            split_action = step.action.split(":")
+            text_to_type = split_action[1].strip() if len(split_action) > 1 else ""
 
         if not text_to_type:
             dprint("⚠️ No text specified for TYPE action")
@@ -734,7 +756,7 @@ class Executor:
         overlay_index = self._get_agent_overlay_index(step)
         if overlay_index is None:
             overlay_index = self.select_best_overlay(
-                step.action,
+                field_description or step.action,
                 elements,
                 failed_elements,
                 screenshot=current_screenshot,
@@ -821,16 +843,7 @@ class Executor:
         type_notes = "; ".join(type_notes_parts) if type_notes_parts else None
 
         # Build target description from step information
-        target_description = None
-        if step.action:
-            # Extract target from action string (e.g., "type: text : field" -> "field")
-            action_str = step.action
-            if ":" in action_str:
-                parts = action_str.split(":")
-                if len(parts) >= 3:  # "type: text : field" format
-                    target_description = parts[2].strip()
-                elif len(parts) == 2:
-                    target_description = parts[1].strip()
+        target_description = field_description or None
 
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
@@ -878,7 +891,8 @@ class Executor:
         Returns:
             bool: True if scroll succeeded, False otherwise
         """
-        direction = step.action.split(":", 1)[1].strip() or "down"
+        args = self._get_action_args(step)
+        direction = (str(args.get("direction", "")).strip() or "down").lower()
         axis = "vertical"
         current_scroll_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
         current_scroll_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
@@ -942,14 +956,19 @@ class Executor:
 
     def execute_press(self, step: ActionStep) -> bool:
         """Execute a key press action"""
+        args = self._get_action_args(step)
         step_keys: List[str] = step.keys_to_press
         if not step_keys:
-            # Extract the keys from the action string
-            step_keys: List[str] = step.action.split(":", 1)[1].strip()
-            if not step_keys:
-                self.event_logger.command_failure(command=step.action, error="No keys specified for PRESS action")
-                return False
-            step_keys: List[str] = step_keys.split(",")
+            arg_key = args.get("key")
+            if isinstance(arg_key, str) and arg_key.strip():
+                step_keys = [arg_key.strip()]
+            else:
+                # Extract the keys from the action string
+                step_keys = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+                if not step_keys:
+                    self.event_logger.command_failure(command=step.action, error="No keys specified for PRESS action")
+                    return False
+                step_keys = step_keys.split(",")
             step_keys = [k.strip() for k in step_keys]
 
         try:
@@ -1199,7 +1218,10 @@ class Executor:
         # Robustly extract the URL from the action string (e.g., handle extra spaces and trailing quotes)
         try:
             before_state = self.memory_store._capture_current_state()
-            url = step.action.split(":", 1)[1].strip()
+            args = self._get_action_args(step)
+            url = str(args.get("url", "")).strip()
+            if not url:
+                url = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
             # Remove trailing or leading single/double quotes if present
             if (url.startswith("'") and url.endswith("'")) or (url.startswith('"') and url.endswith('"')):
                 url = url[1:-1].strip()
@@ -1240,10 +1262,13 @@ class Executor:
         except Exception:
             pass
 
-        if ":" in step.action:
-            num_back = step.action.split(":", 1)[1].strip()
-            num_back = int(num_back) if num_back.isdigit() else 1
-        else:
+        args = self._get_action_args(step)
+        raw_steps = args.get("steps", 1)
+        try:
+            num_back = int(raw_steps)
+        except Exception:
+            num_back = 1
+        if num_back < 1:
             num_back = 1
 
         for _ in range(num_back):
@@ -1279,21 +1304,142 @@ class Executor:
             pass
         return success
 
+    def execute_select_option(
+        self,
+        step: ActionStep,
+        elements: PageElements,
+        failed_elements: List[FailedAction],
+        page_info: PageInfo,
+    ) -> bool:
+        """Select an option in a dropdown/input."""
+        args = self._get_action_args(step)
+        option = str(args.get("option", "")).strip()
+        dropdown_description = str(args.get("dropdown_description", "")).strip()
+        before_state = self.memory_store._capture_current_state()
+        current_screenshot = before_state.screenshot
+
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is None:
+            intent = f"select option {option} in {dropdown_description}".strip()
+            overlay_index = self.select_best_overlay(
+                intent,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.memory_store.base_knowledge,
+            )
+
+        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        success = False
+        error_msg: Optional[str] = None
+        selector: Optional[str] = None
+
+        if not option:
+            error_msg = "No option provided for select_option"
+        elif x is None or y is None:
+            error_msg = "Could not determine coordinates for select_option"
+        else:
+            try:
+                selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+            except Exception:
+                selector = None
+
+            try:
+                if selector:
+                    locator = self.browser.page.locator(selector).first
+                    try:
+                        locator.select_option(label=option)
+                    except Exception:
+                        try:
+                            locator.select_option(value=option)
+                        except Exception:
+                            if option.isdigit():
+                                locator.select_option(index=int(option))
+                            else:
+                                raise
+                    success = True
+                else:
+                    self.browser.page.mouse.click(x, y)
+                    time.sleep(0.1)
+                    self.browser.page.keyboard.type(option, delay=30)
+                    self.browser.page.keyboard.press("Enter")
+                    success = True
+            except Exception as exc:
+                success = False
+                error_msg = str(exc)
+
+        after_state = self.memory_store._capture_current_state()
+        self.memory_store.record_interaction(
+            InteractionType.SELECT,
+            before_state=before_state,
+            after_state=after_state,
+            coordinates=(x, y) if x is not None and y is not None else None,
+            target_element_info={
+                "description": dropdown_description or "dropdown",
+                "overlay_index": overlay_index,
+                "option": option,
+                "selector": selector,
+                "action": step.action,
+            },
+            success=success,
+            error_message=error_msg,
+        )
+        return success
+
 
     def execute_upload(
         self,
         step: ActionStep,
         elements: PageElements,
         page_info: PageInfo,
+        failed_elements: Optional[List[FailedAction]] = None,
         *,
         confirm_before_interaction: bool = False,
     ) -> bool:
         """Execute a file upload action."""
+        args = self._get_action_args(step)
+        failed_elements = failed_elements or []
         before_state = self.memory_store._capture_current_state()
-        x, y = self.get_click_coordinates(step.overlay_index, elements, page_info)
+        file_path = str(args.get("file_path", "")).strip()
+        target_description = str(args.get("target_description", "")).strip()
+        current_screenshot = before_state.screenshot
 
-        success = bool(step.upload_file_path)
-        error_msg = None if success else "No file path provided for upload"
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is None:
+            intent = f"upload file {file_path} in {target_description}".strip()
+            overlay_index = self.select_best_overlay(
+                intent,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.memory_store.base_knowledge,
+            )
+
+        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+
+        success = False
+        error_msg: Optional[str] = None
+        selector: Optional[str] = None
+        if not file_path:
+            error_msg = "No file path provided for upload"
+        elif x is None or y is None:
+            error_msg = "Could not determine upload target coordinates"
+        else:
+            try:
+                selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+            except Exception:
+                selector = None
+
+            try:
+                if selector:
+                    self.browser.page.locator(selector).first.set_input_files(file_path)
+                else:
+                    self.browser.page.mouse.click(x, y)
+                    self.browser.page.set_input_files("input[type='file']", file_path)
+                success = True
+            except Exception as exc:
+                success = False
+                error_msg = str(exc)
 
         after_state = self.memory_store._capture_current_state()
         self.memory_store.record_interaction(
@@ -1301,8 +1447,12 @@ class Executor:
             before_state=before_state,
             after_state=after_state,
             coordinates=(x, y) if x is not None and y is not None else None,
-            target_element_info={"overlay_index": step.overlay_index},
-            notes=step.upload_file_path,
+            target_element_info={
+                "overlay_index": overlay_index,
+                "description": target_description,
+                "selector": selector,
+            },
+            notes=file_path,
             success=success,
             error_message=error_msg,
         )
@@ -1314,15 +1464,54 @@ class Executor:
         step: ActionStep,
         elements: PageElements,
         page_info: PageInfo,
+        failed_elements: Optional[List[FailedAction]] = None,
         *,
         confirm_before_interaction: bool = False,
     ) -> bool:
         """Execute a datetime field action."""
+        args = self._get_action_args(step)
+        failed_elements = failed_elements or []
         before_state = self.memory_store._capture_current_state()
-        x, y = self.get_click_coordinates(step.overlay_index, elements, page_info)
+        datetime_value = str(args.get("value", "")).strip()
+        picker_description = str(args.get("picker_description", "")).strip()
+        current_screenshot = before_state.screenshot
 
-        success = bool(step.datetime_value)
-        error_msg = None if success else "No datetime value provided"
+        overlay_index = self._get_agent_overlay_index(step)
+        if overlay_index is None:
+            intent = f"set datetime {datetime_value} in {picker_description}".strip()
+            overlay_index = self.select_best_overlay(
+                intent,
+                elements,
+                failed_elements,
+                screenshot=current_screenshot,
+                base_knowledge=self.memory_store.base_knowledge,
+            )
+        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+
+        success = False
+        error_msg: Optional[str] = None
+        selector: Optional[str] = None
+        if not datetime_value:
+            error_msg = "No datetime value provided"
+        elif x is None or y is None:
+            error_msg = "Could not determine datetime target coordinates"
+        else:
+            try:
+                selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+            except Exception:
+                selector = None
+
+            try:
+                if selector:
+                    locator = self.browser.page.locator(selector).first
+                    locator.fill(datetime_value)
+                else:
+                    self.browser.page.mouse.click(x, y)
+                    self.browser.page.keyboard.type(datetime_value, delay=30)
+                success = True
+            except Exception as exc:
+                success = False
+                error_msg = str(exc)
 
         after_state = self.memory_store._capture_current_state()
         self.memory_store.record_interaction(
@@ -1331,244 +1520,26 @@ class Executor:
             after_state=after_state,
             coordinates=(x, y) if x is not None and y is not None else None,
             target_element_info={
-                "overlay_index": step.overlay_index,
-                "datetime_value": step.datetime_value,
+                "overlay_index": overlay_index,
+                "datetime_value": datetime_value,
+                "description": picker_description,
+                "selector": selector,
             },
-            text_input=step.datetime_value,
+            text_input=datetime_value,
             success=success,
             error_message=error_msg,
         )
         return success
-    
-    def _execute_keyword_command(
-        self,
-        action_step: ActionStep,
-        detected_elements: PageElements,
-        prior_failures: List[str],
-        failed_elements: List[FailedAction],
-        page_info: PageInfo,
-        confirm_before_interaction: bool,
-        environment_state: EnvironmentState,
-        start_time: float,
-        extraction_schema: Optional[Dict[str, Any]] = None,
-        base_knowledge: Optional[List[str]] = None,
-    ) -> Optional[bool]:
-        """Attempt to execute the action using keyword-based execution. Returns None to fall back."""
-        parsed = parse_keyword_command(action_step.action)
-        if not parsed:
-            return None
-        keyword, payload, helper = parsed
-        keyword = (keyword or "").strip().lower()
-
-        # Safety gate: block browser actions when a dialog is pending
-        if self.browser.tab_manager and self.browser.tab_manager.has_pending_dialog_on_active():
-            browser_keywords = {
-                "click", "type", "clear_text", "select", "scroll", "press",
-                "open", "back", "forward", "upload", "datetime", "extract",
-            }
-            if keyword in browser_keywords:
-                self.event_logger.command_execution_failure(
-                    command=action_step.action,
-                    error="Cannot interact with page — a dialog is blocking. Use dismiss_dialog first."
-                )
-                return False
-
-        self.event_logger.command_start(command=action_step.action)
-        if keyword == "complete_sequence":
-            try:
-                result = self.execute_complete_sequence(
-                    step=action_step,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing complete sequence command: {e}")
-                return None
-        elif keyword == "click":
-            try:
-                result = self.execute_click(
-                    step=action_step,
-                    elements=detected_elements,
-                    prior_failures=prior_failures,
-                    failed_elements=failed_elements,
-                    page_info=page_info,
-                    base_knowledge=base_knowledge,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing click command: {e}")
-                return None
-        elif keyword == "type":
-            try:
-                result = self.execute_type(
-                    step=action_step,
-                    elements=detected_elements,
-                    prior_failures=prior_failures,
-                    failed_elements=failed_elements,
-                    page_info=page_info,
-                    base_knowledge=base_knowledge,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing type command: {e}")
-                return None
-        elif keyword == "clear_text":
-            try:
-                result = self.execute_clear_text(
-                    step=action_step,
-                    elements=detected_elements,
-                    page_info=page_info,
-                    failed_elements=failed_elements,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing clear text command: {e}")
-                return None
-        elif keyword == "ask":
-            try:
-                result = self.execute_ask(
-                    step=action_step,
-                    environment_state=environment_state,
-                    base_knowledge=base_knowledge,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing ask command: {e}")
-                return None
-        elif keyword == "select":
-            try:
-                result = self._keyword_select(
-                    action_step=action_step,
-                    payload=payload,
-                    helper=helper,
-                    confirm_before_interaction=confirm_before_interaction,
-                    base_knowledge=base_knowledge,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing select command: {e}")
-                return None
-        elif keyword == "upload":
-            try:
-                result = self._keyword_upload(
-                    action_step=action_step,
-                    payload=payload,
-                    helper=helper,
-                    confirm_before_interaction=confirm_before_interaction,
-                    base_knowledge=base_knowledge,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing upload command: {e}")
-                return None
-        elif keyword == "datetime":
-            try:
-                result = self._keyword_datetime(
-                action_step=action_step,
-                payload=payload,
-                helper=helper,
-                confirm_before_interaction=confirm_before_interaction,
-                base_knowledge=base_knowledge,
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing datetime command: {e}")
-                return None
-        elif keyword == "scroll":
-            try:
-                result = self.execute_scroll(
-                step=action_step,
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing scroll command: {e}")
-                return None
-        elif keyword == "press":
-            try:
-                result = self.execute_press(
-                step=action_step
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing press command: {e}")
-                return None
-        elif keyword == "back":
-            try:
-                result = self.execute_back(
-                    step=action_step,
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing back command: {e}")
-                return None
-        elif keyword == "forward":
-            try:
-                result = self.execute_forward(
-                    step=action_step,
-            )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing forward command: {e}")
-                return None
-        elif keyword == "open":
-            try:
-                result = self.execute_open(
-                    step=action_step,
-                )
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing navigate command: {e}")
-                return None
-        elif keyword == "extract":
-            try:
-                result, err = self.extract(
-                    step=action_step,
-                    extraction_schema=extraction_schema,
-                )
-
-                if not result:
-                    self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing extract command: {err}")
-
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing extract command: {e}")
-                return None
-        elif keyword == "think":
-            try:
-                result = self.execute_think(step=action_step)
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing think command: {e}")
-                return None
-        elif keyword == "assert":
-            try:
-                result = self.execute_assert(step=action_step)
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing assert command: {e}")
-                return None
-        elif keyword == "flag":
-            try:
-                result = self.execute_flag(step=action_step)
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing flag command: {e}")
-                return None
-        elif keyword == "wait_for":
-            try:
-                result = self.execute_wait_for(step=action_step)
-            except Exception as e:
-                self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing wait_for command: {e}")
-                return None
-        else:
-            # Unsupported keyword
-            self.event_logger.command_execution_failure(command=action_step.action, error=f"Unsupported keyword: {keyword}")
-            return None
-
-        if result is None:
-            # Keyword action could not confidently execute – allow normal flow
-            return None
-
-        duration_ms = (time.time() - start_time) * 1000
-        if result:
-            try:
-                self.event_logger.command_success(action_step.action)
-            except Exception:
-                pass
-        else:
-            print(f"Keyword command execution failed: {result}")
-            self.event_logger.command_failure(command=action_step.action, error="Keyword command execution failed", duration_ms=duration_ms)
-        return result
     
     def extract(
         self,
         step: ActionStep,
         extraction_schema: Optional[Dict[str, Any]] = None,
     ) -> Union[bool, str]:
-
-        extraction_prompt = step.action.replace("extract:", "").strip()
+        args = self._get_action_args(step)
+        extraction_prompt = str(args.get("data_description", "")).strip()
+        if not extraction_prompt:
+            extraction_prompt = step.action.replace("extract:", "").strip()
         self.event_logger.extraction_start(extraction_prompt)
         self.event_logger.extraction_detected(extraction_prompt)
 
@@ -1700,9 +1671,9 @@ class Executor:
                 # Simple text extraction using vision, grounded with page text
                 extraction_user_prompt = f"""
                             Extract the following information from this webpage screenshot:
-                            {step.action}
+                            {extraction_prompt}
 
-                            Your task is to extract the following information from the webpage screenshot: {step.action} 
+                            Your task is to extract the following information from the webpage screenshot: {extraction_prompt} 
                             Do not make up text that isn't in the provided content."""
                 result_text = generate_text(
                     prompt=extraction_user_prompt,
@@ -1815,7 +1786,10 @@ class Executor:
 
     def execute_think(self, step: ActionStep) -> bool:
         """Execute a think action - pure reasoning with no browser action."""
-        reasoning = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+        args = self._get_action_args(step)
+        reasoning = str(args.get("reasoning", "")).strip()
+        if not reasoning:
+            reasoning = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
 
         if not reasoning:
             self.event_logger.system_warning("No reasoning provided for think action")
@@ -1839,7 +1813,10 @@ class Executor:
 
     def execute_assert(self, step: ActionStep) -> bool:
         """Execute an assert action - check a condition from the screenshot."""
-        condition = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+        args = self._get_action_args(step)
+        condition = str(args.get("condition", "")).strip()
+        if not condition:
+            condition = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
 
         if not condition:
             self.event_logger.system_warning("No condition provided for assert action")
@@ -1863,7 +1840,10 @@ class Executor:
 
     def execute_flag(self, step: ActionStep) -> bool:
         """Execute a flag action - non-blocking user notification."""
-        message = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+        args = self._get_action_args(step)
+        message = str(args.get("message", "")).strip()
+        if not message:
+            message = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
 
         if not message:
             self.event_logger.system_warning("No message provided for flag action")
@@ -1887,24 +1867,29 @@ class Executor:
 
     def execute_wait_for(self, step: ActionStep) -> bool:
         """Execute a wait_for action - conditional wait with timeout."""
-        # Parse: "wait_for: condition | timeout=10"
-        parts = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+        args = self._get_action_args(step)
+        condition = str(args.get("condition", "")).strip()
+        timeout_seconds = args.get("timeout_seconds", 10)
+        try:
+            timeout_seconds = int(timeout_seconds)
+        except Exception:
+            timeout_seconds = 10
 
-        if not parts:
+        # Fallback parser for non-function calls.
+        parts = ""
+        if not condition:
+            parts = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+            condition = parts
+            if "|" in parts:
+                condition_part, timeout_part = parts.split("|", 1)
+                condition = condition_part.strip()
+                timeout_match = re.search(r'timeout=(\d+)', timeout_part)
+                if timeout_match:
+                    timeout_seconds = int(timeout_match.group(1))
+
+        if not condition:
             self.event_logger.system_warning("No condition provided for wait_for action")
             return False
-
-        # Split condition and timeout
-        condition = parts
-        timeout_seconds = 10  # default
-
-        if "|" in parts:
-            condition_part, timeout_part = parts.split("|", 1)
-            condition = condition_part.strip()
-            # Parse timeout=N
-            timeout_match = re.search(r'timeout=(\d+)', timeout_part)
-            if timeout_match:
-                timeout_seconds = int(timeout_match.group(1))
 
         # Capture before state
         before_state = self.memory_store._capture_current_state()
@@ -1945,7 +1930,8 @@ class Executor:
         current_iteration: Optional[int] = None,
         **kwargs
     ) -> ActionResult:
-        command = action_step.action
+        command = self._get_action_command(action_step)
+        function_name = (getattr(action_step, "function_name", None) or "").strip()
         prior_failures = prior_failures or []
         failed_elements = failed_elements or []
 
@@ -1986,7 +1972,7 @@ class Executor:
             import uuid
             action_id = str(uuid.uuid4())[:8]
 
-        function_args = getattr(action_step, "function_arguments", {}) or {}
+        function_args = self._get_action_args(action_step)
         try:
             self.memory_store.set_current_action_context(
                 reasoning=getattr(action_step, "reasoning", None) or function_args.get("reasoning"),
@@ -2004,48 +1990,210 @@ class Executor:
             # Add action to history
             self._add_to_command_history(command)
 
-            # Only keyword commands are supported (click:, type:, etc.)
-            keyword_command_result = self._execute_keyword_command(
-                action_step=action_step,
-                detected_elements=detected_elements,
-                prior_failures=prior_failures,
-                failed_elements=failed_elements,
-                page_info=page_info,
-                confirm_before_interaction=confirm_before_interaction,
-                environment_state=environment_state,
-                start_time=start_time,
-                base_knowledge=base_knowledge,
-            )
-            if keyword_command_result is not None:
-                # Convert bool to ActionResult (for temporary compatibility)
+            if not function_name:
                 duration = time.time() - start_time
-                # Get overlay_index from the last interaction (if available)
-                overlay_index = self.memory_store.get_last_interaction_overlay_index()
-                metadata = {"command_type": "keyword"}
-                if overlay_index is not None:
-                    metadata["overlay_index"] = overlay_index
+                error_message = "Missing function_name on action step"
+                self.event_logger.command_failure(
+                    command=command,
+                    error=error_message,
+                    duration_ms=duration * 1000,
+                )
                 return _create_result(
-                    keyword_command_result,
-                    "Action executed successfully" if keyword_command_result else "Action failed",
+                    False,
+                    error_message,
+                    error=error_message,
                     action_id=action_id,
                     duration=duration,
-                    additional_metadata=metadata
                 )
 
-            # If keyword execution can't handle it, fail with clear error message
-            duration_ms = (time.time() - start_time) * 1000
+            # Safety gate: block browser actions when a dialog is pending.
+            if self.browser.tab_manager and self.browser.tab_manager.has_pending_dialog_on_active():
+                browser_functions = {
+                    "click",
+                    "type_text",
+                    "clear_text",
+                    "select_option",
+                    "scroll_page",
+                    "press_key",
+                    "open_url",
+                    "go_back",
+                    "go_forward",
+                    "upload_file",
+                    "set_datetime",
+                    "extract_data",
+                }
+                if function_name in browser_functions:
+                    duration = time.time() - start_time
+                    error_message = "Cannot interact with page — a dialog is blocking. Use dismiss_dialog first."
+                    self.event_logger.command_failure(
+                        command=command,
+                        error=error_message,
+                        duration_ms=duration * 1000,
+                    )
+                    return _create_result(
+                        False,
+                        error_message,
+                        error=error_message,
+                        action_id=action_id,
+                        duration=duration,
+                    )
+
+            self.event_logger.command_start(command=command)
+
+            controller_only_functions = {
+                "mark_progress",
+                "revise_target",
+                "switch_tab",
+                "close_tab",
+                "open_tab",
+                "dismiss_dialog",
+                "plan_next",
+            }
+            if function_name in controller_only_functions:
+                duration = time.time() - start_time
+                error_message = f"{function_name} should be handled by agent controller, not executor"
+                self.event_logger.command_failure(
+                    command=command,
+                    error=error_message,
+                    duration_ms=duration * 1000,
+                )
+                return _create_result(
+                    False,
+                    error_message,
+                    error=error_message,
+                    action_id=action_id,
+                    duration=duration,
+                )
+
+            result_data: Optional[Any] = None
+            if function_name == "click":
+                executed = self.execute_click(
+                    step=action_step,
+                    elements=detected_elements,
+                    prior_failures=prior_failures,
+                    failed_elements=failed_elements,
+                    page_info=page_info,
+                    base_knowledge=base_knowledge,
+                )
+            elif function_name == "type_text":
+                executed = self.execute_type(
+                    step=action_step,
+                    elements=detected_elements,
+                    prior_failures=prior_failures,
+                    failed_elements=failed_elements,
+                    page_info=page_info,
+                    base_knowledge=base_knowledge,
+                )
+            elif function_name == "clear_text":
+                executed = self.execute_clear_text(
+                    step=action_step,
+                    elements=detected_elements,
+                    page_info=page_info,
+                    failed_elements=failed_elements,
+                )
+            elif function_name == "select_option":
+                executed = self.execute_select_option(
+                    step=action_step,
+                    elements=detected_elements,
+                    failed_elements=failed_elements,
+                    page_info=page_info,
+                )
+            elif function_name == "upload_file":
+                executed = self.execute_upload(
+                    step=action_step,
+                    elements=detected_elements,
+                    page_info=page_info,
+                    failed_elements=failed_elements,
+                    confirm_before_interaction=confirm_before_interaction,
+                )
+            elif function_name == "set_datetime":
+                executed = self.execute_datetime(
+                    step=action_step,
+                    elements=detected_elements,
+                    page_info=page_info,
+                    failed_elements=failed_elements,
+                    confirm_before_interaction=confirm_before_interaction,
+                )
+            elif function_name == "press_key":
+                executed = self.execute_press(step=action_step)
+            elif function_name == "open_url":
+                executed = self.execute_open(step=action_step)
+            elif function_name == "go_back":
+                executed = self.execute_back(step=action_step)
+            elif function_name == "go_forward":
+                executed = self.execute_forward(step=action_step)
+            elif function_name == "scroll_page":
+                executed = self.execute_scroll(step=action_step)
+            elif function_name == "extract_data":
+                extract_result = self.extract(
+                    step=action_step,
+                    extraction_schema=extraction_schema,
+                )
+                if isinstance(extract_result, tuple):
+                    executed, extraction_error = extract_result
+                else:
+                    executed, extraction_error = False, "Extraction failed"
+                if extraction_error:
+                    result_data = {"error": extraction_error}
+            elif function_name == "think":
+                executed = self.execute_think(step=action_step)
+            elif function_name == "assert_condition":
+                executed = self.execute_assert(step=action_step)
+            elif function_name == "flag":
+                executed = self.execute_flag(step=action_step)
+            elif function_name == "wait_for":
+                executed = self.execute_wait_for(step=action_step)
+            elif function_name == "ask_user":
+                executed = bool(self.execute_ask(
+                    step=action_step,
+                    environment_state=environment_state,
+                    base_knowledge=base_knowledge,
+                ))
+            else:
+                duration = time.time() - start_time
+                error_message = f"Unsupported function: {function_name}"
+                self.event_logger.command_failure(
+                    command=command,
+                    error=error_message,
+                    duration_ms=duration * 1000,
+                )
+                return _create_result(
+                    False,
+                    error_message,
+                    error=error_message,
+                    action_id=action_id,
+                    duration=duration,
+                )
+
+            executed = bool(executed)
             duration = time.time() - start_time
-            self.event_logger.command_failure(command=command, error="Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.", duration_ms=duration_ms)
-            
-            # self.execution_timer.end_action()
+            if executed:
+                try:
+                    self.event_logger.command_success(command)
+                except Exception:
+                    pass
+            else:
+                self.event_logger.command_failure(
+                    command=command,
+                    error=f"{function_name} execution failed",
+                    duration_ms=duration * 1000,
+                )
+
+            overlay_index = self.memory_store.get_last_interaction_overlay_index()
+            metadata = {"command_type": "function_call", "function_name": function_name}
+            if overlay_index is not None:
+                metadata["overlay_index"] = overlay_index
+
             return _create_result(
-                False,
-                "Could not parse command as keyword action. Use format: 'click: button', 'type: text', etc.",
-                error="Could not parse command as keyword action. Must use keyword format (click:, type:, etc.)",
+                executed,
+                "Action executed successfully" if executed else "Action failed",
                 action_id=action_id,
-                duration=duration
+                duration=duration,
+                additional_metadata=metadata,
+                data=result_data,
             )
         except Exception as e:
+            duration = time.time() - start_time
             self.event_logger.command_execution_failure(command=command, error=f"An error occured while executing command: {e}")
             return _create_result(
                 False,
