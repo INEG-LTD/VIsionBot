@@ -171,13 +171,22 @@ Rules:
 1. Do not create a new plan unless:
    - you are stuck, or
    - the page changed enough that ACTIVE STRATEGY no longer applies.
-2. Do not restate the full plan.
-3. If you call think with next_action=continue, only provide:
+2. The screenshot and current overlays are the source of truth.
+   If ACTIVE STRATEGY or RECOMMENDED NEXT STEP conflicts with what is visible now, update strategy immediately.
+3. Do not restate the full plan.
+4. If you call think with next_action=continue, only provide:
    - one short status update in natural first-person language
    - one short immediate next step (for example: "I'm now going to ...", "Next I'll ...")
    - avoid robotic labels
-4. If the unit of work is complete, choose mark_progress (or think with next_action=mark_progress) instead of extending reasoning.
-5. If nothing meaningful changed and you have no concrete next step, choose next_action=stuck (do not invent a new strategy).
+5. If the unit of work is complete, choose mark_progress (or think with next_action=mark_progress) instead of extending reasoning.
+6. If your recent attempts did not create visible progress toward the task, call think(next_action=stuck).
+7. In that stuck think call:
+   - reasoning should be natural first-person language and describe my new replacement ACTIVE STRATEGY
+   - reasoning should briefly explain how this new strategy is meaningfully different from what you just tried
+   - recommended_next_step should be one concrete immediate action for the new strategy
+8. You should keep working after next_action=stuck. It is a strategy switch, not task completion.
+9. For every non-think tool call, the reasoning must follow ACTIVE STRATEGY and explain in first-person
+   how the action advances that strategy.
 """
 
             if self.checkpoint_mode:
@@ -416,25 +425,39 @@ No progress yet — get started.
 You've been working for a while without making progress.
 
 Before doing anything else, call think() and reason about:
-• What's going wrong? Am I stuck in a loop?
-• Is there a different approach I should try?
-• Should I scroll to find more content?
-• Should I stop and report what I've accomplished so far?
+• What have I already tried, and what did not change?
+• What different approach can I try next?
+• Why is this next approach meaningfully different?
 
-After thinking, either:
-• Try a different approach
-• Call mark_progress with done=true if you're truly stuck
+When this block appears, your next action should be:
+• think(next_action=stuck)
+
+In that call:
+• reasoning = your replacement ACTIVE STRATEGY in natural first-person language
+• recommended_next_step = one concrete immediate next action
 
 """
 
-        # Build overlay list
+        # Build overlay list (biased toward elements with stronger visible text presence).
+        # Keep all overlays, but present text-bearing ones first so selector models
+        # naturally prefer semantically grounded targets.
+        sorted_elements = sorted(
+            element_data.elements,
+            key=lambda e: (
+                -int(getattr(e, "text_presence_score", 0) or 0),
+                int(getattr(e, "overlay_number", 10**9) or 10**9),
+            ),
+        )
+
         candidate_lines: list[str] = []
-        for elem in element_data.elements:
+        for elem in sorted_elements:
             idx = elem.overlay_number
             elem_type = elem.element_type or "unknown"
             subtype = elem.field_subtype or ""
             label = elem.element_label or ""
             focused = elem.is_focused
+            text_score = int(getattr(elem, "text_presence_score", 0) or 0)
+            has_visible_text = bool(getattr(elem, "has_visible_text", False))
 
             # Compact format: Overlay {idx} type={type} [subtype={subtype}] label={label} focused={bool}
             overlay_desc = f"Overlay {idx} type={elem_type}"
@@ -442,6 +465,8 @@ After thinking, either:
                 overlay_desc += f" subtype={subtype}"
             if label:
                 overlay_desc += f" label=\"{label}\""
+            overlay_desc += f" text_score={text_score}"
+            overlay_desc += f" has_text={str(has_visible_text).lower()}"
             overlay_desc += f" focused={focused}"
 
             candidate_lines.append(overlay_desc)
@@ -532,6 +557,13 @@ If something isn't working:
 • Use flag() to notify the user of issues
 • Don't repeat the exact same failed action
 
+STUCK STRATEGY SWITCH RULE:
+• If my recent attempts did not create visible progress, I should not keep the same strategy
+• I should call think(next_action=stuck)
+• In that call:
+  - reasoning should be natural first-person language for my new ACTIVE STRATEGY
+  - recommended_next_step should be one concrete immediate action
+
 ═══════════════════════════════════════════════════════════════
 GUIDELINES
 ═══════════════════════════════════════════════════════════════
@@ -543,6 +575,9 @@ GUIDELINES
 6. Use natural language when marking progress
 7. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
 8. In checkpoint mode, finish/record the current unit with mark_progress before starting the next unit
+9. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
+10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
+    how that action advances the ACTIVE STRATEGY
 {base_knowledge_section}
 
 Choose the next action to take.

@@ -77,6 +77,26 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         seen.add(node);
 
         const rect = node.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+        // Keep only elements that are actually visible in the current viewport.
+        // This prevents the planner from targeting off-screen entries.
+        const isInViewport = (
+            rect.right > 0 &&
+            rect.bottom > 0 &&
+            rect.left < viewportWidth &&
+            rect.top < viewportHeight
+        );
+        if (!isInViewport) {
+            return;
+        }
+
+        const style = window.getComputedStyle(node);
+        if (!style || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+            return;
+        }
+
         if (rect.width <= 0 || rect.height <= 0) {
             return;
         }
@@ -147,6 +167,29 @@ def _describe_element(raw: Dict[str, Any]) -> str:
         parts.append(f'({raw["placeholder"]})')
     return " ".join(parts).strip()
 
+
+def _text_presence_score(raw: Dict[str, Any]) -> int:
+    """
+    Score how much visible text signal this element provides.
+    3: inner text/value present
+    2: placeholder/title present
+    1: aria-label only
+    0: no text signal
+    """
+    text = (raw.get("textContent") or "").strip()
+    placeholder = (raw.get("placeholder") or "").strip()
+    title = (raw.get("title") or "").strip()
+    aria = (raw.get("ariaLabel") or "").strip()
+
+    if text:
+        return 3
+    if placeholder or title:
+        return 2
+    if aria:
+        return 1
+    return 0
+
+
 def build_page_elements(page, page_info: PageInfo) -> PageElements:
     """Convert raw DOM capture into structured PageElements."""
     
@@ -169,6 +212,7 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
     for raw in raw_elements:
         bounding_box = raw.get("boundingBox", {})
         box = _normalize_box(bounding_box, page_info)
+        text_score = _text_presence_score(raw)
         element = DetectedElement(
             element_label=raw.get("ariaLabel") or raw.get("placeholder") or _describe_element(raw),
             description=_describe_element(raw),
@@ -181,6 +225,8 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
             requires_special_handling=False,
             overlay_number=raw.get("index"),
             is_focused=raw.get("isFocused", False),
+            has_visible_text=text_score >= 2,
+            text_presence_score=text_score,
         )
         detected.append(element)
     return PageElements(elements=detected)

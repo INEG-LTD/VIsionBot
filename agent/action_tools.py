@@ -383,7 +383,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "think",
-            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next step, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. If the current unit is complete, prefer next_action=mark_progress. No browser action is taken.",
+            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next step, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. If the current unit is complete, prefer next_action=mark_progress. If the current strategy is stuck, use next_action=stuck to replace it (with reasoning as the new strategy and recommended_next_step as the immediate next action). No browser action is taken.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -394,7 +394,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "next_action": {
                         "type": "string",
                         "enum": ["continue", "mark_progress", "done", "stuck"],
-                        "description": "What to do after thinking. 'continue' = there is still a concrete unfinished requirement and you need another browser action. 'mark_progress' = the current unit is complete and should be counted now. 'done' = the task is fully complete, nothing left to do. 'stuck' = I can't make progress, stop."
+                        "description": "What to do after thinking. 'continue' = there is still a concrete unfinished requirement and you need another browser action. 'mark_progress' = the current unit is complete and should be counted now. 'done' = the task is fully complete, nothing left to do. 'stuck' = the current strategy is stuck, so provide a replacement strategy in reasoning and an immediate recommended_next_step; execution continues with the new strategy."
                     },
                     "recommended_next_step": {
                         "type": "string",
@@ -677,16 +677,24 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
 _ACTION_TOOLS_BY_NAME: Dict[str, Dict[str, Any]] = {
     tool["function"]["name"]: tool for tool in ACTION_TOOLS
 }
+NON_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
+    tool for tool in ACTION_TOOLS
+    if tool["function"]["name"] != "think"
+]
 CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
     _ACTION_TOOLS_BY_NAME["mark_progress"],
     _ACTION_TOOLS_BY_NAME["think"],
 ]
 
 # Tools available when a dialog is blocking the active tab.
-# Only dismiss_dialog and think — all browser actions are blocked.
+# Only dismiss_dialog when not checkpointing; no browser actions are allowed.
 DIALOG_TOOLS: List[Dict[str, Any]] = [
-    tool for tool in ACTION_TOOLS
-    if tool["function"]["name"] in ("dismiss_dialog", "think")
+    tool for tool in NON_CHECKPOINT_TOOLS
+    if tool["function"]["name"] == "dismiss_dialog"
+]
+DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
+    _ACTION_TOOLS_BY_NAME["dismiss_dialog"],
+    _ACTION_TOOLS_BY_NAME["think"],
 ]
 
 
@@ -702,6 +710,8 @@ PLANNING_TOOLS: List[Dict[str, Any]] = [
             "description": (
                 "Decide the next task to execute for this mission, or declare the mission complete. "
                 "Each task should be a self-contained piece of work the browser agent can accomplish. "
+                "Task wording must be tool-grounded (click/type/press/scroll/open/extract_data, etc.). "
+                "Example: If the mission asks for summaries/examples/key points, phrase the task as extraction "
                 "Set task to an empty string when the mission is fully complete."
             ),
             "parameters": {
@@ -713,7 +723,7 @@ PLANNING_TOOLS: List[Dict[str, Any]] = [
                     },
                     "task": {
                         "type": "string",
-                        "description": "The next task to execute. Leave empty (\"\") if the mission is complete."
+                        "description": "The next task to execute. Use tool-grounded wording that maps to available functions; Leave empty (\"\") if the mission is complete."
                     },
                     "target": {
                         "oneOf": [
@@ -746,7 +756,7 @@ def get_filtered_tools(
 
     Args:
         suppress_mark_progress: If True, remove mark_progress from available tools
-        checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of ACTION_TOOLS
+        checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of the normal action tools
         dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
 
     Returns:
@@ -754,9 +764,9 @@ def get_filtered_tools(
     """
     # Dialog takes highest priority — blocks all browser actions
     if dialog_pending:
-        return DIALOG_TOOLS
+        return DIALOG_CHECKPOINT_TOOLS if checkpoint_mode else DIALOG_TOOLS
 
-    base_tools = CHECKPOINT_TOOLS if checkpoint_mode else ACTION_TOOLS
+    base_tools = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
 
     if suppress_mark_progress:
         return [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
@@ -781,7 +791,7 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
 
     elif function_name == "type_text":
         text = arguments['text']
-        return f"type: '{text}' : {arguments['field_description']}"
+        return f"type: {text} : {arguments['field_description']}"
 
     elif function_name == "clear_text":
         return f"clear_text: {arguments['field_description']}"

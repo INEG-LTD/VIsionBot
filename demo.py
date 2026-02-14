@@ -455,11 +455,11 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     agent.event_logger.register_callback(
         create_event_callback(agent, debug_mode=config.logging.debug_mode))
-    agent.browser.page.goto("https://www.google.com/")
+    agent.browser.page.goto("https://www.amazon.com/")
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "go to yahoo finance, search for apple and extract the stock price",
+        "search for microphone",
     )
 
     if result:

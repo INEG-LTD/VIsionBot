@@ -65,6 +65,14 @@ class DetectedElement(BaseModel):
     requires_special_handling: Optional[bool] = Field(default=False, description="Whether this field requires special multi-step handling")
     overlay_number: Optional[int] = Field(default=None, description="The overlay number from numbered detection system")
     is_focused: Optional[bool] = Field(default=False, description="Is this element currently focused?")
+    has_visible_text: Optional[bool] = Field(
+        default=False,
+        description="True when the element has visible on-screen text (inner text, placeholder, or title).",
+    )
+    text_presence_score: Optional[int] = Field(
+        default=0,
+        description="Heuristic text signal strength (0-3) used to bias overlay selection toward text-bearing elements.",
+    )
 
 
 

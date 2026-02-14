@@ -368,8 +368,15 @@ class Agent:
                 task_type=f"target={task.target}",
             )
 
+            # Start checkpoint mode once per mission (first task only).
+            start_in_checkpoint = (task_count == 1)
+
             # Execute the task
-            result = self._execute_task(task, user_mission)
+            result = self._execute_task(
+                task,
+                user_mission,
+                start_in_checkpoint=start_in_checkpoint,
+            )
             self.mission_result.task_results.append(result)
 
             # Build a concise summary for the planner's context
@@ -584,6 +591,10 @@ Each task should do ONE thing. Navigation is its own task. A search is its own t
 
 7. **Actionable language**: Write tasks as clear instructions. Include what to do and enough context. Bad: "Do the next step". Good: "Like the next post in the feed by clicking its heart icon".
 
+8. **Tool-grounded wording**: Write tasks in language that maps directly to available tools. Prefer verbs like click, type, press, scroll, open/navigate, select, extract. Avoid vague verbs like "review", "understand", "summarize" unless the task explicitly says to use extract_data for the result.
+
+9. **Extraction tasks must mention extraction**: If the user asks for summaries/examples/key points, the task should explicitly say to extract them (for example: "extract 2-3 examples..." or "use extract_data to record a concise summary").
+
 ## Examples
 
 ### Example 1: Navigation + repeating action
@@ -600,14 +611,14 @@ Turn 2 (on search results): task="" (mission complete)
 
 ### Example 3: Repetitive with go-back pattern
 Mission: "Open the top 3 articles on Hacker News and summarize each"
-Turn 1 (already on HN): task="Click the next top article's title, read the article, extract a brief summary, then go back to the Hacker News front page", target=3
+Turn 1 (already on HN): task="Click the next top article's title, extract a brief summary with extract_data, then go back to the Hacker News front page", target=3
 Turn 2: task="" (mission complete)
 NOTE: The task describes ONE iteration. target=3 makes the agent repeat it 3 times.
 
 ### Example 4: Navigation then loop (not on target page yet)
 Mission: "Go to Hacker News and summarize the top 3 articles"
 Turn 1 (on google.com): task="Navigate to news.ycombinator.com", target=1
-Turn 2 (on HN front page): task="Click the next top article's title, read it, extract a brief summary, then go back to Hacker News", target=3
+Turn 2 (on HN front page): task="Click the next top article's title, extract a brief summary with extract_data, then go back to Hacker News", target=3
 Turn 3: task="" (mission complete)
 NOTE: Navigation is a separate task from the loop. Don't combine them.
 
@@ -632,7 +643,7 @@ Turn 3: task="" (mission complete)
 
 Call `plan_next` with:
 - reasoning: Your analysis of the current state and what needs to happen next
-- task: The next task instruction (empty string = mission complete). For loops, describe ONE iteration only.
+- task: The next task instruction (empty string = mission complete). For loops, describe ONE iteration only. Use tool-grounded wording (click/type/press/scroll/open/extract_data).
 - target: How many times to repeat (default 1). Set to N for loops.
 - start_hint: Optional first-step hint"""
 
@@ -754,13 +765,20 @@ Call `plan_next` with:
         self.task_list: Optional[MissionPlan] = None
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
 
-    def _execute_task(self, task: Task, user_mission: str) -> TaskResult:
+    def _execute_task(
+        self,
+        task: Task,
+        user_mission: str,
+        *,
+        start_in_checkpoint: bool = False,
+    ) -> TaskResult:
         """
         Execute a unified task (single or repetitive).
 
         Args:
             task: The task to execute (with target indicating repetition)
             user_mission: Original user mission for context
+            start_in_checkpoint: Whether to begin this task in checkpoint mode
 
         Returns:
             TaskResult indicating success/failure and completion status
@@ -768,7 +786,11 @@ Call `plan_next` with:
         task.status = TaskStatus.IN_PROGRESS
 
         # Execute using the unified task loop
-        result = self._run_unified_task_loop(task, user_mission)
+        result = self._run_unified_task_loop(
+            task,
+            user_mission,
+            start_in_checkpoint=start_in_checkpoint,
+        )
 
         # Update task with final completion status
         if result.completion_status:
@@ -832,7 +854,13 @@ Call `plan_next` with:
             action_str = getattr(action_step, "action", str(action_step))
             return f"You performed: {action_str}. Result: {result_str}."
 
-    def _run_unified_task_loop(self, task: Task, original_prompt: str) -> TaskResult:
+    def _run_unified_task_loop(
+        self,
+        task: Task,
+        original_prompt: str,
+        *,
+        start_in_checkpoint: bool = False,
+    ) -> TaskResult:
         """
         Unified task execution loop - handles both single and repetitive tasks.
 
@@ -842,6 +870,7 @@ Call `plan_next` with:
         Args:
             task: Task with goal and target (1, N, or "all")
             original_prompt: Original user mission for context
+            start_in_checkpoint: Whether this task should start in checkpoint mode
 
         Returns:
             TaskResult with completion status
@@ -857,7 +886,7 @@ Call `plan_next` with:
         browser_actions_since_progress = 0
         total_actions = 0
         failed_elements: List[FailedAction] = []
-        checkpoint_pending = False  # After every browser action, force next action to be think or mark_progress
+        checkpoint_pending = bool(start_in_checkpoint)  # Mission-level checkpoint start; browser actions still re-enable checkpoints
         suppress_mark_progress = False  # After mark_progress is called, suppress it until next browser action
         active_strategy: Optional[str] = None  # Persistent reasoning from think(continue), shown every turn
         last_action_summary: Optional[str] = None  # Brief description of last action + result
@@ -865,23 +894,6 @@ Call `plan_next` with:
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
-
-        def _looks_like_next_unit_start(reasoning: str) -> bool:
-            text = (reasoning or "").lower()
-            start_markers = (
-                "next top article",
-                "next article",
-                "next story",
-                "next item",
-                "next record",
-                "next post",
-                "next result",
-                "next iteration",
-                "open the next",
-                "rank #",
-                "rank#",
-            )
-            return any(marker in text for marker in start_markers)
 
         def _record_progress(
             description: str,
@@ -1091,6 +1103,7 @@ Call `plan_next` with:
                         )
                         if not recorded:
                             actions_since_progress += 1
+                            checkpoint_pending = False
                             continue
                         if maybe_completion:
                             return maybe_completion
@@ -1113,6 +1126,7 @@ Call `plan_next` with:
 
                         self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
                         last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
+                        checkpoint_pending = True
                         continue
 
                     # Handle think (with next_action decision)
@@ -1153,41 +1167,32 @@ Call `plan_next` with:
                                 return maybe_completion
 
                         elif think_next_action == "stuck":
-                            # Agent decided it's stuck
-                            active_strategy = None  # Clear strategy
-                            pending_recommended_step = None
-                            reasoning = think_reasoning or "Stuck"
-                            self.event_logger.system_info(f"✗ Agent stuck: {reasoning}")
-                            return TaskResult(
-                                success=False,
-                                completion_status=TaskCompletionStatus.STUCK,
-                                progress=task.progress,
-                                target=task.target,
-                                history=task.history,
-                                reasoning=reasoning,
+                            # Agent detected the current strategy is stuck and proposes a replacement strategy.
+                            replacement_strategy = think_reasoning or "I'm stuck with my prior approach, so I'll try a different strategy."
+                            active_strategy = replacement_strategy
+                            pending_recommended_step = recommended_next_step or None
+                            checkpoint_pending = False
+                            last_action_summary = (
+                                f"Strategy switch (stuck): \"{replacement_strategy}\""
+                            )
+                            if recommended_next_step:
+                                last_action_summary += f" | recommended_next_step={recommended_next_step}"
+                            else:
+                                last_action_summary += " | recommended_next_step=<none acknowledged>"
+                            self.event_logger.system_info(
+                                f"↺ Strategy switched via stuck: {replacement_strategy}"
                             )
 
                         elif think_next_action == "continue":
                             # Set active strategy from the think reasoning
                             active_strategy = think_reasoning
                             pending_recommended_step = recommended_next_step or None
-                            if (
-                                checkpoint_pending
-                                and browser_actions_since_progress > 0
-                                and _looks_like_next_unit_start(think_reasoning)
-                            ):
-                                self.event_logger.system_debug(
-                                    "⚠ think(next_action=continue) blocked — likely starting next unit before mark_progress"
-                                )
-                                last_action_summary = (
-                                    "continue BLOCKED: This reasoning looks like starting the next item/unit "
-                                    "before recording progress for the current one. "
-                                    "Use mark_progress now (or think with next_action=mark_progress)."
-                                )
-                                checkpoint_pending = True
+                            last_action_summary = f"You thought: \"{think_reasoning}\""
+                            if recommended_next_step:
+                                last_action_summary += f" | recommended_next_step={recommended_next_step}"
                             else:
-                                last_action_summary = f"You thought: \"{think_reasoning}\""
-                                checkpoint_pending = False
+                                last_action_summary += " | recommended_next_step=<none acknowledged>"
+                            checkpoint_pending = False
                         else:
                             checkpoint_pending = False
 
@@ -1208,6 +1213,7 @@ Call `plan_next` with:
                         action_content = current_action.split(":", 1)[1].split("|")[0].strip() if ":" in current_action else ""
                         last_action_summary = f"You called {action_type}: \"{action_content}\""
                         actions_since_progress += 1
+                        checkpoint_pending = True
                         continue
 
                     # Handle tab management actions (intercepted by controller)
@@ -1284,9 +1290,10 @@ Call `plan_next` with:
                             self.tab_manager.dismiss_dialog(accept, input_text)
                             action_word = "accepted" if accept else "dismissed"
                             last_action_summary = f"Dialog {action_word}"
-                            checkpoint_pending = False  # Unblock the agent
+                            checkpoint_pending = True
                         else:
                             last_action_summary = "dismiss_dialog: No dialog pending"
+                            checkpoint_pending = True
                         actions_since_progress += 1
                         continue
 

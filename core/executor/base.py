@@ -29,6 +29,118 @@ from lib.ai import generate_text
 from lib.ai import generate_text, generate_model
 from core.session import InteractionType as IT
 
+DOM_SMART_CLICK_POINT_SCRIPT = """
+({ overlayIndex, preferTextDescendant }) => {
+    if (!overlayIndex) {
+        return null;
+    }
+
+    const el = document.querySelector(`[data-dom-index="${overlayIndex}"]`);
+    if (!el) {
+        return null;
+    }
+
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    const inViewportRect = (rect) => {
+        if (!rect) return false;
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        return rect.right > 0 &&
+               rect.bottom > 0 &&
+               rect.left < viewportWidth &&
+               rect.top < viewportHeight;
+    };
+
+    const isVisible = (node) => {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        if (!style) return false;
+        if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") return false;
+        const opacity = Number.parseFloat(style.opacity || "1");
+        if (Number.isFinite(opacity) && opacity === 0) return false;
+        return inViewportRect(node.getBoundingClientRect());
+    };
+
+    const isHittableAt = (x, y, target) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        if (x < 0 || y < 0 || x >= viewportWidth || y >= viewportHeight) return false;
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !target) return false;
+        return hit === target || target.contains(hit) || hit.contains(target);
+    };
+
+    const candidatePointsFromRect = (rect) => {
+        if (!inViewportRect(rect)) {
+            return [];
+        }
+        const points = [
+            { x: rect.left + rect.width * 0.5, y: rect.top + rect.height * 0.5 },
+            { x: rect.left + rect.width * 0.5, y: rect.top + Math.min(rect.height * 0.3, rect.height - 1) },
+            { x: rect.left + rect.width * 0.35, y: rect.top + rect.height * 0.5 },
+            { x: rect.left + rect.width * 0.65, y: rect.top + rect.height * 0.5 },
+            { x: rect.left + rect.width * 0.2, y: rect.top + rect.height * 0.5 },
+            { x: rect.left + rect.width * 0.8, y: rect.top + rect.height * 0.5 },
+        ];
+
+        const dedup = new Set();
+        const normalized = [];
+        for (const p of points) {
+            const px = Math.round(p.x);
+            const py = Math.round(p.y);
+            const key = `${px}:${py}`;
+            if (dedup.has(key)) continue;
+            dedup.add(key);
+            normalized.push({ x: px, y: py });
+        }
+        return normalized;
+    };
+
+    const descendantTargets = [];
+    if (preferTextDescendant && el.tagName === "A") {
+        const selectors = "h1,h2,h3,h4,h5,h6,[role='heading'],span,strong,b,p,div";
+        const children = Array.from(el.querySelectorAll(selectors)).filter(isVisible);
+        children.sort((a, b) => {
+            const ar = a.getBoundingClientRect();
+            const br = b.getBoundingClientRect();
+            return (br.width * br.height) - (ar.width * ar.height);
+        });
+        for (const child of children) {
+            descendantTargets.push(child);
+        }
+    }
+
+    const orderedTargets = [...descendantTargets, el];
+    for (const target of orderedTargets) {
+        const rect = target.getBoundingClientRect();
+        const points = candidatePointsFromRect(rect);
+        for (const point of points) {
+            if (isHittableAt(point.x, point.y, target)) {
+                return {
+                    x: point.x,
+                    y: point.y,
+                    source: target === el ? "target" : "descendant",
+                    targetTag: (target.tagName || "").toLowerCase(),
+                    baseTag: (el.tagName || "").toLowerCase(),
+                };
+            }
+            // For link containers, accept points that hit any part of the anchor subtree.
+            if (target === el && isHittableAt(point.x, point.y, el)) {
+                return {
+                    x: point.x,
+                    y: point.y,
+                    source: "anchor-subtree",
+                    targetTag: (target.tagName || "").toLowerCase(),
+                    baseTag: (el.tagName || "").toLowerCase(),
+                };
+            }
+        }
+    }
+
+    return null;
+}
+"""
+
 class ScrollReason(Enum):
     """Enum for different scroll reasons"""
     USER_ACTION = "user_action"  # User explicitly requested a scroll action
@@ -1036,6 +1148,47 @@ class Executor:
             return None, None
 
         w, h = page_info.width, page_info.height
+        selected_element = None
+
+        for el in elements.elements:
+            if getattr(el, "overlay_number", None) == overlay_index:
+                selected_element = el
+                break
+
+        # Prefer a DOM-backed, hittable click point over pure box center math.
+        if selected_element is not None and self.browser.page is not None:
+            try:
+                prefer_text_descendant = (getattr(selected_element, "element_type", "") or "").lower() == "a"
+                smart_point = self.browser.page.evaluate(
+                    DOM_SMART_CLICK_POINT_SCRIPT,
+                    {
+                        "overlayIndex": int(overlay_index),
+                        "preferTextDescendant": prefer_text_descendant,
+                    },
+                )
+                if isinstance(smart_point, dict):
+                    sx = smart_point.get("x")
+                    sy = smart_point.get("y")
+                    if isinstance(sx, (int, float)) and isinstance(sy, (int, float)):
+                        cx, cy = int(round(sx)), int(round(sy))
+                        if 0 <= cx < w and 0 <= cy < h:
+                            source = smart_point.get("source", "smart")
+                            target_tag = smart_point.get("targetTag", "")
+                            try:
+                                self.event_logger.system_debug(
+                                    f"Smart click point for overlay {overlay_index}: ({cx}, {cy}) "
+                                    f"source={source} target_tag={target_tag}"
+                                )
+                            except Exception:
+                                pass
+                            return cx, cy
+            except Exception as e:
+                try:
+                    self.event_logger.system_debug(
+                        f"Smart click point resolver failed for overlay {overlay_index}: {e}"
+                    )
+                except Exception:
+                    pass
 
         for el in elements.elements:
             box = getattr(el, "box_2d", None)
@@ -1941,18 +2094,31 @@ class Executor:
         base_knowledge: Optional[List[str]] = None,
     ) -> Optional[int]:
         candidate_lines: list[str] = []
-            
-        for elem in element_data.elements:
+
+        sorted_elements = sorted(
+            element_data.elements,
+            key=lambda e: (
+                -int(getattr(e, "text_presence_score", 0) or 0),
+                int(getattr(e, "overlay_number", 10**9) or 10**9),
+            ),
+        )
+
+        for elem in sorted_elements:
             idx = elem.overlay_number
             # role = elem.role_hint
             tag = elem.element_type
             text = elem.element_label
             element_label = elem.element_label
             is_focused = elem.is_focused
+            text_score = int(getattr(elem, "text_presence_score", 0) or 0)
+            has_visible_text = bool(getattr(elem, "has_visible_text", False))
             tag_str = tag or "unknown"
             # Build comprehensive description
             parts = []
-            parts.append(f"Overlay {idx} tag={tag_str} text={text} placeholder={element_label} is-focused={is_focused}")
+            parts.append(
+                f"Overlay {idx} tag={tag_str} text={text} placeholder={element_label} "
+                f"text_score={text_score} has_text={str(has_visible_text).lower()} is-focused={is_focused}"
+            )
             candidate_lines.append("\n".join(parts))
         
         if candidate_lines:
@@ -1980,12 +2146,15 @@ class Executor:
             {candidate_lines}
             
             This is how each overlay is structured:
-            Overlay <index> tag=<tag> text=<text> type=<type>
+            Overlay <index> tag=<tag> text=<text> type=<type> text_score=<0-3> has_text=<true|false>
             - index is the overlay number/index
             - tag is the HTML tag of the element
             - text is the text of the element
             - type is the type of the element
+            - text_score is a heuristic of visible text signal strength
+            - has_text indicates visible on-screen text presence
             Use all of these together to decide which overlay index is the best match.
+            When matching a named control by label/text, prefer higher text_score/has_text=true candidates.
 
             {base_knowledge_section}
         """
