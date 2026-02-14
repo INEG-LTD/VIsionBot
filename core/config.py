@@ -26,12 +26,6 @@ class TaskExecutionConfig(BaseModel):
         ge=1,
         description="Maximum number of actions before a task is forced to end"
     )
-    stuck_threshold: int = Field(
-        default=8,
-        ge=1,
-        le=50,
-        description="Number of actions without progress before forcing a think step"
-    )
     max_tasks_per_mission: int = Field(
         default=20,
         ge=1,
@@ -99,10 +93,6 @@ class ExecutionConfig(BaseModel):
         default=30000,
         ge=0,
         description="Max time to wait for page load before each agent turn (milliseconds)."
-    )
-    track_ineffective_actions: bool = Field(
-        default=True,
-        description="If True, track and avoid repeating actions that didn't yield page changes. When disabled, the agent may retry failed actions."
     )
     use_agent_overlay_index: bool = Field(
         default=True,
@@ -290,26 +280,6 @@ class UserMessagesConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class HistoryConfig(BaseModel):
-    """Configuration for the agent history summary block."""
-
-    max_items: int = Field(
-        default=20,
-        ge=1,
-        description="Maximum history entries to keep in the prompt"
-    )
-    summary_length: int = Field(
-        default=120,
-        ge=40,
-        description="Maximum reasoning characters shown per history entry"
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-
-
 class Config(BaseModel):
     """
     Main configuration object for Agent.
@@ -353,10 +323,6 @@ class Config(BaseModel):
     user_messages: UserMessagesConfig = Field(
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
-    )
-    history: HistoryConfig = Field(
-        default_factory=HistoryConfig,
-        description="History management configuration"
     )
     task_execution: TaskExecutionConfig = Field(
         default_factory=TaskExecutionConfig,

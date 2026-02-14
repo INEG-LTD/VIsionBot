@@ -6,7 +6,7 @@ OpenAI function calling tools, along with conversion utilities to maintain
 backward compatibility with the keyword command format.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # ============================================================================
 # ACTION TOOLS SCHEMA
@@ -671,6 +671,54 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     },
 ]
 
+# Required memory evidence fields for all decision-bearing actions.
+_MEMORY_EVIDENCE_PROPERTIES: Dict[str, Any] = {
+    "memory_evidence_turns": {
+        "type": "array",
+        "items": {"type": "integer", "minimum": 0},
+        "minItems": 1,
+        "description": "Turn numbers from memory that justify this action decision."
+    },
+    "memory_evidence_summary": {
+        "type": "string",
+        "description": "One short first-person summary of the cited memory evidence."
+    },
+}
+
+for _tool in ACTION_TOOLS:
+    _fn = _tool.get("function", {})
+    _params = _fn.get("parameters", {})
+    if not isinstance(_params, dict):
+        continue
+    _properties = _params.setdefault("properties", {})
+    for _k, _v in _MEMORY_EVIDENCE_PROPERTIES.items():
+        _properties[_k] = _v
+    _required = _params.setdefault("required", [])
+    if "memory_evidence_turns" not in _required:
+        _required.append("memory_evidence_turns")
+    if "memory_evidence_summary" not in _required:
+        _required.append("memory_evidence_summary")
+
+# Extra contract for think(next_action=stuck)
+_THINK_TOOL = next(
+    (t for t in ACTION_TOOLS if t.get("function", {}).get("name") == "think"),
+    None,
+)
+if _THINK_TOOL:
+    _think_props = _THINK_TOOL["function"]["parameters"].setdefault("properties", {})
+    _think_props["stuck_pattern"] = {
+        "type": "string",
+        "enum": [
+            "action_loop",
+            "no_state_change",
+            "failure_cluster",
+            "navigation_loop",
+            "element_not_found",
+            "other",
+        ],
+        "description": "Required when next_action=stuck.",
+    }
+
 
 # Tools available during checkpoint mode (after a browser action in multi-target tasks).
 # Keep order explicit to bias completion first: mark progress before more thinking.
@@ -772,6 +820,34 @@ def get_filtered_tools(
         return [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
 
     return base_tools
+
+
+def validate_memory_evidence(function_name: str, arguments: Dict[str, Any]) -> Optional[str]:
+    """
+    Validate memory citation contract for action tool calls.
+
+    Returns:
+        None if valid, otherwise an error string.
+    """
+    turns = arguments.get("memory_evidence_turns")
+    summary = arguments.get("memory_evidence_summary")
+
+    if not isinstance(turns, list) or not turns or not all(isinstance(t, int) for t in turns):
+        return f"{function_name} requires non-empty memory_evidence_turns (integer turn numbers)"
+    if not isinstance(summary, str) or not summary.strip():
+        return f"{function_name} requires memory_evidence_summary"
+
+    if function_name == "think":
+        next_action = str(arguments.get("next_action", "")).strip().lower()
+        if next_action == "stuck":
+            stuck_pattern = arguments.get("stuck_pattern")
+            if not isinstance(stuck_pattern, str) or not stuck_pattern.strip():
+                return "think(next_action=stuck) requires stuck_pattern"
+            recommended_next_step = arguments.get("recommended_next_step")
+            if not isinstance(recommended_next_step, str) or not recommended_next_step.strip():
+                return "think(next_action=stuck) requires recommended_next_step"
+
+    return None
 
 
 # ============================================================================
@@ -893,5 +969,6 @@ def function_call_to_keyword_action(function_name: str, arguments: Dict[str, Any
 __all__ = [
     "ACTION_TOOLS",
     "PLANNING_TOOLS",
+    "validate_memory_evidence",
     "function_call_to_keyword_action",
 ]

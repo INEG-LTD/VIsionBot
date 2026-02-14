@@ -9,9 +9,10 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
-from core.session import SessionTracker
+from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
+from agent.prompts import MEMORY_DEVELOPER_POLICY
 from lib.ai import (
     generate_model,
     generate_action_with_tools,
@@ -36,7 +37,7 @@ class ActionPlanner:
     def __init__(
         self,
         user_prompt: str,
-        session_tracker: SessionTracker,
+        memory_store: NarrativeMemory,
         base_knowledge: Optional[List[str]] = None,
         *,
         model_name: Optional[str] = None,
@@ -74,7 +75,7 @@ class ActionPlanner:
         self._system_prompt_cache: dict[str, str] = {}  # Cache system prompts
         self.interaction_summary_limit = interaction_summary_limit
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
-        self.session_tracker: SessionTracker = session_tracker
+        self.memory_store: NarrativeMemory = memory_store
         self.max_actions_per_plan = max_actions_per_plan
         self.task_target = task_target
         self.task_progress = task_progress
@@ -150,7 +151,7 @@ class ActionPlanner:
         Returns:
             Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
-        from agent.action_tools import get_filtered_tools
+        from agent.action_tools import get_filtered_tools, validate_memory_evidence
 
         try:
             # Build reflection block (active strategy + last action + tab events)
@@ -187,6 +188,9 @@ Rules:
 8. You should keep working after next_action=stuck. It is a strategy switch, not task completion.
 9. For every non-think tool call, the reasoning must follow ACTIVE STRATEGY and explain in first-person
    how the action advances that strategy.
+10. If a RECOMMENDED NEXT STEP is present, either follow it or explicitly explain deviation in reasoning:
+   - "Following recommendation: ..."
+   - "Deviating from recommendation because ..."
 """
 
             if self.checkpoint_mode:
@@ -232,7 +236,10 @@ Based on the screenshot, what is the best next action?
 RECOMMENDED NEXT STEP (from prior think, apply now if valid):
 {self.recommended_next_step}
 
-Use this as your next action unless it is invalid/impossible with the current page or available tools.
+Decision contract for this turn:
+- If you follow it, your reasoning must explain why in first person language.
+- If you do not follow it, your reasoning must explain why in first person language.
+- A deviation reason must cite the concrete conflict with current screenshot/tools/state.
 """
 
             # Get filtered tools based on current state
@@ -243,7 +250,6 @@ Use this as your next action unless it is invalid/impossible with the current pa
             )
 
             system_prompt = self._build_function_calling_system_prompt(
-                self.session_tracker,
                 environment_state,
                 notebook,
                 element_data,
@@ -254,6 +260,7 @@ Use this as your next action unless it is invalid/impossible with the current pa
                 prompt=user_prompt,
                 tools=tools,
                 system_prompt=system_prompt,
+                developer_prompt=MEMORY_DEVELOPER_POLICY,
                 image=screenshot,
                 image_detail=self.image_detail,
                 model=self.model_name,
@@ -274,6 +281,11 @@ Use this as your next action unless it is invalid/impossible with the current pa
 
                 get_event_logger().system_debug(f"Function name: {action['function_name']}")
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
+                validation_error = validate_memory_evidence(
+                    action["function_name"], action["arguments"]
+                )
+                if validation_error:
+                    return None, validation_error
 
                 # Create ActionStep from function call
                 action_step = ActionStep.from_function_call(
@@ -294,7 +306,6 @@ Use this as your next action unless it is invalid/impossible with the current pa
 
     def _build_function_calling_system_prompt(
         self,
-        session_tracker: SessionTracker,
         state: EnvironmentState,
         notebook: Notebook,
         element_data: PageElements,
@@ -309,7 +320,9 @@ Use this as your next action unless it is invalid/impossible with the current pa
                 base_knowledge_section += f"{i}. {knowledge}\n"
 
         # Get history and navigation info
-        history_block = self._get_history_block()
+        memory_narrative_block = self._get_memory_narrative_block()
+        memory_index_block = self._get_memory_turn_index()
+        stuck_hint_lines = self.memory_store.get_stuck_pattern_hints()
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
             getattr(state, "url_pointer", None)
@@ -484,6 +497,8 @@ OPEN TABS
 
 """
 
+        stuck_hints = ", ".join(stuck_hint_lines) if stuck_hint_lines else "none right now"
+
         return f"""You are controlling a web browser. You can see the current page as a screenshot.
 Look at what's on screen, decide what to do, and do it — just like a person would.
 
@@ -494,7 +509,11 @@ Look at what's on screen, decide what to do, and do it — just like a person wo
 ═══════════════════════════════════════════════════════════════
 WHAT YOU'VE DONE SO FAR
 ═══════════════════════════════════════════════════════════════
-{history_block if history_block else "No actions yet."}
+{memory_narrative_block if memory_narrative_block else "No actions yet."}
+Potential stuck patterns from memory scan: {stuck_hints}
+
+Memory turn index (for citing any prior turn):
+{memory_index_block}
 
 Navigation history:
 {nav_summary}
@@ -564,6 +583,19 @@ STUCK STRATEGY SWITCH RULE:
   - reasoning should be natural first-person language for my new ACTIVE STRATEGY
   - recommended_next_step should be one concrete immediate action
 
+RECOMMENDATION COMPLIANCE RULE:
+• If RECOMMENDED NEXT STEP is present, I must either follow it or explicitly explain why I am deviating.
+• If following, my reasoning should explain why in first person language.
+• If deviating, my reasoning should explain why in first person language.
+• Deviation reason must name a concrete conflict with current screenshot, available tools, or page state.
+
+CONTRADICTION CHECK (MANDATORY BEFORE EACH TOOL CALL):
+• Read cited memory turns and extract the facts I rely on.
+• Ensure reasoning does not conflict with those facts.
+• Never claim "I haven't done X yet" if cited turns show X already happened.
+• If X already happened, explain in first person language that you already tried X and the outcome was ...
+• If uncertain, use uncertainty language rather than false claims.
+
 ═══════════════════════════════════════════════════════════════
 GUIDELINES
 ═══════════════════════════════════════════════════════════════
@@ -583,10 +615,41 @@ GUIDELINES
 Choose the next action to take.
 """
 
-    def _get_history_block(self, just_data: bool = False) -> str:
-        if not self.session_tracker:
+    def _get_memory_narrative_block(self, just_data: bool = False) -> str:
+        if not self.memory_store:
             return ""
-        return self.session_tracker.history_block(limit=self.interaction_summary_limit, just_data=just_data)
+        limit = self.interaction_summary_limit or 20
+        narrative = self.memory_store.get_narrative(n=limit)
+        if just_data:
+            return narrative
+        return f"Recent memory narrative:\n{narrative}"
+
+    def _get_memory_turn_index(self, max_lines: int = 120) -> str:
+        if not self.memory_store or not self.memory_store.entries:
+            return "No memory entries yet."
+
+        entries = self.memory_store.entries
+        total = len(entries)
+
+        if total <= max_lines:
+            selected = entries
+        else:
+            head = max_lines // 3
+            tail = max_lines // 3
+            middle = max_lines - head - tail
+            mid_start = max((total // 2) - (middle // 2), 0)
+            selected = entries[:head] + entries[mid_start: mid_start + middle] + entries[-tail:]
+
+        lines: List[str] = []
+        for entry in selected:
+            lines.append(
+                f"[{entry.turn_number}] {entry.action_type} -> {entry.outcome}"
+            )
+
+        if total > len(selected):
+            lines.append(f"... {total - len(selected)} additional turns omitted for prompt size ...")
+
+        return "\n".join(lines)
 
     def _format_notebook(self, notebook: Notebook) -> str:
         """Format notebook entries for inclusion in the prompt."""
@@ -626,7 +689,7 @@ NOTEBOOK (Your Stored Data)
             marker = " (current)" if idx == pointer else ""
             lines.append(f"{idx}: {url_history[idx]}{marker}")
 
-        history_block = "\n    ".join(lines)
+        recent_urls_block = "\n    ".join(lines)
         prev_line = f"Previous page (back target): {prev_url}" if prev_url else "Previous page (back target): none"
         next_line = f"Next page (forward target): {next_url}" if next_url else "Next page (forward target): none"
 
@@ -635,5 +698,5 @@ NOTEBOOK (Your Stored Data)
             f"Current history index: {pointer}\n"
             f"{prev_line}\n"
             f"{next_line}\n"
-            f"Recent history (oldest → newest):\n    {history_block}"
+            f"Recent history (oldest → newest):\n    {recent_urls_block}"
         )

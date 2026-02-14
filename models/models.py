@@ -8,7 +8,6 @@ This module contains all core data models organized by category:
 """
 from __future__ import annotations
 
-from ast import Str
 from dataclasses import dataclass, field
 import re
 from enum import Enum
@@ -119,6 +118,7 @@ class ActionStep(BaseModel):
 
         return cls(
             action=action_string,
+            reasoning=arguments.get("reasoning"),
             function_name=function_name,
             function_arguments=arguments
         )
@@ -282,7 +282,6 @@ class Task:
     target: Union[int, str] = 1  # 1, 5, "all"
     start_hint: Optional[str] = None
     progress: int = 0
-    history: List[str] = field(default_factory=list)
     task_id: str = ""
     status: TaskStatus = TaskStatus.PENDING
     completion_status: Optional[TaskCompletionStatus] = None

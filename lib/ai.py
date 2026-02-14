@@ -547,6 +547,7 @@ def _prepare_image_part(
 
 def _build_messages(
     system_prompt: str,
+    developer_prompt: str,
     prompt: str,
     image: Optional[Union[bytes, bytearray, str]] = None,
     multi_image: Optional[list[bytes]] = None,
@@ -563,6 +564,8 @@ def _build_messages(
     # System message
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
+    if developer_prompt:
+        messages.append({"role": "developer", "content": developer_prompt})
 
     # User message with text and images
     content_parts = []
@@ -733,6 +736,7 @@ def _normalize_reasoning_level(
 def generate_text_with_cost(
     prompt: str,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: bytes | bytearray | str | None = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -750,7 +754,9 @@ def generate_text_with_cost(
         temperature = get_default_temperature()
 
     provider = get_provider(model)
-    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+    messages = _build_messages(
+        system_prompt, developer_prompt, prompt, image, multi_image, image_detail
+    )
 
     response = provider.complete(
         messages=messages,
@@ -780,6 +786,7 @@ def generate_text_with_cost(
 def generate_text_gpt_with_cost(
     prompt: str,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: bytes | bytearray | str | None = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -791,6 +798,7 @@ def generate_text_gpt_with_cost(
     return generate_text_with_cost(
         prompt=prompt,
         system_prompt=system_prompt,
+        developer_prompt=developer_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -803,6 +811,7 @@ def generate_text_gpt_with_cost(
 def generate_text(
     prompt: str,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: bytes | bytearray | str | None = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -814,6 +823,7 @@ def generate_text(
     return generate_text_gpt_with_cost(
         prompt=prompt,
         system_prompt=system_prompt,
+        developer_prompt=developer_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -827,6 +837,7 @@ def generate_model_with_cost(
     prompt: str,
     model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Union[bytes, bytearray, str, None] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -844,7 +855,9 @@ def generate_model_with_cost(
         temperature = get_default_temperature()
 
     provider = get_provider(model)
-    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+    messages = _build_messages(
+        system_prompt, developer_prompt, prompt, image, multi_image, image_detail
+    )
 
     response = provider.complete(
         messages=messages,
@@ -891,6 +904,7 @@ def generate_model_gpt_with_cost(
     prompt: str,
     model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Union[bytes, bytearray, str, None] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -903,6 +917,7 @@ def generate_model_gpt_with_cost(
         prompt=prompt,
         model_object_type=model_object_type,
         system_prompt=system_prompt,
+        developer_prompt=developer_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -916,6 +931,7 @@ def generate_model_gpt(
     prompt: str,
     model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Union[bytes, bytearray, str, None] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -928,6 +944,7 @@ def generate_model_gpt(
         prompt,
         model_object_type=model_object_type,
         system_prompt=system_prompt,
+        developer_prompt=developer_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -941,6 +958,7 @@ def generate_model(
     prompt: str,
     model_object_type: Optional[Type[BaseModel]] = None,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Union[bytes, bytearray, str, None] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -953,6 +971,7 @@ def generate_model(
         prompt=prompt,
         model_object_type=model_object_type,
         system_prompt=system_prompt,
+        developer_prompt=developer_prompt,
         image=image,
         multi_image=multi_image,
         image_detail=image_detail,
@@ -1056,6 +1075,7 @@ def answer_question_with_vision(
 def generate_text_stream(
     prompt: str,
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Optional[bytes] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -1069,7 +1089,9 @@ def generate_text_stream(
     _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
     provider = get_provider(model)
-    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+    messages = _build_messages(
+        system_prompt, developer_prompt, prompt, image, multi_image, image_detail
+    )
 
     return provider.complete(
         messages=messages,
@@ -1083,6 +1105,7 @@ def generate_model_stream(
     prompt: str,
     model_object_type: Type[BaseModel],
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: Optional[bytes] = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -1102,7 +1125,9 @@ def generate_model_stream(
     _, reasoning_value = _normalize_reasoning_level(reasoning_level)
 
     provider = get_provider(model)
-    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+    messages = _build_messages(
+        system_prompt, developer_prompt, prompt, image, multi_image, image_detail
+    )
 
     for chunk in provider.complete(
         messages=messages,
@@ -1128,6 +1153,7 @@ def generate_action_with_tools(
     prompt: str,
     tools: list[dict],
     system_prompt: str = "",
+    developer_prompt: str = "",
     image: bytes | bytearray | str | None = None,
     multi_image: Optional[list[bytes]] = None,
     image_detail: str = "high",
@@ -1168,7 +1194,9 @@ def generate_action_with_tools(
         temperature = get_default_temperature()
 
     # Build messages
-    messages = _build_messages(system_prompt, prompt, image, multi_image, image_detail)
+    messages = _build_messages(
+        system_prompt, developer_prompt, prompt, image, multi_image, image_detail
+    )
 
     # Get OpenAI client
     provider = get_provider(model)
@@ -1177,50 +1205,43 @@ def generate_action_with_tools(
             "Function calling is only supported with OpenAI models"
         )
 
-    # Convert messages to OpenAI chat format
-    openai_messages = []
-    for msg in messages:
-        if isinstance(msg.get("content"), list):
-            # Handle multi-part content (text + images)
-            parts = []
-            for part in msg["content"]:
-                if part.get("type") == "input_text":
-                    parts.append({"type": "text", "text": part["text"]})
-                elif part.get("type") == "input_image":
-                    parts.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": part["image_url"]["url"],
-                            "detail": part["image_url"].get("detail", "high")
-                        }
-                    })
-            openai_messages.append({"role": msg["role"], "content": parts})
-        else:
-            openai_messages.append({"role": msg["role"], "content": msg["content"]})
+    # Convert messages to OpenAI Responses input format
+    openai_messages = provider._convert_to_openai_format(messages)
 
-    # Call OpenAI with function calling
+    # Convert Chat-Completions tool schema to Responses schema.
+    responses_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            fn = tool["function"]
+            responses_tools.append(
+                {
+                    "type": "function",
+                    "name": fn.get("name"),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {"type": "object"}),
+                }
+            )
+        elif tool.get("type") == "function" and "name" in tool:
+            responses_tools.append(tool)
+
+    # Call OpenAI Responses API with tools.
     try:
         kwargs = {}
         if temperature is not None:
             kwargs["temperature"] = temperature
 
-        response = provider.client.chat.completions.create(
+        response = provider.client.responses.create(
             model=model,
-            messages=openai_messages,
-            tools=tools,
+            input=openai_messages,
+            tools=responses_tools,
             tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
             **kwargs,
         )
 
-        message = response.choices[0].message
-
         # Extract usage and calculate cost
-        usage = {
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
+        usage = provider._extract_usage(response)
         cost = provider.calculate_cost(usage, model)
 
         # Log cost
@@ -1236,28 +1257,54 @@ def generate_action_with_tools(
         except Exception:
             pass
 
-        # Extract tool call
-        if not message.tool_calls:
-            # Model didn't call a function
+        # Extract tool calls from Responses output items.
+        actions = []
+        output_items = getattr(response, "output", None) or []
+        for item in output_items:
+            item_type = getattr(item, "type", None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get("type")
+            if item_type not in {"function_call", "tool_call"}:
+                continue
+
+            fn_name = getattr(item, "name", None)
+            if fn_name is None and isinstance(item, dict):
+                fn_name = item.get("name")
+            if not fn_name:
+                continue
+
+            raw_args = getattr(item, "arguments", None)
+            if raw_args is None and isinstance(item, dict):
+                raw_args = item.get("arguments")
+
+            parsed_args: Any = {}
+            if isinstance(raw_args, str):
+                try:
+                    parsed_args = json.loads(raw_args)
+                except Exception:
+                    parsed_args = {}
+            elif isinstance(raw_args, dict):
+                parsed_args = raw_args
+
+            actions.append(
+                {
+                    "function_name": fn_name,
+                    "arguments": parsed_args,
+                    "usage": usage,
+                    "cost_usd": cost,
+                }
+            )
+
+        if not actions:
             if tool_choice == "required":
                 raise ProviderAPIError("Model did not call any function despite tool_choice='required'")
             return [{
                 "function_name": None,
                 "arguments": None,
-                "reasoning": message.content or "",
+                "reasoning": getattr(response, "output_text", "") or "",
                 "usage": usage,
                 "cost_usd": cost,
             }]
-
-        tool_calls = message.tool_calls
-        actions = []
-        for tool_call in tool_calls:
-            actions.append({
-                "function_name": tool_call.function.name,
-                "arguments": json.loads(tool_call.function.arguments),
-                "usage": usage,
-                "cost_usd": cost,
-            })
 
         return actions
 

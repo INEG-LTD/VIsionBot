@@ -17,7 +17,6 @@ class TaskResult:
     completion_status: Optional[TaskCompletionStatus] = None
     progress: int = 0
     target: Union[int, str] = 1
-    history: Optional[List[str]] = None
 
     @property
     def status(self) -> str:

@@ -348,29 +348,6 @@ class Browser:
         
         self.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
         self.url = url
-        # Ensure SessionTracker history reflects the first real navigation instead of about:blank
-        try:
-            if hasattr(self, 'session_tracker') and self.session_tracker:
-                hist = getattr(self.session_tracker, 'url_history', None)
-                ptr = getattr(self.session_tracker, 'url_pointer', None)
-                current = self.page.url
-                # If we only have the initial about:blank entry, replace it with the real URL
-                if isinstance(hist, list) and len(hist) == 1 and (hist[0] or '').startswith('about:blank'):
-                    self.session_tracker.url_history = [current]
-                    self.session_tracker.url_pointer = 0
-                # If history exists but pointer is not at the end, truncate forward stack and append
-                elif isinstance(hist, list) and isinstance(ptr, int) and 0 <= ptr < len(hist):
-                    if hist[ptr] != current:
-                        # Truncate any forward entries
-                        if ptr < (len(hist) - 1):
-                            self.session_tracker.url_history = hist[: ptr + 1]
-                        # Append only if it's not already the last entry
-                        if not self.session_tracker.url_history or self.session_tracker.url_history[-1] != current:
-                            self.session_tracker.url_history.append(current)
-                        self.session_tracker.url_pointer = len(self.session_tracker.url_history) - 1
-        except Exception:
-            # Non-fatal: history sync is best-effort
-            pass
 
     def _scroll_overlay_into_view(self, overlay_index: int) -> Optional[Dict[str, Any]]:
         if overlay_index is None or self.page is None:

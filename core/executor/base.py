@@ -22,12 +22,12 @@ from models.models import FailedAction
 from utils import SelectorUtils
 from utils.intent_parsers import parse_keyword_command
 from utils.page_utils import PageUtils
-from core.session import SessionTracker, InteractionType
+from agent.memory import NarrativeMemory, InteractionType
 from utils.debug_print import dprint
 from execution.result import ActionResult
 from lib.ai import generate_text
 from lib.ai import generate_text, generate_model
-from core.session import InteractionType as IT
+from agent.memory import InteractionType as IT
 
 DOM_SMART_CLICK_POINT_SCRIPT = """
 ({ overlayIndex, preferTextDescendant }) => {
@@ -185,7 +185,7 @@ class Executor:
 
     def __init__(self, 
                  browser: Browser, 
-                 session_tracker: SessionTracker, 
+                 memory_store: NarrativeMemory, 
                  notebook: Notebook,
                  page_utils:PageUtils=None, 
                  preferred_click_method: str = "programmatic", 
@@ -193,7 +193,7 @@ class Executor:
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
                  user_messages_config=None):
         self.browser = browser
-        self.session_tracker = session_tracker
+        self.memory_store = memory_store
         self.page_utils = page_utils
         self.last_failure_reason: Optional[str] = None
         self.user_messages_config = user_messages_config  # Store user messages config
@@ -313,7 +313,7 @@ class Executor:
         before_state = None
         try:
             before_url = self.browser.page.url
-            before_state = self.session_tracker._capture_current_state()
+            before_state = self.memory_store._capture_current_state()
         except Exception:
             pass
 
@@ -338,7 +338,7 @@ class Executor:
         if success:
             try:
                 after_url = self.browser.page.url
-                after_state = self.session_tracker._capture_current_state()
+                after_state = self.memory_store._capture_current_state()
             except Exception:
                 pass
         
@@ -346,7 +346,7 @@ class Executor:
         
         # Record navigation interaction with explicit before_state
         try:
-            self.session_tracker.record_interaction(
+            self.memory_store.record_interaction(
                 InteractionType.NAVIGATION,
                 before_state=before_state,  # Pass explicit before_state since navigation already happened
                 after_state=after_state,
@@ -362,7 +362,7 @@ class Executor:
         self,
         step: ActionStep,
         elements: PageElements,
-        failed_actions: List[str],
+        prior_failures: List[str],
         failed_elements: List[FailedAction],
         page_info: PageInfo,
         base_knowledge: Optional[List[str]] = None,
@@ -370,7 +370,7 @@ class Executor:
         """Execute a click action"""
         # Figure out the overlay to use for the click
         # Capture state BEFORE performing the click (critical for accurate before_state)
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
 
         current_screenshot = before_state.screenshot
 
@@ -379,7 +379,7 @@ class Executor:
         if overlay_index is not None:
             self.event_logger.system_debug(f"Using agent's overlay_index: {overlay_index}")
         else:
-            overlay_index = self.select_best_overlay(step.action, elements, failed_elements, screenshot=current_screenshot, base_knowledge=self.session_tracker.base_knowledge)
+            overlay_index = self.select_best_overlay(step.action, elements, failed_elements, screenshot=current_screenshot, base_knowledge=self.memory_store.base_knowledge)
         
         if overlay_index is None:
             self.event_logger.command_failure(step.action, error="Could not determine best overlay")
@@ -416,7 +416,7 @@ class Executor:
             print(f"Click executed: {click_executed}")
             
             # Capture state after click
-            after_state = self.session_tracker._capture_current_state()
+            after_state = self.memory_store._capture_current_state()
 
         except Exception as e:
             self.event_logger.command_failure(step.action, error=f"An error occured while clicking: {e}")
@@ -428,7 +428,7 @@ class Executor:
         #     success = False
         # else:
         #     # Detect if something meaningful changed
-        #     state_changed = self.session_tracker.detect_state_change(before_state, after_state)
+        #     state_changed = self.memory_store.detect_state_change(before_state, after_state)
 
         #     if state_changed:
         #         success = True
@@ -450,16 +450,16 @@ class Executor:
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
         print(f"Target description: {target_description}")
-        # Get reasoning if available; fall back to session_tracker's current action reasoning
+        # Get reasoning if available; fall back to memory_store's current action reasoning
         step_reasoning = step.reasoning
         if not step_reasoning:
             try:
-                step_reasoning = self.session_tracker.get_current_action_reasoning()
+                step_reasoning = self.memory_store.get_current_action_reasoning()
             except Exception:
                 step_reasoning = None
         print(f"Step reasoning: {step_reasoning}")
         # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             InteractionType.CLICK,
             before_state=before_state,  # Pass explicit before_state captured before the click
             after_state=after_state,
@@ -529,11 +529,11 @@ class Executor:
         # For now, return failure to indicate human intervention needed
         # In the future, this could pause and wait for user input
         try:
-            before_state = self.session_tracker._capture_current_state()
+            before_state = self.memory_store._capture_current_state()
             ask_result = _handle_ask_command(question, environment_state)
-            after_state = self.session_tracker._capture_current_state()
+            after_state = self.memory_store._capture_current_state()
         
-            self.session_tracker.record_interaction(
+            self.memory_store.record_interaction(
                 InteractionType.ASK,
                 before_state=before_state,
                 after_state=after_state,
@@ -546,7 +546,7 @@ class Executor:
             
             # Store question/answer pair for agent context if answer was received
             if ask_result:
-                self.session_tracker.add_question_answer(question, ask_result)
+                self.memory_store.add_question_answer(question, ask_result)
             
         except Exception:
             pass
@@ -556,28 +556,22 @@ class Executor:
     def execute_clear_text(
         self,
         step: ActionStep,
+        elements: PageElements,
+        page_info: PageInfo,
+        failed_elements: List[FailedAction],
     ) -> bool:
-        """Execute a clear text action"""
-        before_state = self.session_tracker._capture_current_state()
-        
+        """Execute a clear text action."""
+        before_state = self.memory_store._capture_current_state()
         current_screenshot = before_state.screenshot
-        elements = before_state.elements
-        page_info = before_state.page_info
-        failed_elements = before_state.failed_elements
 
-        def clear_input_field(x: Optional[int], y: Optional[int]) -> str:
-            """
-            Clear an input field before typing to ensure previous text is removed.
-            Tries multiple methods: JavaScript first, then keyboard select-all+delete.
+        success = False
+        error_msg: Optional[str] = None
 
-            Returns:
-                Status string: "js" if JS cleared, "keyboard" if keyboard fallback, "failed" if both failed
-            """
+        def clear_input_field(x: Optional[int], y: Optional[int]) -> bool:
             if x is None or y is None:
-                return "failed"
+                return False
 
             try:
-                # Try to clear using JavaScript first (most reliable)
                 element_js = f"""
                 (function() {{
                     const element = document.elementFromPoint({x}, {y});
@@ -591,37 +585,22 @@ class Executor:
                     return false;
                 }})();
                 """
-                cleared = self.browser.page.evaluate(element_js)
-                if cleared:
-                    # Only show in debug mode
-                    if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        dprint(f"  ✅ Cleared field using JavaScript")
-                    time.sleep(0.1)
-                    return "js"
-            except Exception as e:
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
+                if bool(self.browser.page.evaluate(element_js)):
+                    return True
+            except Exception:
+                pass
 
-            # Fallback: click, select all, delete
             try:
                 self.browser.page.mouse.click(x, y)
                 time.sleep(0.2)
-                self.browser.page.keyboard.press('Control+a')
+                self.browser.page.keyboard.press("Control+a")
                 time.sleep(0.1)
-                self.browser.page.keyboard.press('Delete')
+                self.browser.page.keyboard.press("Delete")
                 time.sleep(0.1)
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
-                return "keyboard"
-            except Exception as e:
-                # Only show in debug mode
-                if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                    dprint(f"  ⚠️ Keyboard clear failed: {e}")
-                return "failed"
+                return True
+            except Exception:
+                return False
 
-        # Use agent's overlay_index if available and config allows it
         overlay_index = self._get_agent_overlay_index(step)
         if overlay_index is None:
             overlay_index = self.select_best_overlay(
@@ -629,69 +608,61 @@ class Executor:
                 elements,
                 failed_elements,
                 screenshot=current_screenshot,
-                base_knowledge=self.session_tracker.base_knowledge
+                base_knowledge=self.memory_store.base_knowledge,
             )
 
-        # Get coordinates for the element to type into
         x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        if x is None or y is None:
+            error_msg = "Could not determine coordinates for clear_text"
+        else:
+            try:
+                self._human_mouse_move(x, y)
+                self.browser.page.mouse.click(x, y)
+                time.sleep(random.uniform(0.1, 0.3))
+                success = clear_input_field(x, y)
+                if not success:
+                    error_msg = "Unable to clear field with JS or keyboard fallback"
+            except Exception as e:
+                success = False
+                error_msg = str(e)
 
-        # Click first to focus the element
-        if x is not None and y is not None:
-            self._human_mouse_move(x, y)
-            self.browser.page.mouse.click(x, y)
-            time.sleep(random.uniform(0.1, 0.3))
-            
-        try:
-            # Always clear the field before typing to ensure previous text is removed
-            clear_input_field(x, y)
-        except Exception as e:
-            success = False
-            error_msg = str(e)
-            
-        # Build target description from step information
         target_description = None
-        if step.action:
-            # Extract target from action string (e.g., "type: text : field" -> "field")
-            action_str = step.action
-            if ":" in action_str:
-                parts = action_str.split(":")
-                if len(parts) >= 3:  # "type: text : field" format
-                    target_description = parts[2].strip()
-                elif len(parts) == 2:
-                    target_description = parts[1].strip()
-
+        if step.action and ":" in step.action:
+            parts = step.action.split(":")
+            if len(parts) >= 2:
+                target_description = parts[-1].strip()
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
-            
-        after_state = self.session_tracker._capture_current_state()
-        # Record type interaction with goal monitor (pass explicit before_state since typing already happened)
-        self.session_tracker.record_interaction(
+
+        after_state = self.memory_store._capture_current_state()
+        self.memory_store.record_interaction(
             InteractionType.CLEAR_TEXT,
-            before_state=before_state,  # Pass explicit before_state captured before the typing
+            before_state=before_state,
             after_state=after_state,
             coordinates=(x, y) if x is not None and y is not None else None,
             target_element_info={
                 "description": target_description,
                 "overlay_index": overlay_index,
                 "action": step.action,
-            } if target_description or overlay_index else None,
+            } if target_description or overlay_index is not None else None,
             reasoning=None,
             success=success,
             error_message=error_msg,
         )
+        return success
         
     def execute_type(
         self,
         step: ActionStep,
         elements: PageElements,
-        failed_actions: List[str],
+        prior_failures: List[str],
         failed_elements: List[FailedAction],
         page_info: PageInfo,
         *,
         base_knowledge: Optional[List[str]] = None,
     ) -> bool:
         """Execute a type action"""
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         
         current_screenshot = before_state.screenshot
 
@@ -767,7 +738,7 @@ class Executor:
                 elements,
                 failed_elements,
                 screenshot=current_screenshot,
-                base_knowledge=self.session_tracker.base_knowledge
+                base_knowledge=self.memory_store.base_knowledge
             )
 
         # Get coordinates for the element to type into
@@ -864,16 +835,16 @@ class Executor:
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
 
-        # Get reasoning if available; fall back to session_tracker's current action reasoning
+        # Get reasoning if available; fall back to memory_store's current action reasoning
         step_reasoning = getattr(step, 'reasoning', None)
         if not step_reasoning:
             try:
-                step_reasoning = self.session_tracker.get_current_action_reasoning()
+                step_reasoning = self.memory_store.get_current_action_reasoning()
             except Exception:
                 step_reasoning = None
-        after_state = self.session_tracker._capture_current_state()
+        after_state = self.memory_store._capture_current_state()
         # Record type interaction with goal monitor (pass explicit before_state since typing already happened)
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             InteractionType.TYPE,
             before_state=before_state,  # Pass explicit before_state captured before the typing
             after_state=after_state,
@@ -934,7 +905,7 @@ class Executor:
         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
             self.event_logger.system_debug(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
 
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         success = False
         error_msg = None
         try:
@@ -953,9 +924,9 @@ class Executor:
             error_msg = str(exc)
             success = False
             self.event_logger.system_error(f"Scroll failed: {exc}")
-        after_state = self.session_tracker._capture_current_state()
+        after_state = self.memory_store._capture_current_state()
 
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             InteractionType.SCROLL,
             before_state=before_state,
             after_state=after_state,
@@ -987,15 +958,15 @@ class Executor:
             pass
 
         # Capture state BEFORE performing the press action (critical for accurate before_state)
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         for key in step_keys:
             try:
                 # Parse and execute the key combination
                 self.parse_and_press_keys(key)
             except Exception as e:
-                after_state = self.session_tracker._capture_current_state()
+                after_state = self.memory_store._capture_current_state()
                 self.event_logger.command_failure("PRESS", error=f"Key press failed: {e}")
-                self.session_tracker.record_interaction(
+                self.memory_store.record_interaction(
                     InteractionType.PRESS,
                     before_state=before_state,  # Pass explicit before_state captured before the press
                     after_state=after_state,
@@ -1004,10 +975,10 @@ class Executor:
                     error_message=str(e),
                     )
                 return False
-        after_state = self.session_tracker._capture_current_state()
+        after_state = self.memory_store._capture_current_state()
 
         self.event_logger.command_execution_complete("PRESS", success=True, keys_pressed=step.keys_to_press)
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             InteractionType.PRESS,
             before_state=before_state,  # Pass explicit before_state captured before the press
             after_state=after_state,
@@ -1227,7 +1198,7 @@ class Executor:
         # Seperate URL from action instruction
         # Robustly extract the URL from the action string (e.g., handle extra spaces and trailing quotes)
         try:
-            before_state = self.session_tracker._capture_current_state()
+            before_state = self.memory_store._capture_current_state()
             url = step.action.split(":", 1)[1].strip()
             # Remove trailing or leading single/double quotes if present
             if (url.startswith("'") and url.endswith("'")) or (url.startswith('"') and url.endswith('"')):
@@ -1244,8 +1215,8 @@ class Executor:
             error_message = str(e)
             self.event_logger.command_failure(command=step.action, error=f"Open navigation failed: {e}")
 
-        after_state = self.session_tracker._capture_current_state()
-        self.session_tracker.record_interaction(
+        after_state = self.memory_store._capture_current_state()
+        self.memory_store.record_interaction(
             InteractionType.NAVIGATION,
             before_state=before_state,
             after_state=after_state,
@@ -1265,7 +1236,7 @@ class Executor:
         before_state = None
         try:
             before_url = self.browser.page.url
-            before_state = self.session_tracker._capture_current_state()
+            before_state = self.memory_store._capture_current_state()
         except Exception:
             pass
 
@@ -1293,10 +1264,10 @@ class Executor:
             except Exception:
                 pass
         
-        after_state = self.session_tracker._capture_current_state()
+        after_state = self.memory_store._capture_current_state()
         # Record navigation interaction with explicit before_state
         try:
-            self.session_tracker.record_interaction(
+            self.memory_store.record_interaction(
                 InteractionType.NAVIGATION,
                 before_state=before_state,  # Pass explicit before_state since navigation already happened
                 after_state=after_state,
@@ -1317,21 +1288,25 @@ class Executor:
         *,
         confirm_before_interaction: bool = False,
     ) -> bool:
-        """Execute a file upload action"""
-        # Get coordinates for the upload element first
-        x, y = self.get_click_coordinates(self, step, elements, page_info)
+        """Execute a file upload action."""
+        before_state = self.memory_store._capture_current_state()
+        x, y = self.get_click_coordinates(step.overlay_index, elements, page_info)
 
-        # Record planned interaction with goal monitor and get pre-interaction evaluations
-        # Record interaction (planned -> actual)
-        self.session_tracker.record_interaction(
+        success = bool(step.upload_file_path)
+        error_msg = None if success else "No file path provided for upload"
+
+        after_state = self.memory_store._capture_current_state()
+        self.memory_store.record_interaction(
             InteractionType.UPLOAD,
+            before_state=before_state,
+            after_state=after_state,
             coordinates=(x, y) if x is not None and y is not None else None,
-            target_description=step.upload_file_path,
-            upload_file_path=step.upload_file_path,
+            target_element_info={"overlay_index": step.overlay_index},
+            notes=step.upload_file_path,
+            success=success,
+            error_message=error_msg,
         )
-            
-        step_success = True  # Assume success for handlers that don't return values yet
-        return step_success
+        return success
 
 
     def execute_datetime(
@@ -1342,39 +1317,34 @@ class Executor:
         *,
         confirm_before_interaction: bool = False,
     ) -> bool:
-        """Execute a datetime field action"""
-        # Get coordinates for the datetime element first
-        x, y = self.get_click_coordinates(self, step, elements, page_info)
+        """Execute a datetime field action."""
+        before_state = self.memory_store._capture_current_state()
+        x, y = self.get_click_coordinates(step.overlay_index, elements, page_info)
 
-        # Record planned interaction with goal monitor and get pre-interaction evaluations
-        # Record interaction (planned -> actual)
-        self.session_tracker.record_interaction(
+        success = bool(step.datetime_value)
+        error_msg = None if success else "No datetime value provided"
+
+        after_state = self.memory_store._capture_current_state()
+        self.memory_store.record_interaction(
             InteractionType.DATETIME,
+            before_state=before_state,
+            after_state=after_state,
             coordinates=(x, y) if x is not None and y is not None else None,
-            target_description=step.datetime_value or "date field",
-            datetime_value=step.datetime_value,
-        )
-
-        step_success = True  # Assume success for handlers that don't return values yet
-
-        # Record the datetime interaction
-        self.session_tracker.record_interaction(
-            InteractionType.DATETIME,
-            coordinates=(step.x, step.y) if step.x and step.y else None,
             target_element_info={
                 "overlay_index": step.overlay_index,
                 "datetime_value": step.datetime_value,
             },
             text_input=step.datetime_value,
-            success=step_success,
+            success=success,
+            error_message=error_msg,
         )
-        return step_success
+        return success
     
     def _execute_keyword_command(
         self,
         action_step: ActionStep,
         detected_elements: PageElements,
-        failed_actions: List[str],
+        prior_failures: List[str],
         failed_elements: List[FailedAction],
         page_info: PageInfo,
         confirm_before_interaction: bool,
@@ -1417,7 +1387,7 @@ class Executor:
                 result = self.execute_click(
                     step=action_step,
                     elements=detected_elements,
-                    failed_actions=failed_actions,
+                    prior_failures=prior_failures,
                     failed_elements=failed_elements,
                     page_info=page_info,
                     base_knowledge=base_knowledge,
@@ -1430,7 +1400,7 @@ class Executor:
                 result = self.execute_type(
                     step=action_step,
                     elements=detected_elements,
-                    failed_actions=failed_actions,
+                    prior_failures=prior_failures,
                     failed_elements=failed_elements,
                     page_info=page_info,
                     base_knowledge=base_knowledge,
@@ -1442,6 +1412,9 @@ class Executor:
             try:
                 result = self.execute_clear_text(
                     step=action_step,
+                    elements=detected_elements,
+                    page_info=page_info,
+                    failed_elements=failed_elements,
                 )
             except Exception as e:
                 self.event_logger.command_execution_failure(command=action_step.action, error=f"Error executing clear text command: {e}")
@@ -1600,7 +1573,7 @@ class Executor:
         self.event_logger.extraction_detected(extraction_prompt)
 
         # Capture before state with screenshot
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
 
         # Capture screenshot based on scope
         try:
@@ -1740,10 +1713,10 @@ class Executor:
                 extracted_text = result_text.strip()
 
                 # Capture after state with screenshot
-                after_state = self.session_tracker._capture_current_state()
+                after_state = self.memory_store._capture_current_state()
 
                 # Record extraction in interaction history
-                self.session_tracker.record_interaction(
+                self.memory_store.record_interaction(
                     IT.EXTRACT,
                     before_state=before_state,
                     after_state=after_state,
@@ -1798,7 +1771,7 @@ class Executor:
                     return False, "Extracted data is empty"
 
                 # Record extraction in interaction history
-                self.session_tracker.record_interaction(
+                self.memory_store.record_interaction(
                     IT.EXTRACT,
                     extraction_prompt=extraction_prompt,
                     extracted_data=extracted_dict,
@@ -1829,7 +1802,7 @@ class Executor:
                 error_msg = f"Type error during extraction: {e}. This may indicate a malformed response from the model."
             
             # Record failed extraction in interaction history
-            self.session_tracker.record_interaction(
+            self.memory_store.record_interaction(
                 IT.EXTRACT,
                 extraction_prompt=extraction_prompt,
                 extracted_data=None,
@@ -1849,11 +1822,11 @@ class Executor:
             return False
 
         # Capture state for record keeping
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         after_state = before_state  # No change for think
 
         # Record the think interaction
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             IT.THINK,
             before_state=before_state,
             after_state=after_state,
@@ -1873,11 +1846,11 @@ class Executor:
             return False
 
         # Capture state for record keeping
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         after_state = before_state  # No change for assert
 
         # Record the assert interaction
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             IT.ASSERT,
             before_state=before_state,
             after_state=after_state,
@@ -1897,11 +1870,11 @@ class Executor:
             return False
 
         # Capture state for record keeping
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
         after_state = before_state  # No change for flag
 
         # Record the flag interaction
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             IT.FLAG,
             before_state=before_state,
             after_state=after_state,
@@ -1934,7 +1907,7 @@ class Executor:
                 timeout_seconds = int(timeout_match.group(1))
 
         # Capture before state
-        before_state = self.session_tracker._capture_current_state()
+        before_state = self.memory_store._capture_current_state()
 
         # Perform the wait - use a simple sleep for now
         # TODO: Could be enhanced with actual page.wait_for_selector or similar
@@ -1943,10 +1916,10 @@ class Executor:
         time.sleep(min(timeout_seconds, 5))  # Cap at 5 seconds for safety
 
         # Capture after state
-        after_state = self.session_tracker._capture_current_state()
+        after_state = self.memory_store._capture_current_state()
 
         # Record the wait interaction
-        self.session_tracker.record_interaction(
+        self.memory_store.record_interaction(
             IT.WAIT_FOR,
             before_state=before_state,
             after_state=after_state,
@@ -1961,8 +1934,8 @@ class Executor:
         action_step: ActionStep,
         detected_elements: PageElements,
         page_info: PageInfo = None,
-        failed_actions: List[str] = [],
-        failed_elements: List[str] = [],
+        prior_failures: Optional[List[str]] = None,
+        failed_elements: Optional[List[FailedAction]] = None,
         extraction_schema: Optional[Dict[str, Any]] = None,
         confirm_before_interaction: bool = False,
         action_id: Optional[str] = None,
@@ -1973,6 +1946,8 @@ class Executor:
         **kwargs
     ) -> ActionResult:
         command = action_step.action
+        prior_failures = prior_failures or []
+        failed_elements = failed_elements or []
 
         # Store iteration counter as instance variable for access throughout execution
         self.current_iteration = current_iteration
@@ -2010,6 +1985,17 @@ class Executor:
         if action_id is None:
             import uuid
             action_id = str(uuid.uuid4())[:8]
+
+        function_args = getattr(action_step, "function_arguments", {}) or {}
+        try:
+            self.memory_store.set_current_action_context(
+                reasoning=getattr(action_step, "reasoning", None) or function_args.get("reasoning"),
+                memory_evidence_turns=function_args.get("memory_evidence_turns"),
+                memory_evidence_summary=function_args.get("memory_evidence_summary"),
+                stuck_pattern=function_args.get("stuck_pattern"),
+            )
+        except Exception:
+            pass
             
         try:
             # Start action timer
@@ -2022,7 +2008,7 @@ class Executor:
             keyword_command_result = self._execute_keyword_command(
                 action_step=action_step,
                 detected_elements=detected_elements,
-                failed_actions=failed_actions,
+                prior_failures=prior_failures,
                 failed_elements=failed_elements,
                 page_info=page_info,
                 confirm_before_interaction=confirm_before_interaction,
@@ -2034,7 +2020,7 @@ class Executor:
                 # Convert bool to ActionResult (for temporary compatibility)
                 duration = time.time() - start_time
                 # Get overlay_index from the last interaction (if available)
-                overlay_index = self.session_tracker.get_last_interaction_overlay_index()
+                overlay_index = self.memory_store.get_last_interaction_overlay_index()
                 metadata = {"command_type": "keyword"}
                 if overlay_index is not None:
                     metadata["overlay_index"] = overlay_index
@@ -2162,7 +2148,7 @@ class Executor:
         # Add failed elements to the prompt
         if failed_elements:
             # Format failed actions with context
-            failed_actions_lines = []
+            prior_failure_lines = []
             for failed_action in failed_elements:
                 overlay_idx = failed_action.overlay_index
                 action = failed_action.action
@@ -2181,13 +2167,13 @@ class Executor:
                     context_parts.append(f"at {url}")
                 
                 context_str = "\n".join(context_parts)
-                failed_actions_lines.append(f"  • {action_display}{context_str}")
+                prior_failure_lines.append(f"  • {action_display}{context_str}")
             
             prompt += f"""
             
             Failed actions:
             - You tried these and they didn't work:
-            {failed_actions_lines}
+            {prior_failure_lines}
             
             - You should try selecting a different overlay index next time.
             """

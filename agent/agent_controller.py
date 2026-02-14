@@ -6,7 +6,7 @@ import hashlib
 from browser.dom import build_page_elements
 from core.browser import ExecutionTimer
 from core.executor.base import Executor
-from core.session import BrowserState, SessionTracker
+from agent.memory import InteractionType, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
 from models.models import (
     MissionPlan,
@@ -19,8 +19,8 @@ from models.models import (
 from agent.results import MissionResult, TaskResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
-from agent.planning.orchestrator import TaskOrchestrator
 from agent.action_tools import PLANNING_TOOLS
+from agent.prompts import MEMORY_DEVELOPER_POLICY
 from utils.debug_print import dprint
 from lib.ai import (
     ReasoningLevel,
@@ -91,8 +91,6 @@ class Agent:
         self.task_start_url: Optional[str] = None
         self.task_start_time: Optional[float] = None
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
-        self.failed_actions: List[str] = []  # Track actions that failed AND didn't yield any change
-        self.ineffective_actions: List[str] = []  # Track actions that succeeded BUT didn't yield any change
         self.notebook: Notebook = Notebook()
         self._task_tracker: Dict[str, Dict[str, Any]] = {}
         # Completion / evaluation behavior
@@ -175,14 +173,15 @@ class Agent:
         self.browser.started = True
         
         # Initialize components
-        self.session_tracker: SessionTracker = SessionTracker(self.browser)
+        self.memory_store: NarrativeMemory = NarrativeMemory(self.browser)
+        self.memory_store.set_base_knowledge(self.base_knowledge)
         
         self.page_utils = PageUtils(self.browser.page)
 
         # Initialize action executor
         self.action_executor: Executor = Executor(
             self.browser,
-            self.session_tracker,
+            self.memory_store,
             self.notebook,
             self.page_utils,
             user_question_callback=self.user_question_callback,
@@ -316,7 +315,8 @@ class Agent:
         self.execution_timer.start_task()
 
         if self.base_knowledge:
-            self.session_tracker.set_base_knowledge(self.base_knowledge)
+            self.memory_store.set_base_knowledge(self.base_knowledge)
+        self.memory_store.start_mission(user_mission)
 
         # Check if starting from a blank page
         if self.browser.page.url.startswith("about:blank"):
@@ -388,8 +388,6 @@ class Agent:
             }
             if result.reasoning:
                 summary["reasoning"] = result.reasoning[:200]
-            if result.history:
-                summary["history"] = result.history
 
             completed_tasks.append(summary)
 
@@ -464,6 +462,7 @@ class Agent:
                 prompt=user_prompt,
                 tools=PLANNING_TOOLS,
                 system_prompt=system_prompt,
+                developer_prompt=MEMORY_DEVELOPER_POLICY,
                 image=screenshot,
                 image_detail=self.config.model.image_detail,
                 model=self.agent_model_name,
@@ -674,9 +673,6 @@ Call `plan_next` with:
                 line = f"  {i}. [{status}]{progress_str} {t['task']}"
                 if not t["success"] and t.get("reasoning"):
                     line += f" — {t['reasoning']}"
-                if t.get("history"):
-                    for h in t["history"]:
-                        line += f"\n     - {h}"
                 lines.append(line)
         else:
             lines.append("")
@@ -684,7 +680,7 @@ Call `plan_next` with:
 
         return "\n".join(lines)
 
-    def _capture_snapshot(self, full_page: bool = False) -> BrowserState:
+    def _capture_snapshot(self, full_page: bool = False) -> MemoryState:
         """
         Capture current browser state snapshot.
         
@@ -692,7 +688,7 @@ Call `plan_next` with:
             full_page: If True, capture full page screenshot (for exploration mode)
                       If False, capture viewport only (normal mode)
         """
-        snapshot = self.session_tracker._capture_current_state()
+        snapshot = self.memory_store._capture_current_state()
         
         # Always capture screenshot - agent needs it to see the page
         try:
@@ -755,12 +751,6 @@ Call `plan_next` with:
         """
         self.auto_complete_extract_commands = auto_complete_extract_commands
 
-        # Task orchestrator for decomposition
-        self.task_orchestrator = TaskOrchestrator(
-            model_name=self.agent_model_name,
-            reasoning_level=self.agent_reasoning_level,
-        )
-
         # Current task list (set during execution)
         self.task_list: Optional[MissionPlan] = None
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
@@ -783,6 +773,7 @@ Call `plan_next` with:
         Returns:
             TaskResult indicating success/failure and completion status
         """
+        self.memory_store.start_task(task.goal)
         task.status = TaskStatus.IN_PROGRESS
 
         # Execute using the unified task loop
@@ -797,6 +788,63 @@ Call `plan_next` with:
             task.completion_status = result.completion_status
 
         return result
+
+    def _get_latest_recommended_next_step(self) -> Optional[str]:
+        """Return the newest recommended_next_step from memory reflections."""
+        for entry in reversed(self.memory_store.entries):
+            if entry.action_type != "think":
+                continue
+            value = str(entry.action_params.get("recommended_next_step", "")).strip()
+            if value:
+                return value
+        return None
+
+    def _record_controller_action(
+        self,
+        *,
+        action_type: str,
+        action_step: Any,
+        success: bool,
+        error_message: Optional[str] = None,
+        action_params: Optional[Dict[str, Any]] = None,
+        before_state: Optional[MemoryState] = None,
+        after_state: Optional[MemoryState] = None,
+    ) -> None:
+        """Record controller-handled actions into narrative memory."""
+        try:
+            args = getattr(action_step, "function_arguments", {}) or {}
+            params = dict(action_params or {})
+
+            evidence_turns = args.get("memory_evidence_turns")
+            if isinstance(evidence_turns, list):
+                params["memory_evidence_turns"] = evidence_turns
+
+            evidence_summary = args.get("memory_evidence_summary")
+            if isinstance(evidence_summary, str) and evidence_summary.strip():
+                params["memory_evidence_summary"] = evidence_summary.strip()
+
+            if getattr(action_step, "function_name", None):
+                params["tool"] = action_step.function_name
+
+            if before_state is None:
+                before_state = self.memory_store._capture_current_state()
+            if after_state is None:
+                after_state = self.memory_store._capture_current_state()
+
+            self.memory_store.record_action(
+                action_type=action_type,
+                action_params=params,
+                reasoning=args.get("reasoning") or getattr(action_step, "reasoning", None),
+                before_state=before_state,
+                after_state=after_state,
+                success=success,
+                error_message=error_message,
+                mission=self.memory_store.current_mission,
+                task=self.memory_store.current_task,
+                reference_turns=evidence_turns if isinstance(evidence_turns, list) else [],
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _build_action_summary(action_step, result_str: str) -> str:
@@ -879,18 +927,16 @@ Call `plan_next` with:
 
         # Get config values
         max_actions_per_task = self.config.task_execution.max_actions_per_task
-        stuck_threshold = self.config.task_execution.stuck_threshold
 
         # Track progress
         actions_since_progress = 0
         browser_actions_since_progress = 0
         total_actions = 0
         failed_elements: List[FailedAction] = []
+        progress_notes: List[str] = []
         checkpoint_pending = bool(start_in_checkpoint)  # Mission-level checkpoint start; browser actions still re-enable checkpoints
         suppress_mark_progress = False  # After mark_progress is called, suppress it until next browser action
-        active_strategy: Optional[str] = None  # Persistent reasoning from think(continue), shown every turn
         last_action_summary: Optional[str] = None  # Brief description of last action + result
-        pending_recommended_step: Optional[str] = None  # One-shot hint from think(recommended_next_step)
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
@@ -910,9 +956,7 @@ Call `plan_next` with:
             nonlocal browser_actions_since_progress
             nonlocal checkpoint_pending
             nonlocal suppress_mark_progress
-            nonlocal active_strategy
             nonlocal last_action_summary
-            nonlocal pending_recommended_step
 
             if browser_actions_since_progress == 0:
                 self.event_logger.system_debug(
@@ -926,13 +970,11 @@ Call `plan_next` with:
                 return False, None
 
             task.progress += count
-            task.history.append(description)
+            progress_notes.append(description)
             actions_since_progress = 0
             browser_actions_since_progress = 0
             checkpoint_pending = False
             suppress_mark_progress = True
-            active_strategy = None
-            pending_recommended_step = None
 
             if source == "think":
                 self.event_logger.system_info(
@@ -959,7 +1001,6 @@ Call `plan_next` with:
                     completion_status=TaskCompletionStatus.COMPLETED,
                     progress=task.progress,
                     target=task.target,
-                    history=task.history,
                     reasoning=f"Completed: {task.progress}/{task.target}",
                 )
 
@@ -976,7 +1017,6 @@ Call `plan_next` with:
                     completion_status=TaskCompletionStatus.COMPLETED,
                     progress=task.progress,
                     target=task.target,
-                    history=task.history,
                     reasoning=f"Target reached: {task.progress}/{numeric_target}",
                 )
 
@@ -991,22 +1031,23 @@ Call `plan_next` with:
                     completion_status=TaskCompletionStatus.STUCK,
                     progress=task.progress,
                     target=task.target,
-                    history=task.history,
                     reasoning=f"Failed to capture state: {str(e)}",
                 )
 
             # Build environment state
+            memory_recent = self.memory_store.get_recent(20)
             environment_state = EnvironmentState(
                 browser_state=snapshot,
-                interaction_history=self.session_tracker.interaction_history,
+                memory_narrative=self.memory_store.get_narrative(n=20),
+                memory_recent_turns=[entry.turn_number for entry in memory_recent],
                 user_prompt=original_prompt,
                 task_start_url=self.task_start_url,
                 task_start_time=self.task_start_time,
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 visible_text=snapshot.visible_text,
-                url_history=self.session_tracker.url_history.copy(),
-                url_pointer=self.session_tracker.url_pointer
+                url_history=self.memory_store.url_history.copy(),
+                url_pointer=self.memory_store.url_pointer
             )
 
             # Gather tab state for prompt injection
@@ -1022,11 +1063,12 @@ Call `plan_next` with:
                 dialog_pending = self.tab_manager.has_pending_dialog_on_active()
 
             # Create action planner with force_think if stuck
-            force_think = (actions_since_progress >= stuck_threshold)
-            recommended_step_for_turn = pending_recommended_step
+            force_think = False
+            active_strategy = self.memory_store.get_latest_strategy() or None
+            recommended_step_for_turn = self._get_latest_recommended_next_step()
             action_planner = ActionPlanner(
                 task.goal,
-                self.session_tracker,
+                self.memory_store,
                 base_knowledge=self.base_knowledge,
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
@@ -1034,7 +1076,7 @@ Call `plan_next` with:
                 max_actions_per_plan=self.config.execution.max_actions_per_plan,
                 task_target=task.target,
                 task_progress=task.progress,
-                task_history=task.history,
+                task_history=progress_notes,
                 force_think=force_think,
                 current_iteration=self._current_iteration,
                 browser_actions_in_round=browser_actions_since_progress,
@@ -1065,13 +1107,8 @@ Call `plan_next` with:
                         completion_status=TaskCompletionStatus.STUCK,
                         progress=task.progress,
                         target=task.target,
-                        history=task.history,
                         reasoning=error or "No action generated",
                     )
-
-                # recommended_next_step is a one-shot hint: clear after one planning turn that produced actions
-                if recommended_step_for_turn:
-                    pending_recommended_step = None
 
                 # Execute each action
                 for action_step in actions_list:
@@ -1079,6 +1116,7 @@ Call `plan_next` with:
 
                     # Handle mark_progress (intercepted by controller, not executor)
                     if current_action and current_action.lower().startswith("mark_progress:"):
+                        before_state = self.memory_store._capture_current_state()
                         # Parse: "mark_progress: description | count=1 | done=false"
                         parts = current_action.split(":", 1)[1].strip()
                         description = parts
@@ -1101,6 +1139,20 @@ Call `plan_next` with:
                             done=done,
                             source="mark_progress",
                         )
+                        after_state = self.memory_store._capture_current_state()
+                        self._record_controller_action(
+                            action_type=InteractionType.MARK_PROGRESS.value,
+                            action_step=action_step,
+                            success=recorded,
+                            error_message=None if recorded else "No browser actions since last progress mark",
+                            action_params={
+                                "description": description,
+                                "count": count,
+                                "done": done,
+                            },
+                            before_state=before_state,
+                            after_state=after_state,
+                        )
                         if not recorded:
                             actions_since_progress += 1
                             checkpoint_pending = False
@@ -1111,6 +1163,7 @@ Call `plan_next` with:
 
                     # Handle revise_target (intercepted by controller)
                     if current_action and current_action.lower().startswith("revise_target:"):
+                        before_state = self.memory_store._capture_current_state()
                         # Parse: "revise_target: new_target | reason"
                         parts = current_action.split(":", 1)[1].strip()
                         new_target_str = parts.split("|")[0].strip()
@@ -1127,6 +1180,17 @@ Call `plan_next` with:
                         self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
                         last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
                         checkpoint_pending = True
+                        self._record_controller_action(
+                            action_type="revise_target",
+                            action_step=action_step,
+                            success=True,
+                            action_params={
+                                "new_target": task.target,
+                                "reason": reason,
+                            },
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
                         continue
 
                     # Handle think (with next_action decision)
@@ -1169,8 +1233,6 @@ Call `plan_next` with:
                         elif think_next_action == "stuck":
                             # Agent detected the current strategy is stuck and proposes a replacement strategy.
                             replacement_strategy = think_reasoning or "I'm stuck with my prior approach, so I'll try a different strategy."
-                            active_strategy = replacement_strategy
-                            pending_recommended_step = recommended_next_step or None
                             checkpoint_pending = False
                             last_action_summary = (
                                 f"Strategy switch (stuck): \"{replacement_strategy}\""
@@ -1184,9 +1246,6 @@ Call `plan_next` with:
                             )
 
                         elif think_next_action == "continue":
-                            # Set active strategy from the think reasoning
-                            active_strategy = think_reasoning
-                            pending_recommended_step = recommended_next_step or None
                             last_action_summary = f"You thought: \"{think_reasoning}\""
                             if recommended_next_step:
                                 last_action_summary += f" | recommended_next_step={recommended_next_step}"
@@ -1218,8 +1277,11 @@ Call `plan_next` with:
 
                     # Handle tab management actions (intercepted by controller)
                     if current_action and current_action.lower().startswith("switch_tab:"):
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        tab_id = current_action.split(":", 1)[1].strip()
                         if self.tab_manager:
-                            tab_id = current_action.split(":", 1)[1].strip()
                             try:
                                 new_page = self.tab_manager.switch_to(tab_id)
                                 self.action_executor.set_page(new_page)
@@ -1232,16 +1294,31 @@ Call `plan_next` with:
                                 browser_actions_since_progress += 1
                                 suppress_mark_progress = False
                                 checkpoint_pending = True
+                                action_success = True
                             except ValueError as e:
                                 last_action_summary = f"switch_tab FAILED: {e}"
+                                action_error = str(e)
                         else:
                             last_action_summary = "switch_tab FAILED: Tab management not available"
+                            action_error = "Tab management not available"
+                        self._record_controller_action(
+                            action_type=InteractionType.NAVIGATION.value,
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"operation": "switch_tab", "tab_id": tab_id},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
                         actions_since_progress += 1
                         continue
 
                     if current_action and current_action.lower().startswith("close_tab:"):
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        tab_id = current_action.split(":", 1)[1].strip()
                         if self.tab_manager:
-                            tab_id = current_action.split(":", 1)[1].strip()
                             try:
                                 new_page = self.tab_manager.close_tab(tab_id)
                                 self.action_executor.set_page(new_page)
@@ -1251,16 +1328,31 @@ Call `plan_next` with:
                                 browser_actions_since_progress += 1
                                 suppress_mark_progress = False
                                 checkpoint_pending = True
+                                action_success = True
                             except ValueError as e:
                                 last_action_summary = f"close_tab FAILED: {e}"
+                                action_error = str(e)
                         else:
                             last_action_summary = "close_tab FAILED: Tab management not available"
+                            action_error = "Tab management not available"
+                        self._record_controller_action(
+                            action_type=InteractionType.NAVIGATION.value,
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"operation": "close_tab", "tab_id": tab_id},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
                         actions_since_progress += 1
                         continue
 
                     if current_action and current_action.lower().startswith("open_tab:"):
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        url = current_action.split(":", 1)[1].strip() or None
                         if self.tab_manager:
-                            url = current_action.split(":", 1)[1].strip() or None
                             try:
                                 new_page = self.tab_manager.open_tab(url)
                                 self.action_executor.set_page(new_page)
@@ -1272,28 +1364,55 @@ Call `plan_next` with:
                                 browser_actions_since_progress += 1
                                 suppress_mark_progress = False
                                 checkpoint_pending = True
+                                action_success = True
                             except Exception as e:
                                 last_action_summary = f"open_tab FAILED: {e}"
+                                action_error = str(e)
                         else:
                             last_action_summary = "open_tab FAILED: Tab management not available"
+                            action_error = "Tab management not available"
+                        self._record_controller_action(
+                            action_type=InteractionType.NAVIGATION.value,
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"operation": "open_tab", "url": url},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
                         actions_since_progress += 1
                         continue
 
                     if current_action and current_action.lower().startswith("dismiss_dialog:"):
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        accept = False
+                        input_text = None
                         if self.tab_manager and self.tab_manager.pending_dialog:
                             # Parse: "dismiss_dialog: accept=True | input_text=..."
                             parts_str = current_action.split(":", 1)[1].strip()
                             accept = "accept=true" in parts_str.lower()
-                            input_text = None
                             if "input_text=" in parts_str:
                                 input_text = parts_str.split("input_text=", 1)[1].strip()
                             self.tab_manager.dismiss_dialog(accept, input_text)
                             action_word = "accepted" if accept else "dismissed"
                             last_action_summary = f"Dialog {action_word}"
                             checkpoint_pending = True
+                            action_success = True
                         else:
                             last_action_summary = "dismiss_dialog: No dialog pending"
                             checkpoint_pending = True
+                            action_error = "No dialog pending"
+                        self._record_controller_action(
+                            action_type="dismiss_dialog",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"accept": accept, "input_text": input_text},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
                         actions_since_progress += 1
                         continue
 
@@ -1303,7 +1422,6 @@ Call `plan_next` with:
                         detected_elements=detected_elements,
                         page_info=page_info,
                         environment_state=environment_state,
-                        failed_actions=[],
                         base_knowledge=self.base_knowledge,
                         current_iteration=self._current_iteration,
                     )
@@ -1349,7 +1467,6 @@ Call `plan_next` with:
                     completion_status=TaskCompletionStatus.STUCK,
                     progress=task.progress,
                     target=task.target,
-                    history=task.history,
                     reasoning=f"Error: {str(e)}",
                 )
 
@@ -1360,7 +1477,6 @@ Call `plan_next` with:
                 completion_status=TaskCompletionStatus.PARTIAL,
                 progress=task.progress,
                 target=task.target,
-                history=task.history,
                 reasoning=f"Partial completion: {task.progress}/{task.target} (max actions reached)",
             )
         else:
@@ -1369,71 +1485,5 @@ Call `plan_next` with:
                 completion_status=TaskCompletionStatus.STUCK,
                 progress=task.progress,
                 target=task.target,
-                history=task.history,
                 reasoning="Stuck: no progress made",
             )
-
-    def _validate_extraction_schema(
-        self,
-        extracted_data: Any,
-        schema: Dict[str, Any],
-        action: str
-    ) -> Dict[str, Any]:
-        """
-        Validate extracted data against the expected schema.
-
-        Args:
-            extracted_data: The data extracted by the agent
-            schema: The JSON schema to validate against
-            action: The extraction action (for logging)
-
-        Returns:
-            Dict with keys:
-                - valid: bool indicating if validation passed
-                - error: str with error message if validation failed
-                - expected_fields: list of expected field names
-                - actual_fields: list of actual field names
-        """
-        expected_fields = schema.get("required", [])
-
-        # Handle different data formats
-        if isinstance(extracted_data, BaseModel):
-            extracted_data = extracted_data.model_dump()
-
-        if isinstance(extracted_data, dict):
-            # Single extraction - filter out metadata fields (start with _)
-            actual_fields = [k for k in extracted_data.keys() if not k.startswith('_')]
-        elif isinstance(extracted_data, list) and len(extracted_data) > 0:
-            # List of extractions - check first item
-            if isinstance(extracted_data[0], dict):
-                actual_fields = [k for k in extracted_data[0].keys() if not k.startswith('_')]
-            else:
-                actual_fields = []
-        else:
-            actual_fields = []
-
-        # Check if all required fields are present
-        missing_fields = [f for f in expected_fields if f not in actual_fields]
-        # Only report extra fields that are NOT metadata (don't start with _)
-        extra_fields = [f for f in actual_fields if f not in expected_fields]
-
-        if missing_fields or extra_fields:
-            error_parts = []
-            if missing_fields:
-                error_parts.append(f"Missing fields: {missing_fields}")
-            if extra_fields:
-                error_parts.append(f"Unexpected fields: {extra_fields}")
-
-            return {
-                "valid": False,
-                "error": "; ".join(error_parts),
-                "expected_fields": expected_fields,
-                "actual_fields": actual_fields,
-            }
-
-        return {
-            "valid": True,
-            "error": None,
-            "expected_fields": expected_fields,
-            "actual_fields": actual_fields,
-        }

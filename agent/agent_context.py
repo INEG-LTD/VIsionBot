@@ -12,7 +12,8 @@ class EnvironmentState:
     Bundles all relevant state information for decision-making.
     """
     browser_state: Any
-    interaction_history: List[Any]
+    memory_narrative: str
+    memory_recent_turns: List[int]
     user_prompt: str
     task_start_url: str
     task_start_time: float
