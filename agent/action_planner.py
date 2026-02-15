@@ -12,7 +12,15 @@ import re
 from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
-from agent.prompts import MEMORY_DEVELOPER_POLICY
+from agent.prompts import (
+    MEMORY_DEVELOPER_POLICY,
+    DecisionContext,
+    SHARED_CONTRADICTION_GATE,
+    SHARED_EVIDENCE_CONTRACT,
+    SHARED_PROGRESS_COMPLETION_CONTRACT,
+    SHARED_RECOMMENDATION_CONTRACT,
+    render_decision_context,
+)
 from lib.ai import (
     generate_model,
     generate_action_with_tools,
@@ -62,6 +70,8 @@ class ActionPlanner:
         dialog_pending: bool = False,
         start_hint: Optional[str] = None,
         recommended_next_step: Optional[str] = None,
+        recommended_next_step_source_entry: Optional[int] = None,
+        decision_context: Optional[DecisionContext] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -93,6 +103,8 @@ class ActionPlanner:
         self.dialog_pending = dialog_pending
         self.start_hint = start_hint
         self.recommended_next_step = recommended_next_step
+        self.recommended_next_step_source_entry = recommended_next_step_source_entry
+        self.decision_context = decision_context
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -111,7 +123,14 @@ class ActionPlanner:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
 
         if self.recommended_next_step:
-            parts.append(f"RECOMMENDED NEXT STEP (ONE SHOT):\n{self.recommended_next_step}\n")
+            source = (
+                f" (source: M{self.recommended_next_step_source_entry})"
+                if self.recommended_next_step_source_entry is not None
+                else ""
+            )
+            parts.append(
+                f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{self.recommended_next_step}\n"
+            )
 
         if self.checkpoint_mode and self.browser_actions_in_round > 0:
             parts.append(
@@ -190,6 +209,18 @@ Rules:
    how the action advances that strategy.
 """
 
+            decision_context_block = (
+                render_decision_context(self.decision_context)
+                if self.decision_context is not None
+                else (
+                    f"Planning iteration: unknown\n"
+                    f"Action iteration: {self.current_iteration}\n"
+                    f"Mission: {environment_state.user_prompt}\n"
+                    f"Current task: {self.user_prompt}\n"
+                    f"Current page: {environment_state.current_url} — {environment_state.page_title}"
+                )
+            )
+
             if self.checkpoint_mode:
                 cap_rule_line = ""
                 if isinstance(self.task_target, int):
@@ -200,6 +231,9 @@ Rules:
                         f"Do not exceed this cap. If remaining is 0, do not start a new unit of work.\n"
                     )
                 user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Task: {self.user_prompt}
+Decision context:
+{decision_context_block}
+
 Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.{cap_rule_line}
 Unit complete means: one full pass of the task above is done for the current item (including required end state like returning to the source page, if the task asks for it).
 
@@ -224,19 +258,17 @@ Do NOT start a new unit (next item/article/record) before mark_progress is recor
                 hint_line = f"\nHint: {self.start_hint}" if self.start_hint and self.task_target == 1 else ""
                 user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}You are currently trying to: {self.user_prompt}{hint_line}
 
+Decision context:
+{decision_context_block}
+
 Based on the screenshot, what is the best next action?
 """
+            user_prompt += f"""
 
-            if self.recommended_next_step:
-                user_prompt += f"""
-
-RECOMMENDED NEXT STEP (from prior think, apply now if valid):
-{self.recommended_next_step}
-
-Decision contract for this iteration:
-- If you follow it, your reasoning must explain why in first person language.
-- If you do not follow it, your reasoning must explain why in first person language.
-- A deviation reason must cite the concrete conflict with current screenshot/tools/state.
+{SHARED_RECOMMENDATION_CONTRACT}
+{SHARED_CONTRADICTION_GATE}
+{SHARED_EVIDENCE_CONTRACT}
+{SHARED_PROGRESS_COMPLETION_CONTRACT}
 """
 
             # Get filtered tools based on current state
@@ -279,7 +311,9 @@ Decision contract for this iteration:
                 get_event_logger().system_debug(f"Function name: {action['function_name']}")
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
                 validation_error = validate_memory_evidence(
-                    action["function_name"], action["arguments"]
+                    action["function_name"],
+                    action["arguments"],
+                    has_memory_entries=self.memory_store.has_entries(),
                 )
                 if validation_error:
                     return None, validation_error
@@ -319,6 +353,7 @@ Decision contract for this iteration:
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
         memory_index_block = self._get_memory_entry_index()
+        executed_action_ledger = self.memory_store.get_executed_action_ledger(n=20)
         stuck_hint_lines = self.memory_store.get_stuck_pattern_hints()
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
@@ -507,6 +542,9 @@ Look at what's on screen, decide what to do, and do it — just like a person wo
 WHAT YOU'VE DONE SO FAR
 ═══════════════════════════════════════════════════════════════
 {memory_narrative_block if memory_narrative_block else "No actions yet."}
+Executed action ledger (facts only):
+{executed_action_ledger}
+
 Potential stuck patterns from memory scan: {stuck_hints}
 
 Memory entry index (for citing any prior memory entry):
@@ -580,18 +618,10 @@ STUCK STRATEGY SWITCH RULE:
   - reasoning should be natural first-person language for my new ACTIVE STRATEGY
   - recommended_next_step should be one concrete immediate action
 
-RECOMMENDATION COMPLIANCE RULE:
-• If RECOMMENDED NEXT STEP is present, I must either follow it or explicitly explain why I am deviating.
-• If following, my reasoning should explain why in first person language.
-• If deviating, my reasoning should explain why in first person language.
-• Deviation reason must name a concrete conflict with current screenshot, available tools, or page state.
-
-CONTRADICTION CHECK (MANDATORY BEFORE EACH TOOL CALL):
-• Read cited memory entries and extract the facts I rely on.
-• Ensure reasoning does not conflict with those facts.
-• Never claim "I haven't done X yet" if cited memory entries show X already happened.
-• If X already happened, explain in first person language that you already tried X and the outcome was ...
-• If uncertain, use uncertainty language rather than false claims.
+{SHARED_RECOMMENDATION_CONTRACT}
+{SHARED_CONTRADICTION_GATE}
+{SHARED_EVIDENCE_CONTRACT}
+{SHARED_PROGRESS_COMPLETION_CONTRACT}
 
 ═══════════════════════════════════════════════════════════════
 GUIDELINES
@@ -640,7 +670,7 @@ Choose the next action to take.
         lines: List[str] = []
         for entry in selected:
             lines.append(
-                f"[M{entry.memory_entry_index}] {entry.action_type} -> {entry.outcome}"
+                f"[M{entry.memory_entry_index}] {entry.entry_kind} | {entry.action_type} -> {entry.outcome}"
             )
 
         if total > len(selected):

@@ -38,6 +38,14 @@ class MemoryOutcome(str, Enum):
     BLOCKED = "blocked"
 
 
+class MemoryEntryKind(str, Enum):
+    EXECUTED_ACTION = "executed_action"
+    REFLECTION = "reflection"
+    PROGRESS = "progress"
+    AUXILIARY = "auxiliary"
+    PLANNING = "planning"
+
+
 @dataclass
 class MemoryState:
     timestamp: float
@@ -66,6 +74,7 @@ class MemoryEntry:
     state_after: Dict[str, Any]
     mission: str
     task: str
+    entry_kind: str = MemoryEntryKind.EXECUTED_ACTION.value
     memory_tags: List[str] = field(default_factory=list)
     reference_memory_entries: List[int] = field(default_factory=list)
 
@@ -87,6 +96,8 @@ class NarrativeMemory:
         self._current_action_evidence_entries: List[int] = []
         self._current_action_evidence_summary: str = ""
         self._current_action_stuck_pattern: Optional[str] = None
+        self._current_action_recommendation_alignment: Optional[str] = None
+        self._current_action_deviation_reason: str = ""
         self._last_overlay_index: Optional[int] = None
 
     # ---------------------------------------------------------------------
@@ -129,27 +140,42 @@ class NarrativeMemory:
         memory_evidence_entries: Optional[List[int]] = None,
         memory_evidence_summary: Optional[str] = None,
         stuck_pattern: Optional[str] = None,
+        recommendation_alignment: Optional[str] = None,
+        deviation_reason: Optional[str] = None,
     ) -> None:
         self._current_action_reasoning = reasoning
         entries = memory_evidence_entries or []
         self._current_action_evidence_entries = [e for e in entries if isinstance(e, int) and e >= 0]
         self._current_action_evidence_summary = (memory_evidence_summary or "").strip()
         self._current_action_stuck_pattern = (stuck_pattern or "").strip() or None
+        self._current_action_recommendation_alignment = (recommendation_alignment or "").strip() or None
+        self._current_action_deviation_reason = (deviation_reason or "").strip()
 
     def _consume_current_action_context(
         self,
-    ) -> tuple[Optional[str], List[int], str, Optional[str]]:
+    ) -> tuple[Optional[str], List[int], str, Optional[str], Optional[str], str]:
         reasoning = self._current_action_reasoning
         memory_entries = list(self._current_action_evidence_entries)
         summary = self._current_action_evidence_summary
         stuck_pattern = self._current_action_stuck_pattern
+        recommendation_alignment = self._current_action_recommendation_alignment
+        deviation_reason = self._current_action_deviation_reason
 
         self._current_action_reasoning = None
         self._current_action_evidence_entries = []
         self._current_action_evidence_summary = ""
         self._current_action_stuck_pattern = None
+        self._current_action_recommendation_alignment = None
+        self._current_action_deviation_reason = ""
 
-        return reasoning, memory_entries, summary, stuck_pattern
+        return (
+            reasoning,
+            memory_entries,
+            summary,
+            stuck_pattern,
+            recommendation_alignment,
+            deviation_reason,
+        )
 
     # ---------------------------------------------------------------------
     # State capture
@@ -323,6 +349,29 @@ class NarrativeMemory:
             return f"I marked progress: {description or 'completed one unit'}"
         return f"I executed {action_type}"
 
+    def _classify_entry_kind(
+        self,
+        action_type: str,
+        action_params: Dict[str, Any],
+    ) -> MemoryEntryKind:
+        action_type = (action_type or "").lower()
+        tool_name = str(action_params.get("tool", "")).strip().lower()
+
+        if action_type == InteractionType.THINK.value:
+            return MemoryEntryKind.REFLECTION
+        if action_type == InteractionType.MARK_PROGRESS.value:
+            return MemoryEntryKind.PROGRESS
+        if action_type == "plan_next" or tool_name == "plan_next":
+            return MemoryEntryKind.PLANNING
+        if action_type in {
+            InteractionType.ASSERT.value,
+            InteractionType.FLAG.value,
+            InteractionType.WAIT_FOR.value,
+            InteractionType.ASK.value,
+        }:
+            return MemoryEntryKind.AUXILIARY
+        return MemoryEntryKind.EXECUTED_ACTION
+
     def _update_url_history(self, after_state: Optional[MemoryState]) -> None:
         if not after_state or not after_state.url:
             return
@@ -359,6 +408,12 @@ class NarrativeMemory:
         outcome = self._determine_outcome(success, before_state, after_state, error_message)
         and_then = self._describe_outcome(outcome, before_state, after_state, error_message)
         i_did = self._format_action(action_type, params)
+        entry_kind = self._classify_entry_kind(action_type, params).value
+        refs = [
+            idx
+            for idx in (reference_memory_entries or [])
+            if isinstance(idx, int) and idx >= 0
+        ]
 
         entry = MemoryEntry(
             id=str(uuid.uuid4()),
@@ -374,8 +429,9 @@ class NarrativeMemory:
             state_after=self._state_to_dict(after_state),
             mission=(mission if mission is not None else self.current_mission),
             task=(task if task is not None else self.current_task),
+            entry_kind=entry_kind,
             memory_tags=memory_tags or [],
-            reference_memory_entries=reference_memory_entries or [],
+            reference_memory_entries=refs,
         )
 
         self.entries.append(entry)
@@ -429,6 +485,8 @@ class NarrativeMemory:
             buffered_memory_entries,
             buffered_summary,
             buffered_stuck_pattern,
+            buffered_recommendation_alignment,
+            buffered_deviation_reason,
         ) = self._consume_current_action_context()
 
         reasoning = kwargs.get("reasoning") or buffered_reasoning
@@ -450,6 +508,18 @@ class NarrativeMemory:
             stuck_pattern = buffered_stuck_pattern
         if stuck_pattern:
             params["stuck_pattern"] = str(stuck_pattern)
+
+        recommendation_alignment = kwargs.get("recommendation_alignment")
+        if recommendation_alignment is None:
+            recommendation_alignment = buffered_recommendation_alignment
+        if recommendation_alignment:
+            params["recommendation_alignment"] = str(recommendation_alignment)
+
+        deviation_reason = kwargs.get("deviation_reason")
+        if deviation_reason is None:
+            deviation_reason = buffered_deviation_reason
+        if deviation_reason:
+            params["deviation_reason"] = str(deviation_reason)
 
         return self.record_action(
             action_type=action_type,
@@ -484,6 +554,61 @@ class NarrativeMemory:
             return []
         return self.entries[-n:]
 
+    def has_entries(self) -> bool:
+        return bool(self.entries)
+
+    def get_entries_by_kind(
+        self,
+        kind: MemoryEntryKind | str,
+        n: Optional[int] = None,
+    ) -> List[MemoryEntry]:
+        kind_value = kind.value if isinstance(kind, MemoryEntryKind) else str(kind)
+        matches = [entry for entry in self.entries if entry.entry_kind == kind_value]
+        if n is None or n <= 0:
+            return matches
+        return matches[-n:]
+
+    def get_recent_executed_actions(self, n: int = 10) -> List[MemoryEntry]:
+        return self.get_entries_by_kind(MemoryEntryKind.EXECUTED_ACTION, n=n)
+
+    def get_recent_reflections(self, n: int = 10) -> List[MemoryEntry]:
+        return self.get_entries_by_kind(MemoryEntryKind.REFLECTION, n=n)
+
+    def get_recent_executed_action_indexes(self, n: int = 10) -> List[int]:
+        return [entry.memory_entry_index for entry in self.get_recent_executed_actions(n=n)]
+
+    def get_recent_reflection_indexes(self, n: int = 10) -> List[int]:
+        return [entry.memory_entry_index for entry in self.get_recent_reflections(n=n)]
+
+    def get_executed_action_ledger(self, n: int = 12) -> str:
+        rows: List[str] = []
+        for entry in self.get_recent_executed_actions(n=n):
+            description = str(
+                entry.action_params.get("description")
+                or entry.action_params.get("action")
+                or entry.action_params.get("url")
+                or entry.action_params.get("condition")
+                or ""
+            ).strip()
+            url_after = str(entry.state_after.get("url", "")).strip()
+            suffix = f" | target={description}" if description else ""
+            if url_after:
+                suffix += f" | url={url_after}"
+            rows.append(
+                f"[M{entry.memory_entry_index}] {entry.action_type} -> {entry.outcome}{suffix}"
+            )
+
+        return "\n".join(rows) if rows else "No executed browser actions yet."
+
+    def get_latest_recommended_next_step(self) -> tuple[Optional[str], Optional[int]]:
+        for entry in reversed(self.entries):
+            if entry.entry_kind != MemoryEntryKind.REFLECTION.value:
+                continue
+            value = str(entry.action_params.get("recommended_next_step", "")).strip()
+            if value:
+                return value, entry.memory_entry_index
+        return None, None
+
     def search(
         self,
         action_type: Optional[str] = None,
@@ -511,6 +636,7 @@ class NarrativeMemory:
         n: int = 10,
         start_memory_entry_index: Optional[int] = None,
         end_memory_entry_index: Optional[int] = None,
+        entry_kind: Optional[str] = None,
     ) -> str:
         if start_memory_entry_index is not None or end_memory_entry_index is not None:
             lo = start_memory_entry_index if start_memory_entry_index is not None else 0
@@ -518,6 +644,9 @@ class NarrativeMemory:
             selected = self.get_range(lo, hi)
         else:
             selected = self.get_recent(n)
+
+        if entry_kind:
+            selected = [entry for entry in selected if entry.entry_kind == entry_kind]
 
         if not selected:
             return "No memory entries recorded yet."
@@ -531,7 +660,7 @@ class NarrativeMemory:
 
     def get_latest_strategy(self) -> str:
         for entry in reversed(self.entries):
-            if entry.action_type != InteractionType.THINK.value:
+            if entry.entry_kind != MemoryEntryKind.REFLECTION.value:
                 continue
             next_action = str(entry.action_params.get("next_action", "")).lower()
             if next_action in {"continue", "stuck"} and entry.because:
@@ -570,6 +699,7 @@ class NarrativeMemory:
 __all__ = [
     "InteractionType",
     "MemoryOutcome",
+    "MemoryEntryKind",
     "MemoryState",
     "MemoryEntry",
     "NarrativeMemory",

@@ -22,6 +22,7 @@ class EnvironmentState:
     visible_text: Optional[str] = None
     url_history: List[str] = field(default_factory=list)
     url_pointer: Optional[int] = None
+    decision_context: Optional[Any] = None
 
     def __post_init__(self):
         if self.visible_text is None and hasattr(self.browser_state, 'visible_text'):

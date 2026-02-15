@@ -1979,6 +1979,8 @@ class Executor:
                 memory_evidence_entries=function_args.get("memory_evidence_entries"),
                 memory_evidence_summary=function_args.get("memory_evidence_summary"),
                 stuck_pattern=function_args.get("stuck_pattern"),
+                recommendation_alignment=function_args.get("recommendation_alignment"),
+                deviation_reason=function_args.get("deviation_reason"),
             )
         except Exception:
             pass

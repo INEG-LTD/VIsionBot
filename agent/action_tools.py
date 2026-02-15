@@ -675,12 +675,25 @@ _MEMORY_EVIDENCE_PROPERTIES: Dict[str, Any] = {
     "memory_evidence_entries": {
         "type": "array",
         "items": {"type": "integer", "minimum": 0},
-        "minItems": 1,
-        "description": "Memory entry indexes that justify this action decision."
+        "minItems": 0,
+        "description": "Memory entry indexes (M#) that justify this action decision. Use [] only when no memory entries exist yet."
     },
     "memory_evidence_summary": {
         "type": "string",
         "description": "One short first-person summary of the cited memory evidence."
+    },
+    "recommendation_alignment": {
+        "type": "string",
+        "enum": [
+            "follow_recommendation",
+            "deviate_from_recommendation",
+            "no_recommendation",
+        ],
+        "description": "Whether this action follows or deviates from the latest recommended_next_step."
+    },
+    "deviation_reason": {
+        "type": "string",
+        "description": "Required when recommendation_alignment=deviate_from_recommendation."
     },
 }
 
@@ -697,6 +710,8 @@ for _tool in ACTION_TOOLS:
         _required.append("memory_evidence_entries")
     if "memory_evidence_summary" not in _required:
         _required.append("memory_evidence_summary")
+    if "recommendation_alignment" not in _required:
+        _required.append("recommendation_alignment")
 
 # Extra contract for think(next_action=stuck)
 _THINK_TOOL = next(
@@ -821,7 +836,12 @@ def get_filtered_tools(
     return base_tools
 
 
-def validate_memory_evidence(function_name: str, arguments: Dict[str, Any]) -> Optional[str]:
+def validate_memory_evidence(
+    function_name: str,
+    arguments: Dict[str, Any],
+    *,
+    has_memory_entries: bool = False,
+) -> Optional[str]:
     """
     Validate memory citation contract for action tool calls.
 
@@ -830,11 +850,30 @@ def validate_memory_evidence(function_name: str, arguments: Dict[str, Any]) -> O
     """
     memory_entries = arguments.get("memory_evidence_entries")
     summary = arguments.get("memory_evidence_summary")
+    alignment = arguments.get("recommendation_alignment")
+    deviation_reason = arguments.get("deviation_reason")
 
-    if not isinstance(memory_entries, list) or not memory_entries or not all(isinstance(entry, int) for entry in memory_entries):
-        return f"{function_name} requires non-empty memory_evidence_entries (integer memory indexes)"
+    if not isinstance(memory_entries, list) or not all(isinstance(entry, int) and entry >= 0 for entry in memory_entries):
+        return f"{function_name} requires memory_evidence_entries as an array of integer memory indexes"
     if not isinstance(summary, str) or not summary.strip():
         return f"{function_name} requires memory_evidence_summary"
+    if has_memory_entries and not memory_entries:
+        return (
+            f"{function_name} requires non-empty memory_evidence_entries once memory exists; "
+            "cite relevant M# entries"
+        )
+    if alignment not in {
+        "follow_recommendation",
+        "deviate_from_recommendation",
+        "no_recommendation",
+    }:
+        return (
+            f"{function_name} requires recommendation_alignment "
+            "(follow_recommendation|deviate_from_recommendation|no_recommendation)"
+        )
+    if alignment == "deviate_from_recommendation":
+        if not isinstance(deviation_reason, str) or not deviation_reason.strip():
+            return f"{function_name} requires deviation_reason when recommendation_alignment=deviate_from_recommendation"
 
     if function_name == "think":
         next_action = str(arguments.get("next_action", "")).strip().lower()

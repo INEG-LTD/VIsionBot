@@ -21,7 +21,13 @@ from agent.results import MissionResult, TaskResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
 from agent.action_tools import PLANNING_TOOLS
-from agent.prompts import MEMORY_DEVELOPER_POLICY
+from agent.prompts import (
+    MEMORY_DEVELOPER_POLICY,
+    DecisionContext,
+    PLANNER_MEMORY_CONTRACT,
+    SHARED_CONTRADICTION_GATE,
+    SHARED_EVIDENCE_CONTRACT,
+)
 from utils.debug_print import dprint
 from lib.ai import (
     ReasoningLevel,
@@ -388,6 +394,7 @@ class Agent:
             result = self._execute_task(
                 task,
                 user_mission,
+                planning_iteration=planning_iteration,
                 start_in_checkpoint=start_in_checkpoint,
             )
             self.mission_result.task_results.append(result)
@@ -467,7 +474,7 @@ class Agent:
 
         system_prompt = self._build_planning_system_prompt()
         user_prompt = self._build_planning_user_prompt(
-            user_mission, current_url, page_title, completed_tasks
+            user_mission, current_url, page_title, completed_tasks, planning_iteration
         )
 
         try:
@@ -579,85 +586,30 @@ class Agent:
 
     def _build_planning_system_prompt(self) -> str:
         """Build the system prompt for the incremental planner."""
-        return """You are a mission planner for a browser automation agent. You see the current browser screenshot, the mission, and what tasks have been completed so far.
+        return f"""You are a mission planner for a browser automation agent.
 
-Your job: decide the NEXT single task to execute, or declare the mission complete.
+Goal:
+• Decide the NEXT single task, or declare mission complete with task="".
 
-## Key rule: ONE concern per task
+Core planning rules:
+1. One concern per task. Do not combine navigation + loop in one task.
+2. Use small actionable tasks grounded in tools (click/type/press/scroll/open/extract_data).
+3. If a step repeats N times, task describes one iteration and target=N.
+4. Skip already-completed work visible in current page + memory evidence.
+5. Use target="all" only when count is genuinely open-ended.
+6. If prior task failed, adapt strategy instead of repeating blindly.
+7. Declare mission complete only when all user-required outcomes are satisfied.
 
-Each task should do ONE thing. Navigation is its own task. A search is its own task. A repeating loop is its own task. Never combine setup steps with the loop — the agent can't reason clearly about a task that says "go somewhere AND THEN do X three times".
+Output schema:
+• reasoning: why this is the right next task now.
+• task: next task text (empty string means mission complete).
+• target: integer >=1 or "all".
+• start_hint: optional immediate first step.
 
-## Principles
-
-1. **Granular steps**: Break the mission into small, focused tasks. "Navigate to linkedin.com" is one task. "Search for wireless mouse" is one task. "Fill in the login form and submit" is one task. Each task should have a single clear goal.
-
-2. **Loops get their own task**: Any action that repeats N times MUST be a standalone task with the correct target=N. The task describes ONE iteration of the loop. Never bundle navigation or setup into a loop task — those should already be done in a prior task.
-
-3. **Use context**: Look at the screenshot. If the browser is already on the right page, skip the navigation task. If the search is already done, skip the search task. Don't create tasks for work that's already visible on screen.
-
-4. **Set target correctly**: If the user wants something done N times (5 posts, 3 articles), create a task with target=N. The task text describes a SINGLE iteration (e.g., "Click the next top post, read it, summarize it, go back"). The system repeats it N times. Use "all" only when the count is genuinely unknown.
-
-5. **Know when to stop**: Set task="" (empty) when the mission is fully accomplished. Check the completed tasks list — if everything the user asked for is done, stop.
-
-6. **Handle failures gracefully**: If a previous task failed, you can retry differently, skip it, or declare done with partial results. Don't blindly retry the exact same thing.
-
-7. **Actionable language**: Write tasks as clear instructions. Include what to do and enough context. Bad: "Do the next step". Good: "Like the next post in the feed by clicking its heart icon".
-
-8. **Tool-grounded wording**: Write tasks in language that maps directly to available tools. Prefer verbs like click, type, press, scroll, open/navigate, select, extract. Avoid vague verbs like "review", "understand", "summarize" unless the task explicitly says to use extract_data for the result.
-
-9. **Extraction tasks must mention extraction**: If the user asks for summaries/examples/key points, the task should explicitly say to extract them (for example: "extract 2-3 examples..." or "use extract_data to record a concise summary").
-
-## Examples
-
-### Example 1: Navigation + repeating action
-Mission: "Go to LinkedIn and like the 5 most recent posts in my feed"
-Planning iteration 1 (on google.com): task="Navigate to linkedin.com/feed", target=1
-Planning iteration 2 (on LinkedIn feed): task="Like the next post in the feed by clicking the like button, then scroll down to reveal the next post", target=5
-Planning iteration 3: task="" (mission complete)
-NOTE: Navigation and the loop are SEPARATE tasks.
-
-### Example 2: Already on the right page
-Mission: "Search for wireless mouse"
-Planning iteration 1 (on amazon.com): task="Search for 'wireless mouse' using the search bar and press Enter", target=1
-Planning iteration 2 (on search results): task="" (mission complete)
-
-### Example 3: Repetitive with go-back pattern
-Mission: "Open the top 3 articles on Hacker News and summarize each"
-Planning iteration 1 (already on HN): task="Click the next top article's title, extract a brief summary with extract_data, then go back to the Hacker News front page", target=3
-Planning iteration 2: task="" (mission complete)
-NOTE: The task describes ONE iteration. target=3 makes the agent repeat it 3 times.
-
-### Example 4: Navigation then loop (not on target page yet)
-Mission: "Go to Hacker News and summarize the top 3 articles"
-Planning iteration 1 (on google.com): task="Navigate to news.ycombinator.com", target=1
-Planning iteration 2 (on HN front page): task="Click the next top article's title, extract a brief summary with extract_data, then go back to Hacker News", target=3
-Planning iteration 3: task="" (mission complete)
-NOTE: Navigation is a separate task from the loop. Don't combine them.
-
-### Example 5: Handling failure
-Mission: "Log into my account and check messages"
-Planning iteration 1: task="Log in using the email and password fields", target=1
-[Task 1 failed: CAPTCHA appeared]
-Planning iteration 2: task="" (mission complete — cannot proceed past CAPTCHA)
-
-### Example 6: Open-ended extraction
-Mission: "Extract all product names from this page"
-Planning iteration 1: task="Extract all visible product names from the current page, scrolling down if needed to find more", target="all"
-Planning iteration 2: task="" (mission complete)
-
-### Example 7: Multi-step on same page
-Mission: "On this settings page, change my display name to 'John' and switch to dark mode"
-Planning iteration 1: task="Change the display name field to 'John' and save", target=1
-Planning iteration 2: task="Enable dark mode in the appearance settings", target=1
-Planning iteration 3: task="" (mission complete)
-
-## Output
-
-Call `plan_next` with:
-- reasoning: Your analysis of the current state and what needs to happen next
-- task: The next task instruction (empty string = mission complete). For loops, describe ONE iteration only. Use tool-grounded wording (click/type/press/scroll/open/extract_data).
-- target: How many times to repeat (default 1). Set to N for loops.
-- start_hint: Optional first-step hint"""
+{PLANNER_MEMORY_CONTRACT}
+{SHARED_CONTRADICTION_GATE}
+{SHARED_EVIDENCE_CONTRACT}
+"""
 
     def _build_planning_user_prompt(
         self,
@@ -665,14 +617,22 @@ Call `plan_next` with:
         current_url: str,
         page_title: str,
         completed_tasks: List[Dict[str, Any]],
+        planning_iteration: int,
     ) -> str:
         """Build the user prompt for the incremental planner."""
-        lines = [f"MISSION: {user_mission}"]
+        lines = [f"PLANNING ITERATION: {planning_iteration}"]
+        lines.append(f"MISSION: {user_mission}")
         lines.append(f"CURRENT PAGE: {current_url} — {page_title}")
+        lines.append("")
+        lines.append("RECENT MEMORY NARRATIVE (M#):")
+        lines.append(self.memory_store.get_narrative(n=12))
+        lines.append("")
+        lines.append("RECENT EXECUTED ACTION LEDGER (facts only, M#):")
+        lines.append(self.memory_store.get_executed_action_ledger(n=12))
 
         if completed_tasks:
             lines.append("")
-            lines.append("COMPLETED TASKS:")
+            lines.append("COMPLETED TASK SUMMARIES (TS#):")
             for i, t in enumerate(completed_tasks, 1):
                 status = "SUCCESS" if t["success"] else "FAILED"
                 progress_str = ""
@@ -683,13 +643,13 @@ Call `plan_next` with:
                 elif target == "all":
                     progress_str = f" [{progress} done]"
 
-                line = f"  {i}. [{status}]{progress_str} {t['task']}"
+                line = f"  TS{i}. [{status}]{progress_str} {t['task']}"
                 if not t["success"] and t.get("reasoning"):
                     line += f" — {t['reasoning']}"
                 lines.append(line)
         else:
             lines.append("")
-            lines.append("COMPLETED TASKS: None yet — this is the first planning iteration.")
+            lines.append("COMPLETED TASK SUMMARIES (TS#): None yet — this is the first planning iteration.")
 
         return "\n".join(lines)
 
@@ -772,6 +732,7 @@ Call `plan_next` with:
         self,
         task: Task,
         user_mission: str,
+        planning_iteration: int,
         *,
         start_in_checkpoint: bool = False,
     ) -> TaskResult:
@@ -793,6 +754,7 @@ Call `plan_next` with:
         result = self._run_unified_task_loop(
             task,
             user_mission,
+            planning_iteration=planning_iteration,
             start_in_checkpoint=start_in_checkpoint,
         )
 
@@ -802,15 +764,9 @@ Call `plan_next` with:
 
         return result
 
-    def _get_latest_recommended_next_step(self) -> Optional[str]:
-        """Return the newest recommended_next_step from memory reflections."""
-        for entry in reversed(self.memory_store.entries):
-            if entry.action_type != "think":
-                continue
-            value = str(entry.action_params.get("recommended_next_step", "")).strip()
-            if value:
-                return value
-        return None
+    def _get_latest_recommended_next_step(self) -> Tuple[Optional[str], Optional[int]]:
+        """Return newest recommended step plus source memory entry index."""
+        return self.memory_store.get_latest_recommended_next_step()
 
     def _record_controller_action(
         self,
@@ -835,6 +791,14 @@ Call `plan_next` with:
             evidence_summary = args.get("memory_evidence_summary")
             if isinstance(evidence_summary, str) and evidence_summary.strip():
                 params["memory_evidence_summary"] = evidence_summary.strip()
+
+            recommendation_alignment = args.get("recommendation_alignment")
+            if isinstance(recommendation_alignment, str) and recommendation_alignment.strip():
+                params["recommendation_alignment"] = recommendation_alignment.strip()
+
+            deviation_reason = args.get("deviation_reason")
+            if isinstance(deviation_reason, str) and deviation_reason.strip():
+                params["deviation_reason"] = deviation_reason.strip()
 
             if getattr(action_step, "function_name", None):
                 params["tool"] = action_step.function_name
@@ -919,6 +883,7 @@ Call `plan_next` with:
         self,
         task: Task,
         original_prompt: str,
+        planning_iteration: int,
         *,
         start_in_checkpoint: bool = False,
     ) -> TaskResult:
@@ -1037,6 +1002,23 @@ Call `plan_next` with:
 
             # Build environment state
             memory_recent = self.memory_store.get_recent(20)
+            recent_executed_entries = self.memory_store.get_recent_executed_action_indexes(n=20)
+            recent_reflection_entries = self.memory_store.get_recent_reflection_indexes(n=20)
+            recommended_step, recommended_step_source_entry = self._get_latest_recommended_next_step()
+
+            decision_context = DecisionContext(
+                planning_iteration=planning_iteration,
+                action_iteration=state.total_actions,
+                mission=original_prompt,
+                task=task.goal,
+                current_url=snapshot.url,
+                page_title=snapshot.title,
+                recommended_next_step=recommended_step,
+                recommended_from_memory_entry=recommended_step_source_entry,
+                executed_memory_entries=recent_executed_entries,
+                reflection_memory_entries=recent_reflection_entries,
+            )
+
             environment_state = EnvironmentState(
                 browser_state=snapshot,
                 memory_narrative=self.memory_store.get_narrative(n=20),
@@ -1048,7 +1030,8 @@ Call `plan_next` with:
                 page_title=snapshot.title,
                 visible_text=snapshot.visible_text,
                 url_history=self.memory_store.url_history.copy(),
-                url_pointer=self.memory_store.url_pointer
+                url_pointer=self.memory_store.url_pointer,
+                decision_context=decision_context,
             )
 
             # Gather tab state for prompt injection
@@ -1066,7 +1049,6 @@ Call `plan_next` with:
             # Create action planner with force_think if stuck
             force_think = False
             active_strategy = self.memory_store.get_latest_strategy() or None
-            recommended_step_for_planning_iteration = self._get_latest_recommended_next_step()
             action_planner = ActionPlanner(
                 task.goal,
                 self.memory_store,
@@ -1090,7 +1072,9 @@ Call `plan_next` with:
                 tab_events=tab_events,
                 dialog_pending=dialog_pending,
                 start_hint=task.start_hint,
-                recommended_next_step=recommended_step_for_planning_iteration,
+                recommended_next_step=recommended_step,
+                recommended_next_step_source_entry=recommended_step_source_entry,
+                decision_context=decision_context,
             )
 
             # Generate next actions
