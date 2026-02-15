@@ -400,7 +400,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                         "description": """
                             Optional one-step recommendation for the very next action. 
                             Format as a concrete action hint such as 'extract_data: summarize current page' or 'click: top article title'. 
-                            Used only on the next planning turn. 
+                            Used only on the next planning iteration. 
                             
                             If there are missing requirements include the most important one as the recommended next step.
                             Example: "You haven't yet done action A and action B, the most important one is action A, so the recommended next step is 'action_A: ...'."
@@ -672,11 +672,11 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
 
 # Required memory evidence fields for all decision-bearing actions.
 _MEMORY_EVIDENCE_PROPERTIES: Dict[str, Any] = {
-    "memory_evidence_turns": {
+    "memory_evidence_entries": {
         "type": "array",
         "items": {"type": "integer", "minimum": 0},
         "minItems": 1,
-        "description": "Turn numbers from memory that justify this action decision."
+        "description": "Memory entry indexes that justify this action decision."
     },
     "memory_evidence_summary": {
         "type": "string",
@@ -693,8 +693,8 @@ for _tool in ACTION_TOOLS:
     for _k, _v in _MEMORY_EVIDENCE_PROPERTIES.items():
         _properties[_k] = _v
     _required = _params.setdefault("required", [])
-    if "memory_evidence_turns" not in _required:
-        _required.append("memory_evidence_turns")
+    if "memory_evidence_entries" not in _required:
+        _required.append("memory_evidence_entries")
     if "memory_evidence_summary" not in _required:
         _required.append("memory_evidence_summary")
 
@@ -828,11 +828,11 @@ def validate_memory_evidence(function_name: str, arguments: Dict[str, Any]) -> O
     Returns:
         None if valid, otherwise an error string.
     """
-    turns = arguments.get("memory_evidence_turns")
+    memory_entries = arguments.get("memory_evidence_entries")
     summary = arguments.get("memory_evidence_summary")
 
-    if not isinstance(turns, list) or not turns or not all(isinstance(t, int) for t in turns):
-        return f"{function_name} requires non-empty memory_evidence_turns (integer turn numbers)"
+    if not isinstance(memory_entries, list) or not memory_entries or not all(isinstance(entry, int) for entry in memory_entries):
+        return f"{function_name} requires non-empty memory_evidence_entries (integer memory indexes)"
     if not isinstance(summary, str) or not summary.strip():
         return f"{function_name} requires memory_evidence_summary"
 

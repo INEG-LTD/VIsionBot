@@ -280,8 +280,8 @@ class Agent:
             self.event_logger.system_error(f"❌ Scripted Interceptor Failed: {e}")
             return False
 
-    def _maybe_wait_for_turn_load(self, reason: str = "turn") -> None:
-        if not self.config.execution.wait_for_load_before_turn:
+    def _maybe_wait_for_iteration_load(self, reason: str = "iteration") -> None:
+        if not self.config.execution.wait_for_load_before_iteration:
             return
         try:
             if getattr(self.browser, "page", None) and not self.browser.page.is_closed():
@@ -341,19 +341,19 @@ class Agent:
             return self.mission_result
 
         # ── Incremental planning loop ──
-        max_tasks = self.config.task_execution.max_tasks_per_mission
+        max_planning_iterations = self.config.task_execution.max_tasks_per_mission
         completed_tasks: List[Dict[str, Any]] = []
-        task_count = 0
+        planning_iteration = 0
 
-        while task_count < max_tasks:
-            task_count += 1
+        while planning_iteration < max_planning_iterations:
+            planning_iteration += 1
 
-            # Run a planning turn — the planner sees the current screen + history
-            plan = self._run_planning_turn(user_mission, completed_tasks, task_count)
+            # Run a planning iteration — the planner sees the current screen + history
+            plan = self._run_planning_iteration(user_mission, completed_tasks, planning_iteration)
 
             if plan is None:
                 # Planning call failed
-                self.event_logger.system_error("Planning turn returned None")
+                self.event_logger.system_error("Planning iteration returned None")
                 break
 
             if plan.get("mission_complete"):
@@ -371,7 +371,7 @@ class Agent:
                 goal=task_goal,
                 target=task_target,
                 start_hint=start_hint or None,
-                task_id=f"task_{task_count}",
+                task_id=f"task_{planning_iteration}",
                 created_at=time.time(),
             )
 
@@ -382,7 +382,7 @@ class Agent:
             )
 
             # Start checkpoint mode once per mission (first task only).
-            start_in_checkpoint = (task_count == 1)
+            start_in_checkpoint = (planning_iteration == 1)
 
             # Execute the task
             result = self._execute_task(
@@ -435,21 +435,21 @@ class Agent:
 
         return self.mission_result
 
-    def _run_planning_turn(
+    def _run_planning_iteration(
         self,
         user_mission: str,
         completed_tasks: List[Dict[str, Any]],
-        turn_number: int,
+        planning_iteration: int,
     ) -> Optional[Dict[str, Any]]:
         """
-        Run a single planning turn: capture screenshot, call LLM with PLANNING_TOOLS,
+        Run a single planning iteration: capture screenshot, call LLM with PLANNING_TOOLS,
         parse the result into a task description (or mission-complete signal).
 
         Returns:
             Dict with keys: mission_complete (bool), task (str), target, start_hint
             or None on error.
         """
-        self.event_logger.planning_turn_start(turn_number, user_mission)
+        self.event_logger.planning_iteration_start(planning_iteration, user_mission)
 
         # Capture a lean screenshot (no overlays, no element detection)
         try:
@@ -514,8 +514,8 @@ class Agent:
         # Empty task = mission complete
         mission_complete = task_text == ""
 
-        self.event_logger.planning_turn_complete(
-            turn_number,
+        self.event_logger.planning_iteration_complete(
+            planning_iteration,
             task=task_text,
             mission_complete=mission_complete,
             reasoning=reasoning,
@@ -526,7 +526,7 @@ class Agent:
         else:
             target_display = target if isinstance(target, str) else f"{target}x" if target > 1 else ""
             self.event_logger.system_info(
-                f"Planner → Task {turn_number}: \"{task_text}\""
+                f"Planner → Task {planning_iteration}: \"{task_text}\""
                 + (f" (target={target_display})" if target_display else "")
             )
 
@@ -611,45 +611,45 @@ Each task should do ONE thing. Navigation is its own task. A search is its own t
 
 ### Example 1: Navigation + repeating action
 Mission: "Go to LinkedIn and like the 5 most recent posts in my feed"
-Turn 1 (on google.com): task="Navigate to linkedin.com/feed", target=1
-Turn 2 (on LinkedIn feed): task="Like the next post in the feed by clicking the like button, then scroll down to reveal the next post", target=5
-Turn 3: task="" (mission complete)
+Planning iteration 1 (on google.com): task="Navigate to linkedin.com/feed", target=1
+Planning iteration 2 (on LinkedIn feed): task="Like the next post in the feed by clicking the like button, then scroll down to reveal the next post", target=5
+Planning iteration 3: task="" (mission complete)
 NOTE: Navigation and the loop are SEPARATE tasks.
 
 ### Example 2: Already on the right page
 Mission: "Search for wireless mouse"
-Turn 1 (on amazon.com): task="Search for 'wireless mouse' using the search bar and press Enter", target=1
-Turn 2 (on search results): task="" (mission complete)
+Planning iteration 1 (on amazon.com): task="Search for 'wireless mouse' using the search bar and press Enter", target=1
+Planning iteration 2 (on search results): task="" (mission complete)
 
 ### Example 3: Repetitive with go-back pattern
 Mission: "Open the top 3 articles on Hacker News and summarize each"
-Turn 1 (already on HN): task="Click the next top article's title, extract a brief summary with extract_data, then go back to the Hacker News front page", target=3
-Turn 2: task="" (mission complete)
+Planning iteration 1 (already on HN): task="Click the next top article's title, extract a brief summary with extract_data, then go back to the Hacker News front page", target=3
+Planning iteration 2: task="" (mission complete)
 NOTE: The task describes ONE iteration. target=3 makes the agent repeat it 3 times.
 
 ### Example 4: Navigation then loop (not on target page yet)
 Mission: "Go to Hacker News and summarize the top 3 articles"
-Turn 1 (on google.com): task="Navigate to news.ycombinator.com", target=1
-Turn 2 (on HN front page): task="Click the next top article's title, extract a brief summary with extract_data, then go back to Hacker News", target=3
-Turn 3: task="" (mission complete)
+Planning iteration 1 (on google.com): task="Navigate to news.ycombinator.com", target=1
+Planning iteration 2 (on HN front page): task="Click the next top article's title, extract a brief summary with extract_data, then go back to Hacker News", target=3
+Planning iteration 3: task="" (mission complete)
 NOTE: Navigation is a separate task from the loop. Don't combine them.
 
 ### Example 5: Handling failure
 Mission: "Log into my account and check messages"
-Turn 1: task="Log in using the email and password fields", target=1
+Planning iteration 1: task="Log in using the email and password fields", target=1
 [Task 1 failed: CAPTCHA appeared]
-Turn 2: task="" (mission complete — cannot proceed past CAPTCHA)
+Planning iteration 2: task="" (mission complete — cannot proceed past CAPTCHA)
 
 ### Example 6: Open-ended extraction
 Mission: "Extract all product names from this page"
-Turn 1: task="Extract all visible product names from the current page, scrolling down if needed to find more", target="all"
-Turn 2: task="" (mission complete)
+Planning iteration 1: task="Extract all visible product names from the current page, scrolling down if needed to find more", target="all"
+Planning iteration 2: task="" (mission complete)
 
 ### Example 7: Multi-step on same page
 Mission: "On this settings page, change my display name to 'John' and switch to dark mode"
-Turn 1: task="Change the display name field to 'John' and save", target=1
-Turn 2: task="Enable dark mode in the appearance settings", target=1
-Turn 3: task="" (mission complete)
+Planning iteration 1: task="Change the display name field to 'John' and save", target=1
+Planning iteration 2: task="Enable dark mode in the appearance settings", target=1
+Planning iteration 3: task="" (mission complete)
 
 ## Output
 
@@ -689,7 +689,7 @@ Call `plan_next` with:
                 lines.append(line)
         else:
             lines.append("")
-            lines.append("COMPLETED TASKS: None yet — this is the first planning turn.")
+            lines.append("COMPLETED TASKS: None yet — this is the first planning iteration.")
 
         return "\n".join(lines)
 
@@ -828,9 +828,9 @@ Call `plan_next` with:
             args = getattr(action_step, "function_arguments", {}) or {}
             params = dict(action_params or {})
 
-            evidence_turns = args.get("memory_evidence_turns")
-            if isinstance(evidence_turns, list):
-                params["memory_evidence_turns"] = evidence_turns
+            evidence_entries = args.get("memory_evidence_entries")
+            if isinstance(evidence_entries, list):
+                params["memory_evidence_entries"] = evidence_entries
 
             evidence_summary = args.get("memory_evidence_summary")
             if isinstance(evidence_summary, str) and evidence_summary.strip():
@@ -854,7 +854,7 @@ Call `plan_next` with:
                 error_message=error_message,
                 mission=self.memory_store.current_mission,
                 task=self.memory_store.current_task,
-                reference_turns=evidence_turns if isinstance(evidence_turns, list) else [],
+                reference_memory_entries=evidence_entries if isinstance(evidence_entries, list) else [],
             )
         except Exception:
             pass
@@ -1040,7 +1040,7 @@ Call `plan_next` with:
             environment_state = EnvironmentState(
                 browser_state=snapshot,
                 memory_narrative=self.memory_store.get_narrative(n=20),
-                memory_recent_turns=[entry.turn_number for entry in memory_recent],
+                memory_recent_entries=[entry.memory_entry_index for entry in memory_recent],
                 user_prompt=original_prompt,
                 task_start_url=self.task_start_url,
                 task_start_time=self.task_start_time,
@@ -1066,7 +1066,7 @@ Call `plan_next` with:
             # Create action planner with force_think if stuck
             force_think = False
             active_strategy = self.memory_store.get_latest_strategy() or None
-            recommended_step_for_turn = self._get_latest_recommended_next_step()
+            recommended_step_for_planning_iteration = self._get_latest_recommended_next_step()
             action_planner = ActionPlanner(
                 task.goal,
                 self.memory_store,
@@ -1090,7 +1090,7 @@ Call `plan_next` with:
                 tab_events=tab_events,
                 dialog_pending=dialog_pending,
                 start_hint=task.start_hint,
-                recommended_next_step=recommended_step_for_turn,
+                recommended_next_step=recommended_step_for_planning_iteration,
             )
 
             # Generate next actions

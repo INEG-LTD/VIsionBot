@@ -3,7 +3,7 @@ Tab Manager - Tracks browser tabs and dialogs.
 
 Passively monitors Playwright BrowserContext events (new pages, closed pages, dialogs)
 and provides methods for tab switching, closing, opening, and dialog dismissal.
-Surfaces tab state for injection into the agent's prompt each turn.
+Surfaces tab state for injection into the agent's prompt each iteration.
 """
 from __future__ import annotations
 

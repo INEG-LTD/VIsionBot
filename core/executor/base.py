@@ -1976,7 +1976,7 @@ class Executor:
         try:
             self.memory_store.set_current_action_context(
                 reasoning=getattr(action_step, "reasoning", None) or function_args.get("reasoning"),
-                memory_evidence_turns=function_args.get("memory_evidence_turns"),
+                memory_evidence_entries=function_args.get("memory_evidence_entries"),
                 memory_evidence_summary=function_args.get("memory_evidence_summary"),
                 stuck_pattern=function_args.get("stuck_pattern"),
             )

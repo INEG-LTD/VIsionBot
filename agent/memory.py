@@ -55,7 +55,7 @@ class MemoryState:
 class MemoryEntry:
     id: str
     timestamp: float
-    turn_number: int
+    memory_entry_index: int
     i_did: str
     because: str
     and_then: str
@@ -67,7 +67,7 @@ class MemoryEntry:
     mission: str
     task: str
     memory_tags: List[str] = field(default_factory=list)
-    reference_turns: List[int] = field(default_factory=list)
+    reference_memory_entries: List[int] = field(default_factory=list)
 
 
 class NarrativeMemory:
@@ -78,13 +78,13 @@ class NarrativeMemory:
         self.entries: List[MemoryEntry] = []
         self.current_mission: str = ""
         self.current_task: str = ""
-        self.turn_counter: int = 0
+        self.memory_entry_counter: int = 0
         self.base_knowledge: List[str] = []
         self.question_answer_pairs: List[Dict[str, str]] = []
         self.url_history: List[str] = []
         self.url_pointer: int = -1
         self._current_action_reasoning: Optional[str] = None
-        self._current_action_evidence_turns: List[int] = []
+        self._current_action_evidence_entries: List[int] = []
         self._current_action_evidence_summary: str = ""
         self._current_action_stuck_pattern: Optional[str] = None
         self._last_overlay_index: Optional[int] = None
@@ -126,13 +126,13 @@ class NarrativeMemory:
         self,
         *,
         reasoning: Optional[str] = None,
-        memory_evidence_turns: Optional[List[int]] = None,
+        memory_evidence_entries: Optional[List[int]] = None,
         memory_evidence_summary: Optional[str] = None,
         stuck_pattern: Optional[str] = None,
     ) -> None:
         self._current_action_reasoning = reasoning
-        turns = memory_evidence_turns or []
-        self._current_action_evidence_turns = [t for t in turns if isinstance(t, int) and t >= 0]
+        entries = memory_evidence_entries or []
+        self._current_action_evidence_entries = [e for e in entries if isinstance(e, int) and e >= 0]
         self._current_action_evidence_summary = (memory_evidence_summary or "").strip()
         self._current_action_stuck_pattern = (stuck_pattern or "").strip() or None
 
@@ -140,16 +140,16 @@ class NarrativeMemory:
         self,
     ) -> tuple[Optional[str], List[int], str, Optional[str]]:
         reasoning = self._current_action_reasoning
-        turns = list(self._current_action_evidence_turns)
+        memory_entries = list(self._current_action_evidence_entries)
         summary = self._current_action_evidence_summary
         stuck_pattern = self._current_action_stuck_pattern
 
         self._current_action_reasoning = None
-        self._current_action_evidence_turns = []
+        self._current_action_evidence_entries = []
         self._current_action_evidence_summary = ""
         self._current_action_stuck_pattern = None
 
-        return reasoning, turns, summary, stuck_pattern
+        return reasoning, memory_entries, summary, stuck_pattern
 
     # ---------------------------------------------------------------------
     # State capture
@@ -352,7 +352,7 @@ class NarrativeMemory:
         mission: Optional[str] = None,
         task: Optional[str] = None,
         memory_tags: Optional[List[str]] = None,
-        reference_turns: Optional[List[int]] = None,
+        reference_memory_entries: Optional[List[int]] = None,
     ) -> MemoryEntry:
         params = action_params or {}
         because = (reasoning or "I judged this as the best next step.").strip()
@@ -363,7 +363,7 @@ class NarrativeMemory:
         entry = MemoryEntry(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
-            turn_number=self.turn_counter,
+            memory_entry_index=self.memory_entry_counter,
             i_did=i_did,
             because=because,
             and_then=and_then,
@@ -375,11 +375,11 @@ class NarrativeMemory:
             mission=(mission if mission is not None else self.current_mission),
             task=(task if task is not None else self.current_task),
             memory_tags=memory_tags or [],
-            reference_turns=reference_turns or [],
+            reference_memory_entries=reference_memory_entries or [],
         )
 
         self.entries.append(entry)
-        self.turn_counter += 1
+        self.memory_entry_counter += 1
 
         overlay_index = params.get("overlay_index")
         if isinstance(overlay_index, int):
@@ -426,7 +426,7 @@ class NarrativeMemory:
 
         (
             buffered_reasoning,
-            buffered_turns,
+            buffered_memory_entries,
             buffered_summary,
             buffered_stuck_pattern,
         ) = self._consume_current_action_context()
@@ -434,7 +434,7 @@ class NarrativeMemory:
         reasoning = kwargs.get("reasoning") or buffered_reasoning
         success = bool(kwargs.get("success", True))
         error_message = kwargs.get("error_message")
-        reference_turns = kwargs.get("memory_evidence_turns") or buffered_turns or []
+        reference_memory_entries = kwargs.get("memory_evidence_entries") or buffered_memory_entries or []
 
         memory_evidence_summary = kwargs.get("memory_evidence_summary")
         if memory_evidence_summary is None:
@@ -442,8 +442,8 @@ class NarrativeMemory:
         if memory_evidence_summary:
             params["memory_evidence_summary"] = str(memory_evidence_summary)
 
-        if reference_turns:
-            params["memory_evidence_turns"] = reference_turns
+        if reference_memory_entries:
+            params["memory_evidence_entries"] = reference_memory_entries
 
         stuck_pattern = kwargs.get("stuck_pattern")
         if stuck_pattern is None:
@@ -461,23 +461,23 @@ class NarrativeMemory:
             error_message=error_message,
             mission=self.current_mission,
             task=self.current_task,
-            reference_turns=reference_turns,
+            reference_memory_entries=reference_memory_entries,
         )
 
     # ---------------------------------------------------------------------
     # Memory reads
     # ---------------------------------------------------------------------
 
-    def get_turn(self, turn_number: int) -> Optional[MemoryEntry]:
+    def get_memory_entry(self, memory_entry_index: int) -> Optional[MemoryEntry]:
         for entry in self.entries:
-            if entry.turn_number == turn_number:
+            if entry.memory_entry_index == memory_entry_index:
                 return entry
         return None
 
-    def get_range(self, start_turn: int, end_turn: int) -> List[MemoryEntry]:
-        lo = min(start_turn, end_turn)
-        hi = max(start_turn, end_turn)
-        return [e for e in self.entries if lo <= e.turn_number <= hi]
+    def get_range(self, start_memory_entry_index: int, end_memory_entry_index: int) -> List[MemoryEntry]:
+        lo = min(start_memory_entry_index, end_memory_entry_index)
+        hi = max(start_memory_entry_index, end_memory_entry_index)
+        return [e for e in self.entries if lo <= e.memory_entry_index <= hi]
 
     def get_recent(self, n: int = 10) -> List[MemoryEntry]:
         if n <= 0:
@@ -509,12 +509,12 @@ class NarrativeMemory:
     def get_narrative(
         self,
         n: int = 10,
-        start_turn: Optional[int] = None,
-        end_turn: Optional[int] = None,
+        start_memory_entry_index: Optional[int] = None,
+        end_memory_entry_index: Optional[int] = None,
     ) -> str:
-        if start_turn is not None or end_turn is not None:
-            lo = start_turn if start_turn is not None else 0
-            hi = end_turn if end_turn is not None else (self.turn_counter - 1)
+        if start_memory_entry_index is not None or end_memory_entry_index is not None:
+            lo = start_memory_entry_index if start_memory_entry_index is not None else 0
+            hi = end_memory_entry_index if end_memory_entry_index is not None else (self.memory_entry_counter - 1)
             selected = self.get_range(lo, hi)
         else:
             selected = self.get_recent(n)
@@ -525,7 +525,7 @@ class NarrativeMemory:
         lines = []
         for entry in selected:
             lines.append(
-                f"[{entry.turn_number}] {entry.i_did} because {entry.because}. {entry.and_then}"
+                f"[M{entry.memory_entry_index}] {entry.i_did} because {entry.because}. {entry.and_then}"
             )
         return "\n".join(lines)
 

@@ -1,5 +1,5 @@
 """
-Agent Results - Consolidated result types for mission, task, and turn execution.
+Agent Results - Consolidated result types for mission, planning iteration, and task execution.
 """
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Union

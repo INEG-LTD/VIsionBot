@@ -81,18 +81,18 @@ class ExecutionConfig(BaseModel):
         le=20,
         description="Maximum number of actions to generate in a single action plan. Default is 6. Valid range: 1-20."
     )
-    wait_for_load_before_turn: bool = Field(
+    wait_for_load_before_iteration: bool = Field(
         default=False,
-        description="If True, wait for the page to reach a load state before each agent turn."
+        description="If True, wait for the page to reach a load state before each agent iteration."
     )
     wait_for_load_state: str = Field(
         default="networkidle",
-        description="Load state to wait for before each agent turn: 'load', 'domcontentloaded', or 'networkidle'."
+        description="Load state to wait for before each agent iteration: 'load', 'domcontentloaded', or 'networkidle'."
     )
     wait_for_load_timeout_ms: int = Field(
         default=30000,
         ge=0,
-        description="Max time to wait for page load before each agent turn (milliseconds)."
+        description="Max time to wait for page load before each agent iteration (milliseconds)."
     )
     use_agent_overlay_index: bool = Field(
         default=True,

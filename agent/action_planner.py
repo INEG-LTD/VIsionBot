@@ -98,9 +98,9 @@ class ActionPlanner:
         """Build the reflection block for the user prompt.
 
         Contains:
-        - ACTIVE STRATEGY: persistent reasoning from the last think(continue), shown every turn until cleared
+        - ACTIVE STRATEGY: persistent reasoning from the last think(continue), shown every iteration until cleared
         - LAST ACTION: what the agent just did and the result
-        - TAB EVENTS: tab opens/closes/dialog events since last turn
+        - TAB EVENTS: tab opens/closes/dialog events since the last iteration
         """
         parts = []
 
@@ -233,7 +233,7 @@ Based on the screenshot, what is the best next action?
 RECOMMENDED NEXT STEP (from prior think, apply now if valid):
 {self.recommended_next_step}
 
-Decision contract for this turn:
+Decision contract for this iteration:
 - If you follow it, your reasoning must explain why in first person language.
 - If you do not follow it, your reasoning must explain why in first person language.
 - A deviation reason must cite the concrete conflict with current screenshot/tools/state.
@@ -318,7 +318,7 @@ Decision contract for this turn:
 
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
-        memory_index_block = self._get_memory_turn_index()
+        memory_index_block = self._get_memory_entry_index()
         stuck_hint_lines = self.memory_store.get_stuck_pattern_hints()
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
@@ -509,7 +509,7 @@ WHAT YOU'VE DONE SO FAR
 {memory_narrative_block if memory_narrative_block else "No actions yet."}
 Potential stuck patterns from memory scan: {stuck_hints}
 
-Memory turn index (for citing any prior turn):
+Memory entry index (for citing any prior memory entry):
 {memory_index_block}
 
 Navigation history:
@@ -587,9 +587,9 @@ RECOMMENDATION COMPLIANCE RULE:
 • Deviation reason must name a concrete conflict with current screenshot, available tools, or page state.
 
 CONTRADICTION CHECK (MANDATORY BEFORE EACH TOOL CALL):
-• Read cited memory turns and extract the facts I rely on.
+• Read cited memory entries and extract the facts I rely on.
 • Ensure reasoning does not conflict with those facts.
-• Never claim "I haven't done X yet" if cited turns show X already happened.
+• Never claim "I haven't done X yet" if cited memory entries show X already happened.
 • If X already happened, explain in first person language that you already tried X and the outcome was ...
 • If uncertain, use uncertainty language rather than false claims.
 
@@ -621,7 +621,7 @@ Choose the next action to take.
             return narrative
         return f"Recent memory narrative:\n{narrative}"
 
-    def _get_memory_turn_index(self, max_lines: int = 120) -> str:
+    def _get_memory_entry_index(self, max_lines: int = 120) -> str:
         if not self.memory_store or not self.memory_store.entries:
             return "No memory entries yet."
 
@@ -640,11 +640,11 @@ Choose the next action to take.
         lines: List[str] = []
         for entry in selected:
             lines.append(
-                f"[{entry.turn_number}] {entry.action_type} -> {entry.outcome}"
+                f"[M{entry.memory_entry_index}] {entry.action_type} -> {entry.outcome}"
             )
 
         if total > len(selected):
-            lines.append(f"... {total - len(selected)} additional turns omitted for prompt size ...")
+            lines.append(f"... {total - len(selected)} additional memory entries omitted for prompt size ...")
 
         return "\n".join(lines)
 
