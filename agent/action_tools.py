@@ -672,11 +672,11 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
 
 # Required memory evidence fields for all decision-bearing actions.
 _MEMORY_EVIDENCE_PROPERTIES: Dict[str, Any] = {
-    "memory_evidence_entries": {
+    "memory_evidence_ids": {
         "type": "array",
-        "items": {"type": "integer", "minimum": 0},
+        "items": {"type": "string", "pattern": "^mem_[0-9]{6,}$"},
         "minItems": 0,
-        "description": "Memory entry indexes (M#) that justify this action decision. Use [] only when no memory entries exist yet."
+        "description": "Memory IDs that justify this action decision. Use [] only when no memory entries exist yet."
     },
     "memory_evidence_summary": {
         "type": "string",
@@ -706,8 +706,8 @@ for _tool in ACTION_TOOLS:
     for _k, _v in _MEMORY_EVIDENCE_PROPERTIES.items():
         _properties[_k] = _v
     _required = _params.setdefault("required", [])
-    if "memory_evidence_entries" not in _required:
-        _required.append("memory_evidence_entries")
+    if "memory_evidence_ids" not in _required:
+        _required.append("memory_evidence_ids")
     if "memory_evidence_summary" not in _required:
         _required.append("memory_evidence_summary")
     if "recommendation_alignment" not in _required:
@@ -841,6 +841,9 @@ def validate_memory_evidence(
     arguments: Dict[str, Any],
     *,
     has_memory_entries: bool = False,
+    has_active_recommendation: bool = False,
+    recommended_memory_id: Optional[str] = None,
+    memory_store: Optional[Any] = None,
 ) -> Optional[str]:
     """
     Validate memory citation contract for action tool calls.
@@ -848,19 +851,19 @@ def validate_memory_evidence(
     Returns:
         None if valid, otherwise an error string.
     """
-    memory_entries = arguments.get("memory_evidence_entries")
+    memory_ids = arguments.get("memory_evidence_ids")
     summary = arguments.get("memory_evidence_summary")
     alignment = arguments.get("recommendation_alignment")
     deviation_reason = arguments.get("deviation_reason")
 
-    if not isinstance(memory_entries, list) or not all(isinstance(entry, int) and entry >= 0 for entry in memory_entries):
-        return f"{function_name} requires memory_evidence_entries as an array of integer memory indexes"
+    if not isinstance(memory_ids, list) or not all(isinstance(memory_id, str) and memory_id.strip() for memory_id in memory_ids):
+        return f"{function_name} requires memory_evidence_ids as an array of memory ID strings"
     if not isinstance(summary, str) or not summary.strip():
         return f"{function_name} requires memory_evidence_summary"
-    if has_memory_entries and not memory_entries:
+    if has_memory_entries and not memory_ids:
         return (
-            f"{function_name} requires non-empty memory_evidence_entries once memory exists; "
-            "cite relevant M# entries"
+            f"{function_name} requires non-empty memory_evidence_ids once memory exists; "
+            "cite relevant memory IDs"
         )
     if alignment not in {
         "follow_recommendation",
@@ -874,6 +877,56 @@ def validate_memory_evidence(
     if alignment == "deviate_from_recommendation":
         if not isinstance(deviation_reason, str) or not deviation_reason.strip():
             return f"{function_name} requires deviation_reason when recommendation_alignment=deviate_from_recommendation"
+
+    if has_active_recommendation and alignment == "no_recommendation":
+        rec_src = f" (source={recommended_memory_id})" if recommended_memory_id else ""
+        return (
+            f"{function_name} cannot use recommendation_alignment=no_recommendation when a recommendation is active{rec_src}; "
+            "choose follow_recommendation or deviate_from_recommendation"
+        )
+
+    # Validate cited memory IDs against runtime store when available.
+    cited_entries: List[Any] = []
+    if memory_store is not None and memory_ids:
+        for memory_id in memory_ids:
+            entry = memory_store.get_memory_by_id(memory_id) if hasattr(memory_store, "get_memory_by_id") else None
+            if entry is None:
+                return f"{function_name} cites unknown memory ID: {memory_id}"
+            cited_entries.append(entry)
+
+    # Kind-aware evidence check:
+    # If executed browser actions already exist, decision-bearing browser actions
+    # must cite at least one executed_action entry.
+    browser_decision_tools = {
+        "click",
+        "type_text",
+        "clear_text",
+        "select_option",
+        "upload_file",
+        "set_datetime",
+        "press_key",
+        "scroll_page",
+        "open_url",
+        "go_back",
+        "go_forward",
+        "extract_data",
+        "switch_tab",
+        "close_tab",
+        "open_tab",
+        "dismiss_dialog",
+        "mark_progress",
+    }
+    if memory_store is not None and function_name in browser_decision_tools:
+        has_executed_history = bool(memory_store.get_recent_executed_actions(n=1))
+        if has_executed_history:
+            has_executed_evidence = any(
+                getattr(entry, "entry_kind", "") == "executed_action"
+                for entry in cited_entries
+            )
+            if not has_executed_evidence:
+                return (
+                    f"{function_name} must cite at least one executed-action memory ID once executed history exists"
+                )
 
     if function_name == "think":
         next_action = str(arguments.get("next_action", "")).strip().lower()

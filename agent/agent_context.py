@@ -13,7 +13,7 @@ class EnvironmentState:
     """
     browser_state: Any
     memory_narrative: str
-    memory_recent_entries: List[int]
+    memory_recent_ids: List[str]
     user_prompt: str
     task_start_url: str
     task_start_time: float

@@ -22,8 +22,8 @@ from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
 from agent.action_tools import PLANNING_TOOLS
 from agent.prompts import (
-    MEMORY_DEVELOPER_POLICY,
     DecisionContext,
+    PLANNER_DEVELOPER_POLICY,
     PLANNER_MEMORY_CONTRACT,
     SHARED_CONTRADICTION_GATE,
     SHARED_EVIDENCE_CONTRACT,
@@ -482,7 +482,7 @@ class Agent:
                 prompt=user_prompt,
                 tools=PLANNING_TOOLS,
                 system_prompt=system_prompt,
-                developer_prompt=MEMORY_DEVELOPER_POLICY,
+                developer_prompt=PLANNER_DEVELOPER_POLICY,
                 image=screenshot,
                 image_detail=self.config.model.image_detail,
                 model=self.agent_model_name,
@@ -624,10 +624,10 @@ Output schema:
         lines.append(f"MISSION: {user_mission}")
         lines.append(f"CURRENT PAGE: {current_url} — {page_title}")
         lines.append("")
-        lines.append("RECENT MEMORY NARRATIVE (M#):")
+        lines.append("RECENT MEMORY NARRATIVE (memory IDs):")
         lines.append(self.memory_store.get_narrative(n=12))
         lines.append("")
-        lines.append("RECENT EXECUTED ACTION LEDGER (facts only, M#):")
+        lines.append("RECENT EXECUTED ACTION LEDGER (facts only, memory IDs):")
         lines.append(self.memory_store.get_executed_action_ledger(n=12))
 
         if completed_tasks:
@@ -764,8 +764,8 @@ Output schema:
 
         return result
 
-    def _get_latest_recommended_next_step(self) -> Tuple[Optional[str], Optional[int]]:
-        """Return newest recommended step plus source memory entry index."""
+    def _get_latest_recommended_next_step(self) -> Tuple[Optional[str], Optional[str]]:
+        """Return newest recommended step plus source memory ID."""
         return self.memory_store.get_latest_recommended_next_step()
 
     def _record_controller_action(
@@ -784,9 +784,11 @@ Output schema:
             args = getattr(action_step, "function_arguments", {}) or {}
             params = dict(action_params or {})
 
-            evidence_entries = args.get("memory_evidence_entries")
-            if isinstance(evidence_entries, list):
-                params["memory_evidence_entries"] = evidence_entries
+            evidence_ids = args.get("memory_evidence_ids")
+            if isinstance(evidence_ids, list):
+                normalized_ids = self.memory_store.normalize_memory_ids(evidence_ids)
+                if normalized_ids:
+                    params["memory_evidence_ids"] = normalized_ids
 
             evidence_summary = args.get("memory_evidence_summary")
             if isinstance(evidence_summary, str) and evidence_summary.strip():
@@ -818,7 +820,7 @@ Output schema:
                 error_message=error_message,
                 mission=self.memory_store.current_mission,
                 task=self.memory_store.current_task,
-                reference_memory_entries=evidence_entries if isinstance(evidence_entries, list) else [],
+                reference_memory_ids=normalized_ids if isinstance(evidence_ids, list) else [],
             )
         except Exception:
             pass
@@ -1002,9 +1004,9 @@ Output schema:
 
             # Build environment state
             memory_recent = self.memory_store.get_recent(20)
-            recent_executed_entries = self.memory_store.get_recent_executed_action_indexes(n=20)
-            recent_reflection_entries = self.memory_store.get_recent_reflection_indexes(n=20)
-            recommended_step, recommended_step_source_entry = self._get_latest_recommended_next_step()
+            recent_executed_ids = self.memory_store.get_recent_executed_action_ids(n=20)
+            recent_reflection_ids = self.memory_store.get_recent_reflection_ids(n=20)
+            recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
 
             decision_context = DecisionContext(
                 planning_iteration=planning_iteration,
@@ -1014,15 +1016,15 @@ Output schema:
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 recommended_next_step=recommended_step,
-                recommended_from_memory_entry=recommended_step_source_entry,
-                executed_memory_entries=recent_executed_entries,
-                reflection_memory_entries=recent_reflection_entries,
+                recommended_from_memory_id=recommended_step_source_id,
+                executed_memory_ids=recent_executed_ids,
+                reflection_memory_ids=recent_reflection_ids,
             )
 
             environment_state = EnvironmentState(
                 browser_state=snapshot,
                 memory_narrative=self.memory_store.get_narrative(n=20),
-                memory_recent_entries=[entry.memory_entry_index for entry in memory_recent],
+                memory_recent_ids=[entry.memory_id for entry in memory_recent],
                 user_prompt=original_prompt,
                 task_start_url=self.task_start_url,
                 task_start_time=self.task_start_time,
@@ -1073,7 +1075,7 @@ Output schema:
                 dialog_pending=dialog_pending,
                 start_hint=task.start_hint,
                 recommended_next_step=recommended_step,
-                recommended_next_step_source_entry=recommended_step_source_entry,
+                recommended_next_step_source_id=recommended_step_source_id,
                 decision_context=decision_context,
             )
 

@@ -17,9 +17,9 @@ class DecisionContext:
     current_url: str
     page_title: str
     recommended_next_step: Optional[str] = None
-    recommended_from_memory_entry: Optional[int] = None
-    executed_memory_entries: List[int] = field(default_factory=list)
-    reflection_memory_entries: List[int] = field(default_factory=list)
+    recommended_from_memory_id: Optional[str] = None
+    executed_memory_ids: List[str] = field(default_factory=list)
+    reflection_memory_ids: List[str] = field(default_factory=list)
 
 
 SHARED_RECOMMENDATION_CONTRACT = """
@@ -34,10 +34,10 @@ RECOMMENDATION ALIGNMENT CONTRACT:
 
 SHARED_CONTRADICTION_GATE = """
 CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
-• Memory entry ids are M# only. Task summary ids are TS# only.
-• "I already tried X" must cite executed-action memory entries where X was actually executed.
+• Memory evidence uses memory IDs (for example: mem_000001). Task summaries use TS#.
+• "I already tried X" must cite executed-action memory IDs where X was actually executed.
 • Do not use reflection-only memory as proof of execution.
-• Never claim "I haven't done X yet" if cited M# entries show X happened.
+• Never claim "I haven't done X yet" if cited memory IDs show X happened.
 • If evidence is uncertain, say so explicitly in first person.
 """.strip()
 
@@ -45,10 +45,10 @@ CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
 SHARED_EVIDENCE_CONTRACT = """
 MEMORY EVIDENCE CONTRACT:
 • Every decision-bearing tool call must include:
-  - memory_evidence_entries (M# indexes)
+  - memory_evidence_ids (memory IDs)
   - memory_evidence_summary (first person)
   - recommendation_alignment
-• If no memory entries exist yet, use memory_evidence_entries=[] and state that in first person.
+• If no memory entries exist yet, use memory_evidence_ids=[] and state that in first person.
 """.strip()
 
 
@@ -62,9 +62,24 @@ PROGRESS COMPLETION CONTRACT:
 
 PLANNER_MEMORY_CONTRACT = """
 PLANNER MEMORY CONTRACT:
-• Use M# only for memory entries.
+• Use memory IDs (for example: mem_000001) for memory entries.
 • Use TS# only for completed task summaries.
 • Never treat TS# as memory evidence.
+""".strip()
+
+
+PLANNER_DEVELOPER_POLICY = f"""
+You are the mission planner.
+
+Planner policy:
+1. Plan the next single task or declare mission complete.
+2. Do not emit action-tool schema fields in planner prose
+   (for example: memory_evidence_ids=..., recommendation_alignment=...).
+3. Use concise first-person reasoning grounded in current page + memory.
+4. Keep task wording actionable and tool-grounded.
+
+{PLANNER_MEMORY_CONTRACT}
+{SHARED_CONTRADICTION_GATE}
 """.strip()
 
 
@@ -75,7 +90,7 @@ Memory policy:
 1. Refer to actions as your own in first person: "I did...", "I tried...", "I observed...".
 2. Before deciding, cite relevant memory entries that justify your action.
 3. Every decision-bearing tool call must include:
-   - memory_evidence_entries: exact memory entry indexes
+   - memory_evidence_ids: exact memory IDs
    - memory_evidence_summary: short first-person summary
    - recommendation_alignment: follow_recommendation | deviate_from_recommendation | no_recommendation
    - deviation_reason when recommendation_alignment=deviate_from_recommendation
@@ -84,7 +99,7 @@ Memory policy:
    - reasoning in first person
    - recommended_next_step
    - cited evidence entries
-5. If no memory entries exist yet, use memory_evidence_entries=[] and say so explicitly in first person.
+5. If no memory entries exist yet, use memory_evidence_ids=[] and say so explicitly in first person.
 
 Output policy:
 1. Emit exactly ONE tool call per iteration.
@@ -118,14 +133,10 @@ When stuck, switch to a meaningfully different strategy and state one concrete n
 
 def render_decision_context(context: DecisionContext) -> str:
     """Render a compact decision context block for prompts."""
-    recommended_from = (
-        f"M{context.recommended_from_memory_entry}"
-        if context.recommended_from_memory_entry is not None
-        else "none"
-    )
+    recommended_from = context.recommended_from_memory_id or "none"
     recommended_step = context.recommended_next_step or "none"
-    executed = ", ".join(f"M{idx}" for idx in context.executed_memory_entries) or "none"
-    reflections = ", ".join(f"M{idx}" for idx in context.reflection_memory_entries) or "none"
+    executed = ", ".join(context.executed_memory_ids) or "none"
+    reflections = ", ".join(context.reflection_memory_ids) or "none"
 
     return (
         f"Planning iteration: {context.planning_iteration}\n"
@@ -135,6 +146,6 @@ def render_decision_context(context: DecisionContext) -> str:
         f"Current page: {context.current_url} — {context.page_title}\n"
         f"Recommended next step: {recommended_step}\n"
         f"Recommendation source: {recommended_from}\n"
-        f"Recent executed-action memory entries: {executed}\n"
-        f"Recent reflection memory entries: {reflections}"
+        f"Recent executed-action memory IDs: {executed}\n"
+        f"Recent reflection memory IDs: {reflections}"
     )

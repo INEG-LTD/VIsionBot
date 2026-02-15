@@ -70,7 +70,7 @@ class ActionPlanner:
         dialog_pending: bool = False,
         start_hint: Optional[str] = None,
         recommended_next_step: Optional[str] = None,
-        recommended_next_step_source_entry: Optional[int] = None,
+        recommended_next_step_source_id: Optional[str] = None,
         decision_context: Optional[DecisionContext] = None,
     ):
         self.user_prompt = user_prompt
@@ -103,7 +103,7 @@ class ActionPlanner:
         self.dialog_pending = dialog_pending
         self.start_hint = start_hint
         self.recommended_next_step = recommended_next_step
-        self.recommended_next_step_source_entry = recommended_next_step_source_entry
+        self.recommended_next_step_source_id = recommended_next_step_source_id
         self.decision_context = decision_context
 
     def _build_reflection_block(self) -> str:
@@ -124,8 +124,8 @@ class ActionPlanner:
 
         if self.recommended_next_step:
             source = (
-                f" (source: M{self.recommended_next_step_source_entry})"
-                if self.recommended_next_step_source_entry is not None
+                f" (source: {self.recommended_next_step_source_id})"
+                if self.recommended_next_step_source_id
                 else ""
             )
             parts.append(
@@ -314,6 +314,9 @@ Based on the screenshot, what is the best next action?
                     action["function_name"],
                     action["arguments"],
                     has_memory_entries=self.memory_store.has_entries(),
+                    has_active_recommendation=bool(self.recommended_next_step),
+                    recommended_memory_id=self.recommended_next_step_source_id,
+                    memory_store=self.memory_store,
                 )
                 if validation_error:
                     return None, validation_error
@@ -547,7 +550,7 @@ Executed action ledger (facts only):
 
 Potential stuck patterns from memory scan: {stuck_hints}
 
-Memory entry index (for citing any prior memory entry):
+Memory ID ledger (for citing any prior memory entry):
 {memory_index_block}
 
 Navigation history:
@@ -670,7 +673,7 @@ Choose the next action to take.
         lines: List[str] = []
         for entry in selected:
             lines.append(
-                f"[M{entry.memory_entry_index}] {entry.entry_kind} | {entry.action_type} -> {entry.outcome}"
+                f"[{entry.memory_id}] {entry.entry_kind} | {entry.action_type} -> {entry.outcome}"
             )
 
         if total > len(selected):

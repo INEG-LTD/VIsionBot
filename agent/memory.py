@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 
@@ -61,7 +60,7 @@ class MemoryState:
 
 @dataclass
 class MemoryEntry:
-    id: str
+    memory_id: str
     timestamp: float
     memory_entry_index: int
     i_did: str
@@ -76,7 +75,12 @@ class MemoryEntry:
     task: str
     entry_kind: str = MemoryEntryKind.EXECUTED_ACTION.value
     memory_tags: List[str] = field(default_factory=list)
-    reference_memory_entries: List[int] = field(default_factory=list)
+    reference_memory_ids: List[str] = field(default_factory=list)
+
+    @property
+    def id(self) -> str:
+        """Backward-compatible alias."""
+        return self.memory_id
 
 
 class NarrativeMemory:
@@ -85,15 +89,16 @@ class NarrativeMemory:
     def __init__(self, browser: Optional[Any] = None):
         self.browser = browser
         self.entries: List[MemoryEntry] = []
+        self._entries_by_id: Dict[str, MemoryEntry] = {}
         self.current_mission: str = ""
         self.current_task: str = ""
-        self.memory_entry_counter: int = 0
+        self.memory_entry_counter: int = 1
         self.base_knowledge: List[str] = []
         self.question_answer_pairs: List[Dict[str, str]] = []
         self.url_history: List[str] = []
         self.url_pointer: int = -1
         self._current_action_reasoning: Optional[str] = None
-        self._current_action_evidence_entries: List[int] = []
+        self._current_action_evidence_ids: List[str] = []
         self._current_action_evidence_summary: str = ""
         self._current_action_stuck_pattern: Optional[str] = None
         self._current_action_recommendation_alignment: Optional[str] = None
@@ -137,15 +142,15 @@ class NarrativeMemory:
         self,
         *,
         reasoning: Optional[str] = None,
-        memory_evidence_entries: Optional[List[int]] = None,
+        memory_evidence_ids: Optional[List[str]] = None,
         memory_evidence_summary: Optional[str] = None,
         stuck_pattern: Optional[str] = None,
         recommendation_alignment: Optional[str] = None,
         deviation_reason: Optional[str] = None,
     ) -> None:
         self._current_action_reasoning = reasoning
-        entries = memory_evidence_entries or []
-        self._current_action_evidence_entries = [e for e in entries if isinstance(e, int) and e >= 0]
+        memory_ids = memory_evidence_ids or []
+        self._current_action_evidence_ids = self.normalize_memory_ids(memory_ids)
         self._current_action_evidence_summary = (memory_evidence_summary or "").strip()
         self._current_action_stuck_pattern = (stuck_pattern or "").strip() or None
         self._current_action_recommendation_alignment = (recommendation_alignment or "").strip() or None
@@ -153,16 +158,16 @@ class NarrativeMemory:
 
     def _consume_current_action_context(
         self,
-    ) -> tuple[Optional[str], List[int], str, Optional[str], Optional[str], str]:
+    ) -> tuple[Optional[str], List[str], str, Optional[str], Optional[str], str]:
         reasoning = self._current_action_reasoning
-        memory_entries = list(self._current_action_evidence_entries)
+        memory_ids = list(self._current_action_evidence_ids)
         summary = self._current_action_evidence_summary
         stuck_pattern = self._current_action_stuck_pattern
         recommendation_alignment = self._current_action_recommendation_alignment
         deviation_reason = self._current_action_deviation_reason
 
         self._current_action_reasoning = None
-        self._current_action_evidence_entries = []
+        self._current_action_evidence_ids = []
         self._current_action_evidence_summary = ""
         self._current_action_stuck_pattern = None
         self._current_action_recommendation_alignment = None
@@ -170,7 +175,7 @@ class NarrativeMemory:
 
         return (
             reasoning,
-            memory_entries,
+            memory_ids,
             summary,
             stuck_pattern,
             recommendation_alignment,
@@ -384,6 +389,36 @@ class NarrativeMemory:
             self.url_history.append(current)
             self.url_pointer = len(self.url_history) - 1
 
+    def normalize_memory_ids(self, memory_ids: Optional[List[Any]]) -> List[str]:
+        """Normalize, deduplicate, and sequence-sort known memory ids."""
+        if not memory_ids:
+            return []
+
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for value in memory_ids:
+            if not isinstance(value, str):
+                continue
+            memory_id = value.strip()
+            if not memory_id or memory_id in seen:
+                continue
+            seen.add(memory_id)
+            cleaned.append(memory_id)
+
+        if not cleaned:
+            return []
+
+        order_map = {
+            entry.memory_id: entry.memory_entry_index
+            for entry in self.entries
+        }
+        known = [memory_id for memory_id in cleaned if memory_id in order_map]
+        known.sort(key=lambda memory_id: order_map[memory_id])
+        return known
+
+    def _next_memory_id(self) -> str:
+        return f"mem_{self.memory_entry_counter:06d}"
+
     # ---------------------------------------------------------------------
     # Memory writes
     # ---------------------------------------------------------------------
@@ -401,7 +436,7 @@ class NarrativeMemory:
         mission: Optional[str] = None,
         task: Optional[str] = None,
         memory_tags: Optional[List[str]] = None,
-        reference_memory_entries: Optional[List[int]] = None,
+        reference_memory_ids: Optional[List[str]] = None,
     ) -> MemoryEntry:
         params = action_params or {}
         because = (reasoning or "I judged this as the best next step.").strip()
@@ -409,14 +444,11 @@ class NarrativeMemory:
         and_then = self._describe_outcome(outcome, before_state, after_state, error_message)
         i_did = self._format_action(action_type, params)
         entry_kind = self._classify_entry_kind(action_type, params).value
-        refs = [
-            idx
-            for idx in (reference_memory_entries or [])
-            if isinstance(idx, int) and idx >= 0
-        ]
+        refs = self.normalize_memory_ids(reference_memory_ids)
+        memory_id = self._next_memory_id()
 
         entry = MemoryEntry(
-            id=str(uuid.uuid4()),
+            memory_id=memory_id,
             timestamp=time.time(),
             memory_entry_index=self.memory_entry_counter,
             i_did=i_did,
@@ -431,10 +463,11 @@ class NarrativeMemory:
             task=(task if task is not None else self.current_task),
             entry_kind=entry_kind,
             memory_tags=memory_tags or [],
-            reference_memory_entries=refs,
+            reference_memory_ids=refs,
         )
 
         self.entries.append(entry)
+        self._entries_by_id[entry.memory_id] = entry
         self.memory_entry_counter += 1
 
         overlay_index = params.get("overlay_index")
@@ -482,7 +515,7 @@ class NarrativeMemory:
 
         (
             buffered_reasoning,
-            buffered_memory_entries,
+            buffered_memory_ids,
             buffered_summary,
             buffered_stuck_pattern,
             buffered_recommendation_alignment,
@@ -492,7 +525,12 @@ class NarrativeMemory:
         reasoning = kwargs.get("reasoning") or buffered_reasoning
         success = bool(kwargs.get("success", True))
         error_message = kwargs.get("error_message")
-        reference_memory_entries = kwargs.get("memory_evidence_entries") or buffered_memory_entries or []
+        reference_memory_ids = (
+            kwargs.get("memory_evidence_ids")
+            or buffered_memory_ids
+            or []
+        )
+        reference_memory_ids = self.normalize_memory_ids(reference_memory_ids)
 
         memory_evidence_summary = kwargs.get("memory_evidence_summary")
         if memory_evidence_summary is None:
@@ -500,8 +538,8 @@ class NarrativeMemory:
         if memory_evidence_summary:
             params["memory_evidence_summary"] = str(memory_evidence_summary)
 
-        if reference_memory_entries:
-            params["memory_evidence_entries"] = reference_memory_entries
+        if reference_memory_ids:
+            params["memory_evidence_ids"] = reference_memory_ids
 
         stuck_pattern = kwargs.get("stuck_pattern")
         if stuck_pattern is None:
@@ -531,12 +569,20 @@ class NarrativeMemory:
             error_message=error_message,
             mission=self.current_mission,
             task=self.current_task,
-            reference_memory_entries=reference_memory_entries,
+            reference_memory_ids=reference_memory_ids,
         )
 
     # ---------------------------------------------------------------------
     # Memory reads
     # ---------------------------------------------------------------------
+
+    def get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
+        if not isinstance(memory_id, str):
+            return None
+        return self._entries_by_id.get(memory_id.strip())
+
+    def has_memory_id(self, memory_id: str) -> bool:
+        return self.get_memory_by_id(memory_id) is not None
 
     def get_memory_entry(self, memory_entry_index: int) -> Optional[MemoryEntry]:
         for entry in self.entries:
@@ -574,11 +620,11 @@ class NarrativeMemory:
     def get_recent_reflections(self, n: int = 10) -> List[MemoryEntry]:
         return self.get_entries_by_kind(MemoryEntryKind.REFLECTION, n=n)
 
-    def get_recent_executed_action_indexes(self, n: int = 10) -> List[int]:
-        return [entry.memory_entry_index for entry in self.get_recent_executed_actions(n=n)]
+    def get_recent_executed_action_ids(self, n: int = 10) -> List[str]:
+        return [entry.memory_id for entry in self.get_recent_executed_actions(n=n)]
 
-    def get_recent_reflection_indexes(self, n: int = 10) -> List[int]:
-        return [entry.memory_entry_index for entry in self.get_recent_reflections(n=n)]
+    def get_recent_reflection_ids(self, n: int = 10) -> List[str]:
+        return [entry.memory_id for entry in self.get_recent_reflections(n=n)]
 
     def get_executed_action_ledger(self, n: int = 12) -> str:
         rows: List[str] = []
@@ -595,18 +641,18 @@ class NarrativeMemory:
             if url_after:
                 suffix += f" | url={url_after}"
             rows.append(
-                f"[M{entry.memory_entry_index}] {entry.action_type} -> {entry.outcome}{suffix}"
+                f"[{entry.memory_id}] {entry.action_type} -> {entry.outcome}{suffix}"
             )
 
         return "\n".join(rows) if rows else "No executed browser actions yet."
 
-    def get_latest_recommended_next_step(self) -> tuple[Optional[str], Optional[int]]:
+    def get_latest_recommended_next_step(self) -> tuple[Optional[str], Optional[str]]:
         for entry in reversed(self.entries):
             if entry.entry_kind != MemoryEntryKind.REFLECTION.value:
                 continue
             value = str(entry.action_params.get("recommended_next_step", "")).strip()
             if value:
-                return value, entry.memory_entry_index
+                return value, entry.memory_id
         return None, None
 
     def search(
@@ -639,7 +685,7 @@ class NarrativeMemory:
         entry_kind: Optional[str] = None,
     ) -> str:
         if start_memory_entry_index is not None or end_memory_entry_index is not None:
-            lo = start_memory_entry_index if start_memory_entry_index is not None else 0
+            lo = start_memory_entry_index if start_memory_entry_index is not None else 1
             hi = end_memory_entry_index if end_memory_entry_index is not None else (self.memory_entry_counter - 1)
             selected = self.get_range(lo, hi)
         else:
@@ -654,7 +700,7 @@ class NarrativeMemory:
         lines = []
         for entry in selected:
             lines.append(
-                f"[M{entry.memory_entry_index}] {entry.i_did} because {entry.because}. {entry.and_then}"
+                f"[{entry.memory_id}] {entry.i_did} because {entry.because}. {entry.and_then}"
             )
         return "\n".join(lines)
 
