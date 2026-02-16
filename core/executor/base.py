@@ -1788,6 +1788,9 @@ class Executor:
         """Execute a think action - pure reasoning with no browser action."""
         args = self._get_action_args(step)
         reasoning = str(args.get("reasoning", "")).strip()
+        next_action = str(args.get("next_action", "continue")).strip().lower() or "continue"
+        recommended_next_step = str(args.get("recommended_next_step", "")).strip()
+        stuck_pattern = str(args.get("stuck_pattern", "")).strip()
         if not reasoning:
             reasoning = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
 
@@ -1805,6 +1808,9 @@ class Executor:
             before_state=before_state,
             after_state=after_state,
             reasoning=reasoning,
+            next_action=next_action,
+            recommended_next_step=recommended_next_step or None,
+            stuck_pattern=stuck_pattern or None,
             success=True,
         )
 
@@ -1977,10 +1983,7 @@ class Executor:
             self.memory_store.set_current_action_context(
                 reasoning=getattr(action_step, "reasoning", None) or function_args.get("reasoning"),
                 memory_evidence_ids=function_args.get("memory_evidence_ids"),
-                memory_evidence_summary=function_args.get("memory_evidence_summary"),
                 stuck_pattern=function_args.get("stuck_pattern"),
-                recommendation_alignment=function_args.get("recommendation_alignment"),
-                deviation_reason=function_args.get("deviation_reason"),
             )
         except Exception:
             pass

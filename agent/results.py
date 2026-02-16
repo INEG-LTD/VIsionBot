@@ -29,8 +29,16 @@ class MissionResult:
     success: bool
     task_results: List[TaskResult]
     reasoning: str = ""
+    partial: bool = False
+    final_answer_draft: str = ""
 
     def __init__(self):
         self.success = False
         self.task_results = []
         self.reasoning = ""
+        self.partial = False
+        self.final_answer_draft = ""
+
+
+# Backward-compatibility alias for legacy imports at package root.
+AgentResult = MissionResult

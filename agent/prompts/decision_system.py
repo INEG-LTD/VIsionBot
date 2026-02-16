@@ -1,4 +1,10 @@
-"""Canonical decision/prompt contracts shared by planner and action execution."""
+"""Canonical decision contracts for planner/action prompts.
+
+This file is the single prompt-source for:
+- planner-level outcome-ledger instructions
+- action-level memory/recommendation/evidence contracts
+- shared contradiction and progress rules
+"""
 
 from __future__ import annotations
 
@@ -22,16 +28,6 @@ class DecisionContext:
     reflection_memory_ids: List[str] = field(default_factory=list)
 
 
-SHARED_RECOMMENDATION_CONTRACT = """
-RECOMMENDATION ALIGNMENT CONTRACT:
-• If RECOMMENDED NEXT STEP exists, choose one:
-  1) follow_recommendation
-  2) deviate_from_recommendation
-• If you deviate, include a concrete first-person deviation_reason tied to visible state/tools.
-• Never silently ignore a recommendation.
-""".strip()
-
-
 SHARED_CONTRADICTION_GATE = """
 CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
 • Memory evidence uses memory IDs (for example: mem_000001). Task summaries use TS#.
@@ -39,16 +35,6 @@ CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
 • Do not use reflection-only memory as proof of execution.
 • Never claim "I haven't done X yet" if cited memory IDs show X happened.
 • If evidence is uncertain, say so explicitly in first person.
-""".strip()
-
-
-SHARED_EVIDENCE_CONTRACT = """
-MEMORY EVIDENCE CONTRACT:
-• Every decision-bearing tool call must include:
-  - memory_evidence_ids (memory IDs)
-  - memory_evidence_summary (first person)
-  - recommendation_alignment
-• If no memory entries exist yet, use memory_evidence_ids=[] and state that in first person.
 """.strip()
 
 
@@ -73,10 +59,12 @@ You are the mission planner.
 
 Planner policy:
 1. Plan the next single task or declare mission complete.
-2. Do not emit action-tool schema fields in planner prose
-   (for example: memory_evidence_ids=..., recommendation_alignment=...).
+2. Do not emit action-tool schema fields in planner prose.
 3. Use concise first-person reasoning grounded in current page + memory.
 4. Keep task wording actionable and tool-grounded.
+5. When task involves getting/extracting data, set required_tools_for_completion=['extract_data'].
+6. On mission_complete proposals, include final_answer_draft when available.
+7. Do not mark mission complete if your own reasoning says work is still remaining.
 
 {PLANNER_MEMORY_CONTRACT}
 {SHARED_CONTRADICTION_GATE}
@@ -88,29 +76,21 @@ You are the same agent that executed the recorded actions.
 
 Memory policy:
 1. Refer to actions as your own in first person: "I did...", "I tried...", "I observed...".
-2. Before deciding, cite relevant memory entries that justify your action.
-3. Every decision-bearing tool call must include:
-   - memory_evidence_ids: exact memory IDs
-   - memory_evidence_summary: short first-person summary
-   - recommendation_alignment: follow_recommendation | deviate_from_recommendation | no_recommendation
-   - deviation_reason when recommendation_alignment=deviate_from_recommendation
+2. Reference relevant memory entries (mem_XXXXXX) in your reasoning.
+3. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
 4. If you detect a stuck pattern, call think(next_action=stuck) with:
    - stuck_pattern
    - reasoning in first person
    - recommended_next_step
    - cited evidence entries
-5. If no memory entries exist yet, use memory_evidence_ids=[] and say so explicitly in first person.
 
 Output policy:
 1. Emit exactly ONE tool call per iteration.
 2. If a RECOMMENDED NEXT STEP is present, either:
-   - follow it (recommendation_alignment=follow_recommendation), and state in reasoning: "Following recommendation: ..."
-   - or deviate (recommendation_alignment=deviate_from_recommendation), and state in reasoning: "Deviating from recommendation because ..."
-3. A deviation reason must name the concrete conflict (for example: not visible, invalid element, blocked tool, or changed page state).
+   - follow it and state in reasoning: "Following recommendation: ..."
+   - or deviate and state in reasoning: "Deviating from recommendation because ..."
 
-{SHARED_RECOMMENDATION_CONTRACT}
 {SHARED_CONTRADICTION_GATE}
-{SHARED_EVIDENCE_CONTRACT}
 {SHARED_PROGRESS_COMPLETION_CONTRACT}
 
 Stuck examples (use these patterns to self-diagnose):

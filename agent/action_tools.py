@@ -1,8 +1,8 @@
-"""
-Action tools schema for OpenAI function calling.
+"""Action and planning tool schemas for function-calling.
 
-This module defines the complete set of actions available to the agent as
-OpenAI function calling tools.
+This module is the schema layer for both:
+1) action execution tools (click/type/think/mark_progress/etc.)
+2) planner tool output (plan_next).
 """
 
 from typing import Dict, Any, List, Optional
@@ -405,7 +405,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                             If there are missing requirements include the most important one as the recommended next step.
                             Example: "You haven't yet done action A and action B, the most important one is action A, so the recommended next step is 'action_A: ...'."
                             """
-                    }
+                    },
                 },
                 "required": ["reasoning", "next_action"],
                 "additionalProperties": False
@@ -460,7 +460,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                         "type": "boolean",
                         "description": "Only relevant for open-ended tasks (target='all'). Set to true when there's nothing left to do. For numeric targets, the system auto-completes when the count is reached — keep this false.",
                         "default": False
-                    }
+                    },
                 },
                 "required": ["description", "reasoning"],
                 "additionalProperties": False
@@ -670,48 +670,25 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     },
 ]
 
-# Required memory evidence fields for all decision-bearing actions.
-_MEMORY_EVIDENCE_PROPERTIES: Dict[str, Any] = {
+# Optional memory evidence on key decision-bearing tools.
+_MEMORY_EVIDENCE_PROPERTY: Dict[str, Any] = {
     "memory_evidence_ids": {
         "type": "array",
-        "items": {"type": "string", "pattern": "^mem_[0-9]{6,}$"},
-        "minItems": 0,
-        "description": "Memory IDs that justify this action decision. Use [] only when no memory entries exist yet."
-    },
-    "memory_evidence_summary": {
-        "type": "string",
-        "description": "One short first-person summary of the cited memory evidence."
-    },
-    "recommendation_alignment": {
-        "type": "string",
-        "enum": [
-            "follow_recommendation",
-            "deviate_from_recommendation",
-            "no_recommendation",
-        ],
-        "description": "Whether this action follows or deviates from the latest recommended_next_step."
-    },
-    "deviation_reason": {
-        "type": "string",
-        "description": "Required when recommendation_alignment=deviate_from_recommendation."
+        "items": {"type": "string"},
+        "description": "Optional memory IDs that justify this action."
     },
 }
 
+_EVIDENCE_TOOLS = {"click", "type_text", "extract_data", "think", "mark_progress"}
 for _tool in ACTION_TOOLS:
     _fn = _tool.get("function", {})
+    if _fn.get("name") not in _EVIDENCE_TOOLS:
+        continue
     _params = _fn.get("parameters", {})
     if not isinstance(_params, dict):
         continue
     _properties = _params.setdefault("properties", {})
-    for _k, _v in _MEMORY_EVIDENCE_PROPERTIES.items():
-        _properties[_k] = _v
-    _required = _params.setdefault("required", [])
-    if "memory_evidence_ids" not in _required:
-        _required.append("memory_evidence_ids")
-    if "memory_evidence_summary" not in _required:
-        _required.append("memory_evidence_summary")
-    if "recommendation_alignment" not in _required:
-        _required.append("recommendation_alignment")
+    _properties.update(_MEMORY_EVIDENCE_PROPERTY)
 
 # Extra contract for think(next_action=stuck)
 _THINK_TOOL = next(
@@ -798,7 +775,47 @@ PLANNING_TOOLS: List[Dict[str, Any]] = [
                     "start_hint": {
                         "type": "string",
                         "description": "Optional hint for how to begin this task (e.g., 'click the search bar first')"
-                    }
+                    },
+                    "required_tools_for_completion": {
+                        "type": "array",
+                        "description": (
+                            "Optional strict tool grounding for this task. "
+                            "If present, the task should only be considered complete after these tools are actually used "
+                            "within the unit of work (for example: ['extract_data'] for data retrieval outcomes)."
+                        ),
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "click",
+                                "type_text",
+                                "clear_text",
+                                "select_option",
+                                "upload_file",
+                                "set_datetime",
+                                "press_key",
+                                "scroll_page",
+                                "open_url",
+                                "go_back",
+                                "go_forward",
+                                "extract_data",
+                                "ask_user",
+                                "flag",
+                                "switch_tab",
+                                "close_tab",
+                                "open_tab",
+                                "dismiss_dialog",
+                                "think",
+                                "assert_condition",
+                                "mark_progress",
+                                "revise_target",
+                                "wait_for",
+                            ]
+                        }
+                    },
+                    "final_answer_draft": {
+                        "type": "string",
+                        "description": "Optional final user-facing answer draft when declaring mission complete."
+                    },
                 },
                 "required": ["reasoning", "task"],
                 "additionalProperties": False
@@ -836,111 +853,6 @@ def get_filtered_tools(
     return base_tools
 
 
-def validate_memory_evidence(
-    function_name: str,
-    arguments: Dict[str, Any],
-    *,
-    has_memory_entries: bool = False,
-    has_active_recommendation: bool = False,
-    recommended_memory_id: Optional[str] = None,
-    memory_store: Optional[Any] = None,
-) -> Optional[str]:
-    """
-    Validate memory citation contract for action tool calls.
-
-    Returns:
-        None if valid, otherwise an error string.
-    """
-    memory_ids = arguments.get("memory_evidence_ids")
-    summary = arguments.get("memory_evidence_summary")
-    alignment = arguments.get("recommendation_alignment")
-    deviation_reason = arguments.get("deviation_reason")
-
-    if not isinstance(memory_ids, list) or not all(isinstance(memory_id, str) and memory_id.strip() for memory_id in memory_ids):
-        return f"{function_name} requires memory_evidence_ids as an array of memory ID strings"
-    if not isinstance(summary, str) or not summary.strip():
-        return f"{function_name} requires memory_evidence_summary"
-    if has_memory_entries and not memory_ids:
-        return (
-            f"{function_name} requires non-empty memory_evidence_ids once memory exists; "
-            "cite relevant memory IDs"
-        )
-    if alignment not in {
-        "follow_recommendation",
-        "deviate_from_recommendation",
-        "no_recommendation",
-    }:
-        return (
-            f"{function_name} requires recommendation_alignment "
-            "(follow_recommendation|deviate_from_recommendation|no_recommendation)"
-        )
-    if alignment == "deviate_from_recommendation":
-        if not isinstance(deviation_reason, str) or not deviation_reason.strip():
-            return f"{function_name} requires deviation_reason when recommendation_alignment=deviate_from_recommendation"
-
-    if has_active_recommendation and alignment == "no_recommendation":
-        rec_src = f" (source={recommended_memory_id})" if recommended_memory_id else ""
-        return (
-            f"{function_name} cannot use recommendation_alignment=no_recommendation when a recommendation is active{rec_src}; "
-            "choose follow_recommendation or deviate_from_recommendation"
-        )
-
-    # Validate cited memory IDs against runtime store when available.
-    cited_entries: List[Any] = []
-    if memory_store is not None and memory_ids:
-        for memory_id in memory_ids:
-            entry = memory_store.get_memory_by_id(memory_id) if hasattr(memory_store, "get_memory_by_id") else None
-            if entry is None:
-                return f"{function_name} cites unknown memory ID: {memory_id}"
-            cited_entries.append(entry)
-
-    # Kind-aware evidence check:
-    # If executed browser actions already exist, decision-bearing browser actions
-    # must cite at least one executed_action entry.
-    browser_decision_tools = {
-        "click",
-        "type_text",
-        "clear_text",
-        "select_option",
-        "upload_file",
-        "set_datetime",
-        "press_key",
-        "scroll_page",
-        "open_url",
-        "go_back",
-        "go_forward",
-        "extract_data",
-        "switch_tab",
-        "close_tab",
-        "open_tab",
-        "dismiss_dialog",
-        "mark_progress",
-    }
-    if memory_store is not None and function_name in browser_decision_tools:
-        has_executed_history = bool(memory_store.get_recent_executed_actions(n=1))
-        if has_executed_history:
-            has_executed_evidence = any(
-                getattr(entry, "entry_kind", "") == "executed_action"
-                for entry in cited_entries
-            )
-            if not has_executed_evidence:
-                return (
-                    f"{function_name} must cite at least one executed-action memory ID once executed history exists"
-                )
-
-    if function_name == "think":
-        next_action = str(arguments.get("next_action", "")).strip().lower()
-        if next_action == "stuck":
-            stuck_pattern = arguments.get("stuck_pattern")
-            if not isinstance(stuck_pattern, str) or not stuck_pattern.strip():
-                return "think(next_action=stuck) requires stuck_pattern"
-            recommended_next_step = arguments.get("recommended_next_step")
-            if not isinstance(recommended_next_step, str) or not recommended_next_step.strip():
-                return "think(next_action=stuck) requires recommended_next_step"
-
-    return None
-
-
 # ============================================================================
 # EXPORTS
 # ============================================================================
@@ -948,5 +860,4 @@ def validate_memory_evidence(
 __all__ = [
     "ACTION_TOOLS",
     "PLANNING_TOOLS",
-    "validate_memory_evidence",
 ]

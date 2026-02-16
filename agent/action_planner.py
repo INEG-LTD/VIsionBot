@@ -16,9 +16,7 @@ from agent.prompts import (
     MEMORY_DEVELOPER_POLICY,
     DecisionContext,
     SHARED_CONTRADICTION_GATE,
-    SHARED_EVIDENCE_CONTRACT,
     SHARED_PROGRESS_COMPLETION_CONTRACT,
-    SHARED_RECOMMENDATION_CONTRACT,
     render_decision_context,
 )
 from lib.ai import (
@@ -72,6 +70,8 @@ class ActionPlanner:
         recommended_next_step: Optional[str] = None,
         recommended_next_step_source_id: Optional[str] = None,
         decision_context: Optional[DecisionContext] = None,
+        required_tools_for_completion: Optional[List[str]] = None,
+        tools_used_since_progress: Optional[set] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -105,6 +105,12 @@ class ActionPlanner:
         self.recommended_next_step = recommended_next_step
         self.recommended_next_step_source_id = recommended_next_step_source_id
         self.decision_context = decision_context
+        self.required_tools_for_completion = [
+            str(tool).strip().lower()
+            for tool in (required_tools_for_completion or [])
+            if isinstance(tool, str) and str(tool).strip()
+        ]
+        self.tools_used_since_progress: set = tools_used_since_progress or set()
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -133,12 +139,24 @@ class ActionPlanner:
             )
 
         if self.checkpoint_mode and self.browser_actions_in_round > 0:
-            parts.append(
-                "CHECKPOINT HINT:\n"
-                "You already have uncounted browser work in the current unit.\n"
-                "If no requirement remains, prefer mark_progress now "
-                "(or think with next_action=mark_progress).\n"
-            )
+            missing_tools = [
+                t for t in self.required_tools_for_completion
+                if t not in self.tools_used_since_progress
+            ]
+            if missing_tools:
+                parts.append(
+                    "CHECKPOINT HINT:\n"
+                    "You have uncounted browser work, but mark_progress is BLOCKED until you use: "
+                    f"{', '.join(missing_tools)}.\n"
+                    "Call think(next_action=continue) and do the remaining required tool(s) first.\n"
+                )
+            else:
+                parts.append(
+                    "CHECKPOINT HINT:\n"
+                    "You already have uncounted browser work in the current unit.\n"
+                    "If no requirement remains, prefer mark_progress now "
+                    "(or think with next_action=mark_progress).\n"
+                )
 
         if self.tab_events:
             events_str = "\n".join(f"- {e}" for e in self.tab_events)
@@ -170,7 +188,7 @@ class ActionPlanner:
         Returns:
             Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
-        from agent.action_tools import get_filtered_tools, validate_memory_evidence
+        from agent.action_tools import get_filtered_tools
 
         try:
             # Build reflection block (active strategy + last action + tab events)
@@ -265,9 +283,7 @@ Based on the screenshot, what is the best next action?
 """
             user_prompt += f"""
 
-{SHARED_RECOMMENDATION_CONTRACT}
 {SHARED_CONTRADICTION_GATE}
-{SHARED_EVIDENCE_CONTRACT}
 {SHARED_PROGRESS_COMPLETION_CONTRACT}
 """
 
@@ -310,16 +326,6 @@ Based on the screenshot, what is the best next action?
 
                 get_event_logger().system_debug(f"Function name: {action['function_name']}")
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
-                validation_error = validate_memory_evidence(
-                    action["function_name"],
-                    action["arguments"],
-                    has_memory_entries=self.memory_store.has_entries(),
-                    has_active_recommendation=bool(self.recommended_next_step),
-                    recommended_memory_id=self.recommended_next_step_source_id,
-                    memory_store=self.memory_store,
-                )
-                if validation_error:
-                    return None, validation_error
 
                 # Create ActionStep from function call
                 action_step = ActionStep.from_function_call(
@@ -548,6 +554,8 @@ WHAT YOU'VE DONE SO FAR
 Executed action ledger (facts only):
 {executed_action_ledger}
 
+Required tools for completion this task unit: {", ".join(self.required_tools_for_completion) if self.required_tools_for_completion else "none"}
+
 Potential stuck patterns from memory scan: {stuck_hints}
 
 Memory ID ledger (for citing any prior memory entry):
@@ -621,9 +629,7 @@ STUCK STRATEGY SWITCH RULE:
   - reasoning should be natural first-person language for my new ACTIVE STRATEGY
   - recommended_next_step should be one concrete immediate action
 
-{SHARED_RECOMMENDATION_CONTRACT}
 {SHARED_CONTRADICTION_GATE}
-{SHARED_EVIDENCE_CONTRACT}
 {SHARED_PROGRESS_COMPLETION_CONTRACT}
 
 ═══════════════════════════════════════════════════════════════
@@ -640,6 +646,7 @@ GUIDELINES
 9. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
 10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
     how that action advances the ACTIVE STRATEGY
+11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
 {base_knowledge_section}
 
 Choose the next action to take.

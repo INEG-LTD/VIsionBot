@@ -99,10 +99,7 @@ class NarrativeMemory:
         self.url_pointer: int = -1
         self._current_action_reasoning: Optional[str] = None
         self._current_action_evidence_ids: List[str] = []
-        self._current_action_evidence_summary: str = ""
         self._current_action_stuck_pattern: Optional[str] = None
-        self._current_action_recommendation_alignment: Optional[str] = None
-        self._current_action_deviation_reason: str = ""
         self._last_overlay_index: Optional[int] = None
 
     # ---------------------------------------------------------------------
@@ -143,43 +140,28 @@ class NarrativeMemory:
         *,
         reasoning: Optional[str] = None,
         memory_evidence_ids: Optional[List[str]] = None,
-        memory_evidence_summary: Optional[str] = None,
         stuck_pattern: Optional[str] = None,
-        recommendation_alignment: Optional[str] = None,
-        deviation_reason: Optional[str] = None,
     ) -> None:
         self._current_action_reasoning = reasoning
         memory_ids = memory_evidence_ids or []
         self._current_action_evidence_ids = self.normalize_memory_ids(memory_ids)
-        self._current_action_evidence_summary = (memory_evidence_summary or "").strip()
         self._current_action_stuck_pattern = (stuck_pattern or "").strip() or None
-        self._current_action_recommendation_alignment = (recommendation_alignment or "").strip() or None
-        self._current_action_deviation_reason = (deviation_reason or "").strip()
 
     def _consume_current_action_context(
         self,
-    ) -> tuple[Optional[str], List[str], str, Optional[str], Optional[str], str]:
+    ) -> tuple[Optional[str], List[str], Optional[str]]:
         reasoning = self._current_action_reasoning
         memory_ids = list(self._current_action_evidence_ids)
-        summary = self._current_action_evidence_summary
         stuck_pattern = self._current_action_stuck_pattern
-        recommendation_alignment = self._current_action_recommendation_alignment
-        deviation_reason = self._current_action_deviation_reason
 
         self._current_action_reasoning = None
         self._current_action_evidence_ids = []
-        self._current_action_evidence_summary = ""
         self._current_action_stuck_pattern = None
-        self._current_action_recommendation_alignment = None
-        self._current_action_deviation_reason = ""
 
         return (
             reasoning,
             memory_ids,
-            summary,
             stuck_pattern,
-            recommendation_alignment,
-            deviation_reason,
         )
 
     # ---------------------------------------------------------------------
@@ -509,6 +491,8 @@ class NarrativeMemory:
             "extracted_data",
             "notes",
             "error_message",
+            "next_action",
+            "recommended_next_step",
         ):
             if kwargs.get(key) is not None:
                 params[key] = kwargs.get(key)
@@ -516,10 +500,7 @@ class NarrativeMemory:
         (
             buffered_reasoning,
             buffered_memory_ids,
-            buffered_summary,
             buffered_stuck_pattern,
-            buffered_recommendation_alignment,
-            buffered_deviation_reason,
         ) = self._consume_current_action_context()
 
         reasoning = kwargs.get("reasoning") or buffered_reasoning
@@ -532,12 +513,6 @@ class NarrativeMemory:
         )
         reference_memory_ids = self.normalize_memory_ids(reference_memory_ids)
 
-        memory_evidence_summary = kwargs.get("memory_evidence_summary")
-        if memory_evidence_summary is None:
-            memory_evidence_summary = buffered_summary
-        if memory_evidence_summary:
-            params["memory_evidence_summary"] = str(memory_evidence_summary)
-
         if reference_memory_ids:
             params["memory_evidence_ids"] = reference_memory_ids
 
@@ -546,18 +521,6 @@ class NarrativeMemory:
             stuck_pattern = buffered_stuck_pattern
         if stuck_pattern:
             params["stuck_pattern"] = str(stuck_pattern)
-
-        recommendation_alignment = kwargs.get("recommendation_alignment")
-        if recommendation_alignment is None:
-            recommendation_alignment = buffered_recommendation_alignment
-        if recommendation_alignment:
-            params["recommendation_alignment"] = str(recommendation_alignment)
-
-        deviation_reason = kwargs.get("deviation_reason")
-        if deviation_reason is None:
-            deviation_reason = buffered_deviation_reason
-        if deviation_reason:
-            params["deviation_reason"] = str(deviation_reason)
 
         return self.record_action(
             action_type=action_type,

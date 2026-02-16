@@ -458,7 +458,7 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     apply_thinking_border(agent)
     result = agent.execute_mission(
-        "go to yahoo finance, search for apple and get the stock price",
+        "search for ios developer jobs in london then press the jobs tab button when you reach the search results page and then click the first 3 jobs on the page",
     )
 
     if result:

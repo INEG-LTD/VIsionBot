@@ -99,6 +99,11 @@ class ExecutionConfig(BaseModel):
         description="If True, trust the agent's overlay_index from function calling instead of re-selecting via a separate LLM call. "
                     "Saves an API call per click/type/clear and avoids the overlay selector overriding the agent's correct choice."
     )
+    validation_failure_escalation_limit: int = Field(
+        default=3,
+        ge=0,
+        description="Maximum repeated validation failures before escalating to partial/blocked mission result."
+    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -328,7 +333,6 @@ class Config(BaseModel):
         default_factory=TaskExecutionConfig,
         description="Unified task execution configuration"
     )
-
     class Config:
         arbitrary_types_allowed = True
     

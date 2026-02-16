@@ -1,3 +1,11 @@
+"""Agent controller with mission/task orchestration.
+
+Architecture overview:
+- Planner (plan_next) proposes tasks with required_tools_for_completion.
+- Controller executes tools, records memory, and marks progress per task.
+- Mission completion: planner declares done, controller trusts it.
+"""
+
 import time
 import threading
 from dataclasses import dataclass, field
@@ -26,7 +34,6 @@ from agent.prompts import (
     PLANNER_DEVELOPER_POLICY,
     PLANNER_MEMORY_CONTRACT,
     SHARED_CONTRADICTION_GATE,
-    SHARED_EVIDENCE_CONTRACT,
 )
 from utils.debug_print import dprint
 from lib.ai import (
@@ -64,6 +71,7 @@ class TaskExecutionState:
     last_action_summary: Optional[str] = None
     progress_notes: List[str] = field(default_factory=list)
     failed_elements: List[FailedAction] = field(default_factory=list)
+    validation_failures: int = 0
 
 
 """
@@ -350,19 +358,45 @@ class Agent:
         max_planning_iterations = self.config.task_execution.max_tasks_per_mission
         completed_tasks: List[Dict[str, Any]] = []
         planning_iteration = 0
+        planning_feedback: Optional[str] = None
+        mission_declared_complete = False
+        self._latest_final_answer_draft = ""
 
         while planning_iteration < max_planning_iterations:
             planning_iteration += 1
 
             # Run a planning iteration — the planner sees the current screen + history
-            plan = self._run_planning_iteration(user_mission, completed_tasks, planning_iteration)
+            plan = self._run_planning_iteration(
+                user_mission,
+                completed_tasks,
+                planning_iteration,
+                planning_feedback=planning_feedback,
+            )
+            planning_feedback = None
 
             if plan is None:
                 # Planning call failed
                 self.event_logger.system_error("Planning iteration returned None")
                 break
 
+            self._latest_final_answer_draft = str(plan.get("final_answer_draft", "") or "").strip()
+
             if plan.get("mission_complete"):
+                if not self._latest_final_answer_draft:
+                    # Reject: planner must provide a final answer summarizing
+                    # the result so the user gets actionable output.
+                    planning_feedback = (
+                        "Mission declared complete but no final_answer_draft provided. "
+                        "If the mission asks for data (get/find/extract), use extract_data "
+                        "to capture it first, then declare complete with final_answer_draft "
+                        "containing the answer. Otherwise, re-declare complete with a "
+                        "final_answer_draft summarizing what was accomplished."
+                    )
+                    self.event_logger.system_info(
+                        "Mission completion rejected: no final_answer_draft"
+                    )
+                    continue
+                mission_declared_complete = True
                 self.event_logger.system_info(
                     f"Mission declared complete after {len(completed_tasks)} tasks"
                 )
@@ -372,10 +406,20 @@ class Agent:
             task_goal = plan["task"]
             task_target = plan.get("target", 1)
             start_hint = plan.get("start_hint", "")
+            raw_required_tools = plan.get("required_tools_for_completion", [])
+            if isinstance(raw_required_tools, list):
+                required_tools_for_completion = [
+                    str(tool).strip()
+                    for tool in raw_required_tools
+                    if isinstance(tool, str) and str(tool).strip()
+                ]
+            else:
+                required_tools_for_completion = []
 
             task = Task(
                 goal=task_goal,
                 target=task_target,
+                required_tools_for_completion=required_tools_for_completion,
                 start_hint=start_hint or None,
                 task_id=f"task_{planning_iteration}",
                 created_at=time.time(),
@@ -384,7 +428,10 @@ class Agent:
             self.event_logger.task_start(
                 task_id=task.task_id,
                 task=task.goal,
-                task_type=f"target={task.target}",
+                task_type=(
+                    f"target={task.target}, "
+                    f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
+                ),
             )
 
             # Start checkpoint mode once per mission (first task only).
@@ -405,6 +452,7 @@ class Agent:
                 "target": task_target,
                 "success": result.success,
                 "progress": result.progress,
+                "required_tools_for_completion": list(task.required_tools_for_completion),
             }
             if result.reasoning:
                 summary["reasoning"] = result.reasoning[:200]
@@ -414,23 +462,39 @@ class Agent:
             if result.success:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = time.time()
-                self.event_logger.task_complete(task.task_id, task_type=f"target={task.target}")
+                self.event_logger.task_complete(
+                    task.task_id,
+                    task_type=(
+                        f"target={task.target}, "
+                        f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
+                    ),
+                )
             else:
                 task.status = TaskStatus.FAILED
                 task.completed_at = time.time()
-                self.event_logger.task_fail(task.task_id, error=result.reasoning, task_type=f"target={task.target}")
+                self.event_logger.task_fail(
+                    task.task_id,
+                    error=result.reasoning,
+                    task_type=(
+                        f"target={task.target}, "
+                        f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
+                    ),
+                )
                 # Don't abort — let the planner see the failure and decide what to do next
 
         # ── Finalize ──
         if self.execution_timer.task_start_time is not None:
             self.execution_timer.end_task()
 
-        # Determine overall success
-        if not self.mission_result.task_results:
+        self.mission_result.final_answer_draft = self._latest_final_answer_draft
+
+        if mission_declared_complete:
+            self.mission_result.success = True
+            self.mission_result.reasoning = f"Mission complete after {len(completed_tasks)} tasks"
+        elif not self.mission_result.task_results:
             self.mission_result.success = False
             self.mission_result.reasoning = "No tasks were executed"
         else:
-            # Mission succeeds if at least one task succeeded and the planner declared done
             any_success = any(r.success for r in self.mission_result.task_results)
             all_failed = all(not r.success for r in self.mission_result.task_results)
             if all_failed:
@@ -438,7 +502,10 @@ class Agent:
                 self.mission_result.reasoning = "All tasks failed"
             else:
                 self.mission_result.success = any_success
-                self.mission_result.reasoning = f"Completed {sum(1 for r in self.mission_result.task_results if r.success)}/{len(self.mission_result.task_results)} tasks"
+                self.mission_result.reasoning = (
+                    f"Completed {sum(1 for r in self.mission_result.task_results if r.success)}/"
+                    f"{len(self.mission_result.task_results)} tasks"
+                )
 
         return self.mission_result
 
@@ -447,13 +514,15 @@ class Agent:
         user_mission: str,
         completed_tasks: List[Dict[str, Any]],
         planning_iteration: int,
+        planning_feedback: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Run a single planning iteration: capture screenshot, call LLM with PLANNING_TOOLS,
         parse the result into a task description (or mission-complete signal).
 
         Returns:
-            Dict with keys: mission_complete (bool), task (str), target, start_hint
+            Dict with keys: mission_complete (bool), task (str), target, start_hint,
+            required_tools_for_completion, final_answer_draft
             or None on error.
         """
         self.event_logger.planning_iteration_start(planning_iteration, user_mission)
@@ -474,7 +543,12 @@ class Agent:
 
         system_prompt = self._build_planning_system_prompt()
         user_prompt = self._build_planning_user_prompt(
-            user_mission, current_url, page_title, completed_tasks, planning_iteration
+            user_mission,
+            current_url,
+            page_title,
+            completed_tasks,
+            planning_iteration,
+            planning_feedback=planning_feedback,
         )
 
         try:
@@ -517,6 +591,10 @@ class Agent:
             else:
                 self.event_logger.system_debug(target_note)
         start_hint = args.get("start_hint", "")
+        required_tools_for_completion = args.get("required_tools_for_completion", [])
+        if not isinstance(required_tools_for_completion, list):
+            required_tools_for_completion = []
+        final_answer_draft = str(args.get("final_answer_draft", "") or "").strip()
 
         # Empty task = mission complete
         mission_complete = task_text == ""
@@ -542,6 +620,8 @@ class Agent:
             "task": task_text,
             "target": target,
             "start_hint": start_hint,
+            "required_tools_for_completion": required_tools_for_completion,
+            "final_answer_draft": final_answer_draft,
         }
 
     @staticmethod
@@ -594,21 +674,46 @@ Goal:
 Core planning rules:
 1. One concern per task. Do not combine navigation + loop in one task.
 2. Use small actionable tasks grounded in tools (click/type/press/scroll/open/extract_data).
-3. If a step repeats N times, task describes one iteration and target=N.
+3. target controls repetition. Get it right:
+   When target > 1, write the task as a GENERIC action — never name a specific item.
+   The agent repeats the task description each round; naming a specific element causes it to act on that same element every round.
+
+   Ordered missions ("first 3", "top 5") — use "the next" to signal sequential progression:
+   ✓ Mission: "Click the first 3 job postings" → task="Click the next job posting", target=3
+   ✓ Mission: "Star the top 5 repos"           → task="Star the next repo", target=5
+   ✓ Mission: "Open the first 4 emails"        → task="Open the next email", target=4
+
+   Unordered missions (any N items) — use "a/an" for any item:
+   ✓ Mission: "Like 5 photos"    → task="Like a photo", target=5
+   ✓ Mission: "Delete 10 emails" → task="Delete an email", target=10
+
+   WRONG — naming a specific item with target > 1:
+   ✗ "Click the first job posting", target=3   → clicks the SAME posting 3 times
+   ✗ "Star the top repo", target=5             → stars the same repo 5 times
+   ✗ "Like the first photo", target=4          → likes the same photo 4 times
+
+   WRONG — using target > 1 for distinct actions that need separate tasks:
+   ✗ "Fill out a form field", target=3         → each field needs different values; use target=1 per field
+   ✗ "Click a navigation menu item", target=3  → each item is a different destination; use target=1 each
+   ✗ "Complete a checkout step", target=4       → each step has different inputs; use target=1 each
+
 4. Skip already-completed work visible in current page + memory evidence.
 5. Use target="all" only when count is genuinely open-ended.
 6. If prior task failed, adapt strategy instead of repeating blindly.
-7. Declare mission complete only when all user-required outcomes are satisfied.
+7. Declare mission complete (task="") only when all user-requested work is done. When the mission asks to get/find/extract data, you MUST create a task with required_tools_for_completion=['extract_data'] to capture the data before declaring complete. Data visible on screen is NOT extracted until extract_data is called.
+8. When task requires specific tool usage before completion, set required_tools_for_completion.
+9. When task="" (mission complete), you MUST include final_answer_draft with a concrete summary of the result/answer for the user. This is required, not optional.
 
 Output schema:
 • reasoning: why this is the right next task now.
 • task: next task text (empty string means mission complete).
 • target: integer >=1 or "all".
 • start_hint: optional immediate first step.
+• required_tools_for_completion: optional strict tools required for this task's completion.
+• final_answer_draft: optional final user-facing answer when mission complete.
 
 {PLANNER_MEMORY_CONTRACT}
 {SHARED_CONTRADICTION_GATE}
-{SHARED_EVIDENCE_CONTRACT}
 """
 
     def _build_planning_user_prompt(
@@ -618,11 +723,14 @@ Output schema:
         page_title: str,
         completed_tasks: List[Dict[str, Any]],
         planning_iteration: int,
+        planning_feedback: Optional[str] = None,
     ) -> str:
         """Build the user prompt for the incremental planner."""
         lines = [f"PLANNING ITERATION: {planning_iteration}"]
         lines.append(f"MISSION: {user_mission}")
         lines.append(f"CURRENT PAGE: {current_url} — {page_title}")
+        if planning_feedback:
+            lines.append(f"RUNTIME FEEDBACK: {planning_feedback}")
         lines.append("")
         lines.append("RECENT MEMORY NARRATIVE (memory IDs):")
         lines.append(self.memory_store.get_narrative(n=12))
@@ -644,6 +752,9 @@ Output schema:
                     progress_str = f" [{progress} done]"
 
                 line = f"  TS{i}. [{status}]{progress_str} {t['task']}"
+                required_tools = t.get("required_tools_for_completion") or []
+                if isinstance(required_tools, list) and required_tools:
+                    line += f" (required_tools={','.join(str(tool) for tool in required_tools)})"
                 if not t["success"] and t.get("reasoning"):
                     line += f" — {t['reasoning']}"
                 lines.append(line)
@@ -790,18 +901,6 @@ Output schema:
                 if normalized_ids:
                     params["memory_evidence_ids"] = normalized_ids
 
-            evidence_summary = args.get("memory_evidence_summary")
-            if isinstance(evidence_summary, str) and evidence_summary.strip():
-                params["memory_evidence_summary"] = evidence_summary.strip()
-
-            recommendation_alignment = args.get("recommendation_alignment")
-            if isinstance(recommendation_alignment, str) and recommendation_alignment.strip():
-                params["recommendation_alignment"] = recommendation_alignment.strip()
-
-            deviation_reason = args.get("deviation_reason")
-            if isinstance(deviation_reason, str) and deviation_reason.strip():
-                params["deviation_reason"] = deviation_reason.strip()
-
             if getattr(action_step, "function_name", None):
                 params["tool"] = action_step.function_name
 
@@ -914,6 +1013,12 @@ Output schema:
 
         # Determine numeric target (None for "all")
         numeric_target = task.target if isinstance(task.target, int) else None
+        required_tools_for_completion = [
+            str(tool).strip().lower()
+            for tool in (task.required_tools_for_completion or [])
+            if isinstance(tool, str) and str(tool).strip()
+        ]
+        tools_used_since_progress: set[str] = set()
 
         def _record_progress(
             description: str,
@@ -937,12 +1042,26 @@ Output schema:
                 )
                 return False, None
 
+            if required_tools_for_completion:
+                missing_tools = [
+                    tool
+                    for tool in required_tools_for_completion
+                    if tool not in tools_used_since_progress
+                ]
+                if missing_tools:
+                    state.last_action_summary = (
+                        "mark_progress BLOCKED: missing required tools for this task unit: "
+                        + ", ".join(missing_tools)
+                    )
+                    return False, None
+
             task.progress += count
             state.progress_notes.append(description)
             state.actions_since_progress = 0
             state.browser_actions_since_progress = 0
             state.checkpoint_pending = False
             state.suppress_mark_progress = True
+            tools_used_since_progress.clear()
 
             if source == "think":
                 self.event_logger.system_info(
@@ -1077,6 +1196,8 @@ Output schema:
                 recommended_next_step=recommended_step,
                 recommended_next_step_source_id=recommended_step_source_id,
                 decision_context=decision_context,
+                required_tools_for_completion=required_tools_for_completion,
+                tools_used_since_progress=tools_used_since_progress,
             )
 
             # Generate next actions
@@ -1089,13 +1210,28 @@ Output schema:
                 )
 
                 if not actions_list:
+                    state.validation_failures += 1
+                    if (
+                        state.validation_failures
+                        <= self.config.execution.validation_failure_escalation_limit
+                    ):
+                        state.last_action_summary = (
+                            f"Planner/action validation issue: {error or 'No action generated'}. "
+                            "Retrying planning."
+                        )
+                        state.checkpoint_pending = False
+                        continue
                     return TaskResult(
                         success=False,
-                        completion_status=TaskCompletionStatus.STUCK,
+                        completion_status=TaskCompletionStatus.BLOCKED,
                         progress=task.progress,
                         target=task.target,
-                        reasoning=error or "No action generated",
+                        reasoning=(
+                            "Repeated planning/action validation failures: "
+                            f"{error or 'No action generated'}"
+                        ),
                     )
+                state.validation_failures = 0
 
                 # Execute each action
                 for action_step in actions_list:
@@ -1258,6 +1394,7 @@ Output schema:
                                 state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
+                                tools_used_since_progress.add(function_name.lower())
                             except ValueError as e:
                                 state.last_action_summary = f"switch_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1273,6 +1410,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
+
                         state.actions_since_progress += 1
                         continue
 
@@ -1292,6 +1430,7 @@ Output schema:
                                 state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
+                                tools_used_since_progress.add(function_name.lower())
                             except ValueError as e:
                                 state.last_action_summary = f"close_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1307,6 +1446,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
+
                         state.actions_since_progress += 1
                         continue
 
@@ -1328,6 +1468,7 @@ Output schema:
                                 state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
+                                tools_used_since_progress.add(function_name.lower())
                             except Exception as e:
                                 state.last_action_summary = f"open_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1343,6 +1484,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
+
                         state.actions_since_progress += 1
                         continue
 
@@ -1359,6 +1501,7 @@ Output schema:
                             state.last_action_summary = f"Dialog {action_word}"
                             state.checkpoint_pending = True
                             action_success = True
+                            tools_used_since_progress.add(function_name.lower())
                         else:
                             state.last_action_summary = "dismiss_dialog: No dialog pending"
                             state.checkpoint_pending = True
@@ -1372,6 +1515,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
+
                         state.actions_since_progress += 1
                         continue
 
@@ -1393,6 +1537,9 @@ Output schema:
                     if result.success:
                         state.browser_actions_since_progress += 1
                         state.suppress_mark_progress = False
+                        if function_name:
+                            tools_used_since_progress.add(function_name.lower())
+
 
                     # Sync tab manager after browser actions (click may have opened a new tab)
                     if result.success and self.tab_manager:

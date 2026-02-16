@@ -335,6 +335,7 @@ class Task:
     """A unified task with a target. target=1 for single actions, target=N for repetitive, target='all' for indefinite."""
     goal: str
     target: Union[int, str] = 1  # 1, 5, "all"
+    required_tools_for_completion: List[str] = field(default_factory=list)
     start_hint: Optional[str] = None
     progress: int = 0
     task_id: str = ""
