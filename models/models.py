@@ -72,6 +72,8 @@ class DetectedElement(BaseModel):
         default=0,
         description="Heuristic text signal strength (0-3) used to bias overlay selection toward text-bearing elements.",
     )
+    css_class: Optional[str] = Field(default=None, description="CSS class attribute of the element")
+    css_id: Optional[str] = Field(default=None, description="CSS id attribute of the element")
 
 
 
@@ -120,13 +122,21 @@ class ActionStep(BaseModel):
     def _render_action_text(function_name: str, arguments: dict) -> str:
         """Render a concise readable command string for logs/history."""
         if function_name == "click":
-            return f"click: {arguments.get('element_type', 'element')} {arguments.get('description', '')}".strip()
+            element_id = arguments.get('element_id')
+            eid_suffix = f" [id={element_id}]" if element_id is not None else ""
+            return f"click: {arguments.get('description', '')}{eid_suffix}".strip()
         if function_name == "type_text":
-            return f"type: {arguments.get('text', '')} : {arguments.get('field_description', '')}".strip()
+            eid = arguments.get('element_id')
+            suffix = f" [id={eid}]" if eid is not None else ""
+            return f"type: {arguments.get('text', '')} : {arguments.get('field_description', '')}{suffix}".strip()
         if function_name == "clear_text":
-            return f"clear_text: {arguments.get('field_description', '')}".strip()
+            eid = arguments.get('element_id')
+            suffix = f" [id={eid}]" if eid is not None else ""
+            return f"clear_text: {arguments.get('field_description', '')}{suffix}".strip()
         if function_name == "select_option":
-            return f"select_option: {arguments.get('option', '')} in {arguments.get('dropdown_description', '')}".strip()
+            eid = arguments.get('element_id')
+            suffix = f" [id={eid}]" if eid is not None else ""
+            return f"select_option: {arguments.get('option', '')} in {arguments.get('dropdown_description', '')}{suffix}".strip()
         if function_name == "upload_file":
             return f"upload_file: {arguments.get('file_path', '')} in {arguments.get('target_description', '')}".strip()
         if function_name == "set_datetime":

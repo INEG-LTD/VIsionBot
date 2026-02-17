@@ -50,6 +50,9 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
     const seen = new Set();
     const elements = [];
     const MAX_ELEMENTS = 800;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const vpArea = viewportWidth * viewportHeight;
 
     const buildCssPath = (node) => {
         const parts = [];
@@ -77,8 +80,6 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         seen.add(node);
 
         const rect = node.getBoundingClientRect();
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
 
         // Keep only elements that are actually visible in the current viewport.
         // This prevents the planner from targeting off-screen entries.
@@ -113,6 +114,7 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
             textContent,
             text: textContent,
             ariaLabel: node.getAttribute("aria-label") || "",
+            alt: node.getAttribute("alt") || "",
             placeholder: node.getAttribute("placeholder") || "",
             title: node.getAttribute("title") || "",
             role: node.getAttribute("role") || "",
@@ -120,6 +122,7 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
             name: node.getAttribute("name") || "",
             href: node.href || "",
             className: node.className || "",
+            id: node.id || "",
             boundingBox: {
                 x: rect.x,
                 y: rect.y,
@@ -131,12 +134,253 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
         });
     };
 
+    // ── Pass 1: Selector-based detection (semantic HTML) ──
     selectors.forEach((selector) => {
         const nodes = document.querySelectorAll(selector);
         nodes.forEach((node) => {
             addNode(node);
         });
     });
+
+    // ── Pass 2: interactivity-signal detection ──
+    // Catches non-semantic interactive elements (custom components, styled divs,
+    // draggable pieces, etc.) that Pass 1's CSS selectors can't reach.
+
+    // Interactive cursor values (not just 'pointer')
+    const interactiveCursors = new Set([
+        'pointer', 'grab', 'grabbing', 'move', 'cell', 'copy', 'alias'
+    ]);
+
+    // Semantic interactive tags — their children are always subordinate
+    // (clicking a span inside a button = clicking the button).
+    // Pass 2 containers (divs etc.) are different — children may be independent.
+    const semanticTags = new Set([
+        'BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT', 'OPTION',
+        'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    ]);
+    const interactiveRoles = new Set([
+        'button', 'link', 'option', 'menuitem', 'tab', 'checkbox', 'radio',
+    ]);
+    const isSemanticInteractive = (el) => {
+        if (semanticTags.has(el.tagName)) return true;
+        const role = el.getAttribute('role') || '';
+        return interactiveRoles.has(role);
+    };
+
+    // Build ancestor set for fast "is this an ancestor of a captured element?" lookups
+    const ancestorsOfCaptured = new Set();
+    for (const capturedNode of seen) {
+        let parent = capturedNode.parentElement;
+        while (parent) {
+            if (ancestorsOfCaptured.has(parent)) break;
+            ancestorsOfCaptured.add(parent);
+            parent = parent.parentElement;
+        }
+    }
+
+    const allElements = document.body.getElementsByTagName('*');
+    for (let i = 0; i < allElements.length; i++) {
+        if (elements.length >= MAX_ELEMENTS) break;
+
+        const node = allElements[i];
+        if (seen.has(node)) continue;
+
+        // Skip non-element tags that can't be interactive
+        const tag = node.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' ||
+            tag === 'META' || tag === 'LINK' || tag === 'BR' || tag === 'HR') continue;
+
+        const style = window.getComputedStyle(node);
+        if (!style) continue;
+
+        // Check interactivity signals
+        const hasCursorInteractive = interactiveCursors.has(style.cursor);
+        const tabindexAttr = node.getAttribute('tabindex');
+        const hasTabindex = tabindexAttr !== null && parseInt(tabindexAttr) >= 0;
+        const hasAriaInteraction = node.hasAttribute('aria-expanded') ||
+                                   node.hasAttribute('aria-pressed') ||
+                                   node.hasAttribute('aria-checked') ||
+                                   node.hasAttribute('aria-haspopup');
+
+        if (!hasCursorInteractive && !hasTabindex && !hasAriaInteraction) continue;
+
+        // Skip if pointer-events: none (clicks pass through)
+        if (style.pointerEvents === 'none') continue;
+
+        // Visibility checks
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+        const rect = node.getBoundingClientRect();
+        if (rect.width <= 2 || rect.height <= 2) continue;
+
+        // Viewport check
+        if (rect.right <= 0 || rect.bottom <= 0 ||
+            rect.left >= viewportWidth || rect.top >= viewportHeight) continue;
+
+        // Skip if too large (>25% of viewport — likely a container, not a button)
+        if (rect.width * rect.height > vpArea * 0.25) continue;
+
+        // Skip if this is an ANCESTOR of a captured element
+        // (children from Pass 1 are better targets)
+        if (ancestorsOfCaptured.has(node)) continue;
+
+        // Skip if this is a DESCENDANT of a SEMANTIC interactive element
+        // (button, a, input, [role=button], etc. — children are subordinate).
+        // But allow descendants of Pass 2 containers (divs) — their children
+        // may be independently interactive (e.g. bot cards inside an accordion).
+        let skipAsDescendant = false;
+        let anc = node.parentElement;
+        while (anc) {
+            if (seen.has(anc) && isSemanticInteractive(anc)) {
+                skipAsDescendant = true;
+                break;
+            }
+            anc = anc.parentElement;
+        }
+        if (skipAsDescendant) continue;
+
+        // Text context lifting — but ONLY for invisible overlays.
+        // An invisible overlay covers the same area as its parent (e.g. chess.com's
+        // toggleClickArea). A small visual element (chess piece, icon) should be
+        // captured as-is even if it has no text.
+        let target = node;
+        const nodeText = (node.innerText || node.value || '').trim();
+        if (!nodeText && node.parentElement) {
+            const parentRect = node.parentElement.getBoundingClientRect();
+            const isOverlay = (
+                Math.abs(rect.width - parentRect.width) < 20 &&
+                Math.abs(rect.height - parentRect.height) < 20
+            );
+            if (isOverlay) {
+                let parent = node.parentElement;
+                while (parent && parent !== document.body) {
+                    if (seen.has(parent) || ancestorsOfCaptured.has(parent)) break;
+                    const parentText = (parent.innerText || '').trim();
+                    if (parentText) {
+                        const pRect = parent.getBoundingClientRect();
+                        if (pRect.width * pRect.height < vpArea * 0.25) {
+                            target = parent;
+                            break;
+                        }
+                    }
+                    parent = parent.parentElement;
+                }
+            }
+        }
+
+        // If we lifted to a different node, verify it's not already captured
+        if (target !== node && seen.has(target)) continue;
+
+        addNode(target);
+    }
+
+    // ── Pass 3: Dynamically appeared elements (MutationObserver) ──
+    // Catches elements that appeared after user actions — e.g. hint dots
+    // on a chess board after clicking a piece, dropdown options after clicking
+    // a trigger, etc. These may have no cursor:pointer or ARIA attributes,
+    // but their appearance in response to an action implies interactivity.
+    //
+    // Two sets persist across captures:
+    //   __bvb_newNodes  — freshly mutated nodes (filled by observer, drained each capture)
+    //   __bvb_known     — nodes previously captured by Pass 3 (re-checked each capture)
+    // This ensures dynamically added elements stay detected across iterations
+    // as long as they remain in the DOM and visible.
+
+    // Set up MutationObserver once (persists across captures)
+    if (!window.__bvb_observer) {
+        window.__bvb_newNodes = new Set();
+        window.__bvb_known = new Set();
+        window.__bvb_observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const added of mutation.addedNodes) {
+                    if (added.nodeType !== Node.ELEMENT_NODE) continue;
+                    window.__bvb_newNodes.add(added);
+                    const desc = added.getElementsByTagName('*');
+                    for (let j = 0; j < desc.length; j++) {
+                        window.__bvb_newNodes.add(desc[j]);
+                    }
+                }
+            }
+        });
+        window.__bvb_observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
+    }
+
+    // Merge new mutations into the known set, then drain newNodes
+    const newNodes = window.__bvb_newNodes;
+    if (newNodes && newNodes.size > 0) {
+        for (const n of newNodes) {
+            window.__bvb_known.add(n);
+        }
+        window.__bvb_newNodes = new Set();
+    }
+
+    const knownPass3 = window.__bvb_known;
+    if (knownPass3 && knownPass3.size > 0) {
+        // Rebuild ancestor set to include Pass 2 additions
+        const ancestorsOfAll = new Set();
+        for (const capturedNode of seen) {
+            let parent = capturedNode.parentElement;
+            while (parent) {
+                if (ancestorsOfAll.has(parent)) break;
+                ancestorsOfAll.add(parent);
+                parent = parent.parentElement;
+            }
+        }
+
+        // Prune nodes no longer in DOM
+        for (const node of knownPass3) {
+            if (!document.body.contains(node)) {
+                knownPass3.delete(node);
+            }
+        }
+
+        for (const node of knownPass3) {
+            if (elements.length >= MAX_ELEMENTS) break;
+            if (seen.has(node)) continue;
+
+            const tag = node.tagName;
+            if (!tag) continue;
+            if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' ||
+                tag === 'META' || tag === 'LINK' || tag === 'BR' || tag === 'HR') continue;
+
+            const style = window.getComputedStyle(node);
+            if (!style) continue;
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            // NOTE: Do NOT filter pointer-events:none here. Pass 3 elements
+            // appeared after an action — their presence IS the interactivity
+            // signal (e.g. chess hint dots). The agent clicks at the location
+            // and the click passes through to the interactive element below.
+
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 2 || rect.height <= 2) continue;
+
+            if (rect.right <= 0 || rect.bottom <= 0 ||
+                rect.left >= viewportWidth || rect.top >= viewportHeight) continue;
+
+            if (rect.width * rect.height > vpArea * 0.25) continue;
+
+            // Skip if ancestor of a captured element
+            if (ancestorsOfAll.has(node)) continue;
+
+            // Skip if descendant of a semantic interactive element
+            let skipAsDescendant = false;
+            let anc = node.parentElement;
+            while (anc) {
+                if (seen.has(anc) && isSemanticInteractive(anc)) {
+                    skipAsDescendant = true;
+                    break;
+                }
+                anc = anc.parentElement;
+            }
+            if (skipAsDescendant) continue;
+
+            addNode(node);
+        }
+    }
+
     return elements.slice(0, MAX_ELEMENTS);
 }
 """
@@ -156,9 +400,12 @@ def _describe_element(raw: Dict[str, Any]) -> str:
     parts: List[str] = []
     tag = raw.get("tagName") or "element"
     text = raw.get("textContent", "")
+    alt = raw.get("alt", "")
     role = raw.get("role", "")
     if text:
         parts.append(text)
+    elif alt:
+        parts.append(alt)
     elif role:
         parts.append(role)
     else:
@@ -168,22 +415,35 @@ def _describe_element(raw: Dict[str, Any]) -> str:
     return " ".join(parts).strip()
 
 
+def _clean_class(raw_class) -> Optional[str]:
+    """Extract first few CSS classes, skip empty/dict values."""
+    if not raw_class or isinstance(raw_class, dict):
+        return None
+    cls = str(raw_class).strip()
+    if not cls:
+        return None
+    # Keep first 3 classes to avoid huge strings
+    parts = cls.split()[:3]
+    return " ".join(parts) if parts else None
+
+
 def _text_presence_score(raw: Dict[str, Any]) -> int:
     """
     Score how much visible text signal this element provides.
     3: inner text/value present
-    2: placeholder/title present
+    2: placeholder/title/alt present
     1: aria-label only
     0: no text signal
     """
     text = (raw.get("textContent") or "").strip()
     placeholder = (raw.get("placeholder") or "").strip()
     title = (raw.get("title") or "").strip()
+    alt = (raw.get("alt") or "").strip()
     aria = (raw.get("ariaLabel") or "").strip()
 
     if text:
         return 3
-    if placeholder or title:
+    if placeholder or title or alt:
         return 2
     if aria:
         return 1
@@ -194,10 +454,9 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
     """Convert raw DOM capture into structured PageElements."""
     
     def is_clickable(raw: Dict[str, Any]) -> bool:
-        return raw.get("tagName") in [
-            "button", "a", "input", "textarea", "select", "option", "menuitem", "tab", "checkbox", "radio",
-            "h1", "h2", "h3", "h4", "span", "svg", "i", "img"
-        ]
+        # All elements captured by the DOM script are interactive —
+        # Pass 1 matches semantic elements, Pass 2 matches cursor:pointer / ARIA.
+        return True
 
     detected: List[DetectedElement] = []
     
@@ -214,7 +473,7 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
         box = _normalize_box(bounding_box, page_info)
         text_score = _text_presence_score(raw)
         element = DetectedElement(
-            element_label=raw.get("ariaLabel") or raw.get("placeholder") or _describe_element(raw),
+            element_label=raw.get("ariaLabel") or raw.get("alt") or raw.get("placeholder") or _describe_element(raw),
             description=_describe_element(raw),
             element_type=raw.get("tagName") or "element",
             is_clickable=is_clickable(raw),
@@ -227,6 +486,8 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
             is_focused=raw.get("isFocused", False),
             has_visible_text=text_score >= 2,
             text_presence_score=text_score,
+            css_class=_clean_class(raw.get("className")),
+            css_id=raw.get("id") or None,
         )
         detected.append(element)
     return PageElements(elements=detected)

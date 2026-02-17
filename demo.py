@@ -423,16 +423,15 @@ config = Config(
         auto_complete_extract_commands=False
     ),
     elements=ElementConfig(
-        overlay_mode="all",
-        include_textless_overlays=True,
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
         selection_retry_attempts=2,
-        include_overlays_in_agent_context=True,
+        crops_per_gallery=6,
     ),
     logging=DebugConfig(
         debug_mode=True,
-        show_overlay_candidates=False,
+        show_overlay_candidates=True,
         show_llm_costs=False,
+        save_screenshots=True,
     ),
     browser=BrowserConfig(
         provider_type="local",

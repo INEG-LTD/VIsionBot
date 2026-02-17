@@ -9,7 +9,7 @@ object with grouped settings.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 from lib.ai import ReasoningLevel
 from browser.provider import BrowserConfig as BrowserProviderConfig
@@ -94,11 +94,6 @@ class ExecutionConfig(BaseModel):
         ge=0,
         description="Max time to wait for page load before each agent iteration (milliseconds)."
     )
-    use_agent_overlay_index: bool = Field(
-        default=True,
-        description="If True, trust the agent's overlay_index from function calling instead of re-selecting via a separate LLM call. "
-                    "Saves an API call per click/type/clear and avoids the overlay selector overriding the agent's correct choice."
-    )
     validation_failure_escalation_limit: int = Field(
         default=3,
         ge=0,
@@ -143,22 +138,6 @@ class ElementConfig(BaseModel):
         default=True,
         description="Include detailed element information in prompts"
     )
-    overlay_mode: str = Field(
-        default="interactive",
-        description="Overlay drawing mode: 'interactive' (default) or 'all'"
-    )
-    show_overlays: bool = Field(
-        default=False,
-        description="Show visual overlays on page elements (default: False, overrides debug mode)"
-    )
-    include_textless_overlays: bool = Field(
-        default=False,
-        description="Keep overlays with no text/aria/placeholder in LLM selection lists"
-    )
-    overlay_selection_max_samples: Optional[int] = Field(
-        default=None,
-        description="Maximum samples for overlay selection"
-    )
     selection_retry_attempts: int = Field(
         default=3,
         ge=1,
@@ -168,13 +147,16 @@ class ElementConfig(BaseModel):
         default=None,
         description="Fallback model for element selection retries"
     )
-    include_overlays_in_agent_context: bool = Field(
-        default=True,
-        description="Include overlay element data in agent's context for action determination. When enabled, the agent receives detailed element information (tag, placeholder, text, aria-label, etc.) to create more descriptive actions. NOTE: This only affects the agent's action determination phase. Overlays are still generated for element selection during action execution, as they are required for the system to identify and interact with elements on the page."
+    crops_per_gallery: int = Field(
+        default=6,
+        description="Number of element crops per gallery page in element_index mode. "
+                    "Uses 2-column layout with large crops."
     )
-    include_visible_text_in_agent_context: bool = Field(
-        default=False,
-        description="Include visible text in agent's context for action determination. When enabled, the agent receives text content from the page (viewport-only, first 2000 chars). When disabled, the agent relies purely on the screenshot for visual context. Disabling this prevents the agent from targeting off-screen elements based on text hints."
+    max_index_elements: int = Field(
+        default=80,
+        description="Maximum number of elements to include in the element_index text. "
+                    "Elements are ranked by prominence (area * text_score). "
+                    "0 = unlimited."
     )
 
     class Config:

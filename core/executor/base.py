@@ -94,6 +94,24 @@ DOM_SMART_CLICK_POINT_SCRIPT = """
         return normalized;
     };
 
+    // If the element has pointer-events:none, elementFromPoint will never
+    // return it — hit-testing is pointless.  Just return its center directly.
+    // The click at this location passes through to the interactive element
+    // behind it (e.g. chess board square behind a hint dot).
+    const elStyle = window.getComputedStyle(el);
+    if (elStyle && elStyle.pointerEvents === "none") {
+        const elRect = el.getBoundingClientRect();
+        if (inViewportRect(elRect)) {
+            return {
+                x: Math.round(elRect.left + elRect.width * 0.5),
+                y: Math.round(elRect.top + elRect.height * 0.5),
+                source: "pointer-events-none",
+                targetTag: (el.tagName || "").toLowerCase(),
+                baseTag: (el.tagName || "").toLowerCase(),
+            };
+        }
+    }
+
     const descendantTargets = [];
     if (preferTextDescendant && el.tagName === "A") {
         const selectors = "h1,h2,h3,h4,h5,h6,[role='heading'],span,strong,b,p,div";
@@ -273,15 +291,31 @@ class Executor:
         # Maybe just a small random delay after move
         time.sleep(random.uniform(0.05, 0.15))
 
-    def _get_agent_overlay_index(self, step: ActionStep) -> Optional[int]:
-        """Extract the agent's overlay_index from function_arguments if config allows it."""
-        if not self.browser.config.execution.use_agent_overlay_index:
-            return None
+    @staticmethod
+    def _get_agent_element_id(step: ActionStep) -> Optional[int]:
+        """Extract element_id from function_arguments (element_index mode)."""
         args = getattr(step, 'function_arguments', None)
         if args and isinstance(args, dict):
-            idx = args.get('overlay_index')
-            if isinstance(idx, int):
-                return idx
+            eid = args.get('element_id')
+            if eid is not None:
+                try:
+                    return int(eid)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    @staticmethod
+    def _resolve_element_id_to_overlay(
+        step: "ActionStep",
+        elements: "PageElements",
+    ) -> Optional[int]:
+        """If step has element_id, resolve to overlay_number. Returns None if not found."""
+        eid = Executor._get_agent_element_id(step)
+        if eid is None:
+            return None
+        for elem in elements.elements:
+            if getattr(elem, 'overlay_number', None) == eid:
+                return elem.overlay_number
         return None
 
     @staticmethod
@@ -389,12 +423,38 @@ class Executor:
 
         current_screenshot = before_state.screenshot
 
-        # Use agent's overlay_index if available and config allows it
         args = self._get_action_args(step)
-        overlay_index = self._get_agent_overlay_index(step)
-        if overlay_index is not None:
-            self.event_logger.system_debug(f"Using agent's overlay_index: {overlay_index}")
-        else:
+        x, y = None, None
+        overlay_index = None
+
+        # Resolve element_id from the INTERACTIVE ELEMENTS index
+        element_id = self._get_agent_element_id(step)
+        if element_id is not None:
+            self.event_logger.system_debug(
+                f"Element index click: element_id={element_id}"
+            )
+            matched = None
+            for elem in elements.elements:
+                if getattr(elem, 'overlay_number', None) == element_id:
+                    matched = elem
+                    break
+            if matched is not None:
+                overlay_index = matched.overlay_number
+                x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+                self.event_logger.system_debug(
+                    f"Matched element [id={element_id}] → overlay={overlay_index} "
+                    f"(type={getattr(matched, 'element_type', '?')}, "
+                    f"class={getattr(matched, 'css_class', '')})"
+                )
+            else:
+                desc = str(args.get("description", "")).strip()
+                self.event_logger.system_debug(
+                    f"Element [id={element_id}] not found in elements, "
+                    f"falling back to description match: {desc!r}"
+                )
+
+        # LLM fallback if element_id didn't resolve
+        if x is None:
             click_intent = str(args.get("description", "")).strip() or step.action
             overlay_index = self.select_best_overlay(
                 click_intent,
@@ -403,11 +463,10 @@ class Executor:
                 screenshot=current_screenshot,
                 base_knowledge=self.memory_store.base_knowledge,
             )
-        
-        if overlay_index is None:
-            self.event_logger.command_failure(step.action, error="Could not determine best overlay")
-            return False
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+            if overlay_index is None:
+                self.event_logger.command_failure(step.action, error="Could not determine best overlay")
+                return False
+            x, y = self.get_click_coordinates(overlay_index, elements, page_info)
 
         if x is None or y is None:
             self.event_logger.command_failure(step.action, error="Could not determine click coordinates")
@@ -623,7 +682,8 @@ class Executor:
                 return False
 
         args = self._get_action_args(step)
-        overlay_index = self._get_agent_overlay_index(step)
+        # Resolve target: element_id → LLM fallback
+        overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             overlay_index = self.select_best_overlay(
                 str(args.get("field_description", "")).strip() or step.action,
@@ -752,8 +812,8 @@ class Executor:
             dprint("⚠️ No text specified for TYPE action")
             return False
 
-        # Use agent's overlay_index if available and config allows it
-        overlay_index = self._get_agent_overlay_index(step)
+        # Resolve target: element_id → LLM fallback
+        overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             overlay_index = self.select_best_overlay(
                 field_description or step.action,
@@ -1318,7 +1378,8 @@ class Executor:
         before_state = self.memory_store._capture_current_state()
         current_screenshot = before_state.screenshot
 
-        overlay_index = self._get_agent_overlay_index(step)
+        # Resolve target: element_id → LLM fallback
+        overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             intent = f"select option {option} in {dropdown_description}".strip()
             overlay_index = self.select_best_overlay(
@@ -1404,7 +1465,7 @@ class Executor:
         target_description = str(args.get("target_description", "")).strip()
         current_screenshot = before_state.screenshot
 
-        overlay_index = self._get_agent_overlay_index(step)
+        overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             intent = f"upload file {file_path} in {target_description}".strip()
             overlay_index = self.select_best_overlay(
@@ -1476,7 +1537,7 @@ class Executor:
         picker_description = str(args.get("picker_description", "")).strip()
         current_screenshot = before_state.screenshot
 
-        overlay_index = self._get_agent_overlay_index(step)
+        overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             intent = f"set datetime {datetime_value} in {picker_description}".strip()
             overlay_index = self.select_best_overlay(

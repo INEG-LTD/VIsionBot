@@ -19,10 +19,18 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "Click on an interactive element on the page",
+            "description": (
+                "Click on an interactive element. Pick the element from the "
+                "INTERACTIVE ELEMENTS index by its [id] number. For elements "
+                "marked 'SEE CROP GALLERY', cross-reference the gallery images."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "element_id": {
+                        "type": "integer",
+                        "description": "The [id] number from the INTERACTIVE ELEMENTS index"
+                    },
                     "element_type": {
                         "type": "string",
                         "enum": [
@@ -35,28 +43,21 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                             "menu item",
                             "card",
                             "image",
-                            "text"
+                            "text",
+                            "input"
                         ],
                         "description": "Type of element to click"
                     },
                     "description": {
                         "type": "string",
-                        "description": "Clear description of the element to click (e.g., 'Sign In', 'menu icon', 'first result')"
+                        "description": "Clear description of the element (e.g., 'Sign In button', 'close icon')"
                     },
                     "reasoning": {
                         "type": "string",
                         "description": "Reasoning for clicking the element"
                     },
-                    "overlay_index": {
-                        "type": "integer",
-                        "description": "The index of the element to click"
-                    },
-                    "why_this_overlay_index": {
-                        "type": "string",
-                        "description": "Why this overlay index was chosen"
-                    }
                 },
-                "required": ["element_type", "description", "reasoning", "overlay_index", "why_this_overlay_index"],
+                "required": ["element_id", "element_type", "description", "reasoning"],
                 "additionalProperties": False
             }
         }
@@ -65,7 +66,10 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "type_text",
-            "description": "Type text into an input field",
+            "description": (
+                "Type text into an input field. You may specify element_id from "
+                "the INTERACTIVE ELEMENTS index to target a specific field."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -80,7 +84,11 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "reasoning": {
                         "type": "string",
                         "description": "Reasoning for typing the text into the field"
-                    }
+                    },
+                    "element_id": {
+                        "type": "integer",
+                        "description": "Optional [id] from the INTERACTIVE ELEMENTS index for the target input field"
+                    },
                 },
                 "required": ["text", "field_description", "reasoning"],
                 "additionalProperties": False
@@ -91,7 +99,10 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "clear_text",
-            "description": "Clear the text from an input field. Use this when you need to clear the text from the field before typing new text.",
+            "description": (
+                "Clear the text from an input field. You may specify element_id from "
+                "the INTERACTIVE ELEMENTS index to target a specific field."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -102,7 +113,11 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "reasoning": {
                         "type": "string",
                         "description": "Reasoning for clearing the text from the field"
-                    }
+                    },
+                    "element_id": {
+                        "type": "integer",
+                        "description": "Optional [id] from the INTERACTIVE ELEMENTS index for the target input field"
+                    },
                 },
                 "required": ["field_description", "reasoning"],
                 "additionalProperties": False
@@ -113,7 +128,10 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "select_option",
-            "description": "Select an option from a dropdown or select element",
+            "description": (
+                "Select an option from a dropdown or select element. You may specify "
+                "element_id from the INTERACTIVE ELEMENTS index to target a specific dropdown."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -128,7 +146,11 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "reasoning": {
                         "type": "string",
                         "description": "Reasoning for selecting the option"
-                    }
+                    },
+                    "element_id": {
+                        "type": "integer",
+                        "description": "Optional [id] from the INTERACTIVE ELEMENTS index for the target dropdown"
+                    },
                 },
                 "required": ["option", "dropdown_description", "reasoning"],
                 "additionalProperties": False
@@ -710,7 +732,6 @@ if _THINK_TOOL:
         "description": "Required when next_action=stuck.",
     }
 
-
 # Tools available during checkpoint mode (after a browser action in multi-target tasks).
 # Keep order explicit to bias completion first: mark progress before more thinking.
 _ACTION_TOOLS_BY_NAME: Dict[str, Dict[str, Any]] = {
@@ -848,7 +869,7 @@ def get_filtered_tools(
     base_tools = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
 
     if suppress_mark_progress:
-        return [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
+        base_tools = [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
 
     return base_tools
 

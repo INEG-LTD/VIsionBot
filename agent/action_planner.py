@@ -29,6 +29,22 @@ from lib.ai import (
 from models.models import ActionPlan, ActionStep, FailedAction, NotebookEntryType, PageElements
 from utils.event_logger import get_event_logger
 
+
+def strip_targeting_data(step: str) -> str:
+    """Remove element_ids from a recommended step string.
+
+    The LLM should only see the action intent (e.g. 'click: Martin bot avatar')
+    and must determine fresh targeting from the current element index.
+    Stale IDs cause the LLM to copy them verbatim instead of looking.
+    """
+    # Remove element_id patterns: "[id=123]" or "element_id=123"
+    step = re.sub(r'\s*\[id=\d+\]', '', step)
+    step = re.sub(r'\s*element_id\s*=\s*\d+', '', step)
+    # Clean up trailing whitespace / colons
+    step = re.sub(r'\s*:\s*$', '', step).strip()
+    return step or "continue with the recommended action"
+
+
 class ActionPlanner:
     """
     Determines a viewport-safe action plan based on:
@@ -72,6 +88,8 @@ class ActionPlanner:
         decision_context: Optional[DecisionContext] = None,
         required_tools_for_completion: Optional[List[str]] = None,
         tools_used_since_progress: Optional[set] = None,
+        element_index_text: Optional[str] = None,
+        gallery_images: Optional[List[bytes]] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -111,6 +129,8 @@ class ActionPlanner:
             if isinstance(tool, str) and str(tool).strip()
         ]
         self.tools_used_since_progress: set = tools_used_since_progress or set()
+        self.element_index_text = element_index_text
+        self.gallery_images = gallery_images
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -134,8 +154,11 @@ class ActionPlanner:
                 if self.recommended_next_step_source_id
                 else ""
             )
+            # Strip zone/coordinate data — the LLM must determine fresh
+            # targeting from the current grid images, not copy stale values.
+            cleaned_step = self._strip_targeting_data(self.recommended_next_step)
             parts.append(
-                f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{self.recommended_next_step}\n"
+                f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{cleaned_step}\n"
             )
 
         if self.checkpoint_mode and self.browser_actions_in_round > 0:
@@ -166,6 +189,11 @@ class ActionPlanner:
             return ""
 
         return "\n".join(parts) + "\n"
+
+    @staticmethod
+    def _strip_targeting_data(step: str) -> str:
+        """Delegate to module-level helper."""
+        return strip_targeting_data(step)
 
     def get_next_actions_with_function_calling(
         self,
@@ -300,13 +328,23 @@ Based on the screenshot, what is the best next action?
                 element_data,
             )
 
+            # Build image arguments
+            # Element index mode: clean screenshot + gallery pages
+            # Other modes: just the screenshot
+            image_arg = screenshot
+            multi_image_arg = None
+            if self.gallery_images:
+                multi_image_arg = [screenshot] + self.gallery_images
+                image_arg = None
+
             # Generate action using function calling
             result = generate_action_with_tools(
                 prompt=user_prompt,
                 tools=tools,
                 system_prompt=system_prompt,
                 developer_prompt=MEMORY_DEVELOPER_POLICY,
-                image=screenshot,
+                image=image_arg,
+                multi_image=multi_image_arg,
                 image_detail=self.image_detail,
                 model=self.model_name,
                 reasoning_level=self.reasoning_level,
@@ -492,41 +530,6 @@ In that call:
 
 """
 
-        # Build overlay list (biased toward elements with stronger visible text presence).
-        # Keep all overlays, but present text-bearing ones first so selector models
-        # naturally prefer semantically grounded targets.
-        sorted_elements = sorted(
-            element_data.elements,
-            key=lambda e: (
-                -int(getattr(e, "text_presence_score", 0) or 0),
-                int(getattr(e, "overlay_number", 10**9) or 10**9),
-            ),
-        )
-
-        candidate_lines: list[str] = []
-        for elem in sorted_elements:
-            idx = elem.overlay_number
-            elem_type = elem.element_type or "unknown"
-            subtype = elem.field_subtype or ""
-            label = elem.element_label or ""
-            focused = elem.is_focused
-            text_score = int(getattr(elem, "text_presence_score", 0) or 0)
-            has_visible_text = bool(getattr(elem, "has_visible_text", False))
-
-            # Compact format: Overlay {idx} type={type} [subtype={subtype}] label={label} focused={bool}
-            overlay_desc = f"Overlay {idx} type={elem_type}"
-            if subtype:
-                overlay_desc += f" subtype={subtype}"
-            if label:
-                overlay_desc += f" label=\"{label}\""
-            overlay_desc += f" text_score={text_score}"
-            overlay_desc += f" has_text={str(has_visible_text).lower()}"
-            overlay_desc += f" focused={focused}"
-
-            candidate_lines.append(overlay_desc)
-
-        overlays = "\n".join(candidate_lines) if candidate_lines else "No interactive elements found."
-
         # Build tab bar section (only shown when 2+ tabs are open)
         tab_section = ""
         if self.tab_bar:
@@ -540,8 +543,37 @@ OPEN TABS
 
         stuck_hints = ", ".join(stuck_hint_lines) if stuck_hint_lines else "none right now"
 
-        return f"""You are controlling a web browser. You can see the current page as a screenshot.
-Look at what's on screen, decide what to do, and do it — just like a person would.
+        # Build element index section
+        gallery_note = ""
+        if self.gallery_images:
+            n = len(self.gallery_images)
+            gallery_note = (
+                f"\nYou are also shown {n} CROP GALLERY image{'s' if n > 1 else ''} "
+                f"after the screenshot. Elements marked 'SEE CROP GALLERY' in the "
+                f"index have visual crops in these gallery images."
+            )
+        opening_instruction = (
+            "You are controlling a web browser. You can see the current page "
+            "as a screenshot." + gallery_note + "\n"
+            "Use the INTERACTIVE ELEMENTS index below to identify elements by their [id] number."
+        )
+        element_section = f"""═══════════════════════════════════════════════════════════════
+INTERACTIVE ELEMENTS
+═══════════════════════════════════════════════════════════════
+{self.element_index_text or "No interactive elements detected."}
+
+HOW TO CLICK:
+• Pick the [id] number from the list above and pass it as element_id.
+• For elements marked 'SEE CROP GALLERY', look at the gallery images to
+  visually identify the element before clicking.
+• The system clicks the element directly by its DOM reference — no coordinate
+  estimation needed.
+
+FOCUS STATE:
+• focused → Element already has keyboard focus
+• If you need to type and input is focused → Just call type_text (don't click first)"""
+
+        return f"""{opening_instruction}
 
 {forced_think_prompt}
 
@@ -564,17 +596,7 @@ Memory ID ledger (for citing any prior memory entry):
 Navigation history:
 {nav_summary}
 
-═══════════════════════════════════════════════════════════════
-AVAILABLE ELEMENTS (Overlays)
-═══════════════════════════════════════════════════════════════
-{overlays}
-
-Format: Overlay <#> type=<button|input|link|...> [subtype=<text|email|...>] label="<text>" focused=<true|false>
-
-FOCUS STATE:
-• focused=true → Element already has keyboard focus
-• If you need to type and input is focused=true → Just call type_text (don't click first)
-• Clicking an already-focused element usually does nothing
+{element_section}
 
 {self._format_notebook(notebook)}
 
@@ -635,7 +657,7 @@ STUCK STRATEGY SWITCH RULE:
 ═══════════════════════════════════════════════════════════════
 GUIDELINES
 ═══════════════════════════════════════════════════════════════
-1. Only act on elements visible in screenshot
+1. Only act on elements visible in the screenshot — click by their visual position
 2. Be specific in element descriptions
 3. type_text REPLACES content (doesn't append)
 4. Check focused=true before clicking to focus

@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE
 import hashlib
 
 from browser.dom import build_page_elements
+from browser.annotate import build_element_index, build_crop_gallery
 from core.browser import ExecutionTimer
 from core.executor.base import Executor
 from agent.memory import InteractionType, MemoryState, NarrativeMemory
@@ -29,6 +30,7 @@ from agent.results import MissionResult, TaskResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
 from agent.action_tools import PLANNING_TOOLS
+from agent.action_planner import strip_targeting_data
 from agent.prompts import (
     DecisionContext,
     PLANNER_DEVELOPER_POLICY,
@@ -72,6 +74,14 @@ class TaskExecutionState:
     progress_notes: List[str] = field(default_factory=list)
     failed_elements: List[FailedAction] = field(default_factory=list)
     validation_failures: int = 0
+
+
+@dataclass
+class ScreenshotPreparation:
+    """Result of _prepare_screenshot_for_mode()."""
+    screenshot_bytes: bytes
+    gallery_images: Optional[List[bytes]] = None
+    element_index_text: Optional[str] = None
 
 
 """
@@ -980,6 +990,63 @@ Output schema:
             action_str = getattr(action_step, "action", str(action_step))
             return f"You performed: {action_str}. Result: {result_str}."
 
+    def _prepare_screenshot_for_mode(
+        self,
+        snapshot,
+        detected_elements: PageElements,
+        page_info: PageInfo,
+    ) -> ScreenshotPreparation:
+        """Prepare screenshot, element index, and crop gallery for the LLM.
+
+        Returns a ScreenshotPreparation with the clean screenshot bytes,
+        optional gallery images, and element index text.
+        """
+        screenshot = snapshot.screenshot
+
+        if not screenshot:
+            return ScreenshotPreparation(screenshot_bytes=screenshot)
+
+        result = build_element_index(
+            detected_elements.elements,
+            max_elements=self.config.elements.max_index_elements,
+            viewport_only=True,
+        )
+        gallery_images = None
+        if result.text_poor_elements:
+            crops_per = self.config.elements.crops_per_gallery
+            gallery_images = build_crop_gallery(
+                screenshot,
+                result.text_poor_elements,
+                crops_per_page=crops_per,
+            )
+            dprint(f"📸 Built {len(gallery_images)} gallery page(s) for {len(result.text_poor_elements)} text-poor elements")
+
+        # Save debug screenshots
+        if self.save_screenshots:
+            try:
+                from pathlib import Path
+                from datetime import datetime
+                ss_dir = Path(self.screenshot_dir)
+                ss_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%H%M%S")
+                clean_path = str(ss_dir / f"iter{self._current_iteration:03d}_clean_{ts}.png")
+                with open(clean_path, "wb") as f:
+                    f.write(screenshot)
+                if gallery_images:
+                    for gi_idx, gi_bytes in enumerate(gallery_images):
+                        gp = str(ss_dir / f"iter{self._current_iteration:03d}_gallery{gi_idx + 1}_{ts}.png")
+                        with open(gp, "wb") as f:
+                            f.write(gi_bytes)
+                dprint(f"📸 Saved clean + {len(gallery_images or [])} gallery screenshot(s)")
+            except Exception as e:
+                dprint(f"⚠️ Could not save debug screenshots: {e}")
+
+        return ScreenshotPreparation(
+            screenshot_bytes=screenshot,
+            gallery_images=gallery_images,
+            element_index_text=result.index_text,
+        )
+
     def _run_unified_task_loop(
         self,
         task: Task,
@@ -1121,6 +1188,12 @@ Output schema:
                     reasoning=f"Failed to capture state: {str(e)}",
                 )
 
+            # Prepare screenshot + supporting data for the LLM
+            prep = self._prepare_screenshot_for_mode(snapshot, detected_elements, page_info)
+            annotated_screenshot_bytes = prep.screenshot_bytes
+            element_index_text = prep.element_index_text
+            gallery_images = prep.gallery_images
+
             # Build environment state
             memory_recent = self.memory_store.get_recent(20)
             recent_executed_ids = self.memory_store.get_recent_executed_action_ids(n=20)
@@ -1198,13 +1271,15 @@ Output schema:
                 decision_context=decision_context,
                 required_tools_for_completion=required_tools_for_completion,
                 tools_used_since_progress=tools_used_since_progress,
+                element_index_text=element_index_text,
+                gallery_images=gallery_images,
             )
 
             # Generate next actions
             try:
                 actions_list, error = action_planner.get_next_actions_with_function_calling(
                     environment_state=environment_state,
-                    screenshot=snapshot.screenshot,
+                    screenshot=annotated_screenshot_bytes,
                     notebook=self.notebook,
                     element_data=detected_elements,
                 )
@@ -1341,14 +1416,16 @@ Output schema:
                             state.checkpoint_pending = False
                             state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
                             if recommended_next_step:
-                                state.last_action_summary += f" | recommended_next_step={recommended_next_step}"
+                                cleaned = strip_targeting_data(recommended_next_step)
+                                state.last_action_summary += f" | recommended_next_step={cleaned}"
                             else:
                                 state.last_action_summary += " | recommended_next_step=<none acknowledged>"
                             self.event_logger.system_info(f"↺ Strategy switched via stuck: {replacement_strategy}")
                         elif think_next_action == "continue":
                             state.last_action_summary = f"You thought: \"{think_reasoning}\""
                             if recommended_next_step:
-                                state.last_action_summary += f" | recommended_next_step={recommended_next_step}"
+                                cleaned = strip_targeting_data(recommended_next_step)
+                                state.last_action_summary += f" | recommended_next_step={cleaned}"
                             else:
                                 state.last_action_summary += " | recommended_next_step=<none acknowledged>"
                             state.checkpoint_pending = False
