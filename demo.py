@@ -180,6 +180,11 @@ class ThinkingBorderManager:
 def apply_thinking_border(agent: Agent):
     manager = ThinkingBorderManager(agent)
     agent._thinking_border_manager = manager
+    # Executor checks browser for this manager (e.g., ask flow unblocks UI via browser attr).
+    try:
+        agent.browser._thinking_border_manager = manager
+    except Exception:
+        pass
 
     if hasattr(agent.browser.page, "on"):
         def _handle_frame_navigation(frame):
@@ -195,41 +200,68 @@ def apply_thinking_border(agent: Agent):
         except Exception:
             pass
 
-    original_capture = Agent._capture_snapshot
-    def patched_capture(self, *args, **kwargs):
-        manager.start()
-        return original_capture(self, *args, **kwargs)
-    Agent._capture_snapshot = patched_capture
+    if not getattr(Agent, "_thinking_border_capture_patched", False):
+        original_capture = Agent._capture_snapshot
 
-    original_act = Executor.act
-    def patched_act(self, *args, **kwargs):
-        manager.stop()
-        manager.disable_blocking()
-        try:
-            return original_act(self, *args, **kwargs)
-        finally:
-            manager.enable_blocking()
-    Agent.act = patched_act
+        def patched_capture(self, *args, **kwargs):
+            current_manager = getattr(self, "_thinking_border_manager", None)
+            if current_manager:
+                current_manager.start()
+            return original_capture(self, *args, **kwargs)
 
-    original_extract = Executor.extract
-    def patched_extract(self, *args, **kwargs):
-        manager.stop()
-        manager.disable_blocking()
-        try:
-            return original_extract(self, *args, **kwargs)
-        finally:
-            manager.enable_blocking()
-    Agent.extract = patched_extract
+        Agent._capture_snapshot = patched_capture
+        Agent._thinking_border_capture_patched = True
 
-    original_run_loop = Agent._run_execution_loop
-    def patched_run_loop(self, *args, **kwargs):
-        manager.enable_blocking()
-        try:
-            result = original_run_loop(self, *args, **kwargs)
-            return result
-        finally:
-            manager.disable_blocking()
-    Agent._run_execution_loop = patched_run_loop
+    if not getattr(Executor, "_thinking_border_act_patched", False):
+        original_act = Executor.act
+
+        def patched_act(self, *args, **kwargs):
+            current_manager = getattr(self.browser, "_thinking_border_manager", None)
+            if current_manager:
+                current_manager.stop()
+                current_manager.disable_blocking()
+            try:
+                return original_act(self, *args, **kwargs)
+            finally:
+                if current_manager:
+                    current_manager.enable_blocking()
+
+        Executor.act = patched_act
+        Executor._thinking_border_act_patched = True
+
+    if not getattr(Executor, "_thinking_border_extract_patched", False):
+        original_extract = Executor.extract
+
+        def patched_extract(self, *args, **kwargs):
+            current_manager = getattr(self.browser, "_thinking_border_manager", None)
+            if current_manager:
+                current_manager.stop()
+                current_manager.disable_blocking()
+            try:
+                return original_extract(self, *args, **kwargs)
+            finally:
+                if current_manager:
+                    current_manager.enable_blocking()
+
+        Executor.extract = patched_extract
+        Executor._thinking_border_extract_patched = True
+
+    if not getattr(Agent, "_thinking_border_run_loop_patched", False):
+        original_run_loop = Agent._run_execution_loop
+
+        def patched_run_loop(self, *args, **kwargs):
+            current_manager = getattr(self, "_thinking_border_manager", None)
+            if current_manager:
+                current_manager.enable_blocking()
+            try:
+                result = original_run_loop(self, *args, **kwargs)
+                return result
+            finally:
+                if current_manager:
+                    current_manager.disable_blocking()
+
+        Agent._run_execution_loop = patched_run_loop
+        Agent._thinking_border_run_loop_patched = True
 
     return manager
 
@@ -428,7 +460,7 @@ config = Config(
         crops_per_gallery=6,
     ),
     logging=DebugConfig(
-        debug_mode=True,
+        debug_mode=False,
         show_overlay_candidates=True,
         show_llm_costs=False,
         save_screenshots=True,
