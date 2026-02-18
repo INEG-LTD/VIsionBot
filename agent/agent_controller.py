@@ -763,9 +763,11 @@ class Agent:
                     action_args = getattr(action_step, "function_arguments", {}) or {}
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
+                    narrative = action_args.get("narrative", "")
                     self.event_logger.action_determined(
                         action=current_action,
                         reasoning=reasoning,
+                        narrative=narrative,
                     )
 
                     # Handle think (with next_action decision)
@@ -1065,7 +1067,11 @@ class Agent:
 
                     state.actions_since_progress += 1
                     result_str = "success" if result.success else "failed"
-                    state.last_action_summary = self._build_action_summary(action_step, result_str)
+                    state.last_action_summary = (
+                        f"{narrative} ({result_str})"
+                        if narrative
+                        else self._build_action_summary(action_step, result_str)
+                    )
                     _append_recent_action(state.last_action_summary)
                     state.checkpoint_pending = True
 

@@ -678,6 +678,29 @@ for _tool in ACTION_TOOLS:
     _properties = _params.setdefault("properties", {})
     _properties.update(_MEMORY_EVIDENCE_PROPERTY)
 
+_NARRATIVE_PROPERTY: Dict[str, Any] = {
+    "narrative": {
+        "type": "string",
+        "description": (
+            "A short first-person description of what you're doing, written for a non-technical observer. "
+            "No memory IDs, element numbers, internal strategy names, or technical references. "
+            "E.g. 'I'm clicking the sign-in button', 'I've just submitted the search form and I'm "
+            "waiting for results', 'I'm going back to the previous page to try a different link'."
+        )
+    }
+}
+
+for _tool in ACTION_TOOLS:
+    _fn = _tool.get("function", {})
+    _params = _fn.get("parameters", {})
+    if not isinstance(_params, dict):
+        continue
+    _properties = _params.setdefault("properties", {})
+    _properties.update(_NARRATIVE_PROPERTY)
+    _required = _params.setdefault("required", [])
+    if "narrative" not in _required:
+        _required.append("narrative")
+
 # Extra contract for think(next_action=stuck)
 _THINK_TOOL = next(
     (t for t in ACTION_TOOLS if t.get("function", {}).get("name") == "think"),
