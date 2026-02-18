@@ -265,45 +265,6 @@ def apply_thinking_border(agent: Agent):
 
     return manager
 
-def _convert_to_first_person(text: str) -> str:
-    if not text:
-        return text
-
-    text = text.strip()
-
-    first_person_starters = ('i ', 'i\'', 'i\'m', 'i\'ll', 'i\'ve', 'i\'d', 'i see', 'i need', 'i should', 'i will', 'i can')
-    if text.lower().startswith(first_person_starters):
-        return text
-
-    if text.startswith('The '):
-        text = 'I see ' + text.lower()
-    elif text.startswith('To '):
-        text = 'I need ' + text.lower()
-    elif text and text[0].isupper():
-        text = 'I ' + text[0].lower() + text[1:]
-    else:
-        text = 'I ' + text
-
-    if text:
-        text = text[0].upper() + text[1:]
-
-    return text
-
-def _format_action_first_person(action: str) -> str:
-    if not action:
-        return action
-
-    parts = action.split(':', 1)
-    if len(parts) != 2:
-        return f"I will now {action}"
-
-    action_type = parts[0].strip().upper()
-    target = parts[1].strip()
-
-    if action_type == "ASK":
-        return "I will now ask the user a question"
-    return f"I will now [{action_type}] >{target}<"
-
 def setup_interceptors(agent: Agent):
     
     from typing import Optional
@@ -391,9 +352,11 @@ def setup_interceptors(agent: Agent):
 def create_event_callback(agent: Agent, debug_mode: bool = True):
     def simple_event_callback(event: BotEvent):
         if event.event_type == EventType.ITERATION_START:
+            action = event.details.get('action', '?')
+            
             iteration = event.details.get('iteration', '?')
             max_iterations = event.details.get('max_iterations', '?')
-            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
+            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b> [{action}]"))
             if not config.logging.debug_mode:
                 _start_spinner()
 
@@ -401,29 +364,15 @@ def create_event_callback(agent: Agent, debug_mode: bool = True):
             if not config.logging.debug_mode:
                 _stop_spinner()
 
-            action = event.details.get('action', 'Unknown action')
+            narrative = event.details.get('narrative', '')
             reasoning = event.details.get('reasoning', '')
-            plan_step = event.details.get('plan_step')
-            pre_generated_iter = event.details.get('pre_generated_iteration')
 
             if reasoning:
-                first_person_reasoning = _convert_to_first_person(reasoning)
-                print(HTML(f"<gray>> Here's what the agent is thinking: {first_person_reasoning}</gray>"))
-            if pre_generated_iter is not None:
-                plan_note = f"Pre-generated step {plan_step or '?'} from iteration {pre_generated_iter} (reusing a cached plan)."
-                print(f"    🧠 {plan_note}")
-            first_person_action = _format_action_first_person(action)
-            print(f"    ⚡ {first_person_action}")
+                print(HTML(f"<gray>> Here's what the agent is thinking: {reasoning}</gray>"))
+            print(f"    ⚡ {narrative}")
 
-        elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):
-            reasoning = event.details.get('reasoning', '')
-            confidence = event.details.get('confidence')
-            if reasoning:
-                first_person_reasoning = _convert_to_first_person(reasoning)
-                print("\n✅ The task has been completed!")
-                print(f"📝 Reasoning: {first_person_reasoning}")
-                if confidence is not None:
-                    print(f"🎯 Confidence: {confidence:.2f}")
+        elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):            
+            print("\n✅ I have now completed the mission!")
     
     return simple_event_callback
 

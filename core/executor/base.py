@@ -513,15 +513,12 @@ class Executor:
         except Exception:
             pass
 
-        click_executed = False
         success = False
 
         try:
             highlight_click_location(self, x, y)
             # self._human_mouse_move(x, y)
             self.browser.page.mouse.click(x, y)
-            click_executed = True
-            print(f"Click executed: {click_executed}")
             
             # Capture state after click
             after_state = self.memory_store._capture_current_state()
@@ -531,28 +528,11 @@ class Executor:
             return False
 
         success = True
-        # if not click_executed:
-        #     self.event_logger.command_failure(step.action, error="An error occured while clicking")
-        #     success = False
-        # else:
-        #     # Detect if something meaningful changed
-        #     state_changed = self.memory_store.detect_state_change(before_state, after_state)
-
-        #     if state_changed:
-        #         success = True
-        #     else:
-        #         success = False
-        #         try:
-        #             self.event_logger.command_failure(command=step.action, error=f"Click at ({x}, {y}) executed but caused no visible page change")
-        #         except Exception:
-        #             pass
 
         # Build target description from step information
         target_description = str(args.get("description", "")).strip() or None
-        print(f"Target description: {target_description}")
         if not target_description and overlay_index is not None:
             target_description = f"element #{overlay_index}"
-        print(f"Target description: {target_description}")
         # Get reasoning if available; fall back to memory_store's current action reasoning
         step_reasoning = step.reasoning
         if not step_reasoning:
@@ -560,7 +540,6 @@ class Executor:
                 step_reasoning = self.memory_store.get_current_action_reasoning()
             except Exception:
                 step_reasoning = None
-        print(f"Step reasoning: {step_reasoning}")
         # Record actual interaction with goal monitor (pass explicit before_state since click already happened)
         self.memory_store.record_interaction(
             InteractionType.CLICK,
