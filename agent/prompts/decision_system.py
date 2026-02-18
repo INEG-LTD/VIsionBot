@@ -1,9 +1,8 @@
-"""Canonical decision contracts for planner/action prompts.
+"""Canonical decision contracts for action prompts.
 
 This file is the single prompt-source for:
-- planner-level outcome-ledger instructions
 - action-level memory/recommendation/evidence contracts
-- shared contradiction and progress rules
+- shared contradiction rules
 """
 
 from __future__ import annotations
@@ -16,10 +15,8 @@ from typing import List, Optional
 class DecisionContext:
     """Single source of truth for one action-level decision iteration."""
 
-    planning_iteration: int
     action_iteration: int
     mission: str
-    task: str
     current_url: str
     page_title: str
     recommended_next_step: Optional[str] = None
@@ -30,44 +27,11 @@ class DecisionContext:
 
 SHARED_CONTRADICTION_GATE = """
 CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
-• Memory evidence uses memory IDs (for example: mem_000001). Task summaries use TS#.
+• Memory evidence uses memory IDs (for example: mem_000001).
 • "I already tried X" must cite executed-action memory IDs where X was actually executed.
 • Do not use reflection-only memory as proof of execution.
 • Never claim "I haven't done X yet" if cited memory IDs show X happened.
 • If evidence is uncertain, say so explicitly in first person.
-""".strip()
-
-
-SHARED_PROGRESS_COMPLETION_CONTRACT = """
-PROGRESS COMPLETION CONTRACT:
-• Do not call mark_progress just because a click/key action executed.
-• Mark progress only when required task outcome is observed, or extract_data produced the required data.
-• If intended outcome is still blocked or unclear, continue or switch strategy instead of marking complete.
-""".strip()
-
-
-PLANNER_MEMORY_CONTRACT = """
-PLANNER MEMORY CONTRACT:
-• Use memory IDs (for example: mem_000001) for memory entries.
-• Use TS# only for completed task summaries.
-• Never treat TS# as memory evidence.
-""".strip()
-
-
-PLANNER_DEVELOPER_POLICY = f"""
-You are the mission planner.
-
-Planner policy:
-1. Plan the next single task or declare mission complete.
-2. Do not emit action-tool schema fields in planner prose.
-3. Use concise first-person reasoning grounded in current page + memory.
-4. Keep task wording actionable and tool-grounded.
-5. When task involves getting/extracting data, set required_tools_for_completion=['extract_data'].
-6. On mission_complete proposals, include final_answer_draft when available.
-7. Do not mark mission complete if your own reasoning says work is still remaining.
-
-{PLANNER_MEMORY_CONTRACT}
-{SHARED_CONTRADICTION_GATE}
 """.strip()
 
 
@@ -91,7 +55,6 @@ Output policy:
    - or deviate and state in reasoning: "Deviating from recommendation because ..."
 
 {SHARED_CONTRADICTION_GATE}
-{SHARED_PROGRESS_COMPLETION_CONTRACT}
 
 Stuck examples (use these patterns to self-diagnose):
 1. action_loop: I clicked the same overlay repeatedly without progress.
@@ -119,10 +82,8 @@ def render_decision_context(context: DecisionContext) -> str:
     reflections = ", ".join(context.reflection_memory_ids) or "none"
 
     return (
-        f"Planning iteration: {context.planning_iteration}\n"
         f"Action iteration: {context.action_iteration}\n"
         f"Mission: {context.mission}\n"
-        f"Current task: {context.task}\n"
         f"Current page: {context.current_url} — {context.page_title}\n"
         f"Recommended next step: {recommended_step}\n"
         f"Recommendation source: {recommended_from}\n"

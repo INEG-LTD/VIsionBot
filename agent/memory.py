@@ -72,7 +72,6 @@ class MemoryEntry:
     state_before: Dict[str, Any]
     state_after: Dict[str, Any]
     mission: str
-    task: str
     entry_kind: str = MemoryEntryKind.EXECUTED_ACTION.value
     memory_tags: List[str] = field(default_factory=list)
     reference_memory_ids: List[str] = field(default_factory=list)
@@ -91,7 +90,6 @@ class NarrativeMemory:
         self.entries: List[MemoryEntry] = []
         self._entries_by_id: Dict[str, MemoryEntry] = {}
         self.current_mission: str = ""
-        self.current_task: str = ""
         self.memory_entry_counter: int = 1
         self.base_knowledge: List[str] = []
         self.question_answer_pairs: List[Dict[str, str]] = []
@@ -112,14 +110,11 @@ class NarrativeMemory:
     def start_mission(self, mission: str) -> None:
         self.current_mission = (mission or "").strip()
 
-    def start_task(self, task: str) -> None:
-        self.current_task = (task or "").strip()
-
     def set_base_knowledge(self, knowledge: List[str]) -> None:
         self.base_knowledge = knowledge or []
 
     def set_user_prompt(self, prompt: str) -> None:
-        # Kept to avoid duplicating mission/task setters at call sites.
+        # Kept to avoid duplicating mission setters at call sites.
         self.current_mission = (prompt or "").strip()
 
     def add_question_answer(self, question: str, answer: str) -> None:
@@ -302,7 +297,7 @@ class NarrativeMemory:
 
         if before_state and after_state and before_state.url != after_state.url:
             return f"It navigated to {after_state.url or 'a new page'}."
-        return "It worked and moved the task forward."
+        return "It worked and moved the mission forward."
 
     def _format_action(self, action_type: str, action_params: Dict[str, Any]) -> str:
         action_type = (action_type or "action").lower()
@@ -338,18 +333,14 @@ class NarrativeMemory:
 
     def _classify_entry_kind(
         self,
-        action_type: str,
-        action_params: Dict[str, Any],
+        action_type: str
     ) -> MemoryEntryKind:
         action_type = (action_type or "").lower()
-        tool_name = str(action_params.get("tool", "")).strip().lower()
 
         if action_type == InteractionType.THINK.value:
             return MemoryEntryKind.REFLECTION
         if action_type == InteractionType.MARK_PROGRESS.value:
             return MemoryEntryKind.PROGRESS
-        if action_type == "plan_next" or tool_name == "plan_next":
-            return MemoryEntryKind.PLANNING
         if action_type in {
             InteractionType.ASSERT.value,
             InteractionType.FLAG.value,
@@ -416,7 +407,6 @@ class NarrativeMemory:
         success: bool = True,
         error_message: Optional[str] = None,
         mission: Optional[str] = None,
-        task: Optional[str] = None,
         memory_tags: Optional[List[str]] = None,
         reference_memory_ids: Optional[List[str]] = None,
     ) -> MemoryEntry:
@@ -425,7 +415,7 @@ class NarrativeMemory:
         outcome = self._determine_outcome(success, before_state, after_state, error_message)
         and_then = self._describe_outcome(outcome, before_state, after_state, error_message)
         i_did = self._format_action(action_type, params)
-        entry_kind = self._classify_entry_kind(action_type, params).value
+        entry_kind = self._classify_entry_kind(action_type).value
         refs = self.normalize_memory_ids(reference_memory_ids)
         memory_id = self._next_memory_id()
 
@@ -442,7 +432,6 @@ class NarrativeMemory:
             state_before=self._state_to_dict(before_state),
             state_after=self._state_to_dict(after_state),
             mission=(mission if mission is not None else self.current_mission),
-            task=(task if task is not None else self.current_task),
             entry_kind=entry_kind,
             memory_tags=memory_tags or [],
             reference_memory_ids=refs,
@@ -531,7 +520,6 @@ class NarrativeMemory:
             success=success,
             error_message=error_message,
             mission=self.current_mission,
-            task=self.current_task,
             reference_memory_ids=reference_memory_ids,
         )
 

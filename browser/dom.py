@@ -131,6 +131,7 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
             },
             cssPath: buildCssPath(node),
             isFocused: isFocused || false,
+            bvbDone: node.dataset.bvbDone === "true",
         });
     };
 
@@ -488,6 +489,7 @@ def build_page_elements(page, page_info: PageInfo) -> PageElements:
             text_presence_score=text_score,
             css_class=_clean_class(raw.get("className")),
             css_id=raw.get("id") or None,
+            is_done=raw.get("bvbDone", False),
         )
         detected.append(element)
     return PageElements(elements=detected)

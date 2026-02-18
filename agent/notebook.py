@@ -2,43 +2,53 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Union
+from typing import Any, Iterable, Iterator, List, Optional
 
 from models.models import NotebookEntryType
 from utils.event_logger import get_event_logger
 
+
 @dataclass
 class NotebookEntry:
-    def __init__(self, timestamp: float, task: str, iteration: Optional[int], data: Any, url: Optional[str] = None, type: NotebookEntryType = NotebookEntryType.EXTRACTION) -> None:
+    def __init__(
+        self,
+        timestamp: float,
+        description: str,
+        data: Any,
+        url: Optional[str] = None,
+        iteration: Optional[int] = None,
+        type: NotebookEntryType = NotebookEntryType.EXTRACTION,
+    ) -> None:
         self.timestamp: float = timestamp
-        self.task: str = task
-        self.iteration: Optional[int] = iteration
+        self.description: str = description
         self.data: Any = data
         self.url: Optional[str] = url
+        self.iteration: Optional[int] = iteration
         self.type: NotebookEntryType = type
+
 
 @dataclass
 class Notebook:
-    """Collects extracted data and task results during agent execution."""
+    """Collects extracted data during agent execution."""
 
     def __init__(self, entries: Optional[Iterable[NotebookEntry]] = None) -> None:
         self._entries: List[NotebookEntry] = list(entries or [])
 
     def add_extraction(
         self,
-        task: str,
+        description: str,
         data: Any,
         url: Optional[str] = None,
         timestamp: Optional[float] = None,
     ) -> None:
         self._entries.append(NotebookEntry(
             timestamp=timestamp or time.time(),
-            task=task,
+            description=description,
             data=data,
             url=url,
-            iteration=None,
-            type=NotebookEntryType.EXTRACTION))
-        get_event_logger().system_debug(f"Added extraction to notebook: {task} {data} {url}")
+            type=NotebookEntryType.EXTRACTION,
+        ))
+        get_event_logger().system_debug(f"Added extraction to notebook: {description} {data} {url}")
 
     def add_entry(self, entry: NotebookEntry) -> None:
         self._entries.append(entry)

@@ -1,8 +1,7 @@
-"""Action and planning tool schemas for function-calling.
+"""Action tool schemas for function-calling.
 
-This module is the schema layer for both:
-1) action execution tools (click/type/think/mark_progress/etc.)
-2) planner tool output (plan_next).
+This module defines the tool schemas for action execution
+(click/type/think/etc.) used by the browser agent.
 """
 
 from typing import Dict, Any, List, Optional
@@ -404,7 +403,15 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "think",
-            "description": "Stop and think about what's happening. Use this when you need to reason through a problem, plan your next step, or figure out why something isn't working. You must also decide what to do next via the next_action parameter. If the current unit is complete, prefer next_action=mark_progress. If the current strategy is stuck, use next_action=stuck to replace it (with reasoning as the new strategy and recommended_next_step as the immediate next action). No browser action is taken.",
+            "description": (
+                "Stop and think about what's happening. Decide what to do next via next_action.\n"
+                "• continue = more work needed, take another browser action.\n"
+                "• start_loop = you need to repeat an action sequence N times. Provide loop_count and loop_description. The action you just did counts as round 1.\n"
+                "• advance = (loop only) current iteration is done, move to the next round.\n"
+                "• end_loop = exit the loop early (before all rounds are done).\n"
+                "• done = mission is fully complete.\n"
+                "• stuck = current strategy failed, provide a new one in reasoning + recommended_next_step."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -414,19 +421,32 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     },
                     "next_action": {
                         "type": "string",
-                        "enum": ["continue", "mark_progress", "done", "stuck"],
-                        "description": "What to do after thinking. 'continue' = there is still a concrete unfinished requirement and you need another browser action. 'mark_progress' = the current unit is complete and should be counted now. 'done' = the task is fully complete, nothing left to do. 'stuck' = the current strategy is stuck, so provide a replacement strategy in reasoning and an immediate recommended_next_step; execution continues with the new strategy."
+                        "enum": ["continue", "start_loop", "advance", "end_loop", "done", "stuck"],
+                        "description": (
+                            "What to do after thinking. "
+                            "'continue' = need another browser action. "
+                            "'start_loop' = begin a loop (requires loop_count and loop_description). "
+                            "'advance' = (in-loop) current iteration done, advance to next round. "
+                            "'end_loop' = exit the loop early. "
+                            "'done' = mission fully complete. "
+                            "'stuck' = strategy failed, provide replacement in reasoning."
+                        )
                     },
                     "recommended_next_step": {
                         "type": "string",
-                        "description": """
-                            Optional one-step recommendation for the very next action. 
-                            Format as a concrete action hint such as 'extract_data: summarize current page' or 'click: top article title'. 
-                            Used only on the next planning iteration. 
-                            
-                            If there are missing requirements include the most important one as the recommended next step.
-                            Example: "You haven't yet done action A and action B, the most important one is action A, so the recommended next step is 'action_A: ...'."
-                            """
+                        "description": (
+                            "Optional one-step recommendation for the very next action. "
+                            "Format as a concrete action hint such as 'click: top article title'."
+                        )
+                    },
+                    "loop_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Required when next_action='start_loop'. Total number of iterations (including the one already done)."
+                    },
+                    "loop_description": {
+                        "type": "string",
+                        "description": "Required when next_action='start_loop'. Describes what one iteration looks like (e.g., 'click a job listing')."
                     },
                 },
                 "required": ["reasoning", "next_action"],
@@ -456,62 +476,8 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "mark_progress",
-            "description": "Record that you completed a unit of work. Call this every time you finish one iteration of a repeating task (e.g., liked a post, extracted a listing, filled a form). Set done=true when you've finished everything.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "What you just accomplished (e.g., 'Liked the post about machine learning by @alice', 'Extracted job listing for Software Engineer at Google')"
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Brief explanation of why this counts as progress"
-                    },
-                    "count": {
-                        "type": "integer",
-                        "description": "How many units of work this represents (default: 1)",
-                        "default": 1,
-                        "minimum": 1
-                    },
-                    "done": {
-                        "type": "boolean",
-                        "description": "Only relevant for open-ended tasks (target='all'). Set to true when there's nothing left to do. For numeric targets, the system auto-completes when the count is reached — keep this false.",
-                        "default": False
-                    },
-                },
-                "required": ["description", "reasoning"],
-                "additionalProperties": False
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "revise_target",
-            "description": "Adjust how many times you need to do something. Use this if you discover the actual number differs from the original target (e.g., there are only 3 items when asked for 5).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "new_target": {
-                        "type": "integer",
-                        "description": "The revised target count",
-                        "minimum": 1
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Why the target needs to change (e.g., 'Only 3 job listings are visible on the page, not 5')"
-                    }
-                },
-                "required": ["new_target", "reason"],
-                "additionalProperties": False
-            }
-        }
-    },
+
+
     {
         "type": "function",
         "function": {
@@ -701,7 +667,7 @@ _MEMORY_EVIDENCE_PROPERTY: Dict[str, Any] = {
     },
 }
 
-_EVIDENCE_TOOLS = {"click", "type_text", "extract_data", "think", "mark_progress"}
+_EVIDENCE_TOOLS = {"click", "type_text", "extract_data", "think"}
 for _tool in ACTION_TOOLS:
     _fn = _tool.get("function", {})
     if _fn.get("name") not in _EVIDENCE_TOOLS:
@@ -732,8 +698,8 @@ if _THINK_TOOL:
         "description": "Required when next_action=stuck.",
     }
 
-# Tools available during checkpoint mode (after a browser action in multi-target tasks).
-# Keep order explicit to bias completion first: mark progress before more thinking.
+# Tools available during checkpoint mode (after a browser action).
+# Only think is available — agent must decide next via think's next_action.
 _ACTION_TOOLS_BY_NAME: Dict[str, Dict[str, Any]] = {
     tool["function"]["name"]: tool for tool in ACTION_TOOLS
 }
@@ -742,7 +708,6 @@ NON_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
     if tool["function"]["name"] != "think"
 ]
 CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
-    _ACTION_TOOLS_BY_NAME["mark_progress"],
     _ACTION_TOOLS_BY_NAME["think"],
 ]
 
@@ -758,96 +723,7 @@ DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
-# ============================================================================
-# PLANNING TOOLS SCHEMA (used by incremental mission planner)
-# ============================================================================
-
-PLANNING_TOOLS: List[Dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "plan_next",
-            "description": (
-                "Decide the next task to execute for this mission, or declare the mission complete. "
-                "Each task should be a self-contained piece of work the browser agent can accomplish. "
-                "Task wording must be tool-grounded (click/type/press/scroll/open/extract_data, etc.). "
-                "Example: If the mission asks for summaries/examples/key points, phrase the task as extraction "
-                "Set task to an empty string when the mission is fully complete."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Your reasoning about what to do next — what's been done, what's left, and why this task is the right next step"
-                    },
-                    "task": {
-                        "type": "string",
-                        "description": "The next task to execute. Use tool-grounded wording that maps to available functions; Leave empty (\"\") if the mission is complete."
-                    },
-                    "target": {
-                        "oneOf": [
-                            {"type": "integer", "minimum": 1},
-                            {"type": "string", "enum": ["all"]}
-                        ],
-                        "description": "How many times to repeat this task. Use an integer (e.g. 3) for specific counts, or \"all\" for open-ended. Default: 1",
-                        "default": 1
-                    },
-                    "start_hint": {
-                        "type": "string",
-                        "description": "Optional hint for how to begin this task (e.g., 'click the search bar first')"
-                    },
-                    "required_tools_for_completion": {
-                        "type": "array",
-                        "description": (
-                            "Optional strict tool grounding for this task. "
-                            "If present, the task should only be considered complete after these tools are actually used "
-                            "within the unit of work (for example: ['extract_data'] for data retrieval outcomes)."
-                        ),
-                        "items": {
-                            "type": "string",
-                            "enum": [
-                                "click",
-                                "type_text",
-                                "clear_text",
-                                "select_option",
-                                "upload_file",
-                                "set_datetime",
-                                "press_key",
-                                "scroll_page",
-                                "open_url",
-                                "go_back",
-                                "go_forward",
-                                "extract_data",
-                                "ask_user",
-                                "flag",
-                                "switch_tab",
-                                "close_tab",
-                                "open_tab",
-                                "dismiss_dialog",
-                                "think",
-                                "assert_condition",
-                                "mark_progress",
-                                "revise_target",
-                                "wait_for",
-                            ]
-                        }
-                    },
-                    "final_answer_draft": {
-                        "type": "string",
-                        "description": "Optional final user-facing answer draft when declaring mission complete."
-                    },
-                },
-                "required": ["reasoning", "task"],
-                "additionalProperties": False
-            }
-        }
-    }
-]
-
-
 def get_filtered_tools(
-    suppress_mark_progress: bool = False,
     checkpoint_mode: bool = False,
     dialog_pending: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -855,7 +731,6 @@ def get_filtered_tools(
     Get the appropriate tool list based on current state.
 
     Args:
-        suppress_mark_progress: If True, remove mark_progress from available tools
         checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of the normal action tools
         dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
 
@@ -866,12 +741,7 @@ def get_filtered_tools(
     if dialog_pending:
         return DIALOG_CHECKPOINT_TOOLS if checkpoint_mode else DIALOG_TOOLS
 
-    base_tools = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
-
-    if suppress_mark_progress:
-        base_tools = [tool for tool in base_tools if tool["function"]["name"] != "mark_progress"]
-
-    return base_tools
+    return CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
 
 
 # ============================================================================
@@ -880,5 +750,4 @@ def get_filtered_tools(
 
 __all__ = [
     "ACTION_TOOLS",
-    "PLANNING_TOOLS",
 ]

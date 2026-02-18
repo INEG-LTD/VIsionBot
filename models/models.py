@@ -1,10 +1,5 @@
 """
 Consolidated data models for browser-vision-bot.
-
-This module contains all core data models organized by category:
-- Core models: ActionType, PageSection, DetectedElement, etc.
-- Task models: Task, MissionPlan
-- Intent models: ActionIntent
 """
 from __future__ import annotations
 
@@ -74,6 +69,7 @@ class DetectedElement(BaseModel):
     )
     css_class: Optional[str] = Field(default=None, description="CSS class attribute of the element")
     css_id: Optional[str] = Field(default=None, description="CSS id attribute of the element")
+    is_done: Optional[bool] = Field(default=False, description="True when element was already interacted with during the current loop (marked via data-bvb-done DOM attribute)")
 
 
 
@@ -184,8 +180,6 @@ class ActionStep(BaseModel):
                 f"dismiss_dialog: accept={arguments.get('accept', False)}"
                 + (f" | input_text={arguments.get('input_text', '')}" if arguments.get("input_text") else "")
             ).strip()
-        if function_name == "plan_next":
-            return f"plan_next: {arguments.get('task', '')}".strip()
         return f"{function_name}: {arguments}"
 
     def _parse_action(text: str) -> tuple[str, str]:
@@ -318,85 +312,6 @@ class FailedAction(BaseModel):
     url: str = Field(description="The page URL where the action was attempted")
     page_title: Optional[str] = Field(default=None, description="The page title where the action was attempted")
     timestamp: Optional[float] = Field(default=None, description="When the action failed (Unix timestamp)")
-
-
-# ============================================================================
-# TASK MODELS - Unified task system with targets
-# ============================================================================
-
-class TaskStatus(str, Enum):
-    """Status of task execution"""
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class TaskCompletionStatus(str, Enum):
-    """How a task finished"""
-    COMPLETED = "completed"
-    PARTIAL = "partial"
-    STUCK = "stuck"
-    BLOCKED = "blocked"
-
-
-@dataclass
-class Task:
-    """A unified task with a target. target=1 for single actions, target=N for repetitive, target='all' for indefinite."""
-    goal: str
-    target: Union[int, str] = 1  # 1, 5, "all"
-    required_tools_for_completion: List[str] = field(default_factory=list)
-    start_hint: Optional[str] = None
-    progress: int = 0
-    task_id: str = ""
-    status: TaskStatus = TaskStatus.PENDING
-    completion_status: Optional[TaskCompletionStatus] = None
-    created_at: float = 0.0
-    completed_at: Optional[float] = None
-
-
-@dataclass
-class MissionPlan:
-    """Complete plan of tasks for executing a mission"""
-    tasks: List[Task] = field(default_factory=list)
-    current_task_index: int = 0
-
-    def get_current_task(self) -> Optional[Task]:
-        """Get the current task being executed"""
-        if 0 <= self.current_task_index < len(self.tasks):
-            return self.tasks[self.current_task_index]
-        return None
-
-    def get_completed_tasks(self) -> List[Task]:
-        """Get all completed tasks"""
-        return [t for t in self.tasks if t.status == TaskStatus.COMPLETED]
-
-    def get_pending_tasks(self) -> List[Task]:
-        """Get all pending tasks"""
-        return [t for t in self.tasks if t.status == TaskStatus.PENDING]
-
-    def all_tasks_completed(self) -> bool:
-        """Check if all tasks have been completed"""
-        return all(t.status == TaskStatus.COMPLETED for t in self.tasks)
-
-    def get_task_by_id(self, task_id: str) -> Optional[Task]:
-        """Find a task by its ID"""
-        for task in self.tasks:
-            if task.task_id == task_id:
-                return task
-        return None
-
-
-class TaskDefinition(BaseModel):
-    """Task definition from the mission planner"""
-    task: str
-    target: Union[int, str] = 1  # 1, 5, "all"
-    start_hint: Optional[str] = None
-
-
-class MissionPlannerOutput(BaseModel):
-    """Output from Mission Planner decomposition"""
-    tasks: list[TaskDefinition]
 
 
 # ============================================================================

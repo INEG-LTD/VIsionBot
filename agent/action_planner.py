@@ -16,7 +16,6 @@ from agent.prompts import (
     MEMORY_DEVELOPER_POLICY,
     DecisionContext,
     SHARED_CONTRADICTION_GATE,
-    SHARED_PROGRESS_COMPLETION_CONTRACT,
     render_decision_context,
 )
 from lib.ai import (
@@ -68,28 +67,26 @@ class ActionPlanner:
         interaction_summary_limit: Optional[int] = None,
         include_visible_text_in_agent_context: bool = False,
         max_actions_per_plan: int = 6,
-        task_target: Union[int, str] = 1,
-        task_progress: int = 0,
-        task_history: Optional[List[str]] = None,
-        force_think: bool = False,
         current_iteration: int = 0,
         browser_actions_in_round: int = 0,
         checkpoint_mode: bool = False,
-        suppress_mark_progress: bool = False,
         active_strategy: Optional[str] = None,
         last_action_summary: Optional[str] = None,
         tab_bar: Optional[str] = None,
         dialog_notice: Optional[str] = None,
         tab_events: Optional[List[str]] = None,
         dialog_pending: bool = False,
-        start_hint: Optional[str] = None,
         recommended_next_step: Optional[str] = None,
         recommended_next_step_source_id: Optional[str] = None,
         decision_context: Optional[DecisionContext] = None,
-        required_tools_for_completion: Optional[List[str]] = None,
-        tools_used_since_progress: Optional[set] = None,
         element_index_text: Optional[str] = None,
         gallery_images: Optional[List[bytes]] = None,
+        # Loop state
+        in_loop: bool = False,
+        loop_round: int = 0,
+        loop_count: Optional[int] = None,
+        loop_description: str = "",
+        recent_actions: Optional[List[str]] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -100,47 +97,53 @@ class ActionPlanner:
             reasoning = ReasoningLevel.coerce(reasoning_level)
         self.reasoning_level: ReasoningLevel = reasoning
         self.image_detail = image_detail
-        self._system_prompt_cache: dict[str, str] = {}  # Cache system prompts
+        self._system_prompt_cache: dict[str, str] = {}
         self.interaction_summary_limit = interaction_summary_limit
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.memory_store: NarrativeMemory = memory_store
         self.max_actions_per_plan = max_actions_per_plan
-        self.task_target = task_target
-        self.task_progress = task_progress
-        self.task_history = task_history or []
-        self.force_think = force_think
         self.current_iteration = current_iteration
         self.browser_actions_in_round = browser_actions_in_round
         self.checkpoint_mode = checkpoint_mode
-        self.suppress_mark_progress = suppress_mark_progress
         self.active_strategy = active_strategy
         self.last_action_summary = last_action_summary
         self.tab_bar = tab_bar
         self.dialog_notice = dialog_notice
         self.tab_events = tab_events or []
         self.dialog_pending = dialog_pending
-        self.start_hint = start_hint
         self.recommended_next_step = recommended_next_step
         self.recommended_next_step_source_id = recommended_next_step_source_id
         self.decision_context = decision_context
-        self.required_tools_for_completion = [
-            str(tool).strip().lower()
-            for tool in (required_tools_for_completion or [])
-            if isinstance(tool, str) and str(tool).strip()
-        ]
-        self.tools_used_since_progress: set = tools_used_since_progress or set()
         self.element_index_text = element_index_text
         self.gallery_images = gallery_images
+        # Loop state
+        self.in_loop = in_loop
+        self.loop_round = loop_round
+        self.loop_count = loop_count
+        self.loop_description = loop_description
+        self.recent_actions = recent_actions or []
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
 
         Contains:
-        - ACTIVE STRATEGY: persistent reasoning from the last think(continue), shown every iteration until cleared
+        - LOOP STATUS: current loop round/count when in a loop
+        - ACTIVE STRATEGY: persistent reasoning from the last think(continue)
         - LAST ACTION: what the agent just did and the result
+        - RECENT ACTIONS: compact log of last ~10 actions
         - TAB EVENTS: tab opens/closes/dialog events since the last iteration
         """
         parts = []
+
+        # Loop framing
+        if self.in_loop and self.loop_count:
+            remaining = max(0, self.loop_count - self.loop_round + 1)
+            parts.append(
+                f"═══ LOOP {self.loop_round} OF {self.loop_count}: {self.loop_description} ═══\n"
+                f"Elements marked [DONE] in the index have already been handled.\n"
+                f"{remaining} round{'s' if remaining != 1 else ''} remaining.\n"
+                f"After completing this round, call think(next_action=advance).\n"
+            )
 
         if self.active_strategy:
             parts.append(f"ACTIVE STRATEGY:\n{self.active_strategy}\n")
@@ -154,32 +157,23 @@ class ActionPlanner:
                 if self.recommended_next_step_source_id
                 else ""
             )
-            # Strip zone/coordinate data — the LLM must determine fresh
-            # targeting from the current grid images, not copy stale values.
             cleaned_step = self._strip_targeting_data(self.recommended_next_step)
             parts.append(
                 f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{cleaned_step}\n"
             )
 
         if self.checkpoint_mode and self.browser_actions_in_round > 0:
-            missing_tools = [
-                t for t in self.required_tools_for_completion
-                if t not in self.tools_used_since_progress
-            ]
-            if missing_tools:
-                parts.append(
-                    "CHECKPOINT HINT:\n"
-                    "You have uncounted browser work, but mark_progress is BLOCKED until you use: "
-                    f"{', '.join(missing_tools)}.\n"
-                    "Call think(next_action=continue) and do the remaining required tool(s) first.\n"
-                )
-            else:
-                parts.append(
-                    "CHECKPOINT HINT:\n"
-                    "You already have uncounted browser work in the current unit.\n"
-                    "If no requirement remains, prefer mark_progress now "
-                    "(or think with next_action=mark_progress).\n"
-                )
+            parts.append(
+                "CHECKPOINT:\n"
+                "You just performed a browser action. Decide what to do next via think().\n"
+            )
+
+        # Recent actions log
+        if self.recent_actions:
+            actions_str = "\n".join(
+                f"  {i+1}. {a}" for i, a in enumerate(self.recent_actions)
+            )
+            parts.append(f"RECENT ACTIONS:\n{actions_str}\n")
 
         if self.tab_events:
             events_str = "\n".join(f"- {e}" for e in self.tab_events)
@@ -234,25 +228,13 @@ ACTIVE STRATEGY CONTINUATION MODE
 You already have an ACTIVE STRATEGY. Continue it.
 
 Rules:
-1. Do not create a new plan unless:
-   - you are stuck, or
-   - the page changed enough that ACTIVE STRATEGY no longer applies.
-2. The screenshot and current overlays are the source of truth.
-   If ACTIVE STRATEGY or RECOMMENDED NEXT STEP conflicts with what is visible now, update strategy immediately.
+1. Do not create a new plan unless stuck or page changed enough.
+2. The screenshot is the source of truth. If ACTIVE STRATEGY conflicts with what's visible, update immediately.
 3. Do not restate the full plan.
-4. If you call think with next_action=continue, only provide:
-   - one short status update in natural first-person language
-   - one short immediate next step (for example: "I'm now going to ...", "Next I'll ...")
-   - avoid robotic labels
-5. If the unit of work is complete, choose mark_progress (or think with next_action=mark_progress) instead of extending reasoning.
-6. If your recent attempts did not create visible progress toward the task, call think(next_action=stuck).
-7. In that stuck think call:
-   - reasoning should be natural first-person language and describe my new replacement ACTIVE STRATEGY
-   - reasoning should briefly explain how this new strategy is meaningfully different from what you just tried
-   - recommended_next_step should be one concrete immediate action for the new strategy
-8. You should keep working after next_action=stuck. It is a strategy switch, not task completion.
-9. For every non-think tool call, the reasoning must follow ACTIVE STRATEGY and explain in first-person
-   how the action advances that strategy.
+4. If you call think with next_action=continue, only provide a brief first-person status + next step.
+5. If your recent attempts didn't create visible progress, call think(next_action=stuck).
+6. You should keep working after next_action=stuck — it's a strategy switch, not completion.
+7. For every non-think tool call, reasoning must explain how the action advances the ACTIVE STRATEGY.
 """
 
             decision_context_block = (
@@ -262,62 +244,37 @@ Rules:
                     f"Planning iteration: unknown\n"
                     f"Action iteration: {self.current_iteration}\n"
                     f"Mission: {environment_state.user_prompt}\n"
-                    f"Current task: {self.user_prompt}\n"
                     f"Current page: {environment_state.current_url} — {environment_state.page_title}"
                 )
             )
 
             if self.checkpoint_mode:
-                cap_rule_line = ""
-                if isinstance(self.task_target, int):
-                    remaining = max(self.task_target - self.task_progress, 0)
-                    cap_rule_line = (
-                        f"\nHard cap for this task: {self.task_target} total units.\n"
-                        f"Progress: {self.task_progress}/{self.task_target} recorded ({remaining} remaining).\n"
-                        f"Do not exceed this cap. If remaining is 0, do not start a new unit of work.\n"
-                    )
-                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Task: {self.user_prompt}
+                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Mission: {self.user_prompt}
 Decision context:
 {decision_context_block}
 
-Progress so far: {self.task_progress}/{self.task_target} recorded. Your last action is NOT yet counted.{cap_rule_line}
-Unit complete means: one full pass of the task above is done for the current item (including required end state like returning to the source page, if the task asks for it).
+CHECKPOINT — choose via think():
+• think(next_action=continue) — more work needed for the mission
+• think(next_action=start_loop, loop_count=N, loop_description="...") — need to repeat an action N times
+• think(next_action=advance) — (in loop) current iteration done, move to next round
+• think(next_action=done) — mission is fully complete
+• think(next_action=stuck) — strategy failed, provide new one
 
-CHECKPOINT DECISION (choose exactly one):
-1) If the current unit is complete now, call mark_progress immediately
-   OR call think with next_action=mark_progress.
-2) Only if the unit is NOT complete, call think with next_action=continue and include exactly:
-   - one short first-person status sentence naming one specific unfinished requirement from the Task text
-     (example styles: "I haven't ... yet.", "I have ... but still need to ...")
-   - one short first-person immediate next-step sentence with one concrete browser action
-     (example styles: "Next I'll ...", "I'll now ...")
-3) Do not use think(next_action=continue) to move to the next item/article/record.
-   First record completion for the current unit.
-4) Do not re-attempt an already completed unit.
-   Only re-attempt if the user explicitly asks, or if prior completion is invalid
-   (failed, missing required evidence, or no longer true after page/state changes).
-
-Do NOT start a new unit (next item/article/record) before mark_progress is recorded for the current one.
+{SHARED_CONTRADICTION_GATE}
 """
             else:
-                # For single-target tasks, include hint directly
-                hint_line = f"\nHint: {self.start_hint}" if self.start_hint and self.task_target == 1 else ""
-                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}You are currently trying to: {self.user_prompt}{hint_line}
+                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Mission: {self.user_prompt}
 
 Decision context:
 {decision_context_block}
 
 Based on the screenshot, what is the best next action?
-"""
-            user_prompt += f"""
 
 {SHARED_CONTRADICTION_GATE}
-{SHARED_PROGRESS_COMPLETION_CONTRACT}
 """
 
             # Get filtered tools based on current state
             tools = get_filtered_tools(
-                suppress_mark_progress=self.suppress_mark_progress,
                 checkpoint_mode=self.checkpoint_mode,
                 dialog_pending=self.dialog_pending,
             )
@@ -370,8 +327,6 @@ Based on the screenshot, what is the best next action?
                     function_name=action["function_name"],
                     arguments=action["arguments"],
                 )
-                get_event_logger().command_generated(command=action_step)
-
                 actions.append(action_step)
 
             return actions, None
@@ -407,128 +362,10 @@ Based on the screenshot, what is the best next action?
             getattr(state, "url_pointer", None)
         )
 
-        # Build progress context
+        # Build loop context (only shown when in a loop)
         progress_info = ""
-        if self.task_target != 1 or self.task_progress > 0 or self.task_history:
-            # Format target display
-            target_display = self.task_target if isinstance(self.task_target, str) else f"{self.task_target}"
-            numeric_target = self.task_target if isinstance(self.task_target, int) else None
-            current_round = self.task_progress + 1
 
-            if self.task_progress > 0 and self.task_history:
-                # Mid-task: per-iteration reframing
-                last_completed = self.task_history[-1]
-                is_round_start = self.browser_actions_in_round == 0
-
-                history_lines = ""
-                for i, item in enumerate(self.task_history, 1):
-                    history_lines += f"  {i}. {item} ✓\n"
-
-                if numeric_target:
-                    remaining = numeric_target - self.task_progress
-
-                    # Only show the "do it again" nudge and hint at the start of a new round
-                    round_start_hint = (
-                        f'You just finished: "{last_completed}"\n'
-                        f'What you see on screen is from your previous round — do it again.\n'
-                    ) if is_round_start else ""
-                    hint_at_round_start = f"Hint: {self.start_hint}\n" if self.start_hint and is_round_start else ""
-
-                    progress_info = f"""
-═══════════════════════════════════════════════════════════════
-ROUND {current_round} OF {target_display}
-═══════════════════════════════════════════════════════════════
-
-Task: {self.user_prompt}
-{hint_at_round_start}
-Completed:
-{history_lines}
-{round_start_hint}{remaining} round{"s" if remaining != 1 else ""} left.
-
-• After each round, call mark_progress to record what you did
-• mark_progress only counts after real browser actions — you must actually do the work each time
-
-"""
-                else:
-                    # Open-ended target ("all")
-                    round_start_hint = (
-                        f'You just finished: "{last_completed}"\n'
-                        f'What you see on screen may include results of your previous work.\n'
-                    ) if is_round_start else ""
-                    hint_at_round_start = f"Hint: {self.start_hint}\n" if self.start_hint and is_round_start else ""
-
-                    progress_info = f"""
-═══════════════════════════════════════════════════════════════
-PROGRESS ({self.task_progress} done so far)
-═══════════════════════════════════════════════════════════════
-
-Task: {self.user_prompt}
-{hint_at_round_start}
-Completed:
-{history_lines}
-{round_start_hint}Keep going — look for more to do.
-
-• After each unit of work, call mark_progress to record it
-• When there's nothing left to do, call mark_progress with done=true
-
-"""
-            else:
-                # First iteration: no progress yet
-                if numeric_target:
-                    hint_line = f"Hint: {self.start_hint}\n" if self.start_hint else ""
-                    progress_info = f"""
-═══════════════════════════════════════════════════════════════
-ROUND 1 OF {target_display}
-═══════════════════════════════════════════════════════════════
-
-Task: {self.user_prompt}
-{hint_line}
-No rounds completed yet — get started.
-
-• After each round, call mark_progress to record what you did
-• mark_progress only counts after real browser actions — you must actually do the work each time
-
-"""
-                else:
-                    hint_line = f"Hint: {self.start_hint}\n" if self.start_hint else ""
-                    progress_info = f"""
-═══════════════════════════════════════════════════════════════
-TASK PROGRESS
-═══════════════════════════════════════════════════════════════
-
-Task: {self.user_prompt}
-{hint_line}Progress: 0/{target_display}
-
-No progress yet — get started.
-
-• After each unit of work, call mark_progress to record it
-• When there's nothing left to do, call mark_progress with done=true
-
-"""
-
-        # Add forced think prompt if stuck
         forced_think_prompt = ""
-        if self.force_think:
-            forced_think_prompt = """
-═══════════════════════════════════════════════════════════════
-⚠️ STUCK DETECTION - THINK FIRST
-═══════════════════════════════════════════════════════════════
-
-You've been working for a while without making progress.
-
-Before doing anything else, call think() and reason about:
-• What have I already tried, and what did not change?
-• What different approach can I try next?
-• Why is this next approach meaningfully different?
-
-When this block appears, your next action should be:
-• think(next_action=stuck)
-
-In that call:
-• reasoning = your replacement ACTIVE STRATEGY in natural first-person language
-• recommended_next_step = one concrete immediate next action
-
-"""
 
         # Build tab bar section (only shown when 2+ tabs are open)
         tab_section = ""
@@ -586,7 +423,7 @@ WHAT YOU'VE DONE SO FAR
 Executed action ledger (facts only):
 {executed_action_ledger}
 
-Required tools for completion this task unit: {", ".join(self.required_tools_for_completion) if self.required_tools_for_completion else "none"}
+Mission: {self.user_prompt}
 
 Potential stuck patterns from memory scan: {stuck_hints}
 
@@ -628,11 +465,26 @@ TAB MANAGEMENT:
 • dismiss_dialog - Accept or dismiss a JavaScript dialog
 
 COGNITIVE ACTIONS:
-• think - Stop and reason about your situation (no browser action)
+• think - Stop and reason; decide next via next_action param
+  - continue: keep working
+  - start_loop: begin repeating an action (provide loop_count, loop_description)
+  - advance: (in loop) current iteration done, move to next round
+  - end_loop: exit loop early
+  - done: mission complete
+  - stuck: switch strategy
 • assert_condition - Check if something is true from the screenshot
-• mark_progress - Record completion of a unit of work
-• revise_target - Adjust your target mid-execution
 • wait_for - Wait for a condition with timeout
+
+═══════════════════════════════════════════════════════════════
+LOOPS
+═══════════════════════════════════════════════════════════════
+When you need to repeat an action for multiple targets:
+1. Do the first action normally.
+2. At the checkpoint, call think(next_action="start_loop", loop_count=N, loop_description="...").
+   N includes the action you already did (round 1).
+3. Each subsequent round: do the action, then think(next_action="advance").
+4. Elements you've already interacted with show [DONE] in the element index.
+5. The loop auto-completes after the last round, or use think(next_action="end_loop") to exit early.
 
 ═══════════════════════════════════════════════════════════════
 ERROR RECOVERY
@@ -652,7 +504,6 @@ STUCK STRATEGY SWITCH RULE:
   - recommended_next_step should be one concrete immediate action
 
 {SHARED_CONTRADICTION_GATE}
-{SHARED_PROGRESS_COMPLETION_CONTRACT}
 
 ═══════════════════════════════════════════════════════════════
 GUIDELINES
@@ -662,10 +513,8 @@ GUIDELINES
 3. type_text REPLACES content (doesn't append)
 4. Check focused=true before clicking to focus
 5. Don't repeat failed actions
-6. Use natural language when marking progress
-7. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
-8. In checkpoint mode, finish/record the current unit with mark_progress before starting the next unit
-9. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
+6. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
+7. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
 10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
@@ -719,7 +568,7 @@ Choose the next action to take.
 
         notebook_str = ""
         for i, entry in enumerate(entries, 1):
-            notebook_str += f"{i}. {entry.task} → {entry.data}\n"
+            notebook_str += f"{i}. {entry.description} → {entry.data}\n"
 
         return f"""
 ═══════════════════════════════════════════════════════════════

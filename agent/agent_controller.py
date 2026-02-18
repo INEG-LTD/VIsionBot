@@ -1,9 +1,10 @@
-"""Agent controller with mission/task orchestration.
+"""Agent controller — mission execution with inline loops.
 
 Architecture overview:
-- Planner (plan_next) proposes tasks with required_tools_for_completion.
-- Controller executes tools, records memory, and marks progress per task.
-- Mission completion: planner declares done, controller trusts it.
+- Mission goes directly to the execution loop (no planner).
+- Agent uses browser actions to accomplish the mission.
+- When repetition is needed, the agent declares a loop inline via think(start_loop).
+- Loop rounds are advanced with think(advance) and exited with think(end_loop) or think(done).
 """
 
 import time
@@ -18,30 +19,17 @@ from core.browser import ExecutionTimer
 from core.executor.base import Executor
 from agent.memory import InteractionType, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
-from models.models import (
-    MissionPlan,
-    Task,
-    TaskStatus,
-    TaskCompletionStatus,
-    NotebookEntryType,
-    FailedAction,
-)
-from agent.results import MissionResult, TaskResult
+from models.models import FailedAction
+from agent.results import MissionResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
-from agent.action_tools import PLANNING_TOOLS
 from agent.action_planner import strip_targeting_data
 from agent.prompts import (
     DecisionContext,
-    PLANNER_DEVELOPER_POLICY,
-    PLANNER_MEMORY_CONTRACT,
-    SHARED_CONTRADICTION_GATE,
 )
 from utils.debug_print import dprint
 from lib.ai import (
     ReasoningLevel,
-    generate_action_with_tools,
-    get_default_agent_reasoning_level,
     set_default_model,
     set_default_reasoning_level,
     set_default_agent_model,
@@ -63,17 +51,22 @@ UserQuestionCallback = Callable[[str, dict], str]
 
 
 @dataclass
-class TaskExecutionState:
-    """Mutable per-task execution state for the unified loop."""
+class ExecutionState:
+    """Mutable execution state for the mission loop."""
     total_actions: int = 0
     actions_since_progress: int = 0
     browser_actions_since_progress: int = 0
     checkpoint_pending: bool = False
-    suppress_mark_progress: bool = False
     last_action_summary: Optional[str] = None
-    progress_notes: List[str] = field(default_factory=list)
     failed_elements: List[FailedAction] = field(default_factory=list)
     validation_failures: int = 0
+    # Loop state
+    in_loop: bool = False
+    loop_count: Optional[int] = None
+    loop_round: int = 0
+    loop_description: str = ""
+    # Recent action log (compact summaries, last ~10)
+    recent_actions: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -85,19 +78,14 @@ class ScreenshotPreparation:
 
 
 """
-Agent Controller - Task-Based Execution
+Agent Controller - Mission Execution
 
-Runs tasks through the task orchestration and mini-loop execution engine.
+Runs missions through the execution loop with inline loops for repetition.
 """
 
 class Agent:
     """
-    Agent controller running task-based execution.
-
-    Provides:
-    - Task decomposition (Normal and Sequential tasks)
-    - Sequential task iteration with Sequence Planner
-    - Result tracking and accumulation
+    Agent controller running mission execution.
     """
     
     def __init__(
@@ -125,11 +113,11 @@ class Agent:
         set_event_logger(self.event_logger)  # Set as global
         
         self.iteration_delay = 0.5
-        self.task_start_url: Optional[str] = None
-        self.task_start_time: Optional[float] = None
+        self.mission_start_url: Optional[str] = None
+        self.mission_start_time: Optional[float] = None
         self.base_knowledge = base_knowledge or []  # Base knowledge rules that guide agent behavior
         self.notebook: Notebook = Notebook()
-        self._task_tracker: Dict[str, Dict[str, Any]] = {}
+        self._mission_tracker: Dict[str, Dict[str, Any]] = {}
         # Completion / evaluation behavior
         self.clarification_callback = clarification_callback
         self._user_inputs: List[Dict[str, Any]] = []
@@ -150,7 +138,6 @@ class Agent:
         self.command_model_name: str = self.config.model.command_model
         self.command_reasoning_level: ReasoningLevel = self.config.model.command_reasoning_level
         self.image_detail: str = config.model.image_detail
-        self.max_iterations = config.execution.max_iterations
         set_default_model(self.command_model_name)
         set_default_reasoning_level(self.command_reasoning_level)
         set_default_agent_model(self.agent_model_name)
@@ -165,7 +152,7 @@ class Agent:
 
         self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
-        # Execution timer for tracking task, iteration, and action timings
+        # Execution timer for tracking mission, iteration, and action timings
         self.execution_timer = ExecutionTimer()
         
         self.show_llm_costs = config.logging.show_llm_costs
@@ -175,10 +162,9 @@ class Agent:
 
         self._current_iteration = 0
 
-        # Initialize task-based execution system
-        self._initialize_task_system(
-            auto_complete_extract_commands=self.config.execution.auto_complete_extract_commands,
-        )
+        # Initialize execution system
+        self.auto_complete_extract_commands = self.config.execution.auto_complete_extract_commands
+        self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
 
     def __enter__(self) -> 'Agent':
         """
@@ -186,7 +172,7 @@ class Agent:
         
         Example:
             >>> with Agent(browser, config) as agent:
-            ...     agent.run_task("Click the button")
+            ...     agent.run_mission("Click the button")
             # Automatically calls end() on exit
         """
         self._start()
@@ -230,7 +216,6 @@ class Agent:
         self.current_attempt = 0
         self.last_screenshot_hash = None
         self.last_dom_signature = None
-        self.agent_controller = None  # Current agent controller instance (set during execute_task)
         
         # Screenshot caching for performance optimization
         self._cached_clean_screenshot = None
@@ -257,7 +242,7 @@ class Agent:
                 handler=interceptor_data["handler"]
             )
         
-        # Run the mission (Decompose user request into tasks and execute them sequentially)
+        # Run the mission
         mission_result = self._run_mission(user_prompt)
 
         self.event_logger.agent_complete(mission_result.success, mission_result.reasoning)
@@ -325,31 +310,29 @@ class Agent:
     
     def _run_mission(self, user_mission: str) -> MissionResult:
         """
-        Execute a mission using incremental agent-driven planning.
+        Execute a mission directly.
 
-        Instead of decomposing all tasks upfront, the agent plans one task at a
-        time: after each task completes (or fails), it sees the current screenshot
-        and completed work, then decides the next task or declares done.
+        The agent executes browser actions to accomplish the mission.
+        When repetition is needed, it declares loops inline via think(start_loop).
 
         Args:
             user_mission: User's high-level request
         Returns:
             MissionResult indicating success or failure
         """
-        self._task_tracker = {}
+        self._mission_tracker = {}
         self._original_user_mission = user_mission
         self._current_iteration = 0
-        self._current_sequential_iteration = 1
         self.event_logger.agent_start(user_mission)
 
-        # Initialize task tracking
+        # Initialize tracking
         try:
-            self.task_start_url = self.browser.page.url
+            self.mission_start_url = self.browser.page.url
         except Exception:
-            self.task_start_url = "unknown"
-        self.task_start_time = time.time()
+            self.mission_start_url = "unknown"
+        self.mission_start_time = time.time()
 
-        self.execution_timer.start_task()
+        self.execution_timer.start_mission()
 
         if self.base_knowledge:
             self.memory_store.set_base_knowledge(self.base_knowledge)
@@ -358,421 +341,25 @@ class Agent:
         # Check if starting from a blank page
         if self.browser.page.url.startswith("about:blank"):
             self.event_logger.agent_error("Page is on initial blank page.")
-            if self.execution_timer.task_start_time is not None:
-                self.execution_timer.end_task()
+            if self.execution_timer.mission_start_time is not None:
+                self.execution_timer.end_mission()
             self.mission_result.success = False
             self.event_logger.agent_complete(success=False, reasoning="Page is blank")
             return self.mission_result
 
-        # ── Incremental planning loop ──
-        max_planning_iterations = self.config.task_execution.max_tasks_per_mission
-        completed_tasks: List[Dict[str, Any]] = []
-        planning_iteration = 0
-        planning_feedback: Optional[str] = None
-        mission_declared_complete = False
-        self._latest_final_answer_draft = ""
+        # Execute the mission directly
+        self.mission_result = self._run_execution_loop(
+            user_mission,
+            start_in_checkpoint=True,
+        )
 
-        while planning_iteration < max_planning_iterations:
-            planning_iteration += 1
-
-            # Run a planning iteration — the planner sees the current screen + history
-            plan = self._run_planning_iteration(
-                user_mission,
-                completed_tasks,
-                planning_iteration,
-                planning_feedback=planning_feedback,
-            )
-            planning_feedback = None
-
-            if plan is None:
-                # Planning call failed
-                self.event_logger.system_error("Planning iteration returned None")
-                break
-
-            self._latest_final_answer_draft = str(plan.get("final_answer_draft", "") or "").strip()
-
-            if plan.get("mission_complete"):
-                if not self._latest_final_answer_draft:
-                    # Reject: planner must provide a final answer summarizing
-                    # the result so the user gets actionable output.
-                    planning_feedback = (
-                        "Mission declared complete but no final_answer_draft provided. "
-                        "If the mission asks for data (get/find/extract), use extract_data "
-                        "to capture it first, then declare complete with final_answer_draft "
-                        "containing the answer. Otherwise, re-declare complete with a "
-                        "final_answer_draft summarizing what was accomplished."
-                    )
-                    self.event_logger.system_info(
-                        "Mission completion rejected: no final_answer_draft"
-                    )
-                    continue
-                mission_declared_complete = True
-                self.event_logger.system_info(
-                    f"Mission declared complete after {len(completed_tasks)} tasks"
-                )
-                break
-
-            # Build a Task from the plan
-            task_goal = plan["task"]
-            task_target = plan.get("target", 1)
-            start_hint = plan.get("start_hint", "")
-            raw_required_tools = plan.get("required_tools_for_completion", [])
-            if isinstance(raw_required_tools, list):
-                required_tools_for_completion = [
-                    str(tool).strip()
-                    for tool in raw_required_tools
-                    if isinstance(tool, str) and str(tool).strip()
-                ]
-            else:
-                required_tools_for_completion = []
-
-            task = Task(
-                goal=task_goal,
-                target=task_target,
-                required_tools_for_completion=required_tools_for_completion,
-                start_hint=start_hint or None,
-                task_id=f"task_{planning_iteration}",
-                created_at=time.time(),
-            )
-
-            self.event_logger.task_start(
-                task_id=task.task_id,
-                task=task.goal,
-                task_type=(
-                    f"target={task.target}, "
-                    f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
-                ),
-            )
-
-            # Start checkpoint mode once per mission (first task only).
-            start_in_checkpoint = (planning_iteration == 1)
-
-            # Execute the task
-            result = self._execute_task(
-                task,
-                user_mission,
-                planning_iteration=planning_iteration,
-                start_in_checkpoint=start_in_checkpoint,
-            )
-            self.mission_result.task_results.append(result)
-
-            # Build a concise summary for the planner's context
-            summary: Dict[str, Any] = {
-                "task": task_goal,
-                "target": task_target,
-                "success": result.success,
-                "progress": result.progress,
-                "required_tools_for_completion": list(task.required_tools_for_completion),
-            }
-            if result.reasoning:
-                summary["reasoning"] = result.reasoning[:200]
-
-            completed_tasks.append(summary)
-
-            if result.success:
-                task.status = TaskStatus.COMPLETED
-                task.completed_at = time.time()
-                self.event_logger.task_complete(
-                    task.task_id,
-                    task_type=(
-                        f"target={task.target}, "
-                        f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
-                    ),
-                )
-            else:
-                task.status = TaskStatus.FAILED
-                task.completed_at = time.time()
-                self.event_logger.task_fail(
-                    task.task_id,
-                    error=result.reasoning,
-                    task_type=(
-                        f"target={task.target}, "
-                        f"required_tools={','.join(task.required_tools_for_completion) or 'none'}"
-                    ),
-                )
-                # Don't abort — let the planner see the failure and decide what to do next
-
-        # ── Finalize ──
-        if self.execution_timer.task_start_time is not None:
-            self.execution_timer.end_task()
-
-        self.mission_result.final_answer_draft = self._latest_final_answer_draft
-
-        if mission_declared_complete:
-            self.mission_result.success = True
-            self.mission_result.reasoning = f"Mission complete after {len(completed_tasks)} tasks"
-        elif not self.mission_result.task_results:
-            self.mission_result.success = False
-            self.mission_result.reasoning = "No tasks were executed"
-        else:
-            any_success = any(r.success for r in self.mission_result.task_results)
-            all_failed = all(not r.success for r in self.mission_result.task_results)
-            if all_failed:
-                self.mission_result.success = False
-                self.mission_result.reasoning = "All tasks failed"
-            else:
-                self.mission_result.success = any_success
-                self.mission_result.reasoning = (
-                    f"Completed {sum(1 for r in self.mission_result.task_results if r.success)}/"
-                    f"{len(self.mission_result.task_results)} tasks"
-                )
+        if self.execution_timer.mission_start_time is not None:
+            self.execution_timer.end_mission()
 
         return self.mission_result
 
-    def _run_planning_iteration(
-        self,
-        user_mission: str,
-        completed_tasks: List[Dict[str, Any]],
-        planning_iteration: int,
-        planning_feedback: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Run a single planning iteration: capture screenshot, call LLM with PLANNING_TOOLS,
-        parse the result into a task description (or mission-complete signal).
 
-        Returns:
-            Dict with keys: mission_complete (bool), task (str), target, start_hint,
-            required_tools_for_completion, final_answer_draft
-            or None on error.
-        """
-        self.event_logger.planning_iteration_start(planning_iteration, user_mission)
 
-        # Capture a lean screenshot (no overlays, no element detection)
-        try:
-            screenshot = self.browser.page.screenshot(full_page=False)
-        except Exception:
-            screenshot = None
-
-        # Get current page context
-        try:
-            current_url = self.browser.page.url
-            page_title = self.browser.page.title()
-        except Exception:
-            current_url = "unknown"
-            page_title = ""
-
-        system_prompt = self._build_planning_system_prompt()
-        user_prompt = self._build_planning_user_prompt(
-            user_mission,
-            current_url,
-            page_title,
-            completed_tasks,
-            planning_iteration,
-            planning_feedback=planning_feedback,
-        )
-
-        try:
-            tool_calls = generate_action_with_tools(
-                prompt=user_prompt,
-                tools=PLANNING_TOOLS,
-                system_prompt=system_prompt,
-                developer_prompt=PLANNER_DEVELOPER_POLICY,
-                image=screenshot,
-                image_detail=self.config.model.image_detail,
-                model=self.agent_model_name,
-                reasoning_level=self.agent_reasoning_level,
-                tool_choice="required",
-                parallel_tool_calls=False,
-            )
-        except Exception as e:
-            self.event_logger.system_error(f"Planning LLM call failed: {e}")
-            return None
-
-        # Parse the first tool call result
-        if not tool_calls:
-            self.event_logger.system_error("Planning returned no tool calls")
-            return None
-
-        call = tool_calls[0]
-        fn_name = call.get("function_name", "")
-        args = call.get("arguments", {})
-
-        if fn_name != "plan_next":
-            self.event_logger.system_error(f"Unexpected planning function: {fn_name}")
-            return None
-
-        task_text = args.get("task", "").strip()
-        reasoning = args.get("reasoning", "")
-        raw_target = args.get("target", 1)
-        target, target_note, target_note_is_warning = self._normalize_planning_target(raw_target)
-        if target_note:
-            if target_note_is_warning:
-                self.event_logger.system_warning(target_note)
-            else:
-                self.event_logger.system_debug(target_note)
-        start_hint = args.get("start_hint", "")
-        required_tools_for_completion = args.get("required_tools_for_completion", [])
-        if not isinstance(required_tools_for_completion, list):
-            required_tools_for_completion = []
-        final_answer_draft = str(args.get("final_answer_draft", "") or "").strip()
-
-        # Empty task = mission complete
-        mission_complete = task_text == ""
-
-        self.event_logger.planning_iteration_complete(
-            planning_iteration,
-            task=task_text,
-            mission_complete=mission_complete,
-            reasoning=reasoning,
-        )
-
-        if mission_complete:
-            self.event_logger.system_info(f"Planner reasoning (done): {reasoning}")
-        else:
-            target_display = target if isinstance(target, str) else f"{target}x" if target > 1 else ""
-            self.event_logger.system_info(
-                f"Planner → Task {planning_iteration}: \"{task_text}\""
-                + (f" (target={target_display})" if target_display else "")
-            )
-
-        return {
-            "mission_complete": mission_complete,
-            "task": task_text,
-            "target": target,
-            "start_hint": start_hint,
-            "required_tools_for_completion": required_tools_for_completion,
-            "final_answer_draft": final_answer_draft,
-        }
-
-    @staticmethod
-    def _normalize_planning_target(raw_target: Any) -> Tuple[Union[int, str], Optional[str], bool]:
-        """
-        Normalize planner target to either:
-        - positive integer (1+), or
-        - "all"
-
-        Returns:
-            (normalized_target, note, note_is_warning)
-        """
-        if raw_target is None:
-            return 1, "Planner target missing; defaulted to 1.", False
-
-        # bool is a subclass of int; handle it explicitly as invalid
-        if isinstance(raw_target, bool):
-            return 1, f"Invalid planner target {raw_target!r} (bool); defaulted to 1.", True
-
-        if isinstance(raw_target, int):
-            if raw_target >= 1:
-                return raw_target, None, False
-            return 1, f"Invalid planner target {raw_target!r} (<1); defaulted to 1.", True
-
-        if isinstance(raw_target, float):
-            if raw_target.is_integer() and raw_target >= 1:
-                normalized = int(raw_target)
-                return normalized, f"Coerced planner target {raw_target!r} to integer {normalized}.", False
-            return 1, f"Invalid planner target {raw_target!r} (non-integer float); defaulted to 1.", True
-
-        if isinstance(raw_target, str):
-            cleaned = raw_target.strip().lower()
-            if cleaned == "all":
-                return "all", None, False
-            if cleaned.isdigit():
-                normalized = int(cleaned)
-                if normalized >= 1:
-                    return normalized, f"Coerced planner target {raw_target!r} to integer {normalized}.", False
-            return 1, f"Invalid planner target {raw_target!r}; expected positive integer or 'all'. Defaulted to 1.", True
-
-        return 1, f"Invalid planner target type {type(raw_target).__name__}; defaulted to 1.", True
-
-    def _build_planning_system_prompt(self) -> str:
-        """Build the system prompt for the incremental planner."""
-        return f"""You are a mission planner for a browser automation agent.
-
-Goal:
-• Decide the NEXT single task, or declare mission complete with task="".
-
-Core planning rules:
-1. One concern per task. Do not combine navigation + loop in one task.
-2. Use small actionable tasks grounded in tools (click/type/press/scroll/open/extract_data).
-3. target controls repetition. Get it right:
-   When target > 1, write the task as a GENERIC action — never name a specific item.
-   The agent repeats the task description each round; naming a specific element causes it to act on that same element every round.
-
-   Ordered missions ("first 3", "top 5") — use "the next" to signal sequential progression:
-   ✓ Mission: "Click the first 3 job postings" → task="Click the next job posting", target=3
-   ✓ Mission: "Star the top 5 repos"           → task="Star the next repo", target=5
-   ✓ Mission: "Open the first 4 emails"        → task="Open the next email", target=4
-
-   Unordered missions (any N items) — use "a/an" for any item:
-   ✓ Mission: "Like 5 photos"    → task="Like a photo", target=5
-   ✓ Mission: "Delete 10 emails" → task="Delete an email", target=10
-
-   WRONG — naming a specific item with target > 1:
-   ✗ "Click the first job posting", target=3   → clicks the SAME posting 3 times
-   ✗ "Star the top repo", target=5             → stars the same repo 5 times
-   ✗ "Like the first photo", target=4          → likes the same photo 4 times
-
-   WRONG — using target > 1 for distinct actions that need separate tasks:
-   ✗ "Fill out a form field", target=3         → each field needs different values; use target=1 per field
-   ✗ "Click a navigation menu item", target=3  → each item is a different destination; use target=1 each
-   ✗ "Complete a checkout step", target=4       → each step has different inputs; use target=1 each
-
-4. Skip already-completed work visible in current page + memory evidence.
-5. Use target="all" only when count is genuinely open-ended.
-6. If prior task failed, adapt strategy instead of repeating blindly.
-7. Declare mission complete (task="") only when all user-requested work is done. When the mission asks to get/find/extract data, you MUST create a task with required_tools_for_completion=['extract_data'] to capture the data before declaring complete. Data visible on screen is NOT extracted until extract_data is called.
-8. When task requires specific tool usage before completion, set required_tools_for_completion.
-9. When task="" (mission complete), you MUST include final_answer_draft with a concrete summary of the result/answer for the user. This is required, not optional.
-
-Output schema:
-• reasoning: why this is the right next task now.
-• task: next task text (empty string means mission complete).
-• target: integer >=1 or "all".
-• start_hint: optional immediate first step.
-• required_tools_for_completion: optional strict tools required for this task's completion.
-• final_answer_draft: optional final user-facing answer when mission complete.
-
-{PLANNER_MEMORY_CONTRACT}
-{SHARED_CONTRADICTION_GATE}
-"""
-
-    def _build_planning_user_prompt(
-        self,
-        user_mission: str,
-        current_url: str,
-        page_title: str,
-        completed_tasks: List[Dict[str, Any]],
-        planning_iteration: int,
-        planning_feedback: Optional[str] = None,
-    ) -> str:
-        """Build the user prompt for the incremental planner."""
-        lines = [f"PLANNING ITERATION: {planning_iteration}"]
-        lines.append(f"MISSION: {user_mission}")
-        lines.append(f"CURRENT PAGE: {current_url} — {page_title}")
-        if planning_feedback:
-            lines.append(f"RUNTIME FEEDBACK: {planning_feedback}")
-        lines.append("")
-        lines.append("RECENT MEMORY NARRATIVE (memory IDs):")
-        lines.append(self.memory_store.get_narrative(n=12))
-        lines.append("")
-        lines.append("RECENT EXECUTED ACTION LEDGER (facts only, memory IDs):")
-        lines.append(self.memory_store.get_executed_action_ledger(n=12))
-
-        if completed_tasks:
-            lines.append("")
-            lines.append("COMPLETED TASK SUMMARIES (TS#):")
-            for i, t in enumerate(completed_tasks, 1):
-                status = "SUCCESS" if t["success"] else "FAILED"
-                progress_str = ""
-                target = t.get("target", 1)
-                progress = t.get("progress", 0)
-                if isinstance(target, int) and target > 1:
-                    progress_str = f" [{progress}/{target}]"
-                elif target == "all":
-                    progress_str = f" [{progress} done]"
-
-                line = f"  TS{i}. [{status}]{progress_str} {t['task']}"
-                required_tools = t.get("required_tools_for_completion") or []
-                if isinstance(required_tools, list) and required_tools:
-                    line += f" (required_tools={','.join(str(tool) for tool in required_tools)})"
-                if not t["success"] and t.get("reasoning"):
-                    line += f" — {t['reasoning']}"
-                lines.append(line)
-        else:
-            lines.append("")
-            lines.append("COMPLETED TASK SUMMARIES (TS#): None yet — this is the first planning iteration.")
-
-        return "\n".join(lines)
 
     def _capture_snapshot(self, full_page: bool = False) -> MemoryState:
         """
@@ -831,60 +418,6 @@ Output schema:
         
         return snapshot
 
-    # ===== Task-Based Execution Methods (merged from TaskBasedExecution) =====
-
-    def _initialize_task_system(
-        self,
-        auto_complete_extract_commands: bool = True,
-    ) -> None:
-        """
-        Initialize task-based execution system.
-
-        Args:
-            auto_complete_extract_commands: If False, require explicit complete: commands after extract: actions
-        """
-        self.auto_complete_extract_commands = auto_complete_extract_commands
-
-        # Current task list (set during execution)
-        self.task_list: Optional[MissionPlan] = None
-        self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
-
-    def _execute_task(
-        self,
-        task: Task,
-        user_mission: str,
-        planning_iteration: int,
-        *,
-        start_in_checkpoint: bool = False,
-    ) -> TaskResult:
-        """
-        Execute a unified task (single or repetitive).
-
-        Args:
-            task: The task to execute (with target indicating repetition)
-            user_mission: Original user mission for context
-            start_in_checkpoint: Whether to begin this task in checkpoint mode
-
-        Returns:
-            TaskResult indicating success/failure and completion status
-        """
-        self.memory_store.start_task(task.goal)
-        task.status = TaskStatus.IN_PROGRESS
-
-        # Execute using the unified task loop
-        result = self._run_unified_task_loop(
-            task,
-            user_mission,
-            planning_iteration=planning_iteration,
-            start_in_checkpoint=start_in_checkpoint,
-        )
-
-        # Update task with final completion status
-        if result.completion_status:
-            task.completion_status = result.completion_status
-
-        return result
-
     def _get_latest_recommended_next_step(self) -> Tuple[Optional[str], Optional[str]]:
         """Return newest recommended step plus source memory ID."""
         return self.memory_store.get_latest_recommended_next_step()
@@ -928,7 +461,6 @@ Output schema:
                 success=success,
                 error_message=error_message,
                 mission=self.memory_store.current_mission,
-                task=self.memory_store.current_task,
                 reference_memory_ids=normalized_ids if isinstance(evidence_ids, list) else [],
             )
         except Exception:
@@ -1047,132 +579,60 @@ Output schema:
             element_index_text=result.index_text,
         )
 
-    def _run_unified_task_loop(
+    def _run_execution_loop(
         self,
-        task: Task,
-        original_prompt: str,
-        planning_iteration: int,
+        mission: str,
         *,
         start_in_checkpoint: bool = False,
-    ) -> TaskResult:
+    ) -> MissionResult:
         """
-        Unified task execution loop - handles both single and repetitive tasks.
+        Unified mission execution loop.
 
-        This replaces both _execute_normal_task and _execute_sequential_task with one unified loop.
-        The agent uses mark_progress to signal completion of each unit of work.
+        The agent uses browser actions to accomplish the mission directly.
+        When repetition is needed, the agent declares loops inline via think(start_loop).
 
         Args:
-            task: Task with goal and target (1, N, or "all")
-            original_prompt: Original user mission for context
-            start_in_checkpoint: Whether this task should start in checkpoint mode
+            mission: The mission string to execute
+            start_in_checkpoint: Whether to begin in checkpoint mode
 
         Returns:
-            TaskResult with completion status
+            MissionResult with success/failure and reasoning
         """
         from agent.action_planner import ActionPlanner
 
-        # Get config values
-        max_actions_per_task = self.config.task_execution.max_actions_per_task
+        max_actions = self.config.execution.max_actions_per_mission
 
-        state = TaskExecutionState(
+        state = ExecutionState(
             checkpoint_pending=bool(start_in_checkpoint),
         )
 
-        # Determine numeric target (None for "all")
-        numeric_target = task.target if isinstance(task.target, int) else None
-        required_tools_for_completion = [
-            str(tool).strip().lower()
-            for tool in (task.required_tools_for_completion or [])
-            if isinstance(tool, str) and str(tool).strip()
-        ]
-        tools_used_since_progress: set[str] = set()
+        self.memory_store.start_mission(mission)
 
-        def _record_progress(
-            description: str,
-            *,
-            count: int = 1,
-            done: bool = False,
-            source: str = "mark_progress",
-        ) -> Tuple[bool, Optional[TaskResult]]:
-            """
-            Record unit completion consistently for both direct mark_progress and think(next_action=mark_progress).
-            Returns (recorded, completion_result). completion_result is set when task finishes immediately.
-            """
-            if state.browser_actions_since_progress == 0:
-                self.event_logger.system_debug(
-                    f"⚠ {source} ignored — no browser actions since last progress"
-                )
-                state.last_action_summary = (
-                    f"mark_progress BLOCKED: No browser actions since your last progress mark "
-                    f"({task.progress}/{task.target}). Do a browser action first "
-                    f"(click, type, go_back, etc.) before marking progress again."
-                )
-                return False, None
+        def _append_recent_action(summary: str) -> None:
+            """Append a compact action summary to recent_actions, capped at 10."""
+            state.recent_actions.append(summary)
+            if len(state.recent_actions) > 10:
+                state.recent_actions.pop(0)
 
-            if required_tools_for_completion:
-                missing_tools = [
-                    tool
-                    for tool in required_tools_for_completion
-                    if tool not in tools_used_since_progress
-                ]
-                if missing_tools:
-                    state.last_action_summary = (
-                        "mark_progress BLOCKED: missing required tools for this task unit: "
-                        + ", ".join(missing_tools)
-                    )
-                    return False, None
+        def _exit_loop() -> None:
+            """Clean up loop state and DOM markers."""
+            state.in_loop = False
+            state.loop_count = None
+            state.loop_round = 0
+            state.loop_description = ""
+            # Clean up DOM done markers
+            try:
+                self.action_executor.clear_done_markers()
+            except Exception:
+                pass
 
-            task.progress += count
-            state.progress_notes.append(description)
-            state.actions_since_progress = 0
-            state.browser_actions_since_progress = 0
-            state.checkpoint_pending = False
-            state.suppress_mark_progress = True
-            tools_used_since_progress.clear()
-
-            if source == "think":
-                self.event_logger.system_info(
-                    f"✓ Progress (via think): {description} ({task.progress}/{task.target})"
-                )
-                state.last_action_summary = (
-                    f"You marked progress via think: \"{description}\" "
-                    f"({task.progress}/{task.target})"
-                )
-            else:
-                self.event_logger.system_info(
-                    f"✓ Progress: {description} ({task.progress}/{task.target})"
-                )
-                state.last_action_summary = (
-                    f"You marked progress: \"{description}\" "
-                    f"({task.progress}/{task.target})"
-                )
-
-            target_reached = numeric_target is not None and task.progress >= numeric_target
-            done_with_open_target = done and numeric_target is None
-            if target_reached or done_with_open_target:
-                return True, TaskResult(
-                    success=True,
-                    completion_status=TaskCompletionStatus.COMPLETED,
-                    progress=task.progress,
-                    target=task.target,
-                    reasoning=f"Completed: {task.progress}/{task.target}",
-                )
-
-            return True, None
-
-        while state.total_actions < max_actions_per_task:
+        while state.total_actions < max_actions:
             state.total_actions += 1
             self._current_iteration += 1
-
-            # Check if target reached
-            if numeric_target is not None and task.progress >= numeric_target:
-                return TaskResult(
-                    success=True,
-                    completion_status=TaskCompletionStatus.COMPLETED,
-                    progress=task.progress,
-                    target=task.target,
-                    reasoning=f"Target reached: {task.progress}/{numeric_target}",
-                )
+            self.event_logger.iteration_start(
+                iteration=self._current_iteration,
+                max_iterations=max_actions,
+            )
 
             # Capture current state
             try:
@@ -1180,11 +640,9 @@ Output schema:
                 page_info = self.page_utils.get_page_info()
                 detected_elements = build_page_elements(self.browser.page, page_info)
             except Exception as e:
-                return TaskResult(
+                return MissionResult(
                     success=False,
-                    completion_status=TaskCompletionStatus.STUCK,
-                    progress=task.progress,
-                    target=task.target,
+
                     reasoning=f"Failed to capture state: {str(e)}",
                 )
 
@@ -1201,10 +659,8 @@ Output schema:
             recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
 
             decision_context = DecisionContext(
-                planning_iteration=planning_iteration,
                 action_iteration=state.total_actions,
-                mission=original_prompt,
-                task=task.goal,
+                mission=mission,
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 recommended_next_step=recommended_step,
@@ -1217,9 +673,9 @@ Output schema:
                 browser_state=snapshot,
                 memory_narrative=self.memory_store.get_narrative(n=20),
                 memory_recent_ids=[entry.memory_id for entry in memory_recent],
-                user_prompt=original_prompt,
-                task_start_url=self.task_start_url,
-                task_start_time=self.task_start_time,
+                user_prompt=mission,
+                mission_start_url=self.mission_start_url,
+                mission_start_time=self.mission_start_time,
                 current_url=snapshot.url,
                 page_title=snapshot.title,
                 visible_text=snapshot.visible_text,
@@ -1240,39 +696,36 @@ Output schema:
                 tab_events = self.tab_manager.drain_events()
                 dialog_pending = self.tab_manager.has_pending_dialog_on_active()
 
-            # Create action planner with force_think if stuck
-            force_think = False
+            # Create action planner
             active_strategy = self.memory_store.get_latest_strategy() or None
             action_planner = ActionPlanner(
-                task.goal,
+                mission,
                 self.memory_store,
                 base_knowledge=self.base_knowledge,
                 model_name=self.agent_model_name,
                 reasoning_level=self.agent_reasoning_level,
                 image_detail=self.config.model.image_detail,
                 max_actions_per_plan=self.config.execution.max_actions_per_plan,
-                task_target=task.target,
-                task_progress=task.progress,
-                task_history=state.progress_notes,
-                force_think=force_think,
-                current_iteration=self._current_iteration,
-                browser_actions_in_round=state.browser_actions_since_progress,
                 checkpoint_mode=state.checkpoint_pending,
-                suppress_mark_progress=state.suppress_mark_progress,
                 active_strategy=active_strategy,
                 last_action_summary=state.last_action_summary,
                 tab_bar=tab_bar,
                 dialog_notice=dialog_notice,
                 tab_events=tab_events,
                 dialog_pending=dialog_pending,
-                start_hint=task.start_hint,
                 recommended_next_step=recommended_step,
                 recommended_next_step_source_id=recommended_step_source_id,
                 decision_context=decision_context,
-                required_tools_for_completion=required_tools_for_completion,
-                tools_used_since_progress=tools_used_since_progress,
                 element_index_text=element_index_text,
-                gallery_images=gallery_images,
+                gallery_images=None if state.checkpoint_pending else gallery_images,
+                current_iteration=self._current_iteration,
+                browser_actions_in_round=state.browser_actions_since_progress,
+                # Loop state
+                in_loop=state.in_loop,
+                loop_round=state.loop_round,
+                loop_count=state.loop_count,
+                loop_description=state.loop_description,
+                recent_actions=state.recent_actions,
             )
 
             # Generate next actions
@@ -1291,18 +744,14 @@ Output schema:
                         <= self.config.execution.validation_failure_escalation_limit
                     ):
                         state.last_action_summary = (
-                            f"Planner/action validation issue: {error or 'No action generated'}. "
-                            "Retrying planning."
+                            f"Action validation issue: {error or 'No action generated'}. Retrying."
                         )
                         state.checkpoint_pending = False
                         continue
-                    return TaskResult(
+                    return MissionResult(
                         success=False,
-                        completion_status=TaskCompletionStatus.BLOCKED,
-                        progress=task.progress,
-                        target=task.target,
                         reasoning=(
-                            "Repeated planning/action validation failures: "
+                            "Repeated action validation failures: "
                             f"{error or 'No action generated'}"
                         ),
                     )
@@ -1313,76 +762,11 @@ Output schema:
                     function_name = (getattr(action_step, "function_name", None) or "").strip()
                     action_args = getattr(action_step, "function_arguments", {}) or {}
                     current_action = getattr(action_step, "action", "") or function_name
-
-                    # Handle mark_progress (intercepted by controller, not executor)
-                    if function_name == "mark_progress":
-                        before_state = self.memory_store._capture_current_state()
-                        description = str(action_args.get("description", "")).strip() or "Completed one unit"
-                        count_raw = action_args.get("count", 1)
-                        done = bool(action_args.get("done", False))
-                        try:
-                            count = int(count_raw)
-                        except Exception:
-                            count = 1
-                        if count < 1:
-                            count = 1
-
-                        recorded, maybe_completion = _record_progress(
-                            description,
-                            count=count,
-                            done=done,
-                            source="mark_progress",
-                        )
-                        after_state = self.memory_store._capture_current_state()
-                        self._record_controller_action(
-                            action_type=InteractionType.MARK_PROGRESS.value,
-                            action_step=action_step,
-                            success=recorded,
-                            error_message=None if recorded else "No browser actions since last progress mark",
-                            action_params={
-                                "description": description,
-                                "count": count,
-                                "done": done,
-                            },
-                            before_state=before_state,
-                            after_state=after_state,
-                        )
-                        if not recorded:
-                            state.actions_since_progress += 1
-                            state.checkpoint_pending = False
-                            continue
-                        if maybe_completion:
-                            return maybe_completion
-                        continue
-
-                    # Handle revise_target (intercepted by controller)
-                    if function_name == "revise_target":
-                        before_state = self.memory_store._capture_current_state()
-                        new_target_raw = action_args.get("new_target", task.target)
-                        reason = str(action_args.get("reason", "Target revised")).strip() or "Target revised"
-
-                        if isinstance(new_target_raw, str) and new_target_raw.strip().lower() == "all":
-                            task.target = "all"
-                            numeric_target = None
-                        else:
-                            task.target = int(new_target_raw)
-                            numeric_target = task.target
-
-                        self.event_logger.system_info(f"→ Target revised to {task.target}: {reason}")
-                        state.last_action_summary = f"You revised the target to {task.target}: \"{reason}\""
-                        state.checkpoint_pending = True
-                        self._record_controller_action(
-                            action_type="revise_target",
-                            action_step=action_step,
-                            success=True,
-                            action_params={
-                                "new_target": task.target,
-                                "reason": reason,
-                            },
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        continue
+                    reasoning = action_args.get("reasoning", "")
+                    self.event_logger.action_determined(
+                        action=current_action,
+                        reasoning=reasoning,
+                    )
 
                     # Handle think (with next_action decision)
                     if function_name == "think":
@@ -1397,40 +781,119 @@ Output schema:
 
                         think_reasoning = str(action_args.get("reasoning", "")).strip()
                         think_next_action = str(action_args.get("next_action", "continue")).strip().lower()
-                        recommended_next_step = str(action_args.get("recommended_next_step", "")).strip()
+                        recommended_next_step_arg = str(action_args.get("recommended_next_step", "")).strip()
 
-                        if think_next_action in ("mark_progress", "done"):
-                            reasoning = think_reasoning or "Completed"
-                            recorded, maybe_completion = _record_progress(
-                                reasoning,
-                                count=1,
-                                done=(think_next_action == "done"),
-                                source="think",
+                        if think_next_action == "start_loop":
+                            # Enter loop mode
+                            loop_count_raw = action_args.get("loop_count")
+                            loop_desc = str(action_args.get("loop_description", "")).strip()
+                            try:
+                                loop_count = int(loop_count_raw)
+                            except (TypeError, ValueError):
+                                loop_count = 1
+
+                            state.in_loop = True
+                            state.loop_count = loop_count
+                            state.loop_round = 2  # Round 1 was the pre-loop action
+                            state.loop_description = loop_desc or think_reasoning
+                            state.checkpoint_pending = False
+                            state.browser_actions_since_progress = 0
+
+                            state.last_action_summary = (
+                                f"Loop started: {loop_desc or think_reasoning} "
+                                f"(round 2 of {loop_count})"
                             )
-                            if not recorded:
+                            _append_recent_action(f"[LOOP START] {loop_desc} — {loop_count} total rounds")
+                            self.event_logger.system_info(
+                                f"⟳ Loop started: \"{loop_desc}\" — round 2 of {loop_count}"
+                            )
+
+                        elif think_next_action == "advance":
+                            # Advance loop round
+                            if not state.in_loop:
+                                state.last_action_summary = "advance ignored — not in a loop"
                                 state.checkpoint_pending = False
-                            if maybe_completion:
-                                return maybe_completion
+                            elif state.browser_actions_since_progress == 0:
+                                state.last_action_summary = (
+                                    "advance BLOCKED: No browser actions since last advance. "
+                                    "Do a browser action first."
+                                )
+                                state.checkpoint_pending = False
+                            else:
+                                state.loop_round += 1
+                                state.browser_actions_since_progress = 0
+                                state.checkpoint_pending = False
+
+                                # Check if loop is complete
+                                if state.loop_count and state.loop_round > state.loop_count:
+                                    self.event_logger.system_info(
+                                        f"⟳ Loop complete: all {state.loop_count} rounds done"
+                                    )
+                                    state.last_action_summary = (
+                                        f"Loop complete — all {state.loop_count} rounds done"
+                                    )
+                                    _append_recent_action(f"[LOOP COMPLETE] {state.loop_count} rounds done")
+                                    _exit_loop()
+                                else:
+                                    remaining = (
+                                        state.loop_count - state.loop_round + 1
+                                        if state.loop_count
+                                        else "?"
+                                    )
+                                    state.last_action_summary = (
+                                        f"Advanced to loop round {state.loop_round} of {state.loop_count} "
+                                        f"({remaining} remaining)"
+                                    )
+                                    _append_recent_action(
+                                        f"[ADVANCE] Round {state.loop_round} of {state.loop_count}"
+                                    )
+                                    self.event_logger.system_info(
+                                        f"⟳ Loop round {state.loop_round} of {state.loop_count}"
+                                    )
+
+                        elif think_next_action == "end_loop":
+                            if state.in_loop:
+                                self.event_logger.system_info(
+                                    f"⟳ Loop ended early at round {state.loop_round} of {state.loop_count}"
+                                )
+                                state.last_action_summary = (
+                                    f"Loop ended early at round {state.loop_round} of {state.loop_count}"
+                                )
+                                _append_recent_action("[LOOP END] early exit")
+                                _exit_loop()
+                            else:
+                                state.last_action_summary = "end_loop ignored — not in a loop"
+                            state.checkpoint_pending = False
+
+                        elif think_next_action == "done":
+                            # Mission complete
+                            if state.in_loop:
+                                _exit_loop()
+                            return MissionResult(
+                                success=True,
+                                reasoning=think_reasoning or "Mission complete",
+                            )
+
                         elif think_next_action == "stuck":
-                            replacement_strategy = think_reasoning or "I'm stuck with my prior approach, so I'll try a different strategy."
+                            replacement_strategy = think_reasoning or "Trying a different strategy."
                             state.checkpoint_pending = False
                             state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
-                            if recommended_next_step:
-                                cleaned = strip_targeting_data(recommended_next_step)
+                            if recommended_next_step_arg:
+                                cleaned = strip_targeting_data(recommended_next_step_arg)
                                 state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            else:
-                                state.last_action_summary += " | recommended_next_step=<none acknowledged>"
-                            self.event_logger.system_info(f"↺ Strategy switched via stuck: {replacement_strategy}")
+                            _append_recent_action(f"[STUCK] Strategy switch")
+                            self.event_logger.system_info(f"↺ Strategy switched: {replacement_strategy}")
+
                         elif think_next_action == "continue":
                             state.last_action_summary = f"You thought: \"{think_reasoning}\""
-                            if recommended_next_step:
-                                cleaned = strip_targeting_data(recommended_next_step)
+                            if recommended_next_step_arg:
+                                cleaned = strip_targeting_data(recommended_next_step_arg)
                                 state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            else:
-                                state.last_action_summary += " | recommended_next_step=<none acknowledged>"
                             state.checkpoint_pending = False
+
                         else:
                             state.checkpoint_pending = False
+
                         continue
 
                     # Handle assert/flag (non-browser actions)
@@ -1447,6 +910,7 @@ Output schema:
                             action_args.get("condition") if function_name == "assert_condition" else action_args.get("message", "")
                         ).strip()
                         state.last_action_summary = f"You called {action_type}: \"{action_content}\""
+                        _append_recent_action(f"{action_type}: {action_content}")
                         state.actions_since_progress += 1
                         state.checkpoint_pending = True
                         continue
@@ -1468,10 +932,8 @@ Output schema:
                                     pass
                                 state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
                                 state.browser_actions_since_progress += 1
-                                state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
-                                tools_used_since_progress.add(function_name.lower())
                             except ValueError as e:
                                 state.last_action_summary = f"switch_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1487,7 +949,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-
+                        _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
                         continue
 
@@ -1504,10 +966,8 @@ Output schema:
                                 active_id = active.id if active else "?"
                                 state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
                                 state.browser_actions_since_progress += 1
-                                state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
-                                tools_used_since_progress.add(function_name.lower())
                             except ValueError as e:
                                 state.last_action_summary = f"close_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1523,7 +983,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-
+                        _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
                         continue
 
@@ -1542,10 +1002,8 @@ Output schema:
                                 if url:
                                     state.last_action_summary += f" at {url}"
                                 state.browser_actions_since_progress += 1
-                                state.suppress_mark_progress = False
                                 state.checkpoint_pending = True
                                 action_success = True
-                                tools_used_since_progress.add(function_name.lower())
                             except Exception as e:
                                 state.last_action_summary = f"open_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1561,7 +1019,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-
+                        _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
                         continue
 
@@ -1578,7 +1036,6 @@ Output schema:
                             state.last_action_summary = f"Dialog {action_word}"
                             state.checkpoint_pending = True
                             action_success = True
-                            tools_used_since_progress.add(function_name.lower())
                         else:
                             state.last_action_summary = "dismiss_dialog: No dialog pending"
                             state.checkpoint_pending = True
@@ -1592,7 +1049,7 @@ Output schema:
                             before_state=before_state,
                             after_state=self.memory_store._capture_current_state(),
                         )
-
+                        _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
                         continue
 
@@ -1609,16 +1066,26 @@ Output schema:
                     state.actions_since_progress += 1
                     result_str = "success" if result.success else "failed"
                     state.last_action_summary = self._build_action_summary(action_step, result_str)
+                    _append_recent_action(state.last_action_summary)
                     state.checkpoint_pending = True
 
                     if result.success:
                         state.browser_actions_since_progress += 1
-                        state.suppress_mark_progress = False
-                        if function_name:
-                            tools_used_since_progress.add(function_name.lower())
 
+                        # Mark element as done in DOM if we're in a loop
+                        if state.in_loop:
+                            overlay_index = None
+                            if result.metadata:
+                                overlay_index = result.metadata.get("overlay_index")
+                            if overlay_index is None:
+                                overlay_index = action_args.get("element_id")
+                            if overlay_index is not None:
+                                try:
+                                    self.action_executor.mark_element_done(int(overlay_index))
+                                except (TypeError, ValueError):
+                                    pass
 
-                    # Sync tab manager after browser actions (click may have opened a new tab)
+                    # Sync tab manager after browser actions
                     if result.success and self.tab_manager:
                         active_tab = self.tab_manager.get_active()
                         if active_tab and self.browser.page is not active_tab.page:
@@ -1641,28 +1108,14 @@ Output schema:
                             pass
 
             except Exception as e:
-                return TaskResult(
+                return MissionResult(
                     success=False,
-                    completion_status=TaskCompletionStatus.STUCK,
-                    progress=task.progress,
-                    target=task.target,
+
                     reasoning=f"Error: {str(e)}",
                 )
 
         # Max actions reached
-        if task.progress > 0:
-            return TaskResult(
-                success=False,
-                completion_status=TaskCompletionStatus.PARTIAL,
-                progress=task.progress,
-                target=task.target,
-                reasoning=f"Partial completion: {task.progress}/{task.target} (max actions reached)",
-            )
-        else:
-            return TaskResult(
-                success=False,
-                completion_status=TaskCompletionStatus.STUCK,
-                progress=task.progress,
-                target=task.target,
-                reasoning="Stuck: no progress made",
-            )
+        return MissionResult(
+            success=False,
+            reasoning=f"Max actions ({max_actions}) reached without completion",
+        )

@@ -332,6 +332,32 @@ class Executor:
         function_name = getattr(step, "function_name", None) or "unknown_action"
         return f"{function_name}: {self._get_action_args(step)}"
 
+    def mark_element_done(self, overlay_index: int) -> None:
+        """Mark a DOM element as done by setting data-bvb-done attribute."""
+        try:
+            self.browser.page.evaluate(
+                """(overlayIndex) => {
+                    const el = document.querySelector(`[data-dom-index="${overlayIndex}"]`);
+                    if (el) el.setAttribute('data-bvb-done', 'true');
+                }""",
+                overlay_index,
+            )
+        except Exception:
+            pass
+
+    def clear_done_markers(self) -> None:
+        """Remove all data-bvb-done attributes from the DOM."""
+        try:
+            self.browser.page.evaluate(
+                """() => {
+                    document.querySelectorAll('[data-bvb-done]').forEach(
+                        el => el.removeAttribute('data-bvb-done')
+                    );
+                }"""
+            )
+        except Exception:
+            pass
+
     def set_page(self, page: Page) -> None:
         """Update internal references when the active page changes."""
         if not page or page is self.browser.page:
@@ -1699,7 +1725,7 @@ class Executor:
         
         # Build extraction prompt for LLM with full page text for grounding
         extraction_system_prompt = f"""
-            You are given a webpage's screenshots and its page content. Your task is to extract the information requested by the user.
+            You are given a webpage's screenshots and its page content. Your goal is to extract the information requested by the user.
 
             Current page context:
             - URL: {self.browser.page.url}
@@ -1734,7 +1760,7 @@ class Executor:
                             Extract the following information from this webpage screenshot:
                             {extraction_prompt}
 
-                            Your task is to extract the following information from the webpage screenshot: {extraction_prompt} 
+                            Your goal is to extract the following information from the webpage screenshot: {extraction_prompt} 
                             Do not make up text that isn't in the provided content."""
                 result_text = generate_text(
                     prompt=extraction_user_prompt,
@@ -1762,7 +1788,7 @@ class Executor:
                 try:
                     current_url = self.browser.page.url if self.browser.page else None
                     self.notebook.add_extraction(
-                        task=extraction_prompt,
+                        description=extraction_prompt,
                         data=extracted_text,
                         url=current_url
                     )
@@ -1815,7 +1841,7 @@ class Executor:
                 try:
                     current_url = self.browser.page.url if self.browser.page else None
                     self.notebook.add_extraction(
-                        task=extraction_prompt,
+                        description=extraction_prompt,
                         data=extracted_dict,
                         url=current_url
                     )
@@ -2107,13 +2133,10 @@ class Executor:
             self.event_logger.command_start(command=command)
 
             controller_only_functions = {
-                "mark_progress",
-                "revise_target",
                 "switch_tab",
                 "close_tab",
                 "open_tab",
                 "dismiss_dialog",
-                "plan_next",
             }
             if function_name in controller_only_functions:
                 duration = time.time() - start_time

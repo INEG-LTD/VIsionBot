@@ -15,8 +15,8 @@ class EnvironmentState:
     memory_narrative: str
     memory_recent_ids: List[str]
     user_prompt: str
-    task_start_url: str
-    task_start_time: float
+    mission_start_url: str
+    mission_start_time: float
     current_url: str
     page_title: str
     visible_text: Optional[str] = None

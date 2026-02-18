@@ -165,6 +165,7 @@ def build_element_index(
         etype = elem.element_type or "element"
         subtype = f" [{elem.field_subtype}]" if elem.field_subtype else ""
         focused = " (focused)" if elem.is_focused else ""
+        done_tag = " [DONE]" if getattr(elem, 'is_done', False) else ""
 
         if gallery_tag:
             # Text-poor: show CSS identifier + gallery tag
@@ -178,7 +179,7 @@ def build_element_index(
             label_text = elem.element_label or ""
             if label_text:
                 ident += f' "{label_text}"'
-            return f"  [{elem.overlay_number}] {etype}{ident}{focused} — SEE CROP GALLERY"
+            return f"  [{elem.overlay_number}] {etype}{ident}{focused}{done_tag} — SEE CROP GALLERY"
         else:
             # Text-rich: show label + CSS hint for disambiguation
             label = elem.element_label or ""
@@ -189,7 +190,7 @@ def build_element_index(
                 css_hint = f" #{css_id}"
             elif css_class:
                 css_hint = " ." + css_class.split()[0]
-            return f"  [{elem.overlay_number}] {etype}{subtype}: {label}{css_hint}{focused}"
+            return f"  [{elem.overlay_number}] {etype}{subtype}: {label}{css_hint}{focused}{done_tag}"
 
     # Group elements by region, separate focused ones
     focused_lines: List[str] = []

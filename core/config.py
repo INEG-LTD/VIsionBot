@@ -17,25 +17,6 @@ from browser.provider import BrowserConfig as BrowserProviderConfig
 # Backwards-compat: alias for older imports
 BrowserConfig = BrowserProviderConfig
 
-
-class TaskExecutionConfig(BaseModel):
-    """Configuration for unified task execution."""
-
-    max_actions_per_task: int = Field(
-        default=200,
-        ge=1,
-        description="Maximum number of actions before a task is forced to end"
-    )
-    max_tasks_per_mission: int = Field(
-        default=20,
-        ge=1,
-        description="Maximum number of tasks the planner can create per mission (safety limit)"
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
 
@@ -66,11 +47,13 @@ class ModelConfig(BaseModel):
 
 class ExecutionConfig(BaseModel):
     """Runtime execution behavior configuration."""
-    max_iterations: int = Field(
-        default=500,
+
+    max_actions_per_mission: int = Field(
+        default=200,
         ge=1,
-        description="Maximum number of iterations for task completion"
+        description="Maximum number of actions before a mission is forced to end"
     )
+
     auto_complete_extract_commands: bool = Field(
         default=True,
         description="Automatically mark tasks complete after successful extract: commands when the task only contains extraction actions"
@@ -311,9 +294,9 @@ class Config(BaseModel):
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
     )
-    task_execution: TaskExecutionConfig = Field(
-        default_factory=TaskExecutionConfig,
-        description="Unified task execution configuration"
+    execution: ExecutionConfig = Field(
+        default_factory=ExecutionConfig,
+        description="Mission execution configuration"
     )
     class Config:
         arbitrary_types_allowed = True
@@ -328,7 +311,7 @@ class Config(BaseModel):
         """
         return cls(
             execution=ExecutionConfig(
-                max_iterations=1500
+                max_actions_per_mission=1500
             ),
             logging=DebugConfig(debug_mode=False)
         )

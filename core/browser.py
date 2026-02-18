@@ -75,28 +75,27 @@ DOM_ELEMENT_SCROLL_INTO_VIEW_SCRIPT = """
 
 
 class ExecutionTimer:
-    """Tracks execution timings for tasks, iterations, and actions"""
-    
+    """Tracks execution timings for missions, iterations, and actions."""
+
     def __init__(self):
-        self.task_start_time: Optional[float] = None
-        self.task_end_time: Optional[float] = None
-        self.iterations: List[Dict[str, float]] = []  # List of {start, end} dicts
-        self.actions: List[Dict[str, Any]] = []  # List of {action_id, command, start, end} dicts
+        self.mission_start_time: Optional[float] = None
+        self.mission_end_time: Optional[float] = None
+        self.iterations: List[Dict[str, float]] = []
+        self.actions: List[Dict[str, Any]] = []
         self.current_iteration_start: Optional[float] = None
         self.current_action_id: Optional[str] = None
         self.current_action_start: Optional[float] = None
         self._current_command_text: str = ""
-    
-    def start_task(self) -> None:
-        """Start tracking task execution"""
-        self.task_start_time = time.time()
+
+    def start_mission(self) -> None:
+        """Start tracking mission execution."""
+        self.mission_start_time = time.time()
         self.iterations = []
         self.actions = []
-    
-    def end_task(self) -> None:
-        """End task tracking"""
-        self.task_end_time = time.time()
-        # End any active iteration or action
+
+    def end_mission(self) -> None:
+        """End mission tracking."""
+        self.mission_end_time = time.time()
         if self.current_iteration_start is not None:
             self.end_iteration()
         if self.current_action_start is not None:
@@ -143,18 +142,9 @@ class ExecutionTimer:
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of all timings"""
         summary = {
-            "task": {},
             "iterations": [],
             "actions": []
         }
-        
-        # Task timing
-        if self.task_start_time and self.task_end_time:
-            task_duration = self.task_end_time - self.task_start_time
-            summary["task"] = {
-                "duration_seconds": round(task_duration, 2),
-                "duration_formatted": self._format_duration(task_duration)
-            }
         
         # Iteration timings
         for i, iter_data in enumerate(self.iterations, 1):
@@ -187,55 +177,7 @@ class ExecutionTimer:
             mins = int(seconds // 60)
             secs = seconds % 60
             return f"{mins}m {secs:.2f}s"
-    
-    def log_summary(self, event_logger=None) -> None:
-        """Log timing summary to console"""
-        summary = self.get_summary()
         
-        try:
-            # Use event_logger if provided, otherwise use print
-            log_func = event_logger.system_info if event_logger else print
-            
-            log_func("\n" + "="*60)
-            log_func("⏱️  EXECUTION TIMING SUMMARY")
-            log_func("="*60)
-            
-            # Task timing
-            if summary["task"]:
-                log_func(f"\n📋 Task Duration: {summary['task']['duration_formatted']} ({summary['task']['duration_seconds']}s)")
-            
-            # Iteration timings
-            if summary["iterations"]:
-                total_iter_time = sum(iter_data["duration_seconds"] for iter_data in summary["iterations"])
-                avg_iter_time = total_iter_time / len(summary["iterations"])
-                log_func(f"\n🔄 Iterations: {len(summary['iterations'])}")
-                log_func(f"   Total iteration time: {self._format_duration(total_iter_time)}")
-                log_func(f"   Average per iteration: {self._format_duration(avg_iter_time)}")
-                fastest_iter = min(summary['iterations'], key=lambda x: x['duration_seconds'])
-                slowest_iter = max(summary['iterations'], key=lambda x: x['duration_seconds'])
-                log_func(f"   Fastest iteration: {fastest_iter['duration_formatted']}")
-                log_func(f"   Slowest iteration: {slowest_iter['duration_formatted']}")
-            
-            # Action timings
-            if summary["actions"]:
-                total_action_time = sum(action_data["duration_seconds"] for action_data in summary["actions"])
-                avg_action_time = total_action_time / len(summary["actions"])
-                log_func(f"\n🎯 Actions: {len(summary['actions'])}")
-                log_func(f"   Total action time: {self._format_duration(total_action_time)}")
-                log_func(f"   Average per action: {self._format_duration(avg_action_time)}")
-                
-                # Show top 5 slowest actions
-                sorted_actions = sorted(summary["actions"], key=lambda x: x["duration_seconds"], reverse=True)
-                log_func("\n   Top 5 slowest actions:")
-                for i, action in enumerate(sorted_actions[:5], 1):
-                    command_text = action["command"][:50] + "..." if len(action.get("command", "")) > 50 else action.get("command", "")
-                    log_func(f"   {i}. {action['action_id']}: {action['duration_formatted']} - {command_text}")
-            
-            log_func("="*60 + "\n")
-        except Exception:
-            pass
-
-
 class Browser:
     """Modular vision-based web automation bot"""
 

@@ -221,15 +221,15 @@ def apply_thinking_border(agent: Agent):
             manager.enable_blocking()
     Agent.extract = patched_extract
 
-    original_execute_task = Agent._execute_task
-    def patched_execute_task(self, *args, **kwargs):
+    original_run_loop = Agent._run_execution_loop
+    def patched_run_loop(self, *args, **kwargs):
         manager.enable_blocking()
         try:
-            result = original_execute_task(self, *args, **kwargs)
+            result = original_run_loop(self, *args, **kwargs)
             return result
         finally:
             manager.disable_blocking()
-    Agent._execute_task = patched_execute_task
+    Agent._run_execution_loop = patched_run_loop
 
     return manager
 
