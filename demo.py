@@ -460,7 +460,7 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
         "search for ios developer jobs in london then press the jobs tab button when you reach the search results page and then click the first 3 jobs on the page",
     )
 
-    if result:
+    if result.success:
         print("\n✅ Task completed")
         chime.success()
     else:

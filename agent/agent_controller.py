@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
 import hashlib
+import copy
 
 from browser.dom import build_page_elements
 from browser.annotate import build_element_index, build_crop_gallery
@@ -38,6 +39,7 @@ from lib.ai import (
 from pydantic import BaseModel
 
 from utils.event_logger import set_event_logger
+from utils.screenshot_store import ScreenshotStore, ScreenshotMeta
 
 from .interceptor_manager import InterceptorManager, Interceptor, InterceptorMode, InterceptorContext
 from core.config import Config
@@ -99,6 +101,8 @@ class Agent:
         agent_talk_callback: Optional[Callable[[str], None]] = None,
         # Completion callback for complete: command
         completion_callback: Optional[Callable[[str], None]] = None,
+        # Callback to request a hint when the agent declares itself stuck
+        on_stuck_callback: Optional[Callable[[str, int], Optional[str]]] = None,
     ):
         self.config = config
         self.mission_result = MissionResult()
@@ -109,7 +113,11 @@ class Agent:
 
         # Access event logger from agent
         from utils.event_logger import EventLogger
-        self.event_logger = EventLogger(debug_mode=True, show_overlay_candidates=config.logging.show_overlay_candidates, show_llm_costs=config.logging.show_llm_costs)
+        self.event_logger = EventLogger(
+            debug_mode=config.logging.debug_mode,
+            show_overlay_candidates=config.logging.show_overlay_candidates,
+            show_llm_costs=config.logging.show_llm_costs,
+        )
         set_event_logger(self.event_logger)  # Set as global
         
         self.iteration_delay = 0.5
@@ -131,6 +139,7 @@ class Agent:
 
         # Store completion callback for complete: command
         self.completion_callback = completion_callback
+        self.on_stuck_callback = on_stuck_callback
         self._screenshot_counter = 0  # Counter for naming screenshots
 
         self.agent_model_name: str = config.model.agent_model
@@ -149,6 +158,9 @@ class Agent:
         self._pause_event = threading.Event()  # Event to block execution when paused
         self._pause_event.set()  # Initially not paused (event is set = not blocking)
         self._pause_message = "Paused"
+        self._cancel_event = threading.Event()
+        self._hints_lock = threading.Lock()
+        self._pending_hints: List[str] = []
 
         self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
@@ -161,10 +173,18 @@ class Agent:
         self.screenshot_dir = config.logging.screenshot_dir
 
         self._current_iteration = 0
+        self.execution_state: Optional[ExecutionState] = None
 
         # Initialize execution system
         self.auto_complete_extract_commands = self.config.execution.auto_complete_extract_commands
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
+        self.screenshot_store = ScreenshotStore(
+            max_in_memory_items=self.config.logging.screenshot_stream_in_memory_items,
+            max_in_memory_mb=self.config.logging.screenshot_stream_in_memory_mb,
+            persist_to_disk=self.config.logging.screenshot_stream_persist_to_disk,
+            disk_dir=self.config.logging.screenshot_stream_dir,
+            max_disk_files=self.config.logging.screenshot_stream_max_disk_files,
+        )
 
     def __enter__(self) -> 'Agent':
         """
@@ -188,6 +208,69 @@ class Agent:
             except Exception:
                 pass
         self.event_logger.system_info("Agent stopped")
+
+    def pause(self, message: str = "Paused") -> None:
+        with self._pause_lock:
+            self._paused = True
+            self._pause_message = message
+            self._pause_event.clear()
+
+    def resume(self) -> None:
+        with self._pause_lock:
+            self._paused = False
+            self._pause_event.set()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+        # Unblock wait() if currently paused so cancellation can be observed immediately.
+        with self._pause_lock:
+            self._paused = False
+            self._pause_event.set()
+
+    def inject_hint(self, text: str) -> None:
+        hint = (text or "").strip()
+        if not hint:
+            return
+        with self._hints_lock:
+            self._pending_hints.append(hint)
+
+    def get_state_snapshot(self) -> Dict[str, Any]:
+        with self._hints_lock:
+            pending_hints = list(self._pending_hints)
+        with self._pause_lock:
+            paused = self._paused
+            pause_message = self._pause_message
+
+        return {
+            "paused": paused,
+            "pause_message": pause_message,
+            "cancel_requested": self._cancel_event.is_set(),
+            "current_iteration": self._current_iteration,
+            "pending_hints": pending_hints,
+            "execution_state": copy.deepcopy(self.execution_state),
+            "mission_result": copy.deepcopy(self.mission_result),
+            "llm_total_cost_usd": self.event_logger.total_cost_usd,
+            "llm_total_tokens": self.event_logger.total_tokens,
+        }
+
+    def get_screenshot_bytes(self, screenshot_id: str) -> Optional[bytes]:
+        return self.screenshot_store.get_bytes(screenshot_id)
+
+    def get_screenshot_meta(self, screenshot_id: str) -> Optional[ScreenshotMeta]:
+        return self.screenshot_store.get_meta(screenshot_id)
+
+    def list_recent_screenshots(self, limit: int = 20) -> List[ScreenshotMeta]:
+        return self.screenshot_store.list_recent(limit)
+
+    def get_latest_screenshot_bytes(self) -> Optional[bytes]:
+        return self.screenshot_store.get_latest_bytes()
+
+    def get_latest_screenshot_meta(self) -> Optional[ScreenshotMeta]:
+        return self.screenshot_store.get_latest_meta()
+
+    def clear_screenshot_cache(self) -> None:
+        self.screenshot_store.clear()
+
     def _start(self) -> None:
         """Start the agent"""
         # Create browser without context manager - we'll manage its lifecycle
@@ -226,13 +309,27 @@ class Agent:
         # Tab manager for multi-tab support
         self.tab_manager = self.browser.tab_manager
 
+        # Emit navigation events for main-frame URL changes.
+        try:
+            def _on_frame_navigated(frame):
+                try:
+                    if self.browser and self.browser.page and frame == self.browser.page.main_frame:
+                        self.event_logger.browser_navigation(url=frame.url)
+                except Exception:
+                    pass
+
+            if hasattr(self.browser.page, "on"):
+                self.browser.page.on("framenavigated", _on_frame_navigated)
+        except Exception:
+            pass
+
         # Plan generator for AI planning prompts
         self.started = True
       
     def execute_mission(
         self,
         user_prompt: str,
-    ) -> bool:   
+    ) -> MissionResult:
         
         # Register all pre-registered interceptors with the new controller
         for interceptor_data in self.interceptor_stack:
@@ -249,7 +346,7 @@ class Agent:
         
 
         self.mission_result = mission_result
-        return mission_result.success
+        return mission_result
     
     def register_interceptor(
         self,
@@ -323,6 +420,12 @@ class Agent:
         self._mission_tracker = {}
         self._original_user_mission = user_mission
         self._current_iteration = 0
+        self.execution_state = None
+        self._cancel_event.clear()
+        with self._pause_lock:
+            self._paused = False
+            self._pause_message = "Paused"
+            self._pause_event.set()
         self.event_logger.agent_start(user_mission)
 
         # Initialize tracking
@@ -343,8 +446,11 @@ class Agent:
             self.event_logger.agent_error("Page is on initial blank page.")
             if self.execution_timer.mission_start_time is not None:
                 self.execution_timer.end_mission()
-            self.mission_result.success = False
-            self.event_logger.agent_complete(success=False, reasoning="Page is blank")
+            self.mission_result = self._build_mission_result(
+                success=False,
+                reasoning="Page is blank",
+                state=self.execution_state,
+            )
             return self.mission_result
 
         # Execute the mission directly
@@ -357,6 +463,33 @@ class Agent:
             self.execution_timer.end_mission()
 
         return self.mission_result
+
+    def _build_mission_result(
+        self,
+        *,
+        success: bool,
+        reasoning: str,
+        state: Optional[ExecutionState],
+    ) -> MissionResult:
+        duration_s = 0.0
+        if self.mission_start_time is not None:
+            duration_s = max(0.0, time.time() - self.mission_start_time)
+
+        final_url = ""
+        try:
+            final_url = self.browser.page.url if self.browser and self.browser.page else ""
+        except Exception:
+            final_url = ""
+
+        return MissionResult(
+            success=success,
+            reasoning=reasoning,
+            total_iterations=self._current_iteration,
+            total_actions=state.actions_since_progress if state else 0,
+            final_url=final_url,
+            duration_s=duration_s,
+            total_cost_usd=self.event_logger.total_cost_usd,
+        )
 
 
 
@@ -405,6 +538,27 @@ class Agent:
                 dprint(f"📸 Saved screenshot: {filepath}")
             except Exception as e:
                 dprint(f"⚠️ Failed to save screenshot: {e}")
+
+        if snapshot.screenshot and self.config.logging.stream_screenshots:
+            try:
+                screenshot_meta = self.screenshot_store.put(
+                    snapshot.screenshot,
+                    iteration=self._current_iteration,
+                    url=getattr(snapshot, "url", "") or "",
+                    title=getattr(snapshot, "title", "") or "",
+                )
+                setattr(snapshot, "screenshot_id", screenshot_meta.screenshot_id)
+                self.event_logger.screenshot_captured(
+                    screenshot_id=screenshot_meta.screenshot_id,
+                    iteration=screenshot_meta.iteration,
+                    byte_size=screenshot_meta.byte_size,
+                    sha256=screenshot_meta.sha256,
+                    path=screenshot_meta.path,
+                    in_memory=screenshot_meta.in_memory,
+                    url=screenshot_meta.url,
+                )
+            except Exception as e:
+                self.event_logger.system_warning(f"Failed to stream screenshot metadata: {e}")
 
         # Compute screenshot hash for change detection
         screenshot_data = getattr(snapshot, "screenshot", None)
@@ -605,180 +759,236 @@ class Agent:
         state = ExecutionState(
             checkpoint_pending=bool(start_in_checkpoint),
         )
-
+        self.execution_state = state
         self.memory_store.start_mission(mission)
 
+        last_checkpoint_pending = state.checkpoint_pending
+        self.event_logger.checkpoint_changed(pending=state.checkpoint_pending)
+
+        def _set_checkpoint_pending(value: bool) -> None:
+            nonlocal last_checkpoint_pending
+            new_value = bool(value)
+            state.checkpoint_pending = new_value
+            if new_value != last_checkpoint_pending:
+                last_checkpoint_pending = new_value
+                self.event_logger.checkpoint_changed(pending=new_value)
+
         def _append_recent_action(summary: str) -> None:
-            """Append a compact action summary to recent_actions, capped at 10."""
             state.recent_actions.append(summary)
             if len(state.recent_actions) > 10:
                 state.recent_actions.pop(0)
 
         def _exit_loop() -> None:
-            """Clean up loop state and DOM markers."""
             state.in_loop = False
             state.loop_count = None
             state.loop_round = 0
             state.loop_description = ""
-            # Clean up DOM done markers
             try:
                 self.action_executor.clear_done_markers()
             except Exception:
                 pass
 
         while state.total_actions < max_actions:
+            if self._cancel_event.is_set():
+                return self._build_mission_result(
+                    success=False,
+                    reasoning="Mission cancelled",
+                    state=state,
+                )
+
+            self._pause_event.wait()
+            if self._cancel_event.is_set():
+                return self._build_mission_result(
+                    success=False,
+                    reasoning="Mission cancelled",
+                    state=state,
+                )
+
+            iteration_started_at = time.time()
             state.total_actions += 1
             self._current_iteration += 1
+            self.execution_state = state
             self.event_logger.iteration_start(
                 iteration=self._current_iteration,
                 max_iterations=max_actions,
             )
 
-            # Capture current state
             try:
-                snapshot = self._capture_snapshot(full_page=False)
-                page_info = self.page_utils.get_page_info()
-                detected_elements = build_page_elements(self.browser.page, page_info)
-            except Exception as e:
-                return MissionResult(
-                    success=False,
+                try:
+                    snapshot = self._capture_snapshot(full_page=False)
+                    page_info = self.page_utils.get_page_info()
+                    detected_elements = build_page_elements(self.browser.page, page_info)
+                except Exception as e:
+                    return self._build_mission_result(
+                        success=False,
+                        reasoning=f"Failed to capture state: {str(e)}",
+                        state=state,
+                    )
 
-                    reasoning=f"Failed to capture state: {str(e)}",
+                elements = getattr(detected_elements, "elements", []) or []
+                text_rich = sum(
+                    1 for elem in elements
+                    if int(getattr(elem, "text_presence_score", 0) or 0) >= 2
+                )
+                text_poor = sum(
+                    1 for elem in elements
+                    if int(getattr(elem, "text_presence_score", 0) or 0) <= 1
+                )
+                self.event_logger.element_capture(
+                    total=len(elements),
+                    text_rich=text_rich,
+                    text_poor=text_poor,
                 )
 
-            # Prepare screenshot + supporting data for the LLM
-            prep = self._prepare_screenshot_for_mode(snapshot, detected_elements, page_info)
-            annotated_screenshot_bytes = prep.screenshot_bytes
-            element_index_text = prep.element_index_text
-            gallery_images = prep.gallery_images
+                prep = self._prepare_screenshot_for_mode(snapshot, detected_elements, page_info)
+                annotated_screenshot_bytes = prep.screenshot_bytes
+                element_index_text = prep.element_index_text
+                gallery_images = prep.gallery_images
 
-            # Build environment state
-            memory_recent = self.memory_store.get_recent(20)
-            recent_executed_ids = self.memory_store.get_recent_executed_action_ids(n=20)
-            recent_reflection_ids = self.memory_store.get_recent_reflection_ids(n=20)
-            recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
+                memory_recent = self.memory_store.get_recent(20)
+                recent_executed_ids = self.memory_store.get_recent_executed_action_ids(n=20)
+                recent_reflection_ids = self.memory_store.get_recent_reflection_ids(n=20)
+                recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
 
-            decision_context = DecisionContext(
-                action_iteration=state.total_actions,
-                mission=mission,
-                current_url=snapshot.url,
-                page_title=snapshot.title,
-                recommended_next_step=recommended_step,
-                recommended_from_memory_id=recommended_step_source_id,
-                executed_memory_ids=recent_executed_ids,
-                reflection_memory_ids=recent_reflection_ids,
-            )
-
-            environment_state = EnvironmentState(
-                browser_state=snapshot,
-                memory_narrative=self.memory_store.get_narrative(n=20),
-                memory_recent_ids=[entry.memory_id for entry in memory_recent],
-                user_prompt=mission,
-                mission_start_url=self.mission_start_url,
-                mission_start_time=self.mission_start_time,
-                current_url=snapshot.url,
-                page_title=snapshot.title,
-                visible_text=snapshot.visible_text,
-                url_history=self.memory_store.url_history.copy(),
-                url_pointer=self.memory_store.url_pointer,
-                decision_context=decision_context,
-            )
-
-            # Gather tab state for prompt injection
-            tab_bar = None
-            dialog_notice = None
-            tab_events = []
-            dialog_pending = False
-            if self.tab_manager:
-                self.tab_manager.refresh_metadata()
-                tab_bar = self.tab_manager.build_tab_bar()
-                dialog_notice = self.tab_manager.build_dialog_notice()
-                tab_events = self.tab_manager.drain_events()
-                dialog_pending = self.tab_manager.has_pending_dialog_on_active()
-
-            # Create action planner
-            active_strategy = self.memory_store.get_latest_strategy() or None
-            action_planner = ActionPlanner(
-                mission,
-                self.memory_store,
-                base_knowledge=self.base_knowledge,
-                model_name=self.agent_model_name,
-                reasoning_level=self.agent_reasoning_level,
-                image_detail=self.config.model.image_detail,
-                max_actions_per_plan=self.config.execution.max_actions_per_plan,
-                checkpoint_mode=state.checkpoint_pending,
-                active_strategy=active_strategy,
-                last_action_summary=state.last_action_summary,
-                tab_bar=tab_bar,
-                dialog_notice=dialog_notice,
-                tab_events=tab_events,
-                dialog_pending=dialog_pending,
-                recommended_next_step=recommended_step,
-                recommended_next_step_source_id=recommended_step_source_id,
-                decision_context=decision_context,
-                element_index_text=element_index_text,
-                gallery_images=None if state.checkpoint_pending else gallery_images,
-                current_iteration=self._current_iteration,
-                browser_actions_in_round=state.browser_actions_since_progress,
-                # Loop state
-                in_loop=state.in_loop,
-                loop_round=state.loop_round,
-                loop_count=state.loop_count,
-                loop_description=state.loop_description,
-                recent_actions=state.recent_actions,
-            )
-
-            # Generate next actions
-            try:
-                actions_list, error = action_planner.get_next_actions_with_function_calling(
-                    environment_state=environment_state,
-                    screenshot=annotated_screenshot_bytes,
-                    notebook=self.notebook,
-                    element_data=detected_elements,
+                decision_context = DecisionContext(
+                    action_iteration=state.total_actions,
+                    mission=mission,
+                    current_url=snapshot.url,
+                    page_title=snapshot.title,
+                    recommended_next_step=recommended_step,
+                    recommended_from_memory_id=recommended_step_source_id,
+                    executed_memory_ids=recent_executed_ids,
+                    reflection_memory_ids=recent_reflection_ids,
                 )
+
+                environment_state = EnvironmentState(
+                    browser_state=snapshot,
+                    memory_narrative=self.memory_store.get_narrative(n=20),
+                    memory_recent_ids=[entry.memory_id for entry in memory_recent],
+                    user_prompt=mission,
+                    mission_start_url=self.mission_start_url,
+                    mission_start_time=self.mission_start_time,
+                    current_url=snapshot.url,
+                    page_title=snapshot.title,
+                    visible_text=snapshot.visible_text,
+                    url_history=self.memory_store.url_history.copy(),
+                    url_pointer=self.memory_store.url_pointer,
+                    decision_context=decision_context,
+                )
+
+                tab_bar = None
+                dialog_notice = None
+                tab_events = []
+                dialog_pending = False
+                if self.tab_manager:
+                    self.tab_manager.refresh_metadata()
+                    tab_bar = self.tab_manager.build_tab_bar()
+                    dialog_notice = self.tab_manager.build_dialog_notice()
+                    tab_events = self.tab_manager.drain_events()
+                    dialog_pending = self.tab_manager.has_pending_dialog_on_active()
+
+                with self._hints_lock:
+                    pending_hints = list(self._pending_hints)
+                    self._pending_hints.clear()
+
+                active_strategy = self.memory_store.get_latest_strategy() or None
+                action_planner = ActionPlanner(
+                    mission,
+                    self.memory_store,
+                    base_knowledge=self.base_knowledge,
+                    model_name=self.agent_model_name,
+                    reasoning_level=self.agent_reasoning_level,
+                    image_detail=self.config.model.image_detail,
+                    max_actions_per_plan=self.config.execution.max_actions_per_plan,
+                    checkpoint_mode=state.checkpoint_pending,
+                    active_strategy=active_strategy,
+                    last_action_summary=state.last_action_summary,
+                    tab_bar=tab_bar,
+                    dialog_notice=dialog_notice,
+                    tab_events=tab_events,
+                    dialog_pending=dialog_pending,
+                    recommended_next_step=recommended_step,
+                    recommended_next_step_source_id=recommended_step_source_id,
+                    decision_context=decision_context,
+                    element_index_text=element_index_text,
+                    gallery_images=None if state.checkpoint_pending else gallery_images,
+                    current_iteration=self._current_iteration,
+                    browser_actions_in_round=state.browser_actions_since_progress,
+                    user_hints=pending_hints,
+                    in_loop=state.in_loop,
+                    loop_round=state.loop_round,
+                    loop_count=state.loop_count,
+                    loop_description=state.loop_description,
+                    recent_actions=state.recent_actions,
+                )
+
+                try:
+                    actions_list, error = action_planner.get_next_actions_with_function_calling(
+                        environment_state=environment_state,
+                        screenshot=annotated_screenshot_bytes,
+                        notebook=self.notebook,
+                        element_data=detected_elements,
+                    )
+                except Exception as e:
+                    return self._build_mission_result(
+                        success=False,
+                        reasoning=f"Error: {str(e)}",
+                        state=state,
+                    )
 
                 if not actions_list:
                     state.validation_failures += 1
-                    if (
-                        state.validation_failures
-                        <= self.config.execution.validation_failure_escalation_limit
-                    ):
-                        state.last_action_summary = (
-                            f"Action validation issue: {error or 'No action generated'}. Retrying."
-                        )
-                        state.checkpoint_pending = False
+                    if state.validation_failures <= self.config.execution.validation_failure_escalation_limit:
+                        state.last_action_summary = f"Action validation issue: {error or 'No action generated'}. Retrying."
+                        _set_checkpoint_pending(False)
                         continue
-                    return MissionResult(
+                    return self._build_mission_result(
                         success=False,
-                        reasoning=(
-                            "Repeated action validation failures: "
-                            f"{error or 'No action generated'}"
-                        ),
+                        reasoning=f"Repeated action validation failures: {error or 'No action generated'}",
+                        state=state,
                     )
                 state.validation_failures = 0
 
-                # Execute each action
                 for action_step in actions_list:
+                    if self._cancel_event.is_set():
+                        return self._build_mission_result(
+                            success=False,
+                            reasoning="Mission cancelled",
+                            state=state,
+                        )
+                    self._pause_event.wait()
+                    if self._cancel_event.is_set():
+                        return self._build_mission_result(
+                            success=False,
+                            reasoning="Mission cancelled",
+                            state=state,
+                        )
+
                     function_name = (getattr(action_step, "function_name", None) or "").strip()
                     action_args = getattr(action_step, "function_arguments", {}) or {}
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
                     narrative = action_args.get("narrative", "")
+
                     self.event_logger.action_determined(
                         action=current_action,
                         reasoning=reasoning,
                         narrative=narrative,
+                        tool=function_name,
+                        in_loop=state.in_loop,
+                        loop_round=state.loop_round if state.in_loop else None,
+                        loop_count=state.loop_count if state.in_loop else None,
                     )
 
-                    # Handle think (with next_action decision)
                     if function_name == "think":
-                        self.action_executor.act(
+                        result = self.action_executor.act(
                             action_step=action_step,
                             detected_elements=detected_elements,
                             page_info=page_info,
                             environment_state=environment_state,
                             current_iteration=self._current_iteration,
                         )
+                        duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
                         state.actions_since_progress += 1
 
                         think_reasoning = str(action_args.get("reasoning", "")).strip()
@@ -786,7 +996,6 @@ class Agent:
                         recommended_next_step_arg = str(action_args.get("recommended_next_step", "")).strip()
 
                         if think_next_action == "start_loop":
-                            # Enter loop mode
                             loop_count_raw = action_args.get("loop_count")
                             loop_desc = str(action_args.get("loop_description", "")).strip()
                             try:
@@ -796,117 +1005,140 @@ class Agent:
 
                             state.in_loop = True
                             state.loop_count = loop_count
-                            state.loop_round = 2  # Round 1 was the pre-loop action
+                            state.loop_round = 2
                             state.loop_description = loop_desc or think_reasoning
-                            state.checkpoint_pending = False
+                            _set_checkpoint_pending(False)
                             state.browser_actions_since_progress = 0
 
-                            state.last_action_summary = (
-                                f"Loop started: {loop_desc or think_reasoning} "
-                                f"(round 2 of {loop_count})"
-                            )
+                            state.last_action_summary = f"Loop started: {loop_desc or think_reasoning} (round 2 of {loop_count})"
                             _append_recent_action(f"[LOOP START] {loop_desc} — {loop_count} total rounds")
-                            self.event_logger.system_info(
-                                f"⟳ Loop started: \"{loop_desc}\" — round 2 of {loop_count}"
+                            self.event_logger.loop_state_changed(
+                                change="start",
+                                loop_round=state.loop_round,
+                                loop_count=state.loop_count,
+                                loop_description=state.loop_description,
                             )
 
                         elif think_next_action == "advance":
-                            # Advance loop round
                             if not state.in_loop:
                                 state.last_action_summary = "advance ignored — not in a loop"
-                                state.checkpoint_pending = False
+                                _set_checkpoint_pending(False)
                             elif state.browser_actions_since_progress == 0:
-                                state.last_action_summary = (
-                                    "advance BLOCKED: No browser actions since last advance. "
-                                    "Do a browser action first."
-                                )
-                                state.checkpoint_pending = False
+                                state.last_action_summary = "advance BLOCKED: No browser actions since last advance. Do a browser action first."
+                                _set_checkpoint_pending(False)
                             else:
                                 state.loop_round += 1
                                 state.browser_actions_since_progress = 0
-                                state.checkpoint_pending = False
-
-                                # Check if loop is complete
+                                _set_checkpoint_pending(False)
                                 if state.loop_count and state.loop_round > state.loop_count:
-                                    self.event_logger.system_info(
-                                        f"⟳ Loop complete: all {state.loop_count} rounds done"
-                                    )
-                                    state.last_action_summary = (
-                                        f"Loop complete — all {state.loop_count} rounds done"
-                                    )
+                                    state.last_action_summary = f"Loop complete — all {state.loop_count} rounds done"
                                     _append_recent_action(f"[LOOP COMPLETE] {state.loop_count} rounds done")
+                                    self.event_logger.loop_state_changed(
+                                        change="end",
+                                        loop_round=state.loop_count,
+                                        loop_count=state.loop_count,
+                                        loop_description=state.loop_description,
+                                    )
                                     _exit_loop()
                                 else:
-                                    remaining = (
-                                        state.loop_count - state.loop_round + 1
-                                        if state.loop_count
-                                        else "?"
-                                    )
+                                    remaining = state.loop_count - state.loop_round + 1 if state.loop_count else "?"
                                     state.last_action_summary = (
-                                        f"Advanced to loop round {state.loop_round} of {state.loop_count} "
-                                        f"({remaining} remaining)"
+                                        f"Advanced to loop round {state.loop_round} of {state.loop_count} ({remaining} remaining)"
                                     )
-                                    _append_recent_action(
-                                        f"[ADVANCE] Round {state.loop_round} of {state.loop_count}"
-                                    )
-                                    self.event_logger.system_info(
-                                        f"⟳ Loop round {state.loop_round} of {state.loop_count}"
+                                    _append_recent_action(f"[ADVANCE] Round {state.loop_round} of {state.loop_count}")
+                                    self.event_logger.loop_state_changed(
+                                        change="advance",
+                                        loop_round=state.loop_round,
+                                        loop_count=state.loop_count,
+                                        loop_description=state.loop_description,
                                     )
 
                         elif think_next_action == "end_loop":
                             if state.in_loop:
-                                self.event_logger.system_info(
-                                    f"⟳ Loop ended early at round {state.loop_round} of {state.loop_count}"
-                                )
-                                state.last_action_summary = (
-                                    f"Loop ended early at round {state.loop_round} of {state.loop_count}"
-                                )
+                                state.last_action_summary = f"Loop ended early at round {state.loop_round} of {state.loop_count}"
                                 _append_recent_action("[LOOP END] early exit")
+                                self.event_logger.loop_state_changed(
+                                    change="end_early",
+                                    loop_round=state.loop_round,
+                                    loop_count=state.loop_count,
+                                    loop_description=state.loop_description,
+                                )
                                 _exit_loop()
                             else:
                                 state.last_action_summary = "end_loop ignored — not in a loop"
-                            state.checkpoint_pending = False
+                            _set_checkpoint_pending(False)
 
                         elif think_next_action == "done":
-                            # Mission complete
                             if state.in_loop:
+                                self.event_logger.loop_state_changed(
+                                    change="end",
+                                    loop_round=state.loop_round,
+                                    loop_count=state.loop_count,
+                                    loop_description=state.loop_description,
+                                )
                                 _exit_loop()
-                            return MissionResult(
+                            result_str = "success" if result.success else "failed"
+                            self.event_logger.action_complete(
+                                tool=function_name,
+                                narrative=narrative,
+                                success=bool(result.success),
+                                result_str=result_str,
+                                duration_ms=duration_ms,
+                                iteration=self._current_iteration,
+                            )
+                            return self._build_mission_result(
                                 success=True,
                                 reasoning=think_reasoning or "Mission complete",
+                                state=state,
                             )
 
                         elif think_next_action == "stuck":
                             replacement_strategy = think_reasoning or "Trying a different strategy."
-                            state.checkpoint_pending = False
+                            _set_checkpoint_pending(False)
                             state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
                             if recommended_next_step_arg:
                                 cleaned = strip_targeting_data(recommended_next_step_arg)
                                 state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            _append_recent_action(f"[STUCK] Strategy switch")
-                            self.event_logger.system_info(f"↺ Strategy switched: {replacement_strategy}")
+                            _append_recent_action("[STUCK] Strategy switch")
+                            if self.on_stuck_callback:
+                                try:
+                                    hint = self.on_stuck_callback(replacement_strategy, self._current_iteration)
+                                    if hint:
+                                        with self._hints_lock:
+                                            self._pending_hints.append(hint.strip())
+                                except Exception as e:
+                                    self.event_logger.system_warning(f"on_stuck_callback failed: {e}")
 
                         elif think_next_action == "continue":
                             state.last_action_summary = f"You thought: \"{think_reasoning}\""
                             if recommended_next_step_arg:
                                 cleaned = strip_targeting_data(recommended_next_step_arg)
                                 state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            state.checkpoint_pending = False
+                            _set_checkpoint_pending(False)
 
                         else:
-                            state.checkpoint_pending = False
+                            _set_checkpoint_pending(False)
 
+                        result_str = "success" if result.success else "failed"
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=bool(result.success),
+                            result_str=result_str,
+                            duration_ms=duration_ms,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
-                    # Handle assert/flag (non-browser actions)
                     if function_name in {"assert_condition", "flag"}:
-                        self.action_executor.act(
+                        result = self.action_executor.act(
                             action_step=action_step,
                             detected_elements=detected_elements,
                             page_info=page_info,
                             environment_state=environment_state,
                             current_iteration=self._current_iteration,
                         )
+                        duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
                         action_type = "assert" if function_name == "assert_condition" else "flag"
                         action_content = str(
                             action_args.get("condition") if function_name == "assert_condition" else action_args.get("message", "")
@@ -914,10 +1146,18 @@ class Agent:
                         state.last_action_summary = f"You called {action_type}: \"{action_content}\""
                         _append_recent_action(f"{action_type}: {action_content}")
                         state.actions_since_progress += 1
-                        state.checkpoint_pending = True
+                        _set_checkpoint_pending(True)
+                        result_str = "success" if result.success else "failed"
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=bool(result.success),
+                            result_str=result_str,
+                            duration_ms=duration_ms,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
-                    # Handle tab management actions (intercepted by controller)
                     if function_name == "switch_tab":
                         before_state = self.memory_store._capture_current_state()
                         action_success = False
@@ -934,7 +1174,7 @@ class Agent:
                                     pass
                                 state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
                                 state.browser_actions_since_progress += 1
-                                state.checkpoint_pending = True
+                                _set_checkpoint_pending(True)
                                 action_success = True
                             except ValueError as e:
                                 state.last_action_summary = f"switch_tab FAILED: {e}"
@@ -953,6 +1193,14 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
                     if function_name == "close_tab":
@@ -968,7 +1216,7 @@ class Agent:
                                 active_id = active.id if active else "?"
                                 state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
                                 state.browser_actions_since_progress += 1
-                                state.checkpoint_pending = True
+                                _set_checkpoint_pending(True)
                                 action_success = True
                             except ValueError as e:
                                 state.last_action_summary = f"close_tab FAILED: {e}"
@@ -987,6 +1235,14 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
                     if function_name == "open_tab":
@@ -1004,7 +1260,7 @@ class Agent:
                                 if url:
                                     state.last_action_summary += f" at {url}"
                                 state.browser_actions_since_progress += 1
-                                state.checkpoint_pending = True
+                                _set_checkpoint_pending(True)
                                 action_success = True
                             except Exception as e:
                                 state.last_action_summary = f"open_tab FAILED: {e}"
@@ -1023,6 +1279,14 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
                     if function_name == "dismiss_dialog":
@@ -1036,11 +1300,11 @@ class Agent:
                             self.tab_manager.dismiss_dialog(accept, input_text)
                             action_word = "accepted" if accept else "dismissed"
                             state.last_action_summary = f"Dialog {action_word}"
-                            state.checkpoint_pending = True
+                            _set_checkpoint_pending(True)
                             action_success = True
                         else:
                             state.last_action_summary = "dismiss_dialog: No dialog pending"
-                            state.checkpoint_pending = True
+                            _set_checkpoint_pending(True)
                             action_error = "No dialog pending"
                         self._record_controller_action(
                             action_type="dismiss_dialog",
@@ -1053,9 +1317,16 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
                         continue
 
-                    # Execute browser action
                     result = self.action_executor.act(
                         action_step=action_step,
                         detected_elements=detected_elements,
@@ -1073,12 +1344,20 @@ class Agent:
                         else self._build_action_summary(action_step, result_str)
                     )
                     _append_recent_action(state.last_action_summary)
-                    state.checkpoint_pending = True
+                    _set_checkpoint_pending(True)
+
+                    duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
+                    self.event_logger.action_complete(
+                        tool=function_name,
+                        narrative=narrative,
+                        success=bool(result.success),
+                        result_str=result_str,
+                        duration_ms=duration_ms,
+                        iteration=self._current_iteration,
+                    )
 
                     if result.success:
                         state.browser_actions_since_progress += 1
-
-                        # Mark element as done in DOM if we're in a loop
                         if state.in_loop:
                             overlay_index = None
                             if result.metadata:
@@ -1091,7 +1370,6 @@ class Agent:
                                 except (TypeError, ValueError):
                                     pass
 
-                    # Sync tab manager after browser actions
                     if result.success and self.tab_manager:
                         active_tab = self.tab_manager.get_active()
                         if active_tab and self.browser.page is not active_tab.page:
@@ -1107,21 +1385,27 @@ class Agent:
                                 overlay_index=overlay_index,
                                 url=page_info.url if page_info else "",
                                 page_title=page_info.title if page_info else None,
-                                timestamp=time.time()
+                                timestamp=time.time(),
                             )
                             state.failed_elements.append(failed_action)
                         except Exception:
                             pass
 
             except Exception as e:
-                return MissionResult(
+                return self._build_mission_result(
                     success=False,
-
                     reasoning=f"Error: {str(e)}",
+                    state=state,
+                )
+            finally:
+                iteration_duration_ms = (time.time() - iteration_started_at) * 1000.0
+                self.event_logger.iteration_complete(
+                    iteration=self._current_iteration,
+                    duration_ms=iteration_duration_ms,
                 )
 
-        # Max actions reached
-        return MissionResult(
+        return self._build_mission_result(
             success=False,
             reasoning=f"Max actions ({max_actions}) reached without completion",
+            state=state,
         )

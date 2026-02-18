@@ -81,6 +81,7 @@ class ActionPlanner:
         decision_context: Optional[DecisionContext] = None,
         element_index_text: Optional[str] = None,
         gallery_images: Optional[List[bytes]] = None,
+        user_hints: Optional[List[str]] = None,
         # Loop state
         in_loop: bool = False,
         loop_round: int = 0,
@@ -116,6 +117,7 @@ class ActionPlanner:
         self.decision_context = decision_context
         self.element_index_text = element_index_text
         self.gallery_images = gallery_images
+        self.user_hints = [hint.strip() for hint in (user_hints or []) if isinstance(hint, str) and hint.strip()]
         # Loop state
         self.in_loop = in_loop
         self.loop_round = loop_round
@@ -150,6 +152,10 @@ class ActionPlanner:
 
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
+
+        if self.user_hints:
+            hints_str = "\n".join(f"- {h}" for h in self.user_hints)
+            parts.append(f"HINTS FROM USER:\n{hints_str}\n")
 
         if self.recommended_next_step:
             source = (
@@ -352,6 +358,12 @@ Based on the screenshot, what is the best next action?
             for i, knowledge in enumerate(self.base_knowledge, 1):
                 base_knowledge_section += f"{i}. {knowledge}\n"
 
+        user_hints_section = ""
+        if self.user_hints:
+            user_hints_section = "\n\nHINTS FROM USER:\n"
+            for hint in self.user_hints:
+                user_hints_section += f"- {hint}\n"
+
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
         memory_index_block = self._get_memory_entry_index()
@@ -519,6 +531,7 @@ GUIDELINES
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
 {base_knowledge_section}
+{user_hints_section}
 
 Choose the next action to take.
 """

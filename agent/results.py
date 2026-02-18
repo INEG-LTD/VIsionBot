@@ -10,6 +10,14 @@ class MissionResult:
     reasoning: str = ""
     partial: bool = False
     final_answer_draft: str = ""
+    total_iterations: int = 0
+    total_actions: int = 0
+    final_url: str = ""
+    duration_s: float = 0.0
+    total_cost_usd: float = 0.0
+
+    def __bool__(self) -> bool:
+        return self.success
 
 
 # Backward-compatibility alias for legacy imports at package root.

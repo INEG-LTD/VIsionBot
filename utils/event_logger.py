@@ -26,8 +26,14 @@ class EventType(str, Enum):
     ITERATION_START = "iteration_start"
     ITERATION_COMPLETE = "iteration_complete"
     ACTION_DETERMINED = "action_determined"
+    ACTION_COMPLETE = "action_complete"
     ACTION_ERROR = "action_error"
     STUCK_DETECTED = "stuck_detected"
+    LOOP_STATE_CHANGED = "loop_state_changed"
+    CHECKPOINT_CHANGED = "checkpoint_changed"
+    ELEMENT_CAPTURE = "element_capture"
+    SCREENSHOT_CAPTURED = "screenshot_captured"
+    BROWSER_NAVIGATION = "browser_navigation"
 
     # Command execution
     COMMAND_START = "command_start"
@@ -118,19 +124,52 @@ class EventLogger:
             self.show_overlay_candidates = show_overlay_candidates
             self.show_llm_costs = show_llm_costs
             self._callbacks: List[Callable[[BotEvent], None]] = []
+            self._typed_callbacks: Dict[EventType, List[Callable[[BotEvent], None]]] = {}
             self._event_history: List[BotEvent] = []
             self._max_history = 1000
+            self._total_cost_usd: float = 0.0
+            self._total_tokens: int = 0
         except Exception:
             self.debug_mode = True
             self.show_overlay_candidates = False
             self.show_llm_costs = True
             self._callbacks = []
+            self._typed_callbacks = {}
             self._event_history = []
             self._max_history = 1000
+            self._total_cost_usd = 0.0
+            self._total_tokens = 0
 
     def register_callback(self, callback: Callable[[BotEvent], None]) -> None:
         if callback not in self._callbacks:
             self._callbacks.append(callback)
+
+    def unregister_callback(self, callback: Callable[[BotEvent], None]) -> None:
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    def on(self, event_type: EventType, callback: Callable[[BotEvent], None]) -> None:
+        callbacks = self._typed_callbacks.setdefault(event_type, [])
+        if callback not in callbacks:
+            callbacks.append(callback)
+
+    def off(self, event_type: EventType, callback: Callable[[BotEvent], None]) -> None:
+        callbacks = self._typed_callbacks.get(event_type, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+        if not callbacks and event_type in self._typed_callbacks:
+            del self._typed_callbacks[event_type]
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self._total_cost_usd
+
+    @property
+    def total_tokens(self) -> int:
+        return self._total_tokens
+
+    def get_event_history(self) -> List[BotEvent]:
+        return list(self._event_history)
 
     def _safe_emit(self, event: BotEvent) -> None:
         try:
@@ -146,7 +185,13 @@ class EventLogger:
             except Exception:
                 pass
 
-        for callback in self._callbacks:
+        for callback in list(self._callbacks):
+            try:
+                callback(event)
+            except Exception:
+                pass
+
+        for callback in list(self._typed_callbacks.get(event.event_type, [])):
             try:
                 callback(event)
             except Exception:
@@ -229,12 +274,146 @@ class EventLogger:
         except Exception:
             pass
 
+    def action_complete(
+        self,
+        tool: str,
+        narrative: str,
+        success: bool,
+        result_str: str,
+        duration_ms: float,
+        **details,
+    ) -> None:
+        try:
+            level = LogLevel.SUCCESS if success else LogLevel.ERROR
+            message = f"Action complete: {tool} -> {result_str}"
+            if narrative:
+                message += f" | {narrative}"
+            self.emit(
+                EventType.ACTION_COMPLETE,
+                message,
+                level,
+                tool=tool,
+                narrative=narrative,
+                success=success,
+                result=result_str,
+                duration_ms=duration_ms,
+                **details,
+            )
+        except Exception:
+            pass
+
     def action_error(self, action: str, error: str = None, **details):
         try:
             msg = f"Action failed: {action}"
             if error:
                 msg += f" - {error}"
             self.emit(EventType.ACTION_ERROR, msg, LogLevel.ERROR, action=action, error=error, **details)
+        except Exception:
+            pass
+
+    def loop_state_changed(
+        self,
+        change: str,
+        loop_round: int,
+        loop_count: Optional[int],
+        loop_description: str,
+        **details,
+    ) -> None:
+        try:
+            msg = f"Loop {change}: round={loop_round}, total={loop_count or '?'}"
+            if loop_description:
+                msg += f" ({loop_description})"
+            self.emit(
+                EventType.LOOP_STATE_CHANGED,
+                msg,
+                LogLevel.INFO,
+                change=change,
+                loop_round=loop_round,
+                loop_count=loop_count,
+                loop_description=loop_description,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def iteration_complete(self, iteration: int, duration_ms: float, **details) -> None:
+        try:
+            self.emit(
+                EventType.ITERATION_COMPLETE,
+                f"Iteration complete: {iteration} ({duration_ms:.1f} ms)",
+                LogLevel.DEBUG,
+                iteration=iteration,
+                duration_ms=duration_ms,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def checkpoint_changed(self, pending: bool, **details) -> None:
+        try:
+            self.emit(
+                EventType.CHECKPOINT_CHANGED,
+                f"Checkpoint {'pending' if pending else 'cleared'}",
+                LogLevel.DEBUG,
+                pending=pending,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def element_capture(self, total: int, text_rich: int, text_poor: int, **details) -> None:
+        try:
+            self.emit(
+                EventType.ELEMENT_CAPTURE,
+                f"Captured elements: total={total}, text_rich={text_rich}, text_poor={text_poor}",
+                LogLevel.DEBUG,
+                total=total,
+                text_rich=text_rich,
+                text_poor=text_poor,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def screenshot_captured(
+        self,
+        screenshot_id: str,
+        byte_size: int,
+        sha256: str,
+        *,
+        iteration: Optional[int] = None,
+        path: Optional[str] = None,
+        in_memory: bool = True,
+        url: Optional[str] = None,
+        **details,
+    ) -> None:
+        try:
+            msg = f"Screenshot captured: {screenshot_id} ({byte_size} bytes)"
+            self.emit(
+                EventType.SCREENSHOT_CAPTURED,
+                msg,
+                LogLevel.DEBUG,
+                screenshot_id=screenshot_id,
+                iteration=iteration,
+                byte_size=byte_size,
+                sha256=sha256,
+                path=path,
+                in_memory=in_memory,
+                url=url,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def browser_navigation(self, url: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.BROWSER_NAVIGATION,
+                f"Browser navigated: {url}",
+                LogLevel.INFO,
+                url=url,
+                **details,
+            )
         except Exception:
             pass
 
@@ -452,6 +631,8 @@ class EventLogger:
 
     def llm_cost(self, cost_usd: float, input_tokens: int, output_tokens: int, total_tokens: int, model: str = None, **details):
         try:
+            self._total_cost_usd += float(cost_usd or 0.0)
+            self._total_tokens += int(total_tokens or 0)
             if not self.show_llm_costs:
                 return
             msg = f"Prompt Cost: {cost_usd} USD, Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Total Tokens: {total_tokens}"

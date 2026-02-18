@@ -169,6 +169,33 @@ class DebugConfig(BaseModel):
         default=True,
         description="Show LLM cost information in debug mode"
     )
+    stream_screenshots: bool = Field(
+        default=False,
+        description="Emit screenshot metadata events and retain screenshots for API retrieval."
+    )
+    screenshot_stream_persist_to_disk: bool = Field(
+        default=True,
+        description="Persist streamed screenshots to disk so they remain retrievable after memory eviction."
+    )
+    screenshot_stream_dir: str = Field(
+        default="agent_stream_screenshots",
+        description="Directory used by the screenshot stream store."
+    )
+    screenshot_stream_in_memory_items: int = Field(
+        default=40,
+        ge=1,
+        description="Maximum streamed screenshots retained in memory."
+    )
+    screenshot_stream_in_memory_mb: int = Field(
+        default=120,
+        ge=1,
+        description="Maximum in-memory screenshot stream size in MB."
+    )
+    screenshot_stream_max_disk_files: int = Field(
+        default=2000,
+        ge=0,
+        description="Maximum screenshot files retained on disk in stream directory."
+    )
 
     class Config:
         arbitrary_types_allowed = True
