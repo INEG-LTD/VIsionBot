@@ -8,9 +8,8 @@ Surfaces tab state for injection into the agent's prompt each iteration.
 from __future__ import annotations
 
 import time
-import threading
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page, Dialog
@@ -54,8 +53,11 @@ class TabManager:
         self.pending_dialog: Optional[DialogInfo] = None
         self.tab_events: List[str] = []
 
-        # Pages that opened and closed within the debounce window
-        self._debounce_closed: set = set()
+        # Newly created pages are queued and finalized on the main thread.
+        # This avoids cross-thread Playwright calls while still filtering
+        # pages that close immediately (e.g. download popups).
+        self._debounce_window_seconds = 0.5
+        self._pending_pages: Dict[int, Tuple["Page", Optional[str], float]] = {}
 
         # Register the initial page
         initial = self._make_tab(active_page)
@@ -110,6 +112,10 @@ class TabManager:
 
     def _on_page_created(self, page: "Page") -> None:
         """Called when a new page (tab/popup) is created in the context."""
+        # If already tracked (e.g. open_tab() registered it immediately), skip.
+        if self._find_tab_by_page(page):
+            return
+
         # Determine opener
         opener_id = None
         try:
@@ -121,37 +127,56 @@ class TabManager:
         except Exception:
             pass
 
-        # Debounce: track whether this page closes almost immediately (download)
-        page_ref = id(page)
+        # Queue for debounce finalization on the main thread.
+        self._pending_pages[id(page)] = (page, opener_id, time.time())
 
-        def _check_survived():
-            """Called after debounce window. If page didn't close, register it."""
-            if page_ref in self._debounce_closed:
-                # Page closed during debounce — likely a download
-                self._debounce_closed.discard(page_ref)
+    def _finalize_pending_pages(self) -> None:
+        """Register debounced pages from the main loop thread."""
+        if not self._pending_pages:
+            return
+
+        now = time.time()
+        matured_refs = [
+            page_ref
+            for page_ref, (_, _, created_at) in self._pending_pages.items()
+            if now - created_at >= self._debounce_window_seconds
+        ]
+        if not matured_refs:
+            return
+
+        for page_ref in matured_refs:
+            entry = self._pending_pages.pop(page_ref, None)
+            if not entry:
+                continue
+            page, opener_id, _ = entry
+
+            # open_tab() may have registered this already.
+            if self._find_tab_by_page(page):
+                continue
+
+            try:
+                if page.is_closed():
+                    self.tab_events.append("A tab briefly opened and closed (possible download)")
+                    continue
+            except Exception:
                 self.tab_events.append("A tab briefly opened and closed (possible download)")
-                return
+                continue
 
-            # Page survived — register it
             tab = self._make_tab(page, opener_id=opener_id)
             self._tabs.append(tab)
             self._active_id = tab.id
-            self._attach_page_listeners(page, tab.id)
+
+            try:
+                self._attach_page_listeners(page, tab.id)
+            except Exception:
+                # Page may close between the is_closed() check and listener attach.
+                self._tabs = [t for t in self._tabs if t.id != tab.id]
+                self.tab_events.append("A tab briefly opened and closed (possible download)")
+                continue
 
             opener_note = f" (opened by {opener_id})" if opener_id else ""
             title = tab.title or tab.url or "blank"
             self.tab_events.append(f"New tab opened: [{tab.id}] {title}{opener_note}")
-
-        # Register a temporary close listener for debounce detection
-        def _on_early_close():
-            self._debounce_closed.add(page_ref)
-
-        page.on("close", _on_early_close)
-
-        # Wait 500ms then check
-        timer = threading.Timer(0.5, _check_survived)
-        timer.daemon = True
-        timer.start()
 
     def _on_page_closed(self, page: "Page") -> None:
         """Called when a page closes."""
@@ -262,16 +287,14 @@ class TabManager:
 
     def open_tab(self, url: Optional[str] = None) -> "Page":
         """Open a new tab, optionally navigating to a URL. Returns the new Page."""
+        # Keep registry current before forcing a new tab.
+        self._finalize_pending_pages()
         new_page = self._context.new_page()
 
-        # The "page" event on context will fire and _on_page_created will handle registration
-        # But since new_page() is synchronous and we have a debounce timer,
-        # we need to register immediately for user-initiated opens (no debounce needed)
-        # Cancel the debounce by registering directly
-        page_ref = id(new_page)
-        self._debounce_closed.discard(page_ref)  # Ensure not treated as closed
+        # The context "page" event may have queued this page for debounce.
+        self._pending_pages.pop(id(new_page), None)
 
-        # Check if already registered by event handler timer (unlikely in 0ms)
+        # Check if already registered by the context page event handler.
         existing = self._find_tab_by_page(new_page)
         if not existing:
             tab = self._make_tab(new_page)
@@ -315,6 +338,8 @@ class TabManager:
 
     def refresh_metadata(self) -> None:
         """Update url/title for all tabs from their Page objects."""
+        self._finalize_pending_pages()
+
         for tab in self._tabs:
             try:
                 if not tab.page.is_closed():

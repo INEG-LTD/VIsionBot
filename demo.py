@@ -352,23 +352,21 @@ def setup_interceptors(agent: Agent):
 def create_event_callback(agent: Agent, debug_mode: bool = True):
     def simple_event_callback(event: BotEvent):
         if event.event_type == EventType.ITERATION_START:
-            action = event.details.get('action', '?')
-            
             iteration = event.details.get('iteration', '?')
             max_iterations = event.details.get('max_iterations', '?')
-            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b> [{action}]"))
+            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
             if not config.logging.debug_mode:
                 _start_spinner()
 
         elif event.event_type == EventType.ACTION_DETERMINED:
             if not config.logging.debug_mode:
                 _stop_spinner()
-
+            action = event.details.get('action', '?')
             narrative = event.details.get('narrative', '')
             reasoning = event.details.get('reasoning', '')
 
             if reasoning:
-                print(HTML(f"<gray>> Here's what the agent is thinking: {reasoning}</gray>"))
+                print(HTML(f"<gray>> Here's what the agent is thinking [{action}]: {reasoning}</gray>"))
             print(f"    ⚡ {narrative}")
 
         elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):            
@@ -434,18 +432,19 @@ with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
 
     agent.event_logger.register_callback(
         create_event_callback(agent, debug_mode=config.logging.debug_mode))
-    agent.browser.page.goto("https://www.google.com/")
+    agent.browser.page.goto("https://example.com")
 
     apply_thinking_border(agent)
-    result = agent.execute_mission(
-        "search for ios developer jobs in london then press the jobs tab button when you reach the search results page and then click the first 3 jobs on the page",
-    )
+    while True:
+        what_to_do = input("What do you want to do? ")
+        if what_to_do == "exit":
+            break
+        result = agent.execute_mission(what_to_do)
+        if result.success:
+            print("\n✅ Task completed")
+            chime.success()
+        else:
+            print("\n❌ Task failed")
+            chime.error()
 
-    if result.success:
-        print("\n✅ Task completed")
-        chime.success()
-    else:
-        print("\n❌ Task failed")
-        chime.error()
-
-    input("Press Enter to continue...")
+        input("Press Enter to continue...")

@@ -325,6 +325,26 @@ class NarrativeMemory:
             return "I navigated"
         if action_type == "extract":
             return f"I extracted {description or 'data'}"
+        if action_type == "send_email":
+            recipients = action_params.get("to") or ""
+            if isinstance(recipients, list):
+                recipient_text = ", ".join(
+                    str(item).strip() for item in recipients if str(item).strip()
+                )
+            else:
+                recipient_text = str(recipients).strip()
+            subject = str(action_params.get("subject") or "").strip()
+            body_preview = str(action_params.get("body_preview") or "").strip()
+            if recipient_text and subject and body_preview:
+                return (
+                    f"I sent an email to {recipient_text} with subject '{subject}' "
+                    f"and body '{body_preview}'"
+                )
+            if recipient_text and subject:
+                return f"I sent an email to {recipient_text} with subject '{subject}'"
+            if recipient_text:
+                return f"I sent an email to {recipient_text}"
+            return "I sent an email"
         if action_type == "think":
             return "I thought about what to do next"
         if action_type == "mark_progress":
@@ -587,6 +607,22 @@ class NarrativeMemory:
                 or entry.action_params.get("condition")
                 or ""
             ).strip()
+            if entry.action_type == "send_email":
+                recipients = entry.action_params.get("to") or []
+                if isinstance(recipients, list):
+                    recipient_text = ", ".join(
+                        str(item).strip() for item in recipients if str(item).strip()
+                    )
+                else:
+                    recipient_text = str(recipients).strip()
+                subject = str(entry.action_params.get("subject") or "").strip()
+                body_preview = str(entry.action_params.get("body_preview") or "").strip()
+                if recipient_text:
+                    description = f"to={recipient_text}"
+                if subject:
+                    description = f"{description} | subject={subject}" if description else f"subject={subject}"
+                if body_preview:
+                    description = f"{description} | body={body_preview}" if description else f"body={body_preview}"
             url_after = str(entry.state_after.get("url", "")).strip()
             suffix = f" | target={description}" if description else ""
             if url_after:
@@ -598,11 +634,20 @@ class NarrativeMemory:
         return "\n".join(rows) if rows else "No executed browser actions yet."
 
     def get_latest_recommended_next_step(self) -> tuple[Optional[str], Optional[str]]:
+        latest_executed_index = 0
+        for entry in self.entries:
+            if entry.entry_kind == MemoryEntryKind.EXECUTED_ACTION.value:
+                latest_executed_index = max(latest_executed_index, entry.memory_entry_index)
+
         for entry in reversed(self.entries):
             if entry.entry_kind != MemoryEntryKind.REFLECTION.value:
                 continue
             value = str(entry.action_params.get("recommended_next_step", "")).strip()
             if value:
+                # One-shot behavior: once any executed action happens after a recommendation,
+                # treat that recommendation as consumed and do not resurface it.
+                if latest_executed_index > entry.memory_entry_index:
+                    continue
                 return value, entry.memory_id
         return None, None
 

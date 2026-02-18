@@ -656,6 +656,41 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Send an email via the Resend API. Use when the user asks to email someone or to send a message by email",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of recipient email addresses"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Email subject line"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Email body (HTML or plain text). Will be sent as HTML; use <p> tags for paragraphs if desired."
+                    },
+                    "from_email": {
+                        "type": "string",
+                        "description": "Sender address (e.g. 'Name <onboarding@yourdomain.com>'). Optional if RESEND_FROM_EMAIL is set in the environment."
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for sending this email"
+                    }
+                },
+                "required": ["to", "subject", "body", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
 ]
 
 # Optional memory evidence on key decision-bearing tools.

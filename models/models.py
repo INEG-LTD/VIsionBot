@@ -180,6 +180,10 @@ class ActionStep(BaseModel):
                 f"dismiss_dialog: accept={arguments.get('accept', False)}"
                 + (f" | input_text={arguments.get('input_text', '')}" if arguments.get("input_text") else "")
             ).strip()
+        if function_name == "send_email":
+            to_list = arguments.get("to") or []
+            to_str = ", ".join(to_list) if isinstance(to_list, list) else str(to_list)
+            return f"send_email: to={to_str} | subject={arguments.get('subject', '')}".strip()
         return f"{function_name}: {arguments}"
 
     def _parse_action(text: str) -> tuple[str, str]:

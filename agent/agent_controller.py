@@ -7,6 +7,7 @@ Architecture overview:
 - Loop rounds are advanced with think(advance) and exited with think(end_loop) or think(done).
 """
 
+import os
 import time
 import threading
 from dataclasses import dataclass, field
@@ -671,6 +672,11 @@ class Agent:
         elif fn == "wait_for":
             condition = args.get("condition", "")
             return f"You waited for: \"{condition}\". Result: {result_str}."
+        elif fn == "send_email":
+            to = args.get("to", "")
+            subject = args.get("subject", "")
+            body = args.get("body", "")
+            return f"You sent an email to {to} with the subject \"{subject}\" and the body \"{body}\". Result: {result_str}."
         else:
             # Fallback: use the action string
             action_str = getattr(action_step, "action", str(action_step))
@@ -1317,6 +1323,128 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
+                        continue
+
+                    # Send email via Resend API (controller-only; no browser action).
+                    if function_name == "send_email":
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        duplicate_of: Optional[str] = None
+                        message_id: Optional[str] = None
+
+                        raw_to = action_args.get("to") or []
+                        if isinstance(raw_to, list):
+                            to_list = [str(email).strip() for email in raw_to if str(email).strip()]
+                        elif raw_to:
+                            to_list = [str(raw_to).strip()]
+                        else:
+                            to_list = []
+
+                        subject = str(action_args.get("subject", "")).strip()
+                        body = str(action_args.get("body", "")).strip()
+                        body_preview = body if len(body) <= 200 else f"{body[:197]}..."
+                        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body else ""
+                        from_email = (action_args.get("from_email") or "").strip() or os.environ.get("RESEND_FROM_EMAIL", "").strip()
+                        effective_from_email = from_email or "Acme <onboarding@resend.dev>"
+
+                        canonical_to = sorted({email.lower() for email in to_list})
+                        signature_source = f"{'|'.join(canonical_to)}\n{subject.lower()}\n{body}"
+                        email_signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
+
+                        for entry in reversed(self.memory_store.entries):
+                            if entry.action_type != "send_email":
+                                continue
+                            if entry.outcome not in {"success", "no_change"}:
+                                continue
+                            if str(entry.action_params.get("email_signature", "")).strip() == email_signature:
+                                duplicate_of = entry.memory_id
+                                action_success = True
+                                state.last_action_summary = (
+                                    f"send_email skipped: identical email already sent ({duplicate_of}). "
+                                    "If the mission was only this email, call think(next_action=done)."
+                                )
+                                break
+
+                        try:
+                            if duplicate_of is None:
+                                import resend
+                                api_key = os.environ.get("RESEND_API_KEY")
+                                if not api_key:
+                                    action_error = "RESEND_API_KEY is not set"
+                                    state.last_action_summary = f"send_email FAILED: {action_error}"
+                                elif not to_list:
+                                    action_error = "No recipients (to) provided"
+                                    state.last_action_summary = f"send_email FAILED: {action_error}"
+                                elif not subject:
+                                    action_error = "Subject is required"
+                                    state.last_action_summary = f"send_email FAILED: {action_error}"
+                                elif not body:
+                                    action_error = "Body is required"
+                                    state.last_action_summary = f"send_email FAILED: {action_error}"
+                                else:
+                                    resend.api_key = api_key
+                                    params = {
+                                        "from": effective_from_email,
+                                        "to": to_list,
+                                        "subject": subject,
+                                        "html": body,
+                                    }
+                                    send_result = resend.Emails.send(params)
+                                    raw_message_id = (
+                                        send_result.get("id")
+                                        if isinstance(send_result, dict)
+                                        else getattr(send_result, "id", None)
+                                    )
+                                    if raw_message_id:
+                                        message_id = str(raw_message_id).strip()
+
+                                    state.last_action_summary = (
+                                        f"Email sent to {', '.join(to_list)}: \"{subject}\" "
+                                        f"| body=\"{body_preview}\""
+                                    )
+                                    if message_id:
+                                        state.last_action_summary += f" | message_id={message_id}"
+                                    action_success = True
+                        except Exception as e:
+                            action_error = str(e)
+                            state.last_action_summary = f"send_email FAILED: {action_error}"
+                        self._record_controller_action(
+                            action_type="send_email",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={
+                                "operation": "send_email",
+                                "to": to_list,
+                                "subject": subject,
+                                "body_preview": body_preview,
+                                "body_hash": body_hash,
+                                "from_email": effective_from_email,
+                                "email_signature": email_signature,
+                                "duplicate_of": duplicate_of,
+                                "message_id": message_id,
+                            },
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
+                        if action_success:
+                            with self._hints_lock:
+                                self._pending_hints.append(
+                                    "You already sent the requested email. Do not send it again. "
+                                    "If the mission is complete, call think(next_action=done)."
+                                )
+                        _append_recent_action(state.last_action_summary)
+                        state.actions_since_progress += 1
+                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,

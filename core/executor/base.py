@@ -2116,6 +2116,7 @@ class Executor:
                 "close_tab",
                 "open_tab",
                 "dismiss_dialog",
+                "send_email",
             }
             if function_name in controller_only_functions:
                 duration = time.time() - start_time
