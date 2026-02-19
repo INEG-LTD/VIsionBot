@@ -5,7 +5,10 @@ from time import sleep
 import sys
 import threading
 import os
+from dataclasses import dataclass, field
 import chime
+from textual.binding import Binding
+from textual.containers import Container, Vertical, VerticalScroll
 from yaspin import yaspin
 from art import text2art
 from pydantic import BaseModel
@@ -20,31 +23,17 @@ from utils.event_logger import BotEvent, EventType
 from agent.interceptor_manager import Interceptor, InterceptorMode, InterceptorContext
 import random
 from prompt_toolkit import HTML, print_formatted_text as print
+from rich.console import Console
+from rich.prompt import Prompt
+from textual.app import App, ComposeResult
+from textual.widgets import ContentSwitcher, Footer, Header, Label, Tab, ListView, ListItem
+from textual.widgets import Tabs
+
+console = Console()
 
 os.environ.setdefault("PLAYWRIGHT_CHROMIUM_DISABLE_CRASHPAD", "1")
 
-def type_text_sequentially(page, text: str, delay: int = None):
-    if delay is None:
-        delay = random.randint(50, 150)
-    page.keyboard.type(text, delay=delay)
-    print(f"Typed text: {text}")
-
-_spinner_active = False
-_spinner_thread = None
-_completion_shown = False
-
-text_animator = TextAnimator("Thinking...", effect="pulse")
-
-def _start_spinner():
-    global text_animator
-    text_animator.start()
-
-def _stop_spinner():
-    global text_animator
-    text_animator.stop()
-
-class ThinkingBorderManager:
-    
+class ThinkingBorderManager:   
     _JS_INIT = """
     (function() {
         if (window.__agentThinkingBorder) return;
@@ -331,30 +320,28 @@ def setup_interceptors(agent: Agent):
         handler=select_dropdown_handler
     )
   
-def create_event_callback(agent: Agent, debug_mode: bool = True):
-    def simple_event_callback(event: BotEvent):
-        if event.event_type == EventType.ITERATION_START:
-            iteration = event.details.get('iteration', '?')
-            max_iterations = event.details.get('max_iterations', '?')
-            print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
-            if not config.logging.debug_mode:
-                _start_spinner()
+def simple_event_callback(event: BotEvent):
+    text_animator = TextAnimator("Thinking...", effect="pulse")
 
-        elif event.event_type == EventType.ACTION_DETERMINED:
-            if not config.logging.debug_mode:
-                _stop_spinner()
-            action = event.details.get('action', '?')
-            narrative = event.details.get('narrative', '')
-            reasoning = event.details.get('reasoning', '')
+    if event.event_type == EventType.ITERATION_START:
+        iteration = event.details.get('iteration', '?')
+        max_iterations = event.details.get('max_iterations', '?')
+        print(HTML(f"\n<b>∞ Iteration {iteration}/{max_iterations}</b>"))
+          
+        text_animator.start()
 
-            if reasoning:
-                print(HTML(f"<gray>> Here's the agent's internal reasoning [{action}]: {reasoning}</gray>"))
-            print(f"    ⚡ {narrative}")
+    elif event.event_type == EventType.ACTION_DETERMINED:
+        text_animator.stop()
+        action = event.details.get('action', '?')
+        narrative = event.details.get('narrative', '')
+        reasoning = event.details.get('reasoning', '')
 
-        elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):            
-            print("\n✅ I have now completed the mission!")
-    
-    return simple_event_callback
+        if reasoning:
+            print(HTML(f"<gray>> Here's the agent's internal reasoning [{action}]: {reasoning}</gray>"))
+        print(f"    ⚡ {narrative}")
+
+    elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):            
+        print("\n✅ I have now completed the mission!")
 
 def ask_user_for_help(question: str, context: dict) -> str:
     chime.warning()
@@ -370,13 +357,12 @@ def ask_user_for_help(question: str, context: dict) -> str:
         print(f"❌ Error asking user for help: {e}")
         return ""
 
-
 def receive_reported_data(payload: str, context: dict) -> None:
     print("\n📦 Agent reported data:")
-    print(f"   {payload}")
+    print(f"{payload}")
     current_url = context.get("current_url", "")
     if current_url:
-        print(f"   URL: {current_url}")
+        print(f"URL: {current_url}")
 
 config = Config(
     model=ModelConfig(
@@ -446,13 +432,12 @@ def main():
         agent_loading_spinner.stop()
         setup_interceptors(agent)
 
-        agent.event_logger.register_callback(
-            create_event_callback(agent, debug_mode=config.logging.debug_mode))
+        agent.event_logger.register_callback(simple_event_callback)
         agent.browser.page.goto("https://example.com")
 
         apply_thinking_border(agent)
         while True:
-            what_to_do = input("\nWhat do you want to do? ↦ ")
+            what_to_do = Prompt.ask("\n ↦ What do you want to do?", case_sensitive=False)
             if what_to_do == "exit":
                 clear_screen()
                 print(HTML("<b>Thank you for using The Big Browser Agent [RESEARCH TOOL]</b>"))
@@ -466,5 +451,174 @@ def main():
 
             input("Press Enter to continue...")
             
+class AgentView(VerticalScroll):
+    """A per-agent view whose children are mounted only after this view is mounted."""
+
+    def __init__(self, agent_name: str, view_id: str) -> None:
+        super().__init__(id=view_id)
+        self.agent_name = agent_name
+
+    def on_mount(self) -> None:
+        art = text2art("The Big Browser Agent", font="graceful")
+
+        self.mount(Label(art))
+        self.mount(
+            Container(
+                Label("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."),
+                Label("\nAn agent in the browser helps you perform tasks that would be too manual or time consuming to do yourself"),
+                Label("[bold]    ➤ Too manual: Tasks that require a lot of repitition/context switching/tab opening and closing.[/bold]"),
+                Label("[bold]    ➤ Too time consuming: Tasks that take at least 5 minutes of clicking and typing to complete.[/bold]"),
+                Label("The agent works best when you give it a targeted specific task to perform."),
+                Label("The agent is built to perform a task and is not conversational.\n"),
+                Label("[bold]Guiding Tip:[/bold] Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much."),
+                Label("When you are done, you can exit by typing 'exit'."),
+                id="header-content"
+            ),
+        )
+        self.mount(Container())
+        self
+
+        header_content = self.query_one("#header-content")
+        header_content.border_title = "The Big Browser Agent (RESEARCH TOOL)"
+        header_content.styles.border = ("round", "gray")
+        header_content.styles.padding = (1, 3, 1, 3)
+        header_content.styles.max_width = "50%"
+
+
+@dataclass
+class AgentSession:
+    """Per-tab runtime state. Filled out gradually as TUI phases are implemented."""
+
+    tab_id: str
+    label: str
+    status: str = "idle"
+    agent: Agent | None = None
+    current_mission: str = ""
+    thread: threading.Thread | None = None
+    event_buffer: list[BotEvent] = field(default_factory=list)
+    last_snapshot: dict | None = None
+               
+class BrowserAgentApp(App):
+    """Textual UI wrapper that can host multiple agent tabs/views."""
+
+    BINDINGS = [
+        Binding("ctrl+s", "stop_agent", "Stop Agent"),
+        Binding("ctrl+r", "resume_agent", "Resume Agent"),
+        Binding("ctrl+p", "pause_agent", "Pause Agent", show=True),
+        Binding("ctrl+c", "cancel_agent", "Cancel Agent"),
+        Binding("ctrl+x", "exit_agent", "Exit Agent"),
+        Binding("a", "add", "Add Agent"),
+    ]
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        # Tab labels
+        self.tabs: list[str] = ["Agent 1"]
+        self.agents: list[str] = ["Agent 1"]
+
+        # Map tab_id -> ContentSwitcher child id
+        self._tab_to_view: dict[str, str] = {"agent-1": "data-1"}
+        # Map tab_id -> display label
+        self._tab_label: dict[str, str] = {"agent-1": "Agent 1"}
+        # Map tab_id -> isolated runtime session state
+        self._sessions: dict[str, AgentSession] = {}
+        self._create_session("agent-1")
+
+    def _create_session(self, tab_id: str) -> AgentSession:
+        session = AgentSession(
+            tab_id=tab_id,
+            label=self._tab_label.get(tab_id, tab_id),
+        )
+        self._sessions[tab_id] = session
+        return session
+
+    def _ensure_session(self, tab_id: str) -> AgentSession:
+        session = self._sessions.get(tab_id)
+        if session is not None:
+            return session
+        return self._create_session(tab_id)
+
+    def get_session(self, tab_id: str) -> AgentSession | None:
+        return self._sessions.get(tab_id)
+
+    def get_active_session(self) -> AgentSession | None:
+        tabs = self.query_one(Tabs)
+        active_tab_id = tabs.active
+        if active_tab_id is None:
+            return None
+        return self._sessions.get(active_tab_id)
+
+    def _make_agent_view(self, tab_id: str) -> VerticalScroll:
+        self._ensure_session(tab_id)
+        view_id = self._tab_to_view[tab_id]
+        label = self._tab_label.get(tab_id, tab_id)
+        return AgentView(agent_name=label, view_id=view_id)
+
+    def compose(self) -> ComposeResult:
+        yield Tabs(Tab("Agent 1", id="agent-1"))
+
+        with ContentSwitcher(initial="data-1"):
+            # Yield children during compose; don't call .mount() here.
+            yield self._make_agent_view("agent-1")
+
+        yield Footer()
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        if event.tab is None:
+            return
+        self._ensure_session(event.tab.id)
+
+        switcher = self.query_one(ContentSwitcher)
+        view_id = self._tab_to_view.get(event.tab.id)
+        if not view_id:
+            return
+
+        # Only switch if that view already exists (new tabs mount later)
+        try:
+            switcher.query_one(f"#{view_id}")
+        except Exception:
+            return
+
+        switcher.current = view_id
+
+    def action_add(self) -> None:
+        tabs = self.query_one(Tabs)
+        switcher = self.query_one(ContentSwitcher)
+
+        new_index = len(self._tab_to_view) + 1
+        new_label = f"Agent {new_index}"
+        new_tab_id = f"agent-{new_index}"
+        view_id = f"data-{new_index}"
+
+        self._tab_label[new_tab_id] = new_label
+        self._tab_to_view[new_tab_id] = view_id
+        self._create_session(new_tab_id)
+
+        tabs.add_tab(Tab(new_label, id=new_tab_id))
+
+        def _mount_and_show() -> None:
+            # mount first so data-N exists
+            switcher.mount(self._make_agent_view(new_tab_id))
+
+            # then activate (will trigger handler, but now it's safe)
+            tabs.active = new_tab_id
+
+            # and explicitly switch
+            switcher.current = view_id
+
+        self.call_after_refresh(_mount_and_show)
+
+    # Your existing actions (stubs here so bindings don’t crash)
+    def action_stop_agent(self) -> None: ...
+    def action_resume_agent(self) -> None: ...
+    def action_pause_agent(self) -> None: ...
+    def action_cancel_agent(self) -> None: ...
+    def action_exit_agent(self) -> None:
+        self.exit()
+
 if __name__ == "__main__":
-    main()
+    # main()
+    
+    app = BrowserAgentApp()
+    app.run()
