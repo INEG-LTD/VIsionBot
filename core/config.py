@@ -53,11 +53,6 @@ class ExecutionConfig(BaseModel):
         ge=1,
         description="Maximum number of actions before a mission is forced to end"
     )
-
-    auto_complete_extract_commands: bool = Field(
-        default=True,
-        description="Automatically mark tasks complete after successful extract: commands when the task only contains extraction actions"
-    )
     max_actions_per_plan: int = Field(
         default=6,
         ge=1,

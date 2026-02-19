@@ -665,9 +665,8 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "to": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of recipient email addresses"
+                        "type": "string",
+                        "description": "Recipient email address"
                     },
                     "subject": {
                         "type": "string",
@@ -676,10 +675,6 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     "body": {
                         "type": "string",
                         "description": "Email body (HTML or plain text). Will be sent as HTML; use <p> tags for paragraphs if desired."
-                    },
-                    "from_email": {
-                        "type": "string",
-                        "description": "Sender address (e.g. 'Name <onboarding@yourdomain.com>'). Optional if RESEND_FROM_EMAIL is set in the environment."
                     },
                     "reasoning": {
                         "type": "string",

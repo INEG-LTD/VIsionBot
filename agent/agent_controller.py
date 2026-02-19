@@ -177,7 +177,6 @@ class Agent:
         self.execution_state: Optional[ExecutionState] = None
 
         # Initialize execution system
-        self.auto_complete_extract_commands = self.config.execution.auto_complete_extract_commands
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
         self.screenshot_store = ScreenshotStore(
             max_in_memory_items=self.config.logging.screenshot_stream_in_memory_items,
@@ -1341,10 +1340,8 @@ class Agent:
                         duplicate_of: Optional[str] = None
                         message_id: Optional[str] = None
 
-                        raw_to = action_args.get("to") or []
-                        if isinstance(raw_to, list):
-                            to_list = [str(email).strip() for email in raw_to if str(email).strip()]
-                        elif raw_to:
+                        raw_to = action_args.get("to")
+                        if raw_to:
                             to_list = [str(raw_to).strip()]
                         else:
                             to_list = []
@@ -1353,8 +1350,7 @@ class Agent:
                         body = str(action_args.get("body", "")).strip()
                         body_preview = body if len(body) <= 200 else f"{body[:197]}..."
                         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body else ""
-                        from_email = (action_args.get("from_email") or "").strip() or os.environ.get("RESEND_FROM_EMAIL", "").strip()
-                        effective_from_email = from_email or "Acme <onboarding@resend.dev>"
+                        effective_from_email = "Acme <onboarding@resend.dev>"
 
                         canonical_to = sorted({email.lower() for email in to_list})
                         signature_source = f"{'|'.join(canonical_to)}\n{subject.lower()}\n{body}"

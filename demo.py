@@ -6,6 +6,7 @@ import sys
 import threading
 import os
 import chime
+from yaspin import yaspin
 
 from pydantic import BaseModel
 from pathlib import Path
@@ -102,14 +103,10 @@ class ThinkingBorderManager:
             enableBlocking: function() {
                 this.init();
                 this.blockingOverlay.style.display = 'block';
-                document.documentElement.style.overflow = 'hidden';
-                document.body.style.overflow = 'hidden';
             },
             disableBlocking: function() {
                 if (!this.blockingOverlay) return;
                 this.blockingOverlay.style.display = 'none';
-                document.documentElement.style.overflow = '';
-                document.body.style.overflow = '';
             }
         };
     })();
@@ -366,7 +363,7 @@ def create_event_callback(agent: Agent, debug_mode: bool = True):
             reasoning = event.details.get('reasoning', '')
 
             if reasoning:
-                print(HTML(f"<gray>> Here's what the agent is thinking [{action}]: {reasoning}</gray>"))
+                print(HTML(f"<gray>> Here's the agent's internal reasoning [{action}]: {reasoning}</gray>"))
             print(f"    ⚡ {narrative}")
 
         elif event.event_type == EventType.AGENT_COMPLETE and event.details.get('success', False):            
@@ -399,7 +396,6 @@ config = Config(
         wait_for_load_before_iteration=True,
         wait_for_load_state="networkidle",
         wait_for_load_timeout_ms=5000,
-        auto_complete_extract_commands=False
     ),
     elements=ElementConfig(
         selection_fallback_model="gemini/gemini-2.5-flash-lite",
@@ -427,24 +423,46 @@ config = Config(
         file_upload_interrupted="⚠️ Upload interrupted. Please try again."
     )
 )
-with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
-    setup_interceptors(agent)
 
-    agent.event_logger.register_callback(
-        create_event_callback(agent, debug_mode=config.logging.debug_mode))
-    agent.browser.page.goto("https://example.com")
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-    apply_thinking_border(agent)
-    while True:
-        what_to_do = input("What do you want to do? ")
-        if what_to_do == "exit":
-            break
-        result = agent.execute_mission(what_to_do)
-        if result.success:
-            print("\n✅ Task completed")
-            chime.success()
-        else:
-            print("\n❌ Task failed")
-            chime.error()
+def main():
+    clear_screen()
+    print(HTML("<b>Welcome to The Big Browser Agent [RESEARCH TOOL]</b>"))
+    print(HTML("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."))
+    print(HTML("It is a research tool to help you perform tasks that would be too manual or time consuming to do yourself."))
+    print(HTML("    ➤ Too manual here means tasks that require a lot of repitition/context switching/tab opening and closing."))
+    print(HTML("    ➤ Too time consuming here means tasks that take at least 5 minutes of clicking and typing to complete.\n"))
+    
+    print(HTML("The BBA works best when you give it a targeted specific task to perform."))
+    print(HTML("You can tell the agent what you want to do by typing it.\n"))
+    print(HTML("<b>Guiding Tip:</b> Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much."))
+    print(HTML("When you are done, you can exit by typing 'exit'. \n"))
+    
+    agent_loading_spinner = yaspin(text="Loading agent...", color="cyan")
+    agent_loading_spinner.start()
+    with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
+        agent_loading_spinner.stop()
+        setup_interceptors(agent)
 
-        input("Press Enter to continue...")
+        agent.event_logger.register_callback(
+            create_event_callback(agent, debug_mode=config.logging.debug_mode))
+        agent.browser.page.goto("https://example.com")
+
+        apply_thinking_border(agent)
+        while True:
+            what_to_do = input("What do you want to do? ↦ ")
+            if what_to_do == "exit":
+                break
+            result = agent.execute_mission(what_to_do)
+            if result.success:
+                chime.success()
+            else:
+                print("\n❌ Mission failed")
+                chime.error()
+
+            input("Press Enter to continue...")
+            
+if __name__ == "__main__":
+    main()
