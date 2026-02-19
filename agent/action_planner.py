@@ -68,7 +68,7 @@ class ActionPlanner:
         include_visible_text_in_agent_context: bool = False,
         max_actions_per_plan: int = 6,
         current_iteration: int = 0,
-        browser_actions_in_round: int = 0,
+        user_facing_actions_in_round: int = 0,
         checkpoint_mode: bool = False,
         active_strategy: Optional[str] = None,
         last_action_summary: Optional[str] = None,
@@ -104,7 +104,7 @@ class ActionPlanner:
         self.memory_store: NarrativeMemory = memory_store
         self.max_actions_per_plan = max_actions_per_plan
         self.current_iteration = current_iteration
-        self.browser_actions_in_round = browser_actions_in_round
+        self.user_facing_actions_in_round = user_facing_actions_in_round
         self.checkpoint_mode = checkpoint_mode
         self.active_strategy = active_strategy
         self.last_action_summary = last_action_summary
@@ -168,10 +168,10 @@ class ActionPlanner:
                 f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{cleaned_step}\n"
             )
 
-        if self.checkpoint_mode and self.browser_actions_in_round > 0:
+        if self.checkpoint_mode and self.user_facing_actions_in_round > 0:
             parts.append(
                 "CHECKPOINT:\n"
-                "You just performed a browser action. Decide what to do next via think().\n"
+                "You just performed a user-facing action. Decide what to do next via think().\n"
             )
 
         # Recent actions log
@@ -468,6 +468,7 @@ BROWSER ACTIONS:
 DATA & COMMUNICATION:
 • extract_data - Extract and store data in notebook
 • ask_user - Ask user for clarification
+• report_data - Send textual data back to the host callback
 • send_email - Send an email via the Resend API
 • flag - Send non-blocking notification to user
 

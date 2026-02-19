@@ -405,7 +405,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             "name": "think",
             "description": (
                 "Stop and think about what's happening. Decide what to do next via next_action.\n"
-                "• continue = more work needed, take another browser action.\n"
+                "• continue = more work needed, take another user-facing action.\n"
                 "• start_loop = you need to repeat an action sequence N times. Provide loop_count and loop_description. The action you just did counts as round 1.\n"
                 "• advance = (loop only) current iteration is done, move to the next round.\n"
                 "• end_loop = exit the loop early (before all rounds are done).\n"
@@ -424,7 +424,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                         "enum": ["continue", "start_loop", "advance", "end_loop", "done", "stuck"],
                         "description": (
                             "What to do after thinking. "
-                            "'continue' = need another browser action. "
+                            "'continue' = need another user-facing action. "
                             "'start_loop' = begin a loop (requires loop_count and loop_description). "
                             "'advance' = (in-loop) current iteration done, advance to next round. "
                             "'end_loop' = exit the loop early. "
@@ -652,6 +652,32 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["question", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_data",
+            "description": (
+                "Report textual data back to the host application via callback. "
+                "Use this when the user needs intermediate or final textual output."
+                "Use this tool when asked to return/give/report data/information/results/etc back to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        "type": "string",
+                        "description": "Text payload to report back to the user"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for reporting this data now"
+                    }
+                },
+                "required": ["payload", "reasoning"],
                 "additionalProperties": False
             }
         }

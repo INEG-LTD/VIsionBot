@@ -27,6 +27,7 @@ class InteractionType(str, Enum):
     FLAG = "flag"
     WAIT_FOR = "wait_for"
     ASK = "ask"
+    REPORT = "report"
     MARK_PROGRESS = "mark_progress"
 
 
@@ -306,6 +307,7 @@ class NarrativeMemory:
             or action_params.get("action")
             or action_params.get("condition")
             or action_params.get("message")
+            or action_params.get("payload")
             or action_params.get("url")
             or ""
         )
@@ -347,6 +349,8 @@ class NarrativeMemory:
             return "I sent an email"
         if action_type == "think":
             return "I thought about what to do next"
+        if action_type == "report":
+            return f"I reported data to the user: {description or 'text payload'}"
         if action_type == "mark_progress":
             return f"I marked progress: {description or 'completed one unit'}"
         return f"I executed {action_type}"

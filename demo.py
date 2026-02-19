@@ -7,16 +7,14 @@ import threading
 import os
 import chime
 from yaspin import yaspin
-
+from art import text2art
 from pydantic import BaseModel
-from pathlib import Path
 from agent.agent_controller import Agent
 from browser.provider import BrowserConfig
 from core.config import Config, ModelConfig, ExecutionConfig, ElementConfig, DebugConfig, UserMessagesConfig
 from core.config import ActFunctionConfig
 from core.executor import Executor
 from lib.ai import ReasoningLevel
-from core.browser import Browser
 from utils.event_logger import BotEvent, EventType
 from agent.interceptor_manager import Interceptor, InterceptorMode, InterceptorContext
 import random
@@ -372,6 +370,7 @@ def create_event_callback(agent: Agent, debug_mode: bool = True):
     return simple_event_callback
 
 def ask_user_for_help(question: str, context: dict) -> str:
+    chime.warning()
     print(f"\n❓ Agent asks: {question}")
     print("   (Press Enter to skip, or type your answer)")
 
@@ -383,6 +382,14 @@ def ask_user_for_help(question: str, context: dict) -> str:
     except Exception as e:
         print(f"❌ Error asking user for help: {e}")
         return ""
+
+
+def receive_reported_data(payload: str, context: dict) -> None:
+    print("\n📦 Agent reported data:")
+    print(f"   {payload}")
+    current_url = context.get("current_url", "")
+    if current_url:
+        print(f"   URL: {current_url}")
 
 config = Config(
     model=ModelConfig(
@@ -429,20 +436,26 @@ def clear_screen():
 
 def main():
     clear_screen()
+    Art = text2art("The Big Browser Agent", font="puffy")
+    print(Art)
     print(HTML("<b>Welcome to The Big Browser Agent [RESEARCH TOOL]</b>"))
     print(HTML("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."))
     print(HTML("It is a research tool to help you perform tasks that would be too manual or time consuming to do yourself."))
-    print(HTML("    ➤ Too manual here means tasks that require a lot of repitition/context switching/tab opening and closing."))
-    print(HTML("    ➤ Too time consuming here means tasks that take at least 5 minutes of clicking and typing to complete.\n"))
+    print(HTML("    ➤ Too manual: Tasks that require a lot of repitition/context switching/tab opening and closing."))
+    print(HTML("    ➤ Too time consuming: Tasks that take at least 5 minutes of clicking and typing to complete."))
     
-    print(HTML("The BBA works best when you give it a targeted specific task to perform."))
-    print(HTML("You can tell the agent what you want to do by typing it.\n"))
+    print(HTML("The agent works best when you give it a targeted specific task to perform."))
+    print(HTML("The agent is built to perform a task and is not conversational.\n"))
     print(HTML("<b>Guiding Tip:</b> Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much."))
-    print(HTML("When you are done, you can exit by typing 'exit'. \n"))
+    print(HTML("When you are done, you can exit by typing 'exit'."))
     
     agent_loading_spinner = yaspin(text="Loading agent...", color="cyan")
     agent_loading_spinner.start()
-    with Agent(config=config, user_question_callback=ask_user_for_help) as agent:
+    with Agent(
+        config=config,
+        user_question_callback=ask_user_for_help,
+        data_report_callback=receive_reported_data,
+    ) as agent:
         agent_loading_spinner.stop()
         setup_interceptors(agent)
 
@@ -452,8 +465,10 @@ def main():
 
         apply_thinking_border(agent)
         while True:
-            what_to_do = input("What do you want to do? ↦ ")
+            what_to_do = input("\nWhat do you want to do? ↦ ")
             if what_to_do == "exit":
+                clear_screen()
+                print(HTML("<b>Thank you for using The Big Browser Agent [RESEARCH TOOL]</b>"))
                 break
             result = agent.execute_mission(what_to_do)
             if result.success:

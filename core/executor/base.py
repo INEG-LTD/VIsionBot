@@ -207,6 +207,7 @@ class Executor:
                  preferred_click_method: str = "programmatic", 
                  user_question_callback: Optional[Callable[[str, dict], str]] = None, 
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
+                 data_report_callback: Optional[Callable[[str, dict], None]] = None,
                  user_messages_config=None):
         self.browser = browser
         self.memory_store = memory_store
@@ -215,6 +216,7 @@ class Executor:
         self.user_messages_config = user_messages_config  # Store user messages config
         self.user_question_callback = user_question_callback
         self.agent_talk_callback = agent_talk_callback
+        self.data_report_callback = data_report_callback
         self.notebook = notebook  # Optional notebook for storing extraction results
         # Click method configuration
         if preferred_click_method not in ["programmatic", "mouse"]:
@@ -637,6 +639,77 @@ class Executor:
             pass
         
         return ask_result
+
+    def execute_report(
+        self,
+        step: ActionStep,
+        environment_state: Optional[EnvironmentState],
+        current_iteration: Optional[int] = None,
+    ) -> tuple[bool, Dict[str, Any]]:
+        """Execute report_data action - non-blocking textual payload callback."""
+        args = self._get_action_args(step)
+        payload = str(args.get("payload", "")).strip()
+        if not payload:
+            payload = step.action.split(":", 1)[1].strip() if ":" in step.action else ""
+
+        if not payload:
+            self.event_logger.system_warning("No payload provided for report_data action")
+            return False, {"delivered": False}
+
+        context = {
+            "current_url": (
+                getattr(environment_state, "current_url", None)
+                if environment_state is not None
+                else (self.browser.page.url if self.browser.page else "")
+            ),
+            "page_title": (
+                getattr(environment_state, "page_title", None)
+                if environment_state is not None
+                else (self.browser.page.title() if self.browser.page else "")
+            ),
+            "iteration": current_iteration,
+        }
+
+        delivered = False
+        callback_error: Optional[str] = None
+        if not self.data_report_callback:
+            self.event_logger.system_warning(
+                "report_data called but no callback configured; continuing with delivered=false"
+            )
+        else:
+            try:
+                self.data_report_callback(payload, context)
+                delivered = True
+            except Exception as e:
+                callback_error = str(e)
+                self.event_logger.system_warning(
+                    f"report_data callback failed; continuing with delivered=false: {callback_error}"
+                )
+
+        try:
+            before_state = self.memory_store._capture_current_state()
+            after_state = self.memory_store._capture_current_state()
+            self.memory_store.record_interaction(
+                IT.REPORT,
+                before_state=before_state,
+                after_state=after_state,
+                target_element_info={
+                    "payload": payload,
+                    "delivered": delivered,
+                    "context": context,
+                },
+                success=True,
+                error_message=callback_error,
+            )
+        except Exception:
+            pass
+
+        return True, {
+            "payload": payload,
+            "delivered": delivered,
+            "context": context,
+            "error": callback_error,
+        }
 
     def execute_clear_text(
         self,
@@ -2218,6 +2291,13 @@ class Executor:
                     environment_state=environment_state,
                     base_knowledge=base_knowledge,
                 ))
+            elif function_name == "report_data":
+                executed, report_data = self.execute_report(
+                    step=action_step,
+                    environment_state=environment_state,
+                    current_iteration=current_iteration,
+                )
+                result_data = report_data
             else:
                 duration = time.time() - start_time
                 error_message = f"Unsupported function: {function_name}"

@@ -169,6 +169,8 @@ class ActionStep(BaseModel):
             return f"wait_for: {arguments.get('condition', '')} | timeout={arguments.get('timeout_seconds', 10)}".strip()
         if function_name == "ask_user":
             return f"ask: {arguments.get('question', '')}".strip()
+        if function_name == "report_data":
+            return f"report_data: {arguments.get('payload', '')}".strip()
         if function_name == "switch_tab":
             return f"switch_tab: {arguments.get('tab_id', '')}".strip()
         if function_name == "close_tab":

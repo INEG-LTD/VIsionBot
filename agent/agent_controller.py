@@ -51,6 +51,9 @@ from core.browser import Browser
 # Type alias for user question callback (ask: command handler)
 # Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
 UserQuestionCallback = Callable[[str, dict], str]
+# Type alias for reported text callback (report_data: command handler)
+# Callback receives: payload (str), context (dict)
+DataReportCallback = Callable[[str, dict], None]
 
 
 @dataclass
@@ -58,7 +61,7 @@ class ExecutionState:
     """Mutable execution state for the mission loop."""
     total_actions: int = 0
     actions_since_progress: int = 0
-    browser_actions_since_progress: int = 0
+    user_facing_actions_since_progress: int = 0
     checkpoint_pending: bool = False
     last_action_summary: Optional[str] = None
     failed_elements: List[FailedAction] = field(default_factory=list)
@@ -102,6 +105,8 @@ class Agent:
         agent_talk_callback: Optional[Callable[[str], None]] = None,
         # Completion callback for complete: command
         completion_callback: Optional[Callable[[str], None]] = None,
+        # Data report callback for report_data: command
+        data_report_callback: Optional[DataReportCallback] = None,
         # Callback to request a hint when the agent declares itself stuck
         on_stuck_callback: Optional[Callable[[str, int], Optional[str]]] = None,
     ):
@@ -140,6 +145,7 @@ class Agent:
 
         # Store completion callback for complete: command
         self.completion_callback = completion_callback
+        self.data_report_callback = data_report_callback
         self.on_stuck_callback = on_stuck_callback
         self._screenshot_counter = 0  # Counter for naming screenshots
 
@@ -292,6 +298,7 @@ class Agent:
             self.page_utils,
             user_question_callback=self.user_question_callback,
             agent_talk_callback=self.agent_talk_callback,
+            data_report_callback=self.data_report_callback,
             user_messages_config=self.config.user_messages if self.config else None,
         )
         
@@ -668,6 +675,9 @@ class Agent:
         elif fn == "extract_data":
             desc = args.get("data_description", "data")
             return f"You extracted: \"{desc}\". Result: {result_str}."
+        elif fn == "report_data":
+            payload = args.get("payload", "")
+            return f"You reported data to the user: \"{payload}\". Result: {result_str}."
         elif fn == "wait_for":
             condition = args.get("condition", "")
             return f"You waited for: \"{condition}\". Result: {result_str}."
@@ -918,7 +928,7 @@ class Agent:
                     element_index_text=element_index_text,
                     gallery_images=None if state.checkpoint_pending else gallery_images,
                     current_iteration=self._current_iteration,
-                    browser_actions_in_round=state.browser_actions_since_progress,
+                    user_facing_actions_in_round=state.user_facing_actions_since_progress,
                     user_hints=pending_hints,
                     in_loop=state.in_loop,
                     loop_round=state.loop_round,
@@ -1013,7 +1023,7 @@ class Agent:
                             state.loop_round = 2
                             state.loop_description = loop_desc or think_reasoning
                             _set_checkpoint_pending(False)
-                            state.browser_actions_since_progress = 0
+                            state.user_facing_actions_since_progress = 0
 
                             state.last_action_summary = f"Loop started: {loop_desc or think_reasoning} (round 2 of {loop_count})"
                             _append_recent_action(f"[LOOP START] {loop_desc} — {loop_count} total rounds")
@@ -1028,12 +1038,12 @@ class Agent:
                             if not state.in_loop:
                                 state.last_action_summary = "advance ignored — not in a loop"
                                 _set_checkpoint_pending(False)
-                            elif state.browser_actions_since_progress == 0:
-                                state.last_action_summary = "advance BLOCKED: No browser actions since last advance. Do a browser action first."
+                            elif state.user_facing_actions_since_progress == 0:
+                                state.last_action_summary = "advance BLOCKED: No user-facing actions since last advance. Do a user-facing action first."
                                 _set_checkpoint_pending(False)
                             else:
                                 state.loop_round += 1
-                                state.browser_actions_since_progress = 0
+                                state.user_facing_actions_since_progress = 0
                                 _set_checkpoint_pending(False)
                                 if state.loop_count and state.loop_round > state.loop_count:
                                     state.last_action_summary = f"Loop complete — all {state.loop_count} rounds done"
@@ -1178,7 +1188,7 @@ class Agent:
                                 except Exception:
                                     pass
                                 state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
-                                state.browser_actions_since_progress += 1
+                                state.user_facing_actions_since_progress += 1
                                 _set_checkpoint_pending(True)
                                 action_success = True
                             except ValueError as e:
@@ -1220,7 +1230,7 @@ class Agent:
                                 active = self.tab_manager.get_active()
                                 active_id = active.id if active else "?"
                                 state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
-                                state.browser_actions_since_progress += 1
+                                state.user_facing_actions_since_progress += 1
                                 _set_checkpoint_pending(True)
                                 action_success = True
                             except ValueError as e:
@@ -1264,7 +1274,7 @@ class Agent:
                                 state.last_action_summary = f"Opened new tab [{active_id}]"
                                 if url:
                                     state.last_action_summary += f" at {url}"
-                                state.browser_actions_since_progress += 1
+                                state.user_facing_actions_since_progress += 1
                                 _set_checkpoint_pending(True)
                                 action_success = True
                             except Exception as e:
@@ -1322,6 +1332,8 @@ class Agent:
                         )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        if action_success:
+                            state.user_facing_actions_since_progress += 1
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -1440,6 +1452,8 @@ class Agent:
                                 )
                         _append_recent_action(state.last_action_summary)
                         state.actions_since_progress += 1
+                        if action_success and duplicate_of is None:
+                            state.user_facing_actions_since_progress += 1
                         _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
@@ -1480,8 +1494,29 @@ class Agent:
                         iteration=self._current_iteration,
                     )
 
-                    if result.success:
-                        state.browser_actions_since_progress += 1
+                    user_facing_functions = {
+                        "click",
+                        "type_text",
+                        "clear_text",
+                        "select_option",
+                        "upload_file",
+                        "set_datetime",
+                        "press_key",
+                        "open_url",
+                        "go_back",
+                        "go_forward",
+                        "scroll_page",
+                        "extract_data",
+                        "report_data",
+                        "ask_user",
+                    }
+                    if result.success and function_name in user_facing_functions:
+                        if function_name == "report_data":
+                            delivered = bool((result.data or {}).get("delivered", False)) if isinstance(result.data, dict) else False
+                            if delivered:
+                                state.user_facing_actions_since_progress += 1
+                        else:
+                            state.user_facing_actions_since_progress += 1
                         if state.in_loop:
                             overlay_index = None
                             if result.metadata:
