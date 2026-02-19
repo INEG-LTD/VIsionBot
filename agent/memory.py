@@ -28,6 +28,7 @@ class InteractionType(str, Enum):
     WAIT_FOR = "wait_for"
     ASK = "ask"
     REPORT = "report"
+    WRITE_DATA = "write_data"
     MARK_PROGRESS = "mark_progress"
 
 
@@ -308,6 +309,8 @@ class NarrativeMemory:
             or action_params.get("condition")
             or action_params.get("message")
             or action_params.get("payload")
+            or action_params.get("resolved_path")
+            or action_params.get("path")
             or action_params.get("url")
             or ""
         )
@@ -351,6 +354,8 @@ class NarrativeMemory:
             return "I thought about what to do next"
         if action_type == "report":
             return f"I reported data to the user: {description or 'text payload'}"
+        if action_type == "write_data":
+            return f"I wrote data to {description or 'a file'}"
         if action_type == "mark_progress":
             return f"I marked progress: {description or 'completed one unit'}"
         return f"I executed {action_type}"
@@ -374,17 +379,86 @@ class NarrativeMemory:
             return MemoryEntryKind.AUXILIARY
         return MemoryEntryKind.EXECUTED_ACTION
 
-    def _update_url_history(self, after_state: Optional[MemoryState]) -> None:
+    def _update_url_history(
+        self,
+        after_state: Optional[MemoryState],
+        *,
+        before_state: Optional[MemoryState] = None,
+        action_type: Optional[str] = None,
+        action_params: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not after_state or not after_state.url:
             return
-        current = after_state.url
+
+        current_url = after_state.url
         if not self.url_history:
-            self.url_history = [current]
+            self.url_history = [current_url]
             self.url_pointer = 0
             return
-        if self.url_history[-1] != current:
-            self.url_history.append(current)
+
+        pointer = self.url_pointer
+        if pointer < 0 or pointer >= len(self.url_history):
+            pointer = len(self.url_history) - 1
+            self.url_pointer = pointer
+
+        # If the current pointer does not match the recorded before URL,
+        # realign to the nearest matching URL when possible.
+        before_url = (before_state.url if before_state else "").strip()
+        if before_url and self.url_history[pointer] != before_url:
+            matching_indices = [
+                idx for idx, url in enumerate(self.url_history) if url == before_url
+            ]
+            if matching_indices:
+                pointer = min(matching_indices, key=lambda idx: abs(idx - pointer))
+                self.url_pointer = pointer
+
+        if self.url_history[self.url_pointer] == current_url:
+            return
+
+        params = action_params or {}
+        normalized_action_type = (action_type or "").strip().lower()
+        direction = str(params.get("direction", "")).strip().lower()
+
+        # Explicit history traversal for go_back/go_forward.
+        if (
+            normalized_action_type == InteractionType.NAVIGATION.value
+            and direction in {"back", "forward"}
+        ):
+            if direction == "back":
+                for idx in range(self.url_pointer - 1, -1, -1):
+                    if self.url_history[idx] == current_url:
+                        self.url_pointer = idx
+                        return
+            else:
+                for idx in range(self.url_pointer + 1, len(self.url_history)):
+                    if self.url_history[idx] == current_url:
+                        self.url_pointer = idx
+                        return
+
+        # Infer traversal even when direction metadata is absent.
+        if (
+            self.url_pointer > 0
+            and self.url_history[self.url_pointer - 1] == current_url
+        ):
+            self.url_pointer -= 1
+            return
+        if (
+            self.url_pointer < len(self.url_history) - 1
+            and self.url_history[self.url_pointer + 1] == current_url
+        ):
+            self.url_pointer += 1
+            return
+
+        # New navigation from current pointer: discard stale forward branch.
+        if self.url_pointer < len(self.url_history) - 1:
+            self.url_history = self.url_history[: self.url_pointer + 1]
+
+        if self.url_history and self.url_history[-1] == current_url:
             self.url_pointer = len(self.url_history) - 1
+            return
+
+        self.url_history.append(current_url)
+        self.url_pointer = len(self.url_history) - 1
 
     def normalize_memory_ids(self, memory_ids: Optional[List[Any]]) -> List[str]:
         """Normalize, deduplicate, and sequence-sort known memory ids."""
@@ -469,7 +543,12 @@ class NarrativeMemory:
         if isinstance(overlay_index, int):
             self._last_overlay_index = overlay_index
 
-        self._update_url_history(after_state)
+        self._update_url_history(
+            after_state,
+            before_state=before_state,
+            action_type=action_type,
+            action_params=params,
+        )
         return entry
 
     # Unified interaction writer used by executor/controller actions.
@@ -607,6 +686,8 @@ class NarrativeMemory:
             description = str(
                 entry.action_params.get("description")
                 or entry.action_params.get("action")
+                or entry.action_params.get("resolved_path")
+                or entry.action_params.get("path")
                 or entry.action_params.get("url")
                 or entry.action_params.get("condition")
                 or ""

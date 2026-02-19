@@ -15,6 +15,7 @@ from core.config import Config, ModelConfig, ExecutionConfig, ElementConfig, Deb
 from core.config import ActFunctionConfig
 from core.executor import Executor
 from lib.ai import ReasoningLevel
+from text_animator import TextAnimator
 from utils.event_logger import BotEvent, EventType
 from agent.interceptor_manager import Interceptor, InterceptorMode, InterceptorContext
 import random
@@ -32,29 +33,15 @@ _spinner_active = False
 _spinner_thread = None
 _completion_shown = False
 
-def _show_spinner():
-    global _spinner_active
-    spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-    i = 0
-    while _spinner_active:
-        sys.stdout.write(f'\r{spinner_chars[i % len(spinner_chars)]} Thinking...')
-        sys.stdout.flush()
-        sleep(0.1)
-        i += 1
-    sys.stdout.write('\r' + ' ' * 20 + '\r')
-    sys.stdout.flush()
+text_animator = TextAnimator("Thinking...", effect="pulse")
 
 def _start_spinner():
-    global _spinner_active, _spinner_thread
-    _spinner_active = True
-    _spinner_thread = threading.Thread(target=_show_spinner, daemon=True)
-    _spinner_thread.start()
+    global text_animator
+    text_animator.start()
 
 def _stop_spinner():
-    global _spinner_active
-    _spinner_active = False
-    if _spinner_thread:
-        _spinner_thread.join(timeout=0.2)
+    global text_animator
+    text_animator.stop()
 
 class ThinkingBorderManager:
     
@@ -436,7 +423,7 @@ def clear_screen():
 
 def main():
     clear_screen()
-    Art = text2art("The Big Browser Agent", font="puffy")
+    Art = text2art("The Big Browser Agent", font="graceful")
     print(Art)
     print(HTML("<b>Welcome to The Big Browser Agent [RESEARCH TOOL]</b>"))
     print(HTML("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."))

@@ -678,6 +678,9 @@ class Agent:
         elif fn == "report_data":
             payload = args.get("payload", "")
             return f"You reported data to the user: \"{payload}\". Result: {result_str}."
+        elif fn == "write_data":
+            resolved = args.get("path", "") or args.get("file_name", "") or "default location"
+            return f"You wrote data to {resolved}. Result: {result_str}."
         elif fn == "wait_for":
             condition = args.get("condition", "")
             return f"You waited for: \"{condition}\". Result: {result_str}."
@@ -1508,12 +1511,17 @@ class Agent:
                         "scroll_page",
                         "extract_data",
                         "report_data",
+                        "write_data",
                         "ask_user",
                     }
                     if result.success and function_name in user_facing_functions:
                         if function_name == "report_data":
-                            delivered = bool((result.data or {}).get("delivered", False)) if isinstance(result.data, dict) else False
-                            if delivered:
+                            reported = (
+                                bool((result.data or {}).get("reported", result.success))
+                                if isinstance(result.data, dict)
+                                else bool(result.success)
+                            )
+                            if reported:
                                 state.user_facing_actions_since_progress += 1
                         else:
                             state.user_facing_actions_since_progress += 1

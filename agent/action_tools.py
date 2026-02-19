@@ -685,6 +685,51 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "write_data",
+            "description": (
+                "Write textual data to the local filesystem. "
+                "If path is omitted, save to the default bba-data location."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "string",
+                        "description": "Text content to write to disk"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional target file or directory path. If omitted, default location is used."
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Optional filename to use when path is a directory or omitted"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["overwrite", "append"],
+                        "description": "Write mode (default: overwrite)",
+                        "default": "overwrite"
+                    },
+                    "format_hint": {
+                        "type": "string",
+                        "enum": ["text", "markdown", "json", "csv"],
+                        "description": "Optional format hint to choose default file extension",
+                        "default": "text"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for writing this data"
+                    }
+                },
+                "required": ["data", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_email",
             "description": "Send an email via the Resend API. Use when the user asks to email someone or to send a message by email",
             "parameters": {

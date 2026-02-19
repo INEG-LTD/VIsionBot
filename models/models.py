@@ -171,6 +171,11 @@ class ActionStep(BaseModel):
             return f"ask: {arguments.get('question', '')}".strip()
         if function_name == "report_data":
             return f"report_data: {arguments.get('payload', '')}".strip()
+        if function_name == "write_data":
+            path = str(arguments.get("path", "")).strip()
+            file_name = str(arguments.get("file_name", "")).strip()
+            where = path or file_name or "default location"
+            return f"write_data: {where}".strip()
         if function_name == "switch_tab":
             return f"switch_tab: {arguments.get('tab_id', '')}".strip()
         if function_name == "close_tab":

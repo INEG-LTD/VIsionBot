@@ -6,9 +6,13 @@ import math
 import re
 import time
 import random
+import uuid
+from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Tuple, Optional, List, Callable, Type, Union
 from enum import Enum
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page
 from pydantic import BaseModel, Field, create_model
@@ -254,6 +258,7 @@ class Executor:
         # The callback should handle pause checking and blocking internally.
         self._pause_callback: Optional[Callable[[], None]] = None
         self.command_history: List[str] = []
+        self._write_data_session_id: str = f"session_{uuid.uuid4().hex[:8]}"
 
     def _human_mouse_move(self, target_x: int, target_y: int, steps: int = 25):
         """
@@ -400,34 +405,55 @@ class Executor:
         if num_forward < 1:
             num_forward = 1
 
+        error_msg: Optional[str] = None
         for _ in range(num_forward):
             try:
-                self.browser.page.go_forward()
-                success = True
-                error_msg = None
+                self.browser.page.go_forward(wait_until="domcontentloaded")
             except Exception as e:
-                success = False
                 error_msg = str(e)
                 dprint(f"  ❌ Forward navigation failed: {e}")
+                break
 
-        # Get URL after navigation
-        after_url = before_url  # Default to before_url if navigation failed
-        if success:
-            try:
-                after_url = self.browser.page.url
-                after_state = self.memory_store._capture_current_state()
-            except Exception:
-                pass
-        
+        after_state = self.memory_store._capture_current_state()
+        after_url = before_url
+        try:
+            after_url = self.browser.page.url
+        except Exception:
+            if after_state and getattr(after_state, "url", ""):
+                after_url = after_state.url
+
+        state_changed = False
+        try:
+            state_changed = bool(
+                self.memory_store._has_meaningful_change(before_state, after_state)
+            )
+        except Exception:
+            if before_state and after_state:
+                state_changed = (
+                    before_state.url != after_state.url
+                    or before_state.title != after_state.title
+                )
+            elif before_url and after_url:
+                state_changed = before_url != after_url
+
+        success = error_msg is None and state_changed
+        if error_msg is None and not state_changed:
+            error_msg = "Forward navigation did not change the page state."
+
         self.event_logger.command_execution_complete("FORWARD", success=success, target_description=after_url, reasoning=None)
-        
+
         # Record navigation interaction with explicit before_state
         try:
             self.memory_store.record_interaction(
                 InteractionType.NAVIGATION,
                 before_state=before_state,  # Pass explicit before_state since navigation already happened
                 after_state=after_state,
-                target_element_info={"direction": "forward", "from": before_url, "to": after_url},
+                target_element_info={
+                    "direction": "forward",
+                    "steps": num_forward,
+                    "from": before_url,
+                    "to": after_url,
+                },
                 success=success,
                 error_message=error_msg,
             )
@@ -706,9 +732,166 @@ class Executor:
 
         return True, {
             "payload": payload,
+            "reported": True,
             "delivered": delivered,
             "context": context,
             "error": callback_error,
+        }
+
+    @staticmethod
+    def _sanitize_session_segment(raw: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(raw or "").strip())
+        cleaned = cleaned.strip("._-")
+        if not cleaned:
+            return "session"
+        return cleaned[:80]
+
+    def _resolve_non_local_session_segment(self, provider_type: str) -> str:
+        provider_type = str(provider_type or "").strip().lower()
+        browser_cfg = getattr(getattr(self.browser, "config", None), "browser", None)
+
+        if provider_type == "remote" and browser_cfg is not None:
+            remote_cdp_url = str(getattr(browser_cfg, "remote_cdp_url", "") or "").strip()
+            if remote_cdp_url:
+                try:
+                    parsed = urlparse(remote_cdp_url)
+                    query = parse_qs(parsed.query or "")
+                    for key in ("session_id", "sessionId", "browser_session_id", "browserSessionId"):
+                        values = query.get(key) or []
+                        if values and str(values[0]).strip():
+                            return self._sanitize_session_segment(values[0])
+
+                    parts = [part for part in parsed.path.split("/") if part]
+                    for idx in range(len(parts) - 1):
+                        if parts[idx].lower() in {"session", "sessions"}:
+                            return self._sanitize_session_segment(parts[idx + 1])
+                except Exception:
+                    pass
+
+        if provider_type == "persistent" and browser_cfg is not None:
+            user_data_dir = str(getattr(browser_cfg, "user_data_dir", "") or "").strip()
+            if user_data_dir:
+                basename = Path(user_data_dir).expanduser().name
+                if basename:
+                    return self._sanitize_session_segment(basename)
+
+        return self._write_data_session_id
+
+    def execute_write_data(self, step: ActionStep) -> tuple[bool, Dict[str, Any]]:
+        """Execute write_data action - write textual data to local disk."""
+        args = self._get_action_args(step)
+        data = str(args.get("data", ""))
+        if data == "":
+            self.event_logger.system_warning("No data provided for write_data action")
+            return False, {"error": "No data provided"}
+
+        path_arg = str(args.get("path", "")).strip()
+        file_name = str(args.get("file_name", "")).strip()
+        mode = str(args.get("mode", "overwrite")).strip().lower() or "overwrite"
+        if mode not in {"overwrite", "append"}:
+            mode = "overwrite"
+        format_hint = str(args.get("format_hint", "text")).strip().lower() or "text"
+
+        ext_map = {
+            "text": ".txt",
+            "markdown": ".md",
+            "json": ".json",
+            "csv": ".csv",
+        }
+        default_ext = ext_map.get(format_hint, ".txt")
+        generated_name = (
+            f"data_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+            f"_{uuid.uuid4().hex[:6]}{default_ext}"
+        )
+
+        provider_type = "local"
+        try:
+            provider_type = str(self.browser.config.browser.provider_type).strip().lower()
+        except Exception:
+            provider_type = "local"
+
+        session_segment = (
+            "temp"
+            if provider_type == "local"
+            else self._resolve_non_local_session_segment(provider_type)
+        )
+        used_default_location = False
+        explicit_dir_hint = False
+
+        if path_arg:
+            explicit_dir_hint = path_arg.endswith("/") or path_arg.endswith("\\")
+            target = Path(path_arg).expanduser()
+            if not target.is_absolute():
+                target = (Path.cwd() / target).resolve()
+        else:
+            used_default_location = True
+            target = (Path.cwd() / "bba-data" / session_segment / "written_data").resolve()
+
+        if explicit_dir_hint:
+            target_is_directory = True
+        elif target.exists():
+            target_is_directory = target.is_dir()
+        elif used_default_location:
+            target_is_directory = True
+        elif file_name:
+            target_is_directory = True
+        elif target.suffix:
+            target_is_directory = False
+        else:
+            # Extensionless user path defaults to file path (e.g. "./notes").
+            target_is_directory = False
+
+        if target_is_directory:
+            target_file = target / (file_name or generated_name)
+        else:
+            target_file = target
+
+        try:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            write_mode = "a" if mode == "append" else "w"
+            with target_file.open(write_mode, encoding="utf-8") as f:
+                f.write(data)
+        except Exception as e:
+            error_message = f"Failed to write data: {e}"
+            self.event_logger.system_warning(error_message)
+            return False, {"error": error_message}
+
+        bytes_written = len(data.encode("utf-8"))
+        resolved_path = str(target_file)
+
+        data_preview = data if len(data) <= 240 else f"{data[:237]}..."
+        try:
+            before_state = self.memory_store._capture_current_state()
+            after_state = self.memory_store._capture_current_state()
+            self.memory_store.record_interaction(
+                IT.WRITE_DATA,
+                before_state=before_state,
+                after_state=after_state,
+                target_element_info={
+                    "resolved_path": resolved_path,
+                    "path": path_arg or None,
+                    "file_name": file_name or target_file.name,
+                    "mode": mode,
+                    "format_hint": format_hint,
+                    "bytes_written": bytes_written,
+                    "provider_type": provider_type,
+                    "session_segment": session_segment,
+                    "used_default_location": used_default_location,
+                },
+                text_input=data_preview,
+                success=True,
+            )
+        except Exception:
+            pass
+
+        return True, {
+            "resolved_path": resolved_path,
+            "bytes_written": bytes_written,
+            "mode": mode,
+            "format_hint": format_hint,
+            "used_default_location": used_default_location,
+            "provider_type": provider_type,
+            "session_segment": session_segment,
         }
 
     def execute_clear_text(
@@ -1409,32 +1592,55 @@ class Executor:
         if num_back < 1:
             num_back = 1
 
+        error_msg: Optional[str] = None
         for _ in range(num_back):
             try:
-                self.browser.page.go_back()
-                success = True
-                error_msg = None
+                self.browser.page.go_back(wait_until="domcontentloaded")
             except Exception as e:
-                success = False
                 error_msg = str(e)
                 dprint(f"  ❌ Back navigation failed: {e}")
+                break
 
-        # Get URL after navigation
-        after_url = before_url  # Default to before_url if navigation failed
-        if success:
-            try:
-                after_url = self.browser.page.url
-            except Exception:
-                pass
-        
         after_state = self.memory_store._capture_current_state()
+        after_url = before_url
+        try:
+            after_url = self.browser.page.url
+        except Exception:
+            if after_state and getattr(after_state, "url", ""):
+                after_url = after_state.url
+
+        state_changed = False
+        try:
+            state_changed = bool(
+                self.memory_store._has_meaningful_change(before_state, after_state)
+            )
+        except Exception:
+            if before_state and after_state:
+                state_changed = (
+                    before_state.url != after_state.url
+                    or before_state.title != after_state.title
+                )
+            elif before_url and after_url:
+                state_changed = before_url != after_url
+
+        success = error_msg is None and state_changed
+        if error_msg is None and not state_changed:
+            error_msg = "Back navigation did not change the page state."
+
+        self.event_logger.command_execution_complete("BACK", success=success, target_description=after_url, reasoning=None)
+
         # Record navigation interaction with explicit before_state
         try:
             self.memory_store.record_interaction(
                 InteractionType.NAVIGATION,
                 before_state=before_state,  # Pass explicit before_state since navigation already happened
                 after_state=after_state,
-                target_element_info={"direction": "back", "from": before_url, "to": after_url},
+                target_element_info={
+                    "direction": "back",
+                    "steps": num_back,
+                    "from": before_url,
+                    "to": after_url,
+                },
                 success=success,
                 error_message=error_msg,
             )
@@ -2298,6 +2504,9 @@ class Executor:
                     current_iteration=current_iteration,
                 )
                 result_data = report_data
+            elif function_name == "write_data":
+                executed, write_data_result = self.execute_write_data(step=action_step)
+                result_data = write_data_result
             else:
                 duration = time.time() - start_time
                 error_message = f"Unsupported function: {function_name}"

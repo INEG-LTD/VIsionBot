@@ -469,6 +469,7 @@ DATA & COMMUNICATION:
 • extract_data - Extract and store data in notebook
 • ask_user - Ask user for clarification
 • report_data - Send textual data back to the host callback
+• write_data - Write text data to disk
 • send_email - Send an email via the Resend API
 • flag - Send non-blocking notification to user
 
