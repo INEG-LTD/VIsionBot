@@ -938,6 +938,8 @@ class Agent:
                     loop_count=state.loop_count,
                     loop_description=state.loop_description,
                     recent_actions=state.recent_actions,
+                    iterations_remaining=max_actions - state.total_actions,
+                    max_iterations=max_actions,
                 )
 
                 try:

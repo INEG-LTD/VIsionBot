@@ -88,6 +88,8 @@ class ActionPlanner:
         loop_count: Optional[int] = None,
         loop_description: str = "",
         recent_actions: Optional[List[str]] = None,
+        iterations_remaining: int = 0,
+        max_iterations: int = 0,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -124,6 +126,8 @@ class ActionPlanner:
         self.loop_count = loop_count
         self.loop_description = loop_description
         self.recent_actions = recent_actions or []
+        self.iterations_remaining = iterations_remaining
+        self.max_iterations = max_iterations
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -136,6 +140,18 @@ class ActionPlanner:
         - TAB EVENTS: tab opens/closes/dialog events since the last iteration
         """
         parts = []
+
+        # Budget / iteration budget awareness
+        if self.max_iterations > 0:
+            if self.iterations_remaining <= 5:
+                parts.append(
+                    f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining"
+                    f" — wrap up or complete the mission now.\n"
+                )
+            else:
+                parts.append(
+                    f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
+                )
 
         # Loop framing
         if self.in_loop and self.loop_count:
