@@ -142,16 +142,16 @@ class ActionPlanner:
         parts = []
 
         # Budget / iteration budget awareness
-        if self.max_iterations > 0:
-            if self.iterations_remaining <= 5:
-                parts.append(
-                    f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining"
-                    f" — wrap up or complete the mission now.\n"
-                )
-            else:
-                parts.append(
-                    f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
-                )
+        # if self.max_iterations > 0:
+        #     if self.iterations_remaining <= 5:
+        #         parts.append(
+        #             f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining"
+        #             f" — wrap up or complete the mission now.\n"
+        #         )
+        #     else:
+        #         parts.append(
+        #             f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
+        #         )
 
         # Loop framing
         if self.in_loop and self.loop_count:
@@ -546,6 +546,8 @@ GUIDELINES
 5. Don't repeat failed actions
 6. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
 7. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
+8. Stick exactly to the mission. Do not add extra steps, verification, confirmations, or sub-tasks that the mission did not ask for. If the mission is simple, your strategy should be simple.
+9. When setting an ACTIVE STRATEGY, keep it minimal — only describe what is directly required to complete the mission as stated. Do not elaborate beyond that.
 10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
