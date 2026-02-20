@@ -6,11 +6,13 @@ import sys
 import threading
 import os
 import queue
+import time
 from datetime import datetime
 from dataclasses import dataclass, field
 import chime
 from textual.binding import Binding
-from textual.containers import Container, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.widget import Widget
 from yaspin import yaspin
 from art import text2art
 from pydantic import BaseModel
@@ -406,145 +408,184 @@ config = Config(
     )
 )
 
-def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
+class StatusPill(Widget):
+    def __init__(self, status: str, color: str) -> None:
+        super().__init__()
+        self.status = status
+        self.color = color
 
-def main():
-    clear_screen()
-    Art = text2art("The Big Browser Agent", font="graceful")
-    print(Art)
-    print(HTML("<b>Welcome to The Big Browser Agent [RESEARCH TOOL]</b>"))
-    print(HTML("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."))
-    print(HTML("It is a research tool to help you perform tasks that would be too manual or time consuming to do yourself."))
-    print(HTML("    ➤ Too manual: Tasks that require a lot of repitition/context switching/tab opening and closing."))
-    print(HTML("    ➤ Too time consuming: Tasks that take at least 5 minutes of clicking and typing to complete."))
-    
-    print(HTML("The agent works best when you give it a targeted specific task to perform."))
-    print(HTML("The agent is built to perform a task and is not conversational.\n"))
-    print(HTML("<b>Guiding Tip:</b> Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much."))
-    print(HTML("When you are done, you can exit by typing 'exit'."))
-    
-    agent_loading_spinner = yaspin(text="Loading agent...", color="cyan")
-    agent_loading_spinner.start()
-    with Agent(
-        config=config,
-        user_question_callback=ask_user_for_help,
-        data_report_callback=receive_reported_data,
-    ) as agent:
-        agent_loading_spinner.stop()
-        setup_interceptors(agent)
+    def on_mount(self) -> None:
+        self.mount(Label(f"[bold]{self.status}[/bold]"))
+        
+        # self.styles.padding = (1, 1, 1, 1) .
+        self.styles.background = self.color
+        self.styles.color = "white"
+        self.styles.height = "1"
+        self.styles.width = "auto"
+        self.styles.padding = (0, 1, 0, 1)
+        
+    @classmethod
+    def idle(cls) -> "StatusPill":
+        return cls("IDLE", "red")
+    @classmethod
+    def running(cls) -> "StatusPill":
+        return cls("RUNNING", "#4BF538")
+    @classmethod
+    def success(cls) -> "StatusPill":
+        return cls("SUCCESS", "#4BF538")
+    @classmethod
+    def failed(cls) -> "StatusPill":
+        return cls("FAILED", "red")
+    @classmethod
+    def stopping(cls) -> "StatusPill":
+        return cls("STOPPING", "#FF9798")
+    @classmethod
+    def stopped(cls) -> "StatusPill":
+        return cls("STOPPED", "red")
+    @classmethod
+    def paused(cls) -> "StatusPill":
+        return cls("PAUSED", "yellow")
+    @classmethod
+    def cancelled(cls) -> "StatusPill":
+        return cls("CANCELLED", "red")
+    @classmethod
+    def asking(cls) -> "StatusPill":
+        return cls("ASKING", "blue")
 
-        agent.event_logger.register_callback(simple_event_callback)
-        agent.browser.page.goto("https://example.com")
-
-        apply_thinking_border(agent)
-        while True:
-            what_to_do = Prompt.ask("\n ↦ What do you want to do?", case_sensitive=False)
-            if what_to_do == "exit":
-                clear_screen()
-                print(HTML("<b>Thank you for using The Big Browser Agent [RESEARCH TOOL]</b>"))
-                break
-            result = agent.execute_mission(what_to_do)
-            if result.success:
-                chime.success()
-            else:
-                print("\n❌ Mission failed")
-                chime.error()
-
-            input("Press Enter to continue...")
-            
-class AgentView(VerticalScroll):
+class AgentView(Vertical):
     """A per-agent view whose children are mounted only after this view is mounted."""
 
+    Art = text2art("The Big Browser Agent", font="serifcap")
+    
     def __init__(self, agent_name: str, view_id: str, tab_id: str) -> None:
         super().__init__(id=view_id)
         self.agent_name = agent_name
         self.tab_id = tab_id
         self.mission_input_id = f"mission-input-{tab_id}"
         self.run_button_id = f"run-mission-{tab_id}"
-        self.status_label_id = f"session-status-{tab_id}"
-        self.snapshot_label_id = f"session-snapshot-{tab_id}"
+        self.intro_banner_id = f"intro-banner-{tab_id}"
+        self.timeline_scroll_id = f"timeline-scroll-{tab_id}"
         self.timeline_label_id = f"session-timeline-{tab_id}"
+        self.telemetry_label_id = f"session-telemetry-{tab_id}"
+        self.runtime_root_id = f"runtime-root-{tab_id}"
+        self.left_pane_id = f"left-pane-{tab_id}"
+        self.controls_row_id = f"controls-row-{tab_id}"
 
     def on_mount(self) -> None:
-        art = text2art("The Big Browser Agent", font="graceful")
-
-        self.mount(Label(art))
-        self.mount(
+        # Group timeline, controls, and telemetry in a single container for unified mounting/layout.
+        self.mount((
             Container(
-                Label("The Big Browser Agent helps you perform long running complex tasks (called 'missions' by the agent)."),
-                Label("\nAn agent in the browser helps you perform tasks that would be too manual or time consuming to do yourself"),
-                Label("[bold]    ➤ Too manual: Tasks that require a lot of repitition/context switching/tab opening and closing.[/bold]"),
-                Label("[bold]    ➤ Too time consuming: Tasks that take at least 5 minutes of clicking and typing to complete.[/bold]"),
-                Label("The agent works best when you give it a targeted specific task to perform."),
-                Label("The agent is built to perform a task and is not conversational.\n"),
-                Label("[bold]Guiding Tip:[/bold] Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much."),
-                Label("When you are done, you can exit by typing 'exit'."),
-                id="header-content"
-            ),
-        )
-        
-        self.mount(
-            Container(
-                Label("\nStatus: idle", id=self.status_label_id),
-                Label("Snapshot: waiting for mission", id=self.snapshot_label_id),
-                Input(
-                    placeholder="Describe the mission for this agent tab...",
-                    id=self.mission_input_id,
+                Container(
+                    StatusPill.stopping(),
+                    VerticalScroll(
+                        Label("Timeline: waiting for mission events", id=self.timeline_label_id, markup=False),
+                        Container(
+                            Label("[gray]The history of work done by the agent will be displayed here[/gray]"),
+                            Label("[darkgray]TIMELINE[/darkgray]"),
+                            id="timeline-intro-text"
+                        ),
+                        id=self.timeline_scroll_id,
+                        classes="timeline",
+                    ),
+                    Container(
+                        Label(self.Art),
+                        Label("[bold]Welcome to The Big Browser Agent Research Project[/bold]"),
+                        Label("[gray]This is an agent that lives in the browser and supercharges the amount of work you can do. The agent works well when given a targeted specific task to perform.[/gray]"),
+                        Label("[gray][bold]Guiding tip[/bold]: Imagine you were telling someone who's never done what you're asking before, provide just enough detail but not too much`[/gray]"),
+                        id=self.intro_banner_id,
+                        classes="intro-banner",
+                    ),
+                    Horizontal(
+                        Input(
+                            placeholder="Describe the mission for this agent tab...",
+                            id=self.mission_input_id,
+                        ),
+                        Button("RUN", id=self.run_button_id, variant="success"),
+                        id=self.controls_row_id,
+                        classes="controls",
+                    ),
+                    classes="content-container",
                 ),
-                Button("Run Mission", id=self.run_button_id, variant="success"),
-                id=f"mission-controls-{self.tab_id}",
-            ),
-        )
-        self.mount(
-            Container(
-                Label("Timeline: waiting for mission events", id=self.timeline_label_id),
-                id=f"timeline-panel-{self.tab_id}",
-            ),
-        )
-        self.mount(Container())
-        self
+                Container(
+                    Label("Telemetry: waiting for mission state", id=self.telemetry_label_id, markup=False),
+                    Container(
+                        Label("[gray]Internal information about the agent's state will be displayed[/gray]"),
+                        Label("[darkgray]TELEMETRY[/darkgray]"),
+                        id="telemetry-intro-text"
+                    ),
+                    id=f"telemetry-panel-{self.tab_id}",
+                    classes="right-pane",
+                ),
+                classes="agent-page",
+            )
+        ))
+        # Screen grid is defined in dashboard_layout.tcss; avoid overriding here
 
-        # mission_controls = self.query_one(f"#mission-controls-{self.tab_id}")
-        # mission_controls.border_title = f"{self.agent_name} Controls"
-        # mission_controls.styles.border = ("round", "green")
-        # mission_controls.styles.padding = (1, 2, 1, 2)
-        # mission_controls.styles.max_width = "75%"
+        intro_banner = self.query_one(f"#{self.intro_banner_id}")
+        intro_banner.styles.margin_bottom = 1
+        # intro_banner.border_title = "The Big Browser Agent"
+        # intro_banner.styles.border = ("round", "gray")
+        # intro_banner.styles.padding = (0, 1, 0, 1)
+        intro_banner.styles.height = "auto"
 
-        # timeline_panel = self.query_one(f"#timeline-panel-{self.tab_id}")
-        # timeline_panel.border_title = f"{self.agent_name} Timeline"
-        # timeline_panel.styles.border = ("round", "cyan")
-        # timeline_panel.styles.padding = (1, 2, 1, 2)
-        # timeline_panel.styles.max_width = "85%"
+        timeline_scroll = self.query_one(f"#{self.timeline_scroll_id}")
+        timeline_scroll.styles.border = ("solid", "#9C9C9C")
+        timeline_scroll.styles.padding = (1, 1, 1, 1)
+        timeline_scroll.styles.height = "1fr"
+        # timeline_scroll.styles.background = "cyan"
+        timeline_scroll.styles.padding = (0, 0, 0, 1)
 
-        header_content = self.query_one("#header-content")
-        header_content.border_title = "The Big Browser Agent (RESEARCH TOOL)"
-        header_content.styles.border = ("round", "gray")
-        header_content.styles.padding = (1, 3, 1, 3)
-        header_content.styles.max_width = "50%"
+        controls_row = self.query_one(f"#{self.controls_row_id}")
+        controls_row.styles.padding = (0, 0, 0, 0)
+        controls_row.styles.height = "auto"
 
-    def set_runtime(self, session: "AgentSession", snapshot_line: str, timeline_text: str) -> None:
-        """Refresh status/snapshot labels using session state."""
-        try:
-            status_label = self.query_one(f"#{self.status_label_id}", Label)
-            mission = (session.current_mission or "").strip()
-            mission_preview = mission if len(mission) <= 64 else f"{mission[:61]}..."
-            if mission_preview:
-                status_label.update(f"Status: {session.status} | Mission: {mission_preview}")
-            else:
-                status_label.update(f"Status: {session.status}")
-        except Exception:
-            pass
+        mission_input = self.query_one(f"#{self.mission_input_id}", Input)
+        mission_input.styles.border = ("solid", "#9C9C9C")
+        mission_input.styles.background = "transparent"
+        mission_input.styles.height = "auto"
+        mission_input.styles.width = "1fr"
+        mission_input.styles.padding = (0, 1, 0, 1)
 
-        try:
-            snapshot_label = self.query_one(f"#{self.snapshot_label_id}", Label)
-            snapshot_label.update(snapshot_line)
-        except Exception:
-            pass
+        run_button = self.query_one(f"#{self.run_button_id}", Button)
+        run_button.styles.width = 16
+        run_button.styles.height = "3"
+        run_button.styles.background = "transparent"
+        run_button.styles.pointer = "grab"
+        run_button.styles.border = ("solid", "#9C9C9C")
 
+        telemetry_panel = self.query_one(f"#telemetry-panel-{self.tab_id}")
+        telemetry_panel.styles.border = ("solid", "darkgray")
+        telemetry_panel.styles.padding = (0, 1, 0, 1)
+
+        self.styles.width = "100%"
+        self.styles.height = "100%"
+        self.styles.padding = (2, 2, 2, 2)
+
+    def set_runtime(
+        self,
+        session: "AgentSession",
+        timeline_text: str,
+        telemetry_text: str,
+    ) -> None:
+        """Refresh timeline + telemetry and hide intro once missions begin."""
         try:
             timeline_label = self.query_one(f"#{self.timeline_label_id}", Label)
             timeline_label.update(timeline_text)
+            timeline_scroll = self.query_one(f"#{self.timeline_scroll_id}", VerticalScroll)
+            timeline_scroll.scroll_end(animate=False)
+        except Exception:
+            pass
+
+        try:
+            telemetry_label = self.query_one(f"#{self.telemetry_label_id}", Label)
+            telemetry_label.update(telemetry_text)
+        except Exception:
+            pass
+
+        try:
+            intro_banner = self.query_one(f"#{self.intro_banner_id}")
+            has_started_mission = bool((session.current_mission or "").strip()) or session.status not in {"idle"}
+            intro_banner.styles.display = "none" if has_started_mission else "block"
         except Exception:
             pass
 
@@ -565,10 +606,15 @@ class AgentSession:
     event_buffer: list[BotEvent] = field(default_factory=list)
     event_lock: threading.Lock = field(default_factory=threading.Lock)
     last_snapshot: dict | None = None
+    last_known_url: str = ""
     last_message: str = "Ready"
+    dropped_event_count: int = 0
+    last_render_key: tuple | None = None
+    last_render_at_monotonic: float = 0.0
                
 class BrowserAgentApp(App):
     """Textual UI wrapper that can host multiple agent tabs/views."""
+    CSS_PATH = "dashboard_layout.tcss"
 
     BINDINGS = [
         Binding("ctrl+s", "stop_agent", "Stop Agent"),
@@ -585,6 +631,7 @@ class BrowserAgentApp(App):
         # Tab labels
         self.tabs: list[str] = ["Agent 1"]
         self.agents: list[str] = ["Agent 1"]
+        self._switcher_id = "agent-switcher"
 
         # Map tab_id -> ContentSwitcher child id
         self._tab_to_view: dict[str, str] = {"agent-1": "data-1"}
@@ -594,6 +641,9 @@ class BrowserAgentApp(App):
         self._sessions: dict[str, AgentSession] = {}
         self._create_session("agent-1")
         self._snapshot_timer = None
+        self._max_event_buffer = 5000
+        self._max_queue_depth = 40
+        self._min_refresh_interval_s = 0.12
 
     def _create_session(self, tab_id: str) -> AgentSession:
         session = AgentSession(
@@ -620,6 +670,12 @@ class BrowserAgentApp(App):
         return self._sessions.get(active_tab_id)
 
     def on_mount(self) -> None:
+        try:
+            switcher = self.query_one(f"#{self._switcher_id}", ContentSwitcher)
+            switcher.styles.width = "100%"
+            switcher.styles.height = "1fr"
+        except Exception:
+            pass
         self._snapshot_timer = self.set_interval(0.5, self._poll_sessions)
         self._refresh_all_views()
 
@@ -640,16 +696,19 @@ class BrowserAgentApp(App):
             except Exception:
                 pass
 
-    def _make_agent_view(self, tab_id: str) -> VerticalScroll:
+    def _make_agent_view(self, tab_id: str) -> Vertical:
         self._ensure_session(tab_id)
         view_id = self._tab_to_view[tab_id]
         label = self._tab_label.get(tab_id, tab_id)
-        return AgentView(agent_name=label, view_id=view_id, tab_id=tab_id)
+        view = AgentView(agent_name=label, view_id=view_id, tab_id=tab_id)
+        view.styles.width = "100%"
+        view.styles.height = "1fr"
+        return view
 
     def compose(self) -> ComposeResult:
         yield Tabs(Tab("Agent 1", id="agent-1"))
 
-        with ContentSwitcher(initial="data-1"):
+        with ContentSwitcher(initial="data-1", id=self._switcher_id):
             # Yield children during compose; don't call .mount() here.
             yield self._make_agent_view("agent-1")
 
@@ -706,40 +765,209 @@ class BrowserAgentApp(App):
         tab_id = widget_id[len(prefix):]
         return tab_id or None
 
-    def _format_snapshot_line(self, session: AgentSession) -> str:
-        snapshot = session.last_snapshot
-        if not snapshot:
-            return f"Snapshot: waiting for mission | {session.last_message}"
+    def _emit_notice(self, message: str, severity: str = "information") -> None:
+        try:
+            self.notify(message, severity=severity, timeout=2.5)
+        except Exception:
+            # Keep notifications best-effort; never break runtime flow.
+            pass
 
-        iteration = snapshot.get("current_iteration", "?")
-        paused = bool(snapshot.get("paused", False))
-        cancel_requested = bool(snapshot.get("cancel_requested", False))
-        total_cost = float(snapshot.get("llm_total_cost_usd", 0.0) or 0.0)
-        total_tokens = int(snapshot.get("llm_total_tokens", 0) or 0)
-        mode = "paused" if paused else "running"
-        if cancel_requested:
-            mode = "cancel requested"
+    @staticmethod
+    def _state_value(source: object, key: str, default=None):
+        if source is None:
+            return default
+        if isinstance(source, dict):
+            return source.get(key, default)
+        return getattr(source, key, default)
+
+    def _snapshot_signature(self, snapshot: dict | None) -> tuple:
+        if not snapshot:
+            return ()
+
+        execution_state = self._state_value(snapshot, "execution_state")
+        mission_result = self._state_value(snapshot, "mission_result")
+
         return (
-            f"Snapshot: iter={iteration} | mode={mode} | "
-            f"cost=${total_cost:.4f} | tokens={total_tokens} | {session.last_message}"
+            self._state_value(snapshot, "paused", False),
+            self._state_value(snapshot, "cancel_requested", False),
+            self._state_value(snapshot, "current_iteration", 0),
+            round(float(self._state_value(snapshot, "llm_total_cost_usd", 0.0) or 0.0), 6),
+            int(self._state_value(snapshot, "llm_total_tokens", 0) or 0),
+            bool(self._state_value(execution_state, "in_loop", False)),
+            self._state_value(execution_state, "loop_round", 0),
+            self._state_value(execution_state, "loop_count", 0),
+            bool(self._state_value(execution_state, "checkpoint_pending", False)),
+            int(self._state_value(execution_state, "total_actions", 0) or 0),
+            int(self._state_value(execution_state, "actions_since_progress", 0) or 0),
+            int(self._state_value(execution_state, "user_facing_actions_since_progress", 0) or 0),
+            str(self._state_value(execution_state, "last_action_summary", "") or ""),
+            self._state_value(mission_result, "success", None),
+            str(self._state_value(mission_result, "reasoning", "") or ""),
+            str(self._state_value(mission_result, "final_url", "") or ""),
         )
 
-    def _refresh_view_for_tab(self, tab_id: str) -> None:
+    @staticmethod
+    def _truncate_text(value: object, max_len: int = 72) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "n/a"
+        if len(text) <= max_len:
+            return text
+        return f"{text[:max_len - 3]}..."
+
+    def _build_render_key(self, session: AgentSession) -> tuple:
+        with session.event_lock:
+            event_count = len(session.event_buffer)
+            last_event_ts = session.event_buffer[-1].timestamp if event_count else 0.0
+
+        queue_depth = session.mission_queue.qsize()
+        worker_alive = bool(session.worker_thread and session.worker_thread.is_alive())
+        snapshot_signature = self._snapshot_signature(session.last_snapshot)
+        mission = (session.current_mission or "").strip()
+
+        return (
+            session.status,
+            session.last_message,
+            mission,
+            queue_depth,
+            worker_alive,
+            session.last_known_url,
+            session.dropped_event_count,
+            event_count,
+            last_event_ts,
+            snapshot_signature,
+        )
+
+    def _get_view_and_input(self, tab_id: str) -> tuple[AgentView | None, Input | None]:
+        view_id = self._tab_to_view.get(tab_id)
+        if not view_id:
+            return None, None
+        try:
+            switcher = self.query_one(ContentSwitcher)
+            view = switcher.query_one(f"#{view_id}", AgentView)
+            mission_input = view.query_one(f"#{view.mission_input_id}", Input)
+            return view, mission_input
+        except Exception:
+            return None, None
+
+    def _clear_and_focus_mission_input(self, tab_id: str) -> None:
+        _, mission_input = self._get_view_and_input(tab_id)
+        if mission_input is None:
+            return
+        mission_input.value = ""
+        mission_input.focus()
+
+    def _build_telemetry_text(self, session: AgentSession) -> str:
+        snapshot = session.last_snapshot or {}
+        execution_state = self._state_value(snapshot, "execution_state")
+        mission_result = self._state_value(snapshot, "mission_result")
+
+        iteration = self._state_value(snapshot, "current_iteration", "-")
+        paused = bool(self._state_value(snapshot, "paused", False))
+        cancel_requested = bool(self._state_value(snapshot, "cancel_requested", False))
+        total_cost = float(self._state_value(snapshot, "llm_total_cost_usd", 0.0) or 0.0)
+        total_tokens = int(self._state_value(snapshot, "llm_total_tokens", 0) or 0)
+
+        queue_depth = session.mission_queue.qsize()
+        worker_alive = bool(session.worker_thread and session.worker_thread.is_alive())
+        agent_attached = session.agent is not None
+
+        in_loop = bool(self._state_value(execution_state, "in_loop", False))
+        loop_round = self._state_value(execution_state, "loop_round", 0)
+        loop_count = self._state_value(execution_state, "loop_count", None)
+        loop_desc = self._truncate_text(self._state_value(execution_state, "loop_description", ""), 54)
+        checkpoint_pending = bool(self._state_value(execution_state, "checkpoint_pending", False))
+        total_actions = int(self._state_value(execution_state, "total_actions", 0) or 0)
+        actions_since_progress = int(self._state_value(execution_state, "actions_since_progress", 0) or 0)
+        user_facing_actions = int(
+            self._state_value(execution_state, "user_facing_actions_since_progress", 0) or 0
+        )
+        last_action_summary = self._truncate_text(
+            self._state_value(execution_state, "last_action_summary", ""),
+            70,
+        )
+
+        final_url = self._state_value(mission_result, "final_url", "")
+        current_url = session.last_known_url or final_url
+        current_url = self._truncate_text(current_url, 70)
+
+        mission_success = self._state_value(mission_result, "success", None)
+        if mission_success is None:
+            mission_result_line = "Result: n/a"
+        else:
+            mission_result_line = f"Result: {'success' if mission_success else 'failed'}"
+
+        loop_line = "off"
+        if in_loop:
+            loop_line = f"round {loop_round}/{loop_count or '?'} ({loop_desc})"
+
+        if not snapshot:
+            idle_lines = [
+                f"Status: {session.status}",
+                f"Message: {self._truncate_text(session.last_message, 64)}",
+                f"Queue Depth: {queue_depth}",
+                f"Worker: {'running' if worker_alive else 'stopped'}",
+                "Iteration: n/a",
+                "Cost USD: 0.0000",
+                "Tokens: 0",
+                f"Dropped Events: {session.dropped_event_count}",
+                "Hint: enter a mission and press Run.",
+            ]
+            return "\n".join(idle_lines)
+
+        lines = [
+            f"Status: {session.status}",
+            f"Message: {self._truncate_text(session.last_message, 64)}",
+            f"Queue Depth: {queue_depth}",
+            f"Worker: {'running' if worker_alive else 'stopped'}",
+            f"Agent Attached: {'yes' if agent_attached else 'no'}",
+            f"Iteration: {iteration}",
+            f"Paused: {'yes' if paused else 'no'}",
+            f"Cancel Req: {'yes' if cancel_requested else 'no'}",
+            f"Loop: {loop_line}",
+            f"Checkpoint: {'pending' if checkpoint_pending else 'clear'}",
+            f"Actions: total={total_actions}",
+            f"Progress Gap: {actions_since_progress}",
+            f"User Actions: {user_facing_actions}",
+            f"Cost USD: {total_cost:.4f}",
+            f"Tokens: {total_tokens}",
+            f"URL: {current_url}",
+            f"Last Action: {last_action_summary}",
+            f"Dropped Events: {session.dropped_event_count}",
+            mission_result_line,
+        ]
+        return "\n".join(lines)
+
+    def _refresh_view_for_tab(self, tab_id: str, *, force: bool = False) -> None:
         session = self._sessions.get(tab_id)
         view_id = self._tab_to_view.get(tab_id)
         if not session or not view_id:
             return
+        now = time.monotonic()
+        render_key = self._build_render_key(session)
+        if not force:
+            if render_key == session.last_render_key:
+                return
+            if session.last_render_at_monotonic and (now - session.last_render_at_monotonic) < self._min_refresh_interval_s:
+                return
         try:
             switcher = self.query_one(ContentSwitcher)
             view = switcher.query_one(f"#{view_id}", AgentView)
             timeline_text = self._build_timeline_text(session)
-            view.set_runtime(session, self._format_snapshot_line(session), timeline_text)
+            telemetry_text = self._build_telemetry_text(session)
+            view.set_runtime(
+                session,
+                timeline_text,
+                telemetry_text,
+            )
+            session.last_render_key = render_key
+            session.last_render_at_monotonic = now
         except Exception:
             pass
 
     def _refresh_all_views(self) -> None:
         for tab_id in list(self._sessions.keys()):
-            self._refresh_view_for_tab(tab_id)
+            self._refresh_view_for_tab(tab_id, force=True)
 
     def _format_timeline_event(self, event: BotEvent) -> str | None:
         event_type = event.event_type
@@ -794,14 +1022,21 @@ class BrowserAgentApp(App):
             events = list(session.event_buffer)
 
         lines: list[str] = []
+        if session.dropped_event_count > 0:
+            lines.append(f"[history] dropped {session.dropped_event_count} older event(s) to cap memory")
+
         for event in events:
             formatted = self._format_timeline_event(event)
             if formatted:
                 lines.append(formatted)
 
-        if not lines:
-            return "Timeline: waiting for mission events"
-        return "\n".join(lines[-24:])
+        # if not lines:
+        #     return (
+        #         "Timeline is empty.\n"
+        #         "Start a mission to see live execution events here.\n"
+        #         "Controls: Ctrl+P pause, Ctrl+R resume, Ctrl+C cancel, Ctrl+S stop."
+            # )
+        return "\n".join(lines)
 
     def _ensure_agent_for_session(self, session: AgentSession) -> Agent:
         current_thread_id = threading.get_ident()
@@ -836,9 +1071,14 @@ class BrowserAgentApp(App):
         # Store a rolling event buffer used by the live timeline panel.
         def _capture_event(event: BotEvent) -> None:
             with session.event_lock:
+                if event.event_type == EventType.BROWSER_NAVIGATION:
+                    url = str((event.details or {}).get("url", "")).strip()
+                    if url:
+                        session.last_known_url = url
                 session.event_buffer.append(event)
-                if len(session.event_buffer) > 300:
+                if len(session.event_buffer) > self._max_event_buffer:
                     session.event_buffer.pop(0)
+                    session.dropped_event_count += 1
 
         agent.event_logger.register_callback(_capture_event)
         session.agent = agent
@@ -882,23 +1122,29 @@ class BrowserAgentApp(App):
                     session.status = "running"
                     session.current_mission = mission
                     session.last_message = f"Initializing mission ({pending} queued)..."
-                    self.call_from_thread(self._refresh_view_for_tab, tab_id)
+                    self.call_from_thread(self._refresh_view_for_tab, tab_id, force=True)
 
                     agent = self._ensure_agent_for_session(session)
                     session.last_message = "Mission executing..."
-                    self.call_from_thread(self._refresh_view_for_tab, tab_id)
+                    self.call_from_thread(self._refresh_view_for_tab, tab_id, force=True)
 
                     result = agent.execute_mission(mission)
                     session.last_snapshot = agent.get_state_snapshot()
                     session.status = "completed" if result.success else "failed"
                     session.last_message = result.reasoning or ("Mission complete" if result.success else "Mission failed")
+                    session.last_known_url = str(getattr(result, "final_url", "") or session.last_known_url)
+                    if result.success:
+                        self.call_from_thread(self._emit_notice, f"{session.label}: mission complete", "information")
+                    else:
+                        self.call_from_thread(self._emit_notice, f"{session.label}: mission failed", "warning")
                 except Exception as exc:
                     session.status = "error"
                     session.last_message = f"Runtime error: {exc}"
+                    self.call_from_thread(self._emit_notice, f"{session.label}: runtime error", "error")
                 finally:
                     session.mission_queue.task_done()
                     try:
-                        self.call_from_thread(self._refresh_view_for_tab, tab_id)
+                        self.call_from_thread(self._refresh_view_for_tab, tab_id, force=True)
                     except Exception:
                         pass
         finally:
@@ -920,35 +1166,67 @@ class BrowserAgentApp(App):
                 session.status = "idle"
                 session.last_message = "Worker stopped"
             try:
-                self.call_from_thread(self._refresh_view_for_tab, tab_id)
+                self.call_from_thread(self._refresh_view_for_tab, tab_id, force=True)
             except Exception:
                 pass
 
-    def _enqueue_mission_for_tab(self, tab_id: str, mission: str) -> None:
+    def _enqueue_mission_for_tab(self, tab_id: str, mission: str) -> bool:
         session = self._ensure_session(tab_id)
         mission_text = (mission or "").strip()
         if not mission_text:
             session.last_message = "Please enter a mission before running."
-            self._refresh_view_for_tab(tab_id)
-            return
+            self._emit_notice(f"{session.label}: mission text is required.", "warning")
+            self._refresh_view_for_tab(tab_id, force=True)
+            return False
 
         self._start_worker_for_session(session)
+        current_depth = session.mission_queue.qsize()
+        if current_depth >= self._max_queue_depth:
+            session.last_message = (
+                f"Queue full ({current_depth}/{self._max_queue_depth}). Wait for missions to finish."
+            )
+            self._emit_notice(f"{session.label}: queue is full.", "warning")
+            self._refresh_view_for_tab(tab_id, force=True)
+            return False
 
         session.mission_queue.put(mission_text)
         pending = session.mission_queue.qsize()
-        if session.status != "running":
+        if session.status not in {"running", "paused", "cancel requested", "stopping"}:
             session.status = "queued"
         session.last_message = f"Mission queued ({pending} pending)."
-        self._refresh_view_for_tab(tab_id)
+        self._refresh_view_for_tab(tab_id, force=True)
+        return True
+
+    def _drain_pending_missions(self, session: AgentSession) -> int:
+        drained = 0
+        while True:
+            try:
+                queued = session.mission_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                # Ignore sentinel bookkeeping details; we only track user missions.
+                if queued is not None:
+                    drained += 1
+                try:
+                    session.mission_queue.task_done()
+                except Exception:
+                    pass
+        return drained
 
     def _poll_sessions(self) -> None:
-        for tab_id, session in self._sessions.items():
+        for tab_id, session in list(self._sessions.items()):
             agent = session.agent
             if agent is None:
                 self._refresh_view_for_tab(tab_id)
                 continue
             try:
                 session.last_snapshot = agent.get_state_snapshot()
+                paused = bool(session.last_snapshot.get("paused", False))
+                if paused and session.status in {"running", "queued", "starting"}:
+                    session.status = "paused"
+                elif not paused and session.status == "paused":
+                    session.status = "running"
             except Exception as exc:
                 session.last_message = f"Snapshot error: {exc}"
             self._refresh_view_for_tab(tab_id)
@@ -961,26 +1239,110 @@ class BrowserAgentApp(App):
         if not view_id:
             return
         mission = ""
-        try:
-            switcher = self.query_one(ContentSwitcher)
-            view = switcher.query_one(f"#{view_id}", AgentView)
-            mission_input = view.query_one(f"#{view.mission_input_id}", Input)
+        _, mission_input = self._get_view_and_input(tab_id)
+        if mission_input is not None:
             mission = mission_input.value
-        except Exception:
-            pass
-        self._enqueue_mission_for_tab(tab_id, mission)
+        enqueued = self._enqueue_mission_for_tab(tab_id, mission)
+        if enqueued:
+            if mission_input is not None:
+                mission_input.value = ""
+                mission_input.focus()
+            else:
+                self._clear_and_focus_mission_input(tab_id)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         tab_id = self._extract_tab_id(event.input.id, "mission-input-")
         if tab_id is None:
             return
-        self._enqueue_mission_for_tab(tab_id, event.value)
+        enqueued = self._enqueue_mission_for_tab(tab_id, event.value)
+        if enqueued:
+            event.input.value = ""
+            event.input.focus()
 
-    # Your existing actions (stubs here so bindings don’t crash)
-    def action_stop_agent(self) -> None: ...
-    def action_resume_agent(self) -> None: ...
-    def action_pause_agent(self) -> None: ...
-    def action_cancel_agent(self) -> None: ...
+    def action_stop_agent(self) -> None:
+        session = self.get_active_session()
+        if session is None:
+            return
+
+        drained = self._drain_pending_missions(session)
+        session.worker_stop_event.set()
+        try:
+            session.mission_queue.put_nowait(None)
+        except Exception:
+            pass
+
+        if session.agent is not None:
+            try:
+                session.agent.cancel()
+            except Exception:
+                pass
+
+        session.status = "stopping"
+        session.last_message = f"Stop requested. Cleared {drained} queued mission(s)."
+        self._refresh_view_for_tab(session.tab_id, force=True)
+
+    def action_resume_agent(self) -> None:
+        session = self.get_active_session()
+        if session is None:
+            return
+
+        if session.agent is None:
+            session.last_message = "No active mission to resume."
+            self._refresh_view_for_tab(session.tab_id, force=True)
+            return
+
+        try:
+            session.agent.resume()
+            session.status = "running"
+            session.last_message = "Mission resumed."
+        except Exception as exc:
+            session.status = "error"
+            session.last_message = f"Resume failed: {exc}"
+        self._refresh_view_for_tab(session.tab_id, force=True)
+
+    def action_pause_agent(self) -> None:
+        session = self.get_active_session()
+        if session is None:
+            return
+
+        if session.agent is None:
+            session.last_message = "No active mission to pause."
+            self._refresh_view_for_tab(session.tab_id, force=True)
+            return
+
+        try:
+            session.agent.pause("Paused from keyboard")
+            session.status = "paused"
+            session.last_message = "Mission paused."
+        except Exception as exc:
+            session.status = "error"
+            session.last_message = f"Pause failed: {exc}"
+        self._refresh_view_for_tab(session.tab_id, force=True)
+
+    def action_cancel_agent(self) -> None:
+        session = self.get_active_session()
+        if session is None:
+            return
+
+        drained = self._drain_pending_missions(session)
+        if session.agent is None:
+            if drained > 0:
+                session.status = "idle"
+                session.last_message = f"Cleared {drained} queued mission(s)."
+            else:
+                session.last_message = "No active mission to cancel."
+            self._refresh_view_for_tab(session.tab_id, force=True)
+            return
+
+        try:
+            session.agent.cancel()
+            session.status = "cancel requested"
+            session.last_message = f"Cancel requested. Cleared {drained} queued mission(s)."
+        except Exception as exc:
+            session.status = "error"
+            session.last_message = f"Cancel failed: {exc}"
+        self._refresh_view_for_tab(session.tab_id, force=True)
+
     def action_exit_agent(self) -> None:
         self.exit()
 

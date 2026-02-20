@@ -142,16 +142,17 @@ class ActionPlanner:
         parts = []
 
         # Budget / iteration budget awareness
-        # if self.max_iterations > 0:
-        #     if self.iterations_remaining <= 5:
-        #         parts.append(
-        #             f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining"
-        #             f" — wrap up or complete the mission now.\n"
-        #         )
-        #     else:
-        #         parts.append(
-        #             f"BUDGET: {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
-        #         )
+        if self.max_iterations > 0:
+            parts.append(f"You have been given a budget of {self.max_iterations} iterations to complete the mission. Try and complete the mission in the amount of iterations you have been given.")
+            if self.iterations_remaining <= 5:
+                parts.append(
+                    f"You have {self.iterations_remaining} of {self.max_iterations} iterations remaining"
+                    f" — wrap up or complete the mission now.\n"
+                )
+            else:
+                parts.append(
+                    f"You have {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
+                )
 
         # Loop framing
         if self.in_loop and self.loop_count:

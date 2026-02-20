@@ -1,0 +1,51 @@
+.agent-page {
+    layout: horizontal;
+    width: 100%;
+    height: 100%;
+}
+
+.content-container {
+    layout: vertical;
+    width: 1fr;
+    height: 100%;
+    min-height: 0;
+}
+
+.intro-banner {
+    height: auto;
+    width: 99%;
+    padding-top: 2;
+    padding-bottom: 2
+}
+
+.timeline {
+    height: 1fr;
+    min-height: 0;
+    overflow-y: auto;
+    width: 99%
+}
+
+.controls {
+    height: auto;
+    width: 99%
+}
+
+.controls Input {
+    width: 1fr;
+}
+
+.right-pane {
+    width: 48;
+    height: 100%;
+    overflow-y: auto;
+}
+
+#timeline-intro-text {
+    align: left bottom;
+    padding-left: 2;
+    padding-bottom: 1
+}
+
+#telemetry-intro-text {
+    align: left bottom
+}
