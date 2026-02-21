@@ -200,6 +200,35 @@ class AgentPanel(Widget):
 
     listens_to: list[EventType] = []
 
+    @staticmethod
+    def _to_class_token(value: str) -> str:
+        """Convert arbitrary text into a safe CSS class token."""
+        raw = str(value or "").strip().lower()
+        chars: list[str] = []
+        last_dash = False
+        for ch in raw:
+            if ch.isalnum():
+                chars.append(ch)
+                last_dash = False
+                continue
+            if not last_dash:
+                chars.append("-")
+                last_dash = True
+        token = "".join(chars).strip("-")
+        return token or "unknown"
+
+    @classmethod
+    def apply_variant_class(cls, widget: Widget, prefix: str, value: str) -> str:
+        """Set one `prefix*` class on a widget and remove old variants."""
+        token = cls._to_class_token(value)
+        target_class = f"{prefix}{token}"
+        for existing in list(widget.classes):
+            existing_name = str(existing)
+            if existing_name.startswith(prefix) and existing_name != target_class:
+                widget.remove_class(existing_name)
+        widget.add_class(target_class)
+        return target_class
+
     def on_mount(self) -> None:
         # panel_ready() must run first so subclasses can grab widget references
         # (subscribe() immediately calls on_state_update() with current state)
@@ -265,17 +294,18 @@ def _truncate(value: object, max_len: int = 72) -> str:
     return text if len(text) <= max_len else f"{text[:max_len - 3]}..."
 
 
-_STATUS_COLORS: dict[str, tuple[str, str]] = {
-    "idle": ("IDLE", "red"),
-    "running": ("RUNNING", "#4BF538"),
-    "completed": ("SUCCESS", "#4BF538"),
-    "failed": ("FAILED", "red"),
-    "stopping": ("STOPPING", "#FF9798"),
-    "stopped": ("STOPPED", "red"),
-    "paused": ("PAUSED", "yellow"),
-    "queued": ("QUEUED", "#F5A623"),
-    "cancel requested": ("CANCELLING", "#FF9798"),
-    "error": ("ERROR", "red"),
+_STATUS_META: dict[str, tuple[str, str]] = {
+    "idle": (" IDLE ", "idle"),
+    "starting": (" STARTING ", "starting"),
+    "running": (" RUNNING ", "running"),
+    "completed": (" SUCCESS ", "completed"),
+    "failed": (" FAILED ", "failed"),
+    "stopping": (" STOPPING ", "stopping"),
+    "stopped": (" STOPPED ", "stopped"),
+    "paused": (" PAUSED ", "paused"),
+    "queued": (" QUEUED ", "queued"),
+    "cancel requested": (" CANCELLING ", "cancel-requested"),
+    "error": (" ERROR ", "error"),
 }
 
 
@@ -293,6 +323,62 @@ class TimelineEntry:
 
 
 # ---------------------------------------------------------------------------
+# Reusable widgets
+# ---------------------------------------------------------------------------
+
+
+class StatusPill(Widget):
+    """Reusable status chip with decoupled background and text layers."""
+
+    DEFAULT_CSS = """
+    StatusPill { 
+        height: auto; width: auto; min-width: 12;
+        height: 1; 
+        width: auto; 
+    }
+    StatusPill .pill-text.status--idle { background: #6B7280; color: #f8fafc; }
+    StatusPill .pill-text.status--starting { background: #A78BFA; color: #0b1220; }
+    StatusPill .pill-text.status--running { background: #22C55E; color: #052e16; }
+    StatusPill .pill-text.status--completed { background: #14B8A6; color: #042f2e; }
+    StatusPill .pill-text.status--failed { background: #EF4444; color: #431407; }
+    StatusPill .pill-text.status--stopping { background: #F97316; color: #431407; }
+    StatusPill .pill-text.status--stopped { background: #475569; color: #431407; }
+    StatusPill .pill-text.status--paused { background: #EAB308; color: #422006; }
+    StatusPill .pill-text.status--queued { background: #3B82F6; color: #0b1220; }
+    StatusPill .pill-text.status--cancel-requested { background: #FB7185; color: #431407; }
+    StatusPill .pill-text.status--error { background: #DC2626; color: #431407; }
+    StatusPill .pill-text.status--unknown { background: #64748b; color: #431407; }
+
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str = " IDLE ",
+        variant: str = "idle",
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(classes=classes)
+        self._initial_label = str(label or "IDLE")
+        self._initial_variant = str(variant or "idle")
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            # yield Container(classes=f"pill-bg status--{AgentPanel._to_class_token(self._initial_variant)}")
+            yield Label(self._initial_label, markup=False, classes="pill-text")
+
+    def on_mount(self) -> None:
+        # self._bg = self.query_one(".pill-bg", Container)
+        self._text = self.query_one(".pill-text", Label)
+        self.set_status(self._initial_label, self._initial_variant)
+
+    def set_status(self, label: str, variant: str) -> None:
+        self._text.update(str(label or "UNKNOWN"))
+        # AgentPanel.apply_variant_class(self._bg, "status--", str(variant or "unknown"))
+        AgentPanel.apply_variant_class(self._text, "status--", str(variant or "unknown"))
+
+
+# ---------------------------------------------------------------------------
 # Concrete panels
 # ---------------------------------------------------------------------------
 
@@ -303,31 +389,29 @@ class StatusRow(AgentPanel):
     DEFAULT_CSS = """
     StatusRow { height: auto; width: 99%; }
     StatusRow Horizontal { height: auto; }
-    StatusRow .status-pill {
-        height: 1; width: auto; padding: 0 1;
-        background: red; color: white;
-    }
     StatusRow .thinking-label {
         height: auto; width: 1fr; color: #F0D264;
         padding: 0 1; text-align: right;
     }
     """
+    
+    label = "IDLE"
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield Label("[bold]IDLE[/bold]", classes="status-pill")
+            yield StatusPill(label=self.label, variant="idle")
             yield Label("THINKING: idle", markup=False, classes="thinking-label")
 
     def panel_ready(self) -> None:
-        self._pill = self.query_one(".status-pill", Label)
+        self._pill = self.query_one(StatusPill)
         self._thinking = self.query_one(".thinking-label", Label)
 
     def on_state_update(self, state: AgentState) -> None:
-        label_text, color = _STATUS_COLORS.get(
-            state.status, (state.status.upper(), "gray")
-        )
-        self._pill.update(f"[bold]{label_text}[/bold]")
-        self._pill.styles.background = color
+        status_key = str(state.status or "").strip().lower()
+        fallback_label = status_key.upper() if status_key else "UNKNOWN"
+        label_text, variant = _STATUS_META.get(status_key, (fallback_label, "unknown"))
+        self._pill.set_status(label_text, variant)
+        self.label = label_text
 
         if state.thinking_active:
             frame = state.render_frame % 4
@@ -335,7 +419,7 @@ class StatusRow(AgentPanel):
             text = _truncate(state.thinking_text or "Thinking...", 84)
             self._thinking.update(f"THINKING: 🤔 {text}{dots}")
         else:
-            self._thinking.update("THINKING: idle")
+            self._thinking.update("")
 
 
 class IntroBanner(AgentPanel):
