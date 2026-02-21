@@ -470,10 +470,32 @@ class TimelinePanel(AgentPanel):
     ]
 
     DEFAULT_CSS = """
-    TimelinePanel { height: 1fr; min-height: 0; width: 99%; }
+    TimelinePanel {
+        height: 1fr; 
+        min-height: 0; 
+        width: 99%;
+        layers: below above;
+    }
     TimelinePanel VerticalScroll {
-        height: 1fr; border: solid #9C9C9C;
-        padding: 0 0 0 1; overflow-y: auto;
+        height: 1fr; 
+        border: solid #9C9C9C;
+        padding: 0 0 0 1; 
+        overflow-y: auto;
+    }
+    
+    .timeline-events {
+        layers: above;
+    }
+    
+    .timeline-intro-text {
+        align: center middle;
+        layer: below;
+        text-align: center;
+    }
+    
+    .timeline-intro-text Label {
+        text-align: center;
+        width: 100%
     }
     """
 
@@ -484,7 +506,7 @@ class TimelinePanel(AgentPanel):
                 yield Label(
                     "[gray]The history of agent work will appear here[/gray]"
                 )
-                yield Label("[darkgray]TIMELINE[/darkgray]")
+                yield Label("[darkgray]TIMELINE[/darkgray]", classes="timeline-intro-text-label")
 
     def panel_ready(self) -> None:
         self._scroll = self.query_one(".timeline-scroll", VerticalScroll)
@@ -519,7 +541,7 @@ class TimelinePanel(AgentPanel):
             if details.get("iteration", 0) == 1:
                 return TimelineEntry(
                     kind="line",
-                    text=f"Mission: {details.get('mission', 'unknown')}",
+                    text=f"Your agent is currently: {details.get('mission', 'unknown')}",
                 )
 
         elif t == EventType.ACTION_DETERMINED:
@@ -555,8 +577,17 @@ class TelemetryPanel(AgentPanel):
 
     DEFAULT_CSS = """
     TelemetryPanel {
-        width: 48; height: 100%; overflow-y: auto;
-        border: solid darkgray; padding: 0 1;
+        width: 48; 
+        height: 100%; 
+        overflow-y: auto;
+        border: solid darkgray; 
+        padding-left: 2;
+        padding-top: 1;
+        padding-bottom: 1
+    }
+    
+    .telemetry-intro {
+        align: left bottom;
     }
     """
 
@@ -668,7 +699,7 @@ class MissionControls(AgentPanel):
         inp.styles.background = "transparent"
         inp.styles.height = "auto"
         inp.styles.padding = (0, 1, 0, 1)
-        btn.styles.width = 16
+        btn.styles.width = "auto"
         btn.styles.height = "3"
         btn.styles.background = "transparent"
         btn.styles.border = ("solid", "#9C9C9C")

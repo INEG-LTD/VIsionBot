@@ -319,7 +319,7 @@ class AgentView(Vertical):
     def on_mount(self) -> None:
         self.styles.width = "100%"
         self.styles.height = "100%"
-        self.styles.padding = (2, 2, 2, 2)
+        self.styles.padding = (1, 2, 2, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +343,7 @@ class BrowserAgentApp(App):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self._add_tab_id = "agent-add"
         self._switcher_id = "agent-switcher"
         self._tab_to_view: dict[str, str] = {"agent-1": "data-1"}
         self._tab_label: dict[str, str] = {"agent-1": "Agent 1"}
@@ -375,7 +376,10 @@ class BrowserAgentApp(App):
     # ---- App lifecycle ----------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Tabs(Tab("Agent 1", id="agent-1"))
+        yield Tabs(
+            Tab("Agent 1", id="agent-1"),
+            Tab("+ New Agent", id=self._add_tab_id),
+        )
         with ContentSwitcher(initial="data-1", id=self._switcher_id):
             yield self._make_agent_view("agent-1")
         yield Footer()
@@ -719,6 +723,9 @@ class BrowserAgentApp(App):
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         if event.tab is None:
             return
+        if event.tab.id == self._add_tab_id:
+            self.action_add()
+            return
         self._ensure_session(event.tab.id)
         switcher = self.query_one(ContentSwitcher)
         view_id = self._tab_to_view.get(event.tab.id)
@@ -740,7 +747,7 @@ class BrowserAgentApp(App):
         self._tab_label[new_tab_id] = new_label
         self._tab_to_view[new_tab_id] = view_id
         self._create_session(new_tab_id)
-        tabs.add_tab(Tab(new_label, id=new_tab_id))
+        tabs.add_tab(Tab(new_label, id=new_tab_id), before=self._add_tab_id)
 
         def _mount_and_show() -> None:
             switcher.mount(self._make_agent_view(new_tab_id))

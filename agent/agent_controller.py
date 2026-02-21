@@ -894,6 +894,7 @@ class Agent:
             self.event_logger.iteration_start(
                 iteration=self._current_iteration,
                 max_iterations=max_actions,
+                mission=mission,
                 budget_spent=state.budget_spent,
                 budget_remaining=state.budget_remaining,
                 budget_phase=state.budget_phase,

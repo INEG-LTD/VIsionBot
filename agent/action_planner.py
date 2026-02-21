@@ -161,12 +161,12 @@ class ActionPlanner:
                 f"- low_budget_mode={mode}\n"
             )
             if self.budget_constraints_enabled:
-                parts.append(
-                    "BUDGET CONTRACT (MANDATORY IN REASONING):\n"
-                    '- Include "State: ..."\n'
-                    '- Include "Budget: spent=X, remaining=Y, total=Z"\n'
-                    '- Include "Why: ..."\n'
-                )
+                # parts.append(
+                #     "BUDGET CONTRACT (MANDATORY IN REASONING):\n"
+                #     '- Include "State: ..."\n'
+                #     '- Include "Budget: spent=X, remaining=Y, total=Z"\n'
+                #     '- Include "Why: ..."\n'
+                # )
                 if self.iterations_remaining <= 5:
                     parts.append("You are near budget exhaustion — prioritize completion-oriented actions.\n")
 
@@ -440,20 +440,15 @@ OPEN TABS
             )
         budget_constraints_status = "enabled" if self.budget_constraints_enabled else "disabled"
         if self.budget_constraints_enabled:
-            budget_reasoning_contract = """12. Every tool-call reasoning must include:
-    - State: current task/page state
-    - Budget: numeric spent/remaining/total
-    - Why: why this is the most efficient next action
-13. Every tool call arguments object must include:
+            budget_reasoning_contract = """
+12. Every tool call arguments object must include:
     - budget_spent
     - budget_remaining
     - budget_total
     and these values must exactly match the Budget status shown above."""
         else:
-            budget_reasoning_contract = """12. Every tool-call reasoning should include:
-    - State: current task/page state
-    - Why: why this is the most efficient next action
-13. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
+            budget_reasoning_contract = """
+12. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
         opening_instruction = (
             "You are controlling a web browser. You can see the current page "
             "as a screenshot." + gallery_note + "\n"
