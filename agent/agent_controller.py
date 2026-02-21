@@ -476,6 +476,7 @@ class Agent:
         *,
         success: bool,
         reasoning: str,
+        narrative: str,
         state: Optional[ExecutionState],
     ) -> MissionResult:
         duration_s = 0.0
@@ -491,6 +492,7 @@ class Agent:
         return MissionResult(
             success=success,
             reasoning=reasoning,
+            narrative=narrative,
             total_iterations=self._current_iteration,
             total_actions=state.actions_since_progress if state else 0,
             final_url=final_url,
@@ -811,6 +813,7 @@ class Agent:
                 return self._build_mission_result(
                     success=False,
                     reasoning="Mission cancelled",
+                    narrative="Mission cancelled",
                     state=state,
                 )
 
@@ -819,6 +822,7 @@ class Agent:
                 return self._build_mission_result(
                     success=False,
                     reasoning="Mission cancelled",
+                    narrative="Mission cancelled",
                     state=state,
                 )
 
@@ -841,6 +845,7 @@ class Agent:
                         success=False,
                         reasoning=f"Failed to capture state: {str(e)}",
                         state=state,
+                        narrative="Failed to capture state",
                     )
 
                 elements = getattr(detected_elements, "elements", []) or []
@@ -954,6 +959,7 @@ class Agent:
                         success=False,
                         reasoning=f"Error: {str(e)}",
                         state=state,
+                        narrative="Failed to get next actions",
                     )
 
                 if not actions_list:
@@ -966,6 +972,7 @@ class Agent:
                         success=False,
                         reasoning=f"Repeated action validation failures: {error or 'No action generated'}",
                         state=state,
+                        narrative="Repeated action validation failures",
                     )
                 state.validation_failures = 0
 
@@ -974,6 +981,7 @@ class Agent:
                         return self._build_mission_result(
                             success=False,
                             reasoning="Mission cancelled",
+                            narrative="Mission cancelled",
                             state=state,
                         )
                     self._pause_event.wait()
@@ -981,6 +989,7 @@ class Agent:
                         return self._build_mission_result(
                             success=False,
                             reasoning="Mission cancelled",
+                            narrative="Mission cancelled",
                             state=state,
                         )
 
@@ -1109,6 +1118,7 @@ class Agent:
                             return self._build_mission_result(
                                 success=True,
                                 reasoning=think_reasoning or "Mission complete",
+                                narrative=narrative,
                                 state=state,
                             )
 
@@ -1564,6 +1574,7 @@ class Agent:
                 return self._build_mission_result(
                     success=False,
                     reasoning=f"Error: {str(e)}",
+                    narrative="Error",
                     state=state,
                 )
             finally:
@@ -1576,5 +1587,6 @@ class Agent:
         return self._build_mission_result(
             success=False,
             reasoning=f"Max actions ({max_actions}) reached without completion",
+            narrative="Max actions reached without completion",
             state=state,
         )

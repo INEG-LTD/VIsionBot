@@ -8,6 +8,7 @@ from dataclasses import dataclass
 class MissionResult:
     success: bool = False
     reasoning: str = ""
+    narrative: str = ""
     partial: bool = False
     final_answer_draft: str = ""
     total_iterations: int = 0
