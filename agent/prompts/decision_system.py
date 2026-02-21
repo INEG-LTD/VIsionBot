@@ -23,6 +23,11 @@ class DecisionContext:
     recommended_from_memory_id: Optional[str] = None
     executed_memory_ids: List[str] = field(default_factory=list)
     reflection_memory_ids: List[str] = field(default_factory=list)
+    budget_spent: int = 0
+    budget_remaining: int = 0
+    budget_total: int = 0
+    budget_phase: str = "normal"
+    low_budget_mode: bool = False
 
 
 SHARED_CONTRADICTION_GATE = """
@@ -53,6 +58,8 @@ Output policy:
 2. If a RECOMMENDED NEXT STEP is present, either:
    - follow it and state in reasoning: "Following recommendation: ..."
    - or deviate and state in reasoning: "Deviating from recommendation because ..."
+3. Every tool call arguments object must include budget_spent, budget_remaining, budget_total and those values must match the current Budget status shown in prompt context.
+4. Any action missing budget fields or missing the State/Budget/Why reasoning contract is invalid and will be rejected.
 
 {SHARED_CONTRADICTION_GATE}
 
@@ -85,6 +92,9 @@ def render_decision_context(context: DecisionContext) -> str:
         f"Action iteration: {context.action_iteration}\n"
         f"Mission: {context.mission}\n"
         f"Current page: {context.current_url} — {context.page_title}\n"
+        f"Budget: spent={context.budget_spent}, remaining={context.budget_remaining}, total={context.budget_total}\n"
+        f"Budget phase: {context.budget_phase}\n"
+        f"Low-budget mode: {'on' if context.low_budget_mode else 'off'}\n"
         f"Recommended next step: {recommended_step}\n"
         f"Recommendation source: {recommended_from}\n"
         f"Recent executed-action memory IDs: {executed}\n"

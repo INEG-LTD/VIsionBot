@@ -90,6 +90,9 @@ class ActionPlanner:
         recent_actions: Optional[List[str]] = None,
         iterations_remaining: int = 0,
         max_iterations: int = 0,
+        budget_spent: int = 0,
+        budget_phase: str = "normal",
+        low_budget_mode: bool = False,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -128,6 +131,9 @@ class ActionPlanner:
         self.recent_actions = recent_actions or []
         self.iterations_remaining = iterations_remaining
         self.max_iterations = max_iterations
+        self.budget_spent = max(0, int(budget_spent or 0))
+        self.budget_phase = str(budget_phase or "normal").strip().lower() or "normal"
+        self.low_budget_mode = bool(low_budget_mode)
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -143,16 +149,23 @@ class ActionPlanner:
 
         # Budget / iteration budget awareness
         if self.max_iterations > 0:
-            parts.append(f"You have been given a budget of {self.max_iterations} iterations to complete the mission. Your strategy should be able to complete the mission in the amount of iterations you have been given.")
+            mode = "ON" if self.low_budget_mode else "OFF"
+            parts.append(
+                "BUDGET STATE:\n"
+                f"- spent={self.budget_spent}\n"
+                f"- remaining={self.iterations_remaining}\n"
+                f"- total={self.max_iterations}\n"
+                f"- phase={self.budget_phase}\n"
+                f"- low_budget_mode={mode}\n"
+            )
+            parts.append(
+                "BUDGET CONTRACT (MANDATORY IN REASONING):\n"
+                '- Include "State: ..."\n'
+                '- Include "Budget: spent=X, remaining=Y, total=Z"\n'
+                '- Include "Why: ..."\n'
+            )
             if self.iterations_remaining <= 5:
-                parts.append(
-                    f"You have {self.iterations_remaining} of {self.max_iterations} iterations remaining"
-                    f" — wrap up or complete the mission now.\n"
-                )
-            else:
-                parts.append(
-                    f"You have {self.iterations_remaining} of {self.max_iterations} iterations remaining.\n"
-                )
+                parts.append("You are near budget exhaustion — prioritize completion-oriented actions.\n")
 
         # Loop framing
         if self.in_loop and self.loop_count:
@@ -267,7 +280,10 @@ Rules:
                     f"Planning iteration: unknown\n"
                     f"Action iteration: {self.current_iteration}\n"
                     f"Mission: {environment_state.user_prompt}\n"
-                    f"Current page: {environment_state.current_url} — {environment_state.page_title}"
+                    f"Current page: {environment_state.current_url} — {environment_state.page_title}\n"
+                    f"Budget: spent={self.budget_spent}, remaining={self.iterations_remaining}, total={self.max_iterations}\n"
+                    f"Budget phase: {self.budget_phase}\n"
+                    f"Low-budget mode: {'on' if self.low_budget_mode else 'off'}"
                 )
             )
 
@@ -454,6 +470,13 @@ Executed action ledger (facts only):
 
 Mission: {self.user_prompt}
 
+Budget status:
+- spent={self.budget_spent}
+- remaining={self.iterations_remaining}
+- total={self.max_iterations}
+- phase={self.budget_phase}
+- low_budget_mode={"on" if self.low_budget_mode else "off"}
+
 Potential stuck patterns from memory scan: {stuck_hints}
 
 Memory ID ledger (for citing any prior memory entry):
@@ -559,6 +582,15 @@ GUIDELINES
 10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
+12. Every tool-call reasoning must include:
+    - State: current task/page state
+    - Budget: numeric spent/remaining/total
+    - Why: why this is the most efficient next action
+13. Every tool call arguments object must include:
+    - budget_spent
+    - budget_remaining
+    - budget_total
+    and these values must exactly match the Budget status shown above.
 {base_knowledge_section}
 {user_hints_section}
 

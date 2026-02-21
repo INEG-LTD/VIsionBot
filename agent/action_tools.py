@@ -815,6 +815,24 @@ _NARRATIVE_PROPERTY: Dict[str, Any] = {
     }
 }
 
+_BUDGET_CONTRACT_PROPERTIES: Dict[str, Any] = {
+    "budget_spent": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Controller budget counter: actions spent so far in this mission."
+    },
+    "budget_remaining": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Controller budget counter: actions remaining in this mission."
+    },
+    "budget_total": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Controller budget counter: total allowed actions for this mission."
+    },
+}
+
 for _tool in ACTION_TOOLS:
     _fn = _tool.get("function", {})
     _params = _fn.get("parameters", {})
@@ -822,9 +840,16 @@ for _tool in ACTION_TOOLS:
         continue
     _properties = _params.setdefault("properties", {})
     _properties.update(_NARRATIVE_PROPERTY)
+    _properties.update(_BUDGET_CONTRACT_PROPERTIES)
     _required = _params.setdefault("required", [])
     if "narrative" not in _required:
         _required.append("narrative")
+    if "budget_spent" not in _required:
+        _required.append("budget_spent")
+    if "budget_remaining" not in _required:
+        _required.append("budget_remaining")
+    if "budget_total" not in _required:
+        _required.append("budget_total")
 
 # Extra contract for think(next_action=stuck)
 _THINK_TOOL = next(

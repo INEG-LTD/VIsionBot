@@ -73,6 +73,13 @@ class ExecutionState:
     loop_description: str = ""
     # Recent action log (compact summaries, last ~10)
     recent_actions: List[str] = field(default_factory=list)
+    # Budget telemetry
+    budget_total: int = 0
+    budget_spent: int = 0
+    budget_remaining: int = 0
+    budget_phase: str = "normal"
+    low_budget_mode: bool = False
+    planning_batch_limit: int = 0
 
 
 @dataclass
@@ -498,7 +505,39 @@ class Agent:
             final_url=final_url,
             duration_s=duration_s,
             total_cost_usd=self.event_logger.total_cost_usd,
+            budget_total=int(getattr(state, "budget_total", 0) or 0),
+            budget_spent=int(getattr(state, "budget_spent", 0) or 0),
+            budget_remaining=int(getattr(state, "budget_remaining", 0) or 0),
+            budget_phase=str(getattr(state, "budget_phase", "normal") or "normal"),
         )
+
+    @staticmethod
+    def _compute_budget_phase(remaining: int, total: int) -> str:
+        """Derive a simple budget phase from remaining vs total actions."""
+        total_i = max(1, int(total or 1))
+        remaining_i = max(0, int(remaining or 0))
+        critical_threshold = max(1, int(total_i * 0.03))
+        caution_threshold = max(3, int(total_i * 0.10))
+        if caution_threshold <= critical_threshold:
+            caution_threshold = critical_threshold + 1
+        if remaining_i <= critical_threshold:
+            return "critical"
+        if remaining_i <= caution_threshold:
+            return "caution"
+        return "normal"
+
+    @staticmethod
+    def _clamp_loop_count_to_budget(requested_loop_count: Any, budget_remaining: int) -> Tuple[int, bool]:
+        """Clamp loop count to remaining budget. Returns (effective_count, clamped)."""
+        try:
+            count = int(requested_loop_count)
+        except (TypeError, ValueError):
+            count = 1
+        count = max(1, count)
+        remaining_i = max(0, int(budget_remaining or 0))
+        if remaining_i > 0 and count > remaining_i:
+            return remaining_i, True
+        return count, False
 
 
 
@@ -779,6 +818,8 @@ class Agent:
         state = ExecutionState(
             checkpoint_pending=bool(start_in_checkpoint),
         )
+        state.budget_total = max_actions
+        state.planning_batch_limit = self.config.execution.max_actions_per_plan
         self.execution_state = state
         self.memory_store.start_mission(mission)
 
@@ -798,6 +839,19 @@ class Agent:
             if len(state.recent_actions) > 10:
                 state.recent_actions.pop(0)
 
+        def _refresh_budget_state() -> None:
+            state.budget_spent = max(0, int(state.total_actions or 0))
+            state.budget_total = max(1, int(max_actions or 1))
+            state.budget_remaining = max(0, state.budget_total - state.budget_spent)
+            state.budget_phase = self._compute_budget_phase(
+                remaining=state.budget_remaining,
+                total=state.budget_total,
+            )
+            state.low_budget_mode = state.budget_phase in {"caution", "critical"}
+            state.planning_batch_limit = (
+                1 if state.low_budget_mode else self.config.execution.max_actions_per_plan
+            )
+
         def _exit_loop() -> None:
             state.in_loop = False
             state.loop_count = None
@@ -807,6 +861,8 @@ class Agent:
                 self.action_executor.clear_done_markers()
             except Exception:
                 pass
+
+        _refresh_budget_state()
 
         while state.total_actions < max_actions:
             if self._cancel_event.is_set():
@@ -828,11 +884,16 @@ class Agent:
 
             iteration_started_at = time.time()
             state.total_actions += 1
+            _refresh_budget_state()
             self._current_iteration += 1
             self.execution_state = state
             self.event_logger.iteration_start(
                 iteration=self._current_iteration,
                 max_iterations=max_actions,
+                budget_spent=state.budget_spent,
+                budget_remaining=state.budget_remaining,
+                budget_phase=state.budget_phase,
+                low_budget_mode=state.low_budget_mode,
             )
 
             try:
@@ -882,6 +943,11 @@ class Agent:
                     recommended_from_memory_id=recommended_step_source_id,
                     executed_memory_ids=recent_executed_ids,
                     reflection_memory_ids=recent_reflection_ids,
+                    budget_spent=state.budget_spent,
+                    budget_remaining=state.budget_remaining,
+                    budget_total=state.budget_total,
+                    budget_phase=state.budget_phase,
+                    low_budget_mode=state.low_budget_mode,
                 )
 
                 environment_state = EnvironmentState(
@@ -915,6 +981,13 @@ class Agent:
                     self._pending_hints.clear()
 
                 active_strategy = self.memory_store.get_latest_strategy() or None
+                if self.config.logging.debug_mode and state.low_budget_mode:
+                    self.event_logger.system_debug(
+                        "Low-budget mode active; using single-action planning",
+                        budget_phase=state.budget_phase,
+                        budget_remaining=state.budget_remaining,
+                        planning_batch_limit=state.planning_batch_limit,
+                    )
                 action_planner = ActionPlanner(
                     mission,
                     self.memory_store,
@@ -922,7 +995,7 @@ class Agent:
                     model_name=self.agent_model_name,
                     reasoning_level=self.agent_reasoning_level,
                     image_detail=self.config.model.image_detail,
-                    max_actions_per_plan=self.config.execution.max_actions_per_plan,
+                    max_actions_per_plan=state.planning_batch_limit,
                     checkpoint_mode=state.checkpoint_pending,
                     active_strategy=active_strategy,
                     last_action_summary=state.last_action_summary,
@@ -943,8 +1016,11 @@ class Agent:
                     loop_count=state.loop_count,
                     loop_description=state.loop_description,
                     recent_actions=state.recent_actions,
-                    iterations_remaining=max_actions - state.total_actions,
-                    max_iterations=max_actions,
+                    iterations_remaining=state.budget_remaining,
+                    max_iterations=state.budget_total,
+                    budget_spent=state.budget_spent,
+                    budget_phase=state.budget_phase,
+                    low_budget_mode=state.low_budget_mode,
                 )
 
                 try:
@@ -974,7 +1050,6 @@ class Agent:
                         state=state,
                         narrative="Repeated action validation failures",
                     )
-                state.validation_failures = 0
 
                 for action_step in actions_list:
                     if self._cancel_event.is_set():
@@ -998,12 +1073,25 @@ class Agent:
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
                     narrative = action_args.get("narrative", "")
+                    if self.config.logging.debug_mode:
+                        self.event_logger.system_debug(
+                            "Budget telemetry",
+                            tool=function_name,
+                            budget_phase=state.budget_phase,
+                            budget_remaining=state.budget_remaining,
+                            budget_spent=state.budget_spent,
+                            budget_total=state.budget_total,
+                        )
 
                     self.event_logger.action_determined(
                         action=current_action,
                         reasoning=reasoning,
                         narrative=narrative,
                         tool=function_name,
+                        budget_phase=state.budget_phase,
+                        budget_remaining=state.budget_remaining,
+                        budget_spent=state.budget_spent,
+                        budget_total=state.budget_total,
                         in_loop=state.in_loop,
                         loop_round=state.loop_round if state.in_loop else None,
                         loop_count=state.loop_count if state.in_loop else None,
@@ -1027,10 +1115,10 @@ class Agent:
                         if think_next_action == "start_loop":
                             loop_count_raw = action_args.get("loop_count")
                             loop_desc = str(action_args.get("loop_description", "")).strip()
-                            try:
-                                loop_count = int(loop_count_raw)
-                            except (TypeError, ValueError):
-                                loop_count = 1
+                            loop_count, clamped_loop = self._clamp_loop_count_to_budget(
+                                requested_loop_count=loop_count_raw,
+                                budget_remaining=state.budget_remaining,
+                            )
 
                             state.in_loop = True
                             state.loop_count = loop_count
@@ -1040,7 +1128,16 @@ class Agent:
                             state.user_facing_actions_since_progress = 0
 
                             state.last_action_summary = f"Loop started: {loop_desc or think_reasoning} (round 2 of {loop_count})"
+                            if clamped_loop:
+                                state.last_action_summary += f" [clamped to budget remaining={state.budget_remaining}]"
                             _append_recent_action(f"[LOOP START] {loop_desc} — {loop_count} total rounds")
+                            if clamped_loop and self.config.logging.debug_mode:
+                                self.event_logger.system_debug(
+                                    "Loop count clamped to budget",
+                                    requested_loop_count=loop_count_raw,
+                                    effective_loop_count=loop_count,
+                                    budget_remaining=state.budget_remaining,
+                                )
                             self.event_logger.loop_state_changed(
                                 change="start",
                                 loop_round=state.loop_round,
@@ -1569,6 +1666,8 @@ class Agent:
                             state.failed_elements.append(failed_action)
                         except Exception:
                             pass
+
+                state.validation_failures = 0
 
             except Exception as e:
                 return self._build_mission_result(

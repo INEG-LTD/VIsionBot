@@ -474,6 +474,12 @@ class BrowserAgentApp(App):
             user_facing_actions_since_progress=int(
                 sv(execution_state, "user_facing_actions_since_progress", 0) or 0
             ),
+            budget_total=int(sv(execution_state, "budget_total", 0) or 0),
+            budget_spent=int(sv(execution_state, "budget_spent", 0) or 0),
+            budget_remaining=int(sv(execution_state, "budget_remaining", 0) or 0),
+            budget_phase=str(sv(execution_state, "budget_phase", "normal") or "normal"),
+            low_budget_mode=bool(sv(execution_state, "low_budget_mode", False)),
+            planning_batch_limit=int(sv(execution_state, "planning_batch_limit", 0) or 0),
             checkpoint_pending=bool(sv(execution_state, "checkpoint_pending", False)),
             last_action_summary=str(sv(execution_state, "last_action_summary", "") or ""),
             in_loop=bool(sv(execution_state, "in_loop", False)),

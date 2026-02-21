@@ -58,6 +58,12 @@ class AgentState:
     total_actions: int = 0
     actions_since_progress: int = 0
     user_facing_actions_since_progress: int = 0
+    budget_total: int = 0
+    budget_spent: int = 0
+    budget_remaining: int = 0
+    budget_phase: str = "normal"
+    low_budget_mode: bool = False
+    planning_batch_limit: int = 0
     checkpoint_pending: bool = False
     last_action_summary: str = ""
     in_loop: bool = False
@@ -581,6 +587,7 @@ class TelemetryPanel(AgentPanel):
                     f"Queue: {state.queue_depth}",
                     f"Worker: {'running' if state.worker_alive else 'stopped'}",
                     "Iteration: n/a",
+                    "Budget: 0/0 (phase: normal)",
                     "Cost: $0.0000",
                     "Tokens: 0",
                     f"Dropped Events: {state.dropped_event_count}",
@@ -616,6 +623,9 @@ class TelemetryPanel(AgentPanel):
                 f"Actions: {state.total_actions}",
                 f"Progress Gap: {state.actions_since_progress}",
                 f"User Actions: {state.user_facing_actions_since_progress}",
+                f"Budget: {state.budget_remaining}/{state.budget_total} remaining (spent={state.budget_spent}, phase={state.budget_phase})",
+                f"Low Budget Mode: {'on' if state.low_budget_mode else 'off'}",
+                f"Plan Batch Limit: {state.planning_batch_limit or '-'}",
                 f"Cost: ${state.llm_total_cost_usd:.4f}",
                 f"Tokens: {state.llm_total_tokens}",
                 f"URL: {current_url}",
