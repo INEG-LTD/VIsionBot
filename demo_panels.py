@@ -63,6 +63,7 @@ class AgentState:
     budget_remaining: int = 0
     budget_phase: str = "normal"
     low_budget_mode: bool = False
+    budget_constraints_enabled: bool = True
     planning_batch_limit: int = 0
     checkpoint_pending: bool = False
     last_action_summary: str = ""
@@ -624,6 +625,7 @@ class TelemetryPanel(AgentPanel):
                 f"Progress Gap: {state.actions_since_progress}",
                 f"User Actions: {state.user_facing_actions_since_progress}",
                 f"Budget: {state.budget_remaining}/{state.budget_total} remaining (spent={state.budget_spent}, phase={state.budget_phase})",
+                f"Budget Constraints: {'on' if state.budget_constraints_enabled else 'off'}",
                 f"Low Budget Mode: {'on' if state.low_budget_mode else 'off'}",
                 f"Plan Batch Limit: {state.planning_batch_limit or '-'}",
                 f"Cost: ${state.llm_total_cost_usd:.4f}",

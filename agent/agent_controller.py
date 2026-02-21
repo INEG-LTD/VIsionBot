@@ -79,6 +79,7 @@ class ExecutionState:
     budget_remaining: int = 0
     budget_phase: str = "normal"
     low_budget_mode: bool = False
+    budget_constraints_enabled: bool = True
     planning_batch_limit: int = 0
 
 
@@ -817,6 +818,7 @@ class Agent:
 
         state = ExecutionState(
             checkpoint_pending=bool(start_in_checkpoint),
+            budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
         )
         state.budget_total = max_actions
         state.planning_batch_limit = self.config.execution.max_actions_per_plan
@@ -849,7 +851,9 @@ class Agent:
             )
             state.low_budget_mode = state.budget_phase in {"caution", "critical"}
             state.planning_batch_limit = (
-                1 if state.low_budget_mode else self.config.execution.max_actions_per_plan
+                1
+                if (state.budget_constraints_enabled and state.low_budget_mode)
+                else self.config.execution.max_actions_per_plan
             )
 
         def _exit_loop() -> None:
@@ -981,7 +985,11 @@ class Agent:
                     self._pending_hints.clear()
 
                 active_strategy = self.memory_store.get_latest_strategy() or None
-                if self.config.logging.debug_mode and state.low_budget_mode:
+                if (
+                    self.config.logging.debug_mode
+                    and state.budget_constraints_enabled
+                    and state.low_budget_mode
+                ):
                     self.event_logger.system_debug(
                         "Low-budget mode active; using single-action planning",
                         budget_phase=state.budget_phase,
@@ -1021,6 +1029,7 @@ class Agent:
                     budget_spent=state.budget_spent,
                     budget_phase=state.budget_phase,
                     low_budget_mode=state.low_budget_mode,
+                    budget_constraints_enabled=state.budget_constraints_enabled,
                 )
 
                 try:
@@ -1117,7 +1126,11 @@ class Agent:
                             loop_desc = str(action_args.get("loop_description", "")).strip()
                             loop_count, clamped_loop = self._clamp_loop_count_to_budget(
                                 requested_loop_count=loop_count_raw,
-                                budget_remaining=state.budget_remaining,
+                                budget_remaining=(
+                                    state.budget_remaining
+                                    if state.budget_constraints_enabled
+                                    else 0
+                                ),
                             )
 
                             state.in_loop = True

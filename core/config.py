@@ -59,6 +59,13 @@ class ExecutionConfig(BaseModel):
         le=20,
         description="Maximum number of actions to generate in a single action plan. Default is 6. Valid range: 1-20."
     )
+    budget_constraints_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable budget-constraining behavior (prompt/schema budget contract, "
+            "low-budget single-action planning, and loop-count clamping)."
+        ),
+    )
     wait_for_load_before_iteration: bool = Field(
         default=False,
         description="If True, wait for the page to reach a load state before each agent iteration."

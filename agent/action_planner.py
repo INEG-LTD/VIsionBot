@@ -13,9 +13,9 @@ from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
 from agent.prompts import (
-    MEMORY_DEVELOPER_POLICY,
     DecisionContext,
     SHARED_CONTRADICTION_GATE,
+    get_memory_developer_policy,
     render_decision_context,
 )
 from lib.ai import (
@@ -93,6 +93,7 @@ class ActionPlanner:
         budget_spent: int = 0,
         budget_phase: str = "normal",
         low_budget_mode: bool = False,
+        budget_constraints_enabled: bool = True,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -134,6 +135,7 @@ class ActionPlanner:
         self.budget_spent = max(0, int(budget_spent or 0))
         self.budget_phase = str(budget_phase or "normal").strip().lower() or "normal"
         self.low_budget_mode = bool(low_budget_mode)
+        self.budget_constraints_enabled = bool(budget_constraints_enabled)
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -158,14 +160,15 @@ class ActionPlanner:
                 f"- phase={self.budget_phase}\n"
                 f"- low_budget_mode={mode}\n"
             )
-            parts.append(
-                "BUDGET CONTRACT (MANDATORY IN REASONING):\n"
-                '- Include "State: ..."\n'
-                '- Include "Budget: spent=X, remaining=Y, total=Z"\n'
-                '- Include "Why: ..."\n'
-            )
-            if self.iterations_remaining <= 5:
-                parts.append("You are near budget exhaustion — prioritize completion-oriented actions.\n")
+            if self.budget_constraints_enabled:
+                parts.append(
+                    "BUDGET CONTRACT (MANDATORY IN REASONING):\n"
+                    '- Include "State: ..."\n'
+                    '- Include "Budget: spent=X, remaining=Y, total=Z"\n'
+                    '- Include "Why: ..."\n'
+                )
+                if self.iterations_remaining <= 5:
+                    parts.append("You are near budget exhaustion — prioritize completion-oriented actions.\n")
 
         # Loop framing
         if self.in_loop and self.loop_count:
@@ -316,6 +319,7 @@ Based on the screenshot, what is the best next action?
             tools = get_filtered_tools(
                 checkpoint_mode=self.checkpoint_mode,
                 dialog_pending=self.dialog_pending,
+                budget_constraints_enabled=self.budget_constraints_enabled,
             )
 
             system_prompt = self._build_function_calling_system_prompt(
@@ -338,7 +342,7 @@ Based on the screenshot, what is the best next action?
                 prompt=user_prompt,
                 tools=tools,
                 system_prompt=system_prompt,
-                developer_prompt=MEMORY_DEVELOPER_POLICY,
+                developer_prompt=get_memory_developer_policy(self.budget_constraints_enabled),
                 image=image_arg,
                 multi_image=multi_image_arg,
                 image_detail=self.image_detail,
@@ -434,6 +438,22 @@ OPEN TABS
                 f"after the screenshot. Elements marked 'SEE CROP GALLERY' in the "
                 f"index have visual crops in these gallery images."
             )
+        budget_constraints_status = "enabled" if self.budget_constraints_enabled else "disabled"
+        if self.budget_constraints_enabled:
+            budget_reasoning_contract = """12. Every tool-call reasoning must include:
+    - State: current task/page state
+    - Budget: numeric spent/remaining/total
+    - Why: why this is the most efficient next action
+13. Every tool call arguments object must include:
+    - budget_spent
+    - budget_remaining
+    - budget_total
+    and these values must exactly match the Budget status shown above."""
+        else:
+            budget_reasoning_contract = """12. Every tool-call reasoning should include:
+    - State: current task/page state
+    - Why: why this is the most efficient next action
+13. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
         opening_instruction = (
             "You are controlling a web browser. You can see the current page "
             "as a screenshot." + gallery_note + "\n"
@@ -476,6 +496,7 @@ Budget status:
 - total={self.max_iterations}
 - phase={self.budget_phase}
 - low_budget_mode={"on" if self.low_budget_mode else "off"}
+- constraints={budget_constraints_status}
 
 Potential stuck patterns from memory scan: {stuck_hints}
 
@@ -582,15 +603,7 @@ GUIDELINES
 10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
-12. Every tool-call reasoning must include:
-    - State: current task/page state
-    - Budget: numeric spent/remaining/total
-    - Why: why this is the most efficient next action
-13. Every tool call arguments object must include:
-    - budget_spent
-    - budget_remaining
-    - budget_total
-    and these values must exactly match the Budget status shown above.
+{budget_reasoning_contract}
 {base_knowledge_section}
 {user_hints_section}
 

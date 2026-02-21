@@ -4,6 +4,7 @@ This module defines the tool schemas for action execution
 (click/type/think/etc.) used by the browser agent.
 """
 
+from copy import deepcopy
 from typing import Dict, Any, List, Optional
 
 # ============================================================================
@@ -832,6 +833,7 @@ _BUDGET_CONTRACT_PROPERTIES: Dict[str, Any] = {
         "description": "Controller budget counter: total allowed actions for this mission."
     },
 }
+_BUDGET_CONTRACT_FIELDS = tuple(_BUDGET_CONTRACT_PROPERTIES.keys())
 
 for _tool in ACTION_TOOLS:
     _fn = _tool.get("function", {})
@@ -899,6 +901,7 @@ DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 def get_filtered_tools(
     checkpoint_mode: bool = False,
     dialog_pending: bool = False,
+    budget_constraints_enabled: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Get the appropriate tool list based on current state.
@@ -906,15 +909,33 @@ def get_filtered_tools(
     Args:
         checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of the normal action tools
         dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
+        budget_constraints_enabled: If False, strip budget fields from tool schemas
 
     Returns:
         Filtered list of tools available to the agent
     """
     # Dialog takes highest priority — blocks all browser actions
     if dialog_pending:
-        return DIALOG_CHECKPOINT_TOOLS if checkpoint_mode else DIALOG_TOOLS
+        selected = DIALOG_CHECKPOINT_TOOLS if checkpoint_mode else DIALOG_TOOLS
+    else:
+        selected = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
 
-    return CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
+    if budget_constraints_enabled:
+        return selected
+
+    stripped = deepcopy(selected)
+    for tool in stripped:
+        params = tool.get("function", {}).get("parameters", {})
+        if not isinstance(params, dict):
+            continue
+        properties = params.get("properties")
+        if isinstance(properties, dict):
+            for field in _BUDGET_CONTRACT_FIELDS:
+                properties.pop(field, None)
+        required = params.get("required")
+        if isinstance(required, list):
+            params["required"] = [item for item in required if item not in _BUDGET_CONTRACT_FIELDS]
+    return stripped
 
 
 # ============================================================================

@@ -479,6 +479,9 @@ class BrowserAgentApp(App):
             budget_remaining=int(sv(execution_state, "budget_remaining", 0) or 0),
             budget_phase=str(sv(execution_state, "budget_phase", "normal") or "normal"),
             low_budget_mode=bool(sv(execution_state, "low_budget_mode", False)),
+            budget_constraints_enabled=bool(
+                sv(execution_state, "budget_constraints_enabled", True)
+            ),
             planning_batch_limit=int(sv(execution_state, "planning_batch_limit", 0) or 0),
             checkpoint_pending=bool(sv(execution_state, "checkpoint_pending", False)),
             last_action_summary=str(sv(execution_state, "last_action_summary", "") or ""),

@@ -40,29 +40,7 @@ CONTRADICTION GATE (MANDATORY BEFORE EACH TOOL CALL):
 """.strip()
 
 
-MEMORY_DEVELOPER_POLICY = f"""
-You are the same agent that executed the recorded actions.
-
-Memory policy:
-1. Refer to actions as your own in first person: "I did...", "I tried...", "I observed...".
-2. Reference relevant memory entries (mem_XXXXXX) in your reasoning.
-3. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
-4. If you detect a stuck pattern, call think(next_action=stuck) with:
-   - stuck_pattern
-   - reasoning in first person
-   - recommended_next_step
-   - cited evidence entries
-
-Output policy:
-1. Emit exactly ONE tool call per iteration.
-2. If a RECOMMENDED NEXT STEP is present, either:
-   - follow it and state in reasoning: "Following recommendation: ..."
-   - or deviate and state in reasoning: "Deviating from recommendation because ..."
-3. Every tool call arguments object must include budget_spent, budget_remaining, budget_total and those values must match the current Budget status shown in prompt context.
-4. Any action missing budget fields or missing the State/Budget/Why reasoning contract is invalid and will be rejected.
-
-{SHARED_CONTRADICTION_GATE}
-
+_STUCK_EXAMPLES = """
 Stuck examples (use these patterns to self-diagnose):
 1. action_loop: I clicked the same overlay repeatedly without progress.
 2. action_loop: I retried the same key press multiple times and got the same result.
@@ -79,6 +57,46 @@ Stuck examples (use these patterns to self-diagnose):
 
 When stuck, switch to a meaningfully different strategy and state one concrete next action.
 """.strip()
+
+
+def get_memory_developer_policy(budget_constraints_enabled: bool = True) -> str:
+    output_policy = [
+        "1. Emit exactly ONE tool call per iteration.",
+        "2. If a RECOMMENDED NEXT STEP is present, either:",
+        '   - follow it and state in reasoning: "Following recommendation: ..."',
+        '   - or deviate and state in reasoning: "Deviating from recommendation because ..."',
+    ]
+    if budget_constraints_enabled:
+        output_policy.extend(
+            [
+                "3. Every tool call arguments object must include budget_spent, budget_remaining, budget_total and those values must match the current Budget status shown in prompt context.",
+                "4. Any action missing budget fields or missing the State/Budget/Why reasoning contract is invalid and will be rejected.",
+            ]
+        )
+
+    return f"""
+You are the same agent that executed the recorded actions.
+
+Memory policy:
+1. Refer to actions as your own in first person: "I did...", "I tried...", "I observed...".
+2. Reference relevant memory entries (mem_XXXXXX) in your reasoning.
+3. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
+4. If you detect a stuck pattern, call think(next_action=stuck) with:
+   - stuck_pattern
+   - reasoning in first person
+   - recommended_next_step
+   - cited evidence entries
+
+Output policy:
+{chr(10).join(output_policy)}
+
+{SHARED_CONTRADICTION_GATE}
+
+{_STUCK_EXAMPLES}
+""".strip()
+
+
+MEMORY_DEVELOPER_POLICY = get_memory_developer_policy(True)
 
 
 def render_decision_context(context: DecisionContext) -> str:
