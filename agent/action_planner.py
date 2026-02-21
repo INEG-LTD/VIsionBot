@@ -143,7 +143,7 @@ class ActionPlanner:
 
         # Budget / iteration budget awareness
         if self.max_iterations > 0:
-            parts.append(f"You have been given a budget of {self.max_iterations} iterations to complete the mission. Try and complete the mission in the amount of iterations you have been given.")
+            parts.append(f"You have been given a budget of {self.max_iterations} iterations to complete the mission. Your strategy should be able to complete the mission in the amount of iterations you have been given.")
             if self.iterations_remaining <= 5:
                 parts.append(
                     f"You have {self.iterations_remaining} of {self.max_iterations} iterations remaining"
@@ -478,7 +478,14 @@ BROWSER ACTIONS:
 • upload_file - Upload a file
 • set_datetime - Set date/time in picker
 • press_key - Press keyboard key (Enter, Tab, Escape, etc.)
-• scroll_page - Scroll up/down
+• scroll_page - Scroll the page or a specific container
+  Examples:
+    scroll_page(direction="down")                              ← scroll main page
+    scroll_page(direction="down", element_id=42)               ← scroll the modal/sidebar/panel containing element 42
+    scroll_page(direction="up", element_id=17)                 ← scroll up inside a sidebar (pass any element inside it)
+    scroll_page(direction="down", scroll_to_element_id=55)     ← bring element 55 into view
+  When to use element_id: any time you see a modal, drawer, dropdown list, chat panel, or overflow
+  area — pick any element visible inside it and pass its id. The system finds the scrollable container.
 • open_url - Navigate to URL
 • go_back / go_forward - Browser navigation
 

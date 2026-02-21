@@ -324,24 +324,48 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "scroll_page",
-            "description": "Scroll the page in a specific direction",
+            "description": (
+                "Scroll the page or a specific scrollable container (modal, sidebar, overflow panel, list). "
+                "Three modes:\n"
+                "1. Window scroll: omit element_id and scroll_to_element_id — scrolls the main page.\n"
+                "2. Container scroll: provide element_id of ANY element inside the container — the system "
+                "finds the nearest scrollable ancestor and scrolls it. Use this for modals, sidebars, "
+                "dropdown lists, chat panels, or any overflow area.\n"
+                "3. Scroll-to: provide scroll_to_element_id — brings that element into view regardless "
+                "of where it is. direction and amount are ignored in this mode."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "direction": {
                         "type": "string",
-                        "enum": ["up", "down"],
-                        "description": "Direction to scroll"
+                        "enum": ["up", "down", "left", "right"],
+                        "description": "Direction to scroll. Ignored when scroll_to_element_id is set."
                     },
                     "amount": {
                         "type": "string",
                         "enum": ["small", "medium", "large"],
-                        "description": "Amount to scroll (optional, default: medium)",
+                        "description": "How far to scroll: small=150px, medium=400px, large=800px. Default: medium. Ignored when scroll_to_element_id is set.",
                         "default": "medium"
+                    },
+                    "element_id": {
+                        "type": "integer",
+                        "description": (
+                            "ID of any element inside the scrollable container you want to scroll. "
+                            "The system walks up the DOM to find the nearest scrollable ancestor and scrolls it. "
+                            "Example: to scroll a modal, pass the ID of any element visible inside the modal."
+                        )
+                    },
+                    "scroll_to_element_id": {
+                        "type": "integer",
+                        "description": (
+                            "ID of an element to bring into view. Scrolls whatever container is needed. "
+                            "When set, direction and amount are ignored."
+                        )
                     },
                     "reasoning": {
                         "type": "string",
-                        "description": "Reasoning for scrolling the page"
+                        "description": "Reasoning for the scroll action"
                     }
                 },
                 "required": ["direction", "reasoning"],

@@ -1204,63 +1204,116 @@ class Executor:
 
     def execute_scroll(self, step: ActionStep) -> bool:
         """
-        Execute a scroll action via a straightforward Playwright scroll call.
+        Execute a scroll action. Supports three modes:
+        1. Window scroll: no element_id/scroll_to_element_id — scrolls the main page.
+        2. Container scroll: element_id provided — walks DOM to find the nearest
+           scrollable ancestor of that element and scrolls it (modals, sidebars, etc.).
+        3. Scroll-to: scroll_to_element_id provided — brings that element into view.
 
-        Args:
-            step: ActionStep containing scroll direction and parameters
-
-        Returns:
-            bool: True if scroll succeeded, False otherwise
+        Returns True if scroll moved content, False if at boundary or element not found.
         """
         args = self._get_action_args(step)
         direction = (str(args.get("direction", "")).strip() or "down").lower()
-        axis = "vertical"
-        current_scroll_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
-        current_scroll_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+        amount_label = (str(args.get("amount", "")).strip() or "medium").lower()
+        element_id = args.get("element_id")
+        scroll_to_element_id = args.get("scroll_to_element_id")
 
-        if direction == "down":
-            target_x = current_scroll_x
-            target_y = min(current_scroll_y + 300, 9999)
-        elif direction == "up":
-            target_x = current_scroll_x
-            target_y = max(current_scroll_y - 300, 0)
-        elif direction == "right":
-            target_x = min(current_scroll_x + 300, 9999)
-            target_y = current_scroll_y
-            axis = "horizontal"
-        else:
-            target_x = max(current_scroll_x - 300, 0)
-            target_y = current_scroll_y
-            axis = "horizontal"
-        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            self.event_logger.system_debug(f"[Executor] Using default scroll: target position ({target_x}, {target_y}) {direction} ({axis})")
-        target_x = int(target_x)
-        target_y = int(target_y)
-
-        if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            self.event_logger.system_debug(f"  Scrolling to position ({target_x}, {target_y}) {direction} ({axis})")
+        amount_px = {"small": 150, "medium": 400, "large": 800}.get(amount_label, 400)
+        axis = "horizontal" if direction in ("left", "right") else "vertical"
+        dx = {"right": amount_px, "left": -amount_px}.get(direction, 0)
+        dy = {"down": amount_px, "up": -amount_px}.get(direction, 0)
 
         before_state = self.memory_store._capture_current_state()
         success = False
         error_msg = None
+        target_x, target_y = 0, 0
+
         try:
-            scroll_amount_y = target_y - current_scroll_y
-            scroll_amount_x = target_x - current_scroll_x
-            if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                self.event_logger.system_debug(f"🔍 [Executor] Attempting to scroll {direction} by ({scroll_amount_x}, {scroll_amount_y})px")
-            self.browser.page.evaluate(f"window.scrollBy({scroll_amount_x}, {scroll_amount_y})")
-            if self.page_utils:
-                actual_scroll_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
-                actual_scroll_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
-                self.page_utils.last_scroll_y = actual_scroll_y
-                self.page_utils.last_scroll_x = actual_scroll_x
-            success = True
+            if scroll_to_element_id is not None:
+                # Mode 3: bring element into view
+                js = """
+                    (idx) => {
+                        const el = document.querySelector('[data-domIndex="' + idx + '"]');
+                        if (!el) return false;
+                        el.scrollIntoView({behavior: 'instant', block: 'nearest', inline: 'nearest'});
+                        return true;
+                    }
+                """
+                found = self.browser.page.evaluate(js, int(scroll_to_element_id))
+                if not found:
+                    error_msg = f"scroll_to_element_id={scroll_to_element_id} not found in DOM"
+                    success = False
+                else:
+                    success = True
+
+            elif element_id is not None:
+                # Mode 2: scroll the nearest scrollable ancestor of this element
+                js = """
+                    ([idx, dx, dy]) => {
+                        const el = document.querySelector('[data-domIndex="' + idx + '"]');
+                        if (!el) return {found: false};
+                        let node = el.parentElement;
+                        while (node && node !== document.body && node !== document.documentElement) {
+                            const style = getComputedStyle(node);
+                            const oy = style.overflowY;
+                            const ox = style.overflowX;
+                            const canY = (oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight;
+                            const canX = (ox === 'auto' || ox === 'scroll') && node.scrollWidth > node.clientWidth;
+                            if (canY || canX) {
+                                const beforeY = node.scrollTop;
+                                const beforeX = node.scrollLeft;
+                                node.scrollBy(dx, dy);
+                                return {found: true, no_ancestor: false, delta_y: node.scrollTop - beforeY, delta_x: node.scrollLeft - beforeX};
+                            }
+                            node = node.parentElement;
+                        }
+                        return {found: true, no_ancestor: true};
+                    }
+                """
+                result = self.browser.page.evaluate(js, [int(element_id), dx, dy])
+                if not isinstance(result, dict) or not result.get("found"):
+                    error_msg = f"element_id={element_id} not found in DOM"
+                    success = False
+                elif result.get("no_ancestor"):
+                    # No scrollable ancestor — fall back to window scroll
+                    self.browser.page.evaluate(f"window.scrollBy({dx}, {dy})")
+                    self.event_logger.system_debug(f"[Scroll] No scrollable ancestor for element {element_id}, fell back to window scroll")
+                    success = True
+                else:
+                    delta_y = result.get("delta_y", 0)
+                    delta_x = result.get("delta_x", 0)
+                    if delta_y == 0 and delta_x == 0:
+                        boundary = "bottom" if dy > 0 else "top" if dy < 0 else "right" if dx > 0 else "left"
+                        error_msg = f"Container already at {boundary} boundary"
+                        success = False
+                    else:
+                        success = True
+
+            else:
+                # Mode 1: window scroll
+                before_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                before_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                target_x = before_x + dx
+                target_y = before_y + dy
+                self.browser.page.evaluate(f"window.scrollBy({dx}, {dy})")
+                after_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                after_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                if self.page_utils:
+                    self.page_utils.last_scroll_y = after_y
+                    self.page_utils.last_scroll_x = after_x
+                if after_y == before_y and after_x == before_x:
+                    boundary = "bottom" if dy > 0 else "top" if dy < 0 else "right" if dx > 0 else "left"
+                    error_msg = f"Page already at {boundary} boundary"
+                    success = False
+                else:
+                    success = True
+
         except Exception as exc:
             error_msg = str(exc)
             success = False
             self.event_logger.system_error(f"Scroll failed: {exc}")
-        after_state = self.memory_store._capture_current_state()
 
+        after_state = self.memory_store._capture_current_state()
         self.memory_store.record_interaction(
             InteractionType.SCROLL,
             before_state=before_state,
@@ -1272,7 +1325,6 @@ class Executor:
             success=success,
             error_message=error_msg,
         )
-
         return success
 
     def execute_press(self, step: ActionStep) -> bool:
