@@ -339,9 +339,8 @@ class StatusPill(Widget):
 
     DEFAULT_CSS = """
     StatusPill { 
-        height: auto; width: auto; min-width: 12;
         height: 1; 
-        width: auto; 
+        max-width: 30;
     }
     StatusPill .pill-text.status--idle { background: #6B7280; color: #f8fafc; }
     StatusPill .pill-text.status--starting { background: #A78BFA; color: #0b1220; }
@@ -395,10 +394,11 @@ class StatusRow(AgentPanel):
 
     DEFAULT_CSS = """
     StatusRow { height: auto; width: 99%; }
-    StatusRow Horizontal { height: auto; }
-    StatusRow .thinking-label {
-        height: auto; width: 1fr; color: #F0D264;
-        padding: 0 1; text-align: right;
+    StatusRow Horizontal { height: 1; width: 100%; }
+    .thinking-label {
+        color: #F0D264;
+        text-align: right;
+        width: 1fr;
     }
     """
     
@@ -407,7 +407,7 @@ class StatusRow(AgentPanel):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield StatusPill(label=self.label, variant="idle")
-            yield Label("THINKING: idle", markup=False, classes="thinking-label")
+            yield Label("THINKING: idle", classes="thinking-label")
 
     def panel_ready(self) -> None:
         self._pill = self.query_one(StatusPill)
@@ -419,7 +419,6 @@ class StatusRow(AgentPanel):
         label_text, variant = _STATUS_META.get(status_key, (fallback_label, "unknown"))
         self._pill.set_status(label_text, variant)
         self.label = label_text
-
         if state.thinking_active:
             frame = state.render_frame % 4
             dots = "." * frame + " " * (3 - frame)
@@ -571,14 +570,48 @@ class TimelinePanel(AgentPanel):
 
         return None
 
+class ConfigButtons(AgentPanel):
+    """Buttons for the agent configuration."""
+
+    DEFAULT_CSS = """
+    ConfigButtons { height: auto; width: 100%; margin-top: 1; }
+    ConfigButtons Horizontal { height: auto; width: 100%; }
+    ConfigButtons Button {
+        width: 1fr;
+        min-width: 12;
+        height: 3;
+        background: transparent;
+        border: solid #9C9C9C;
+    }
+    """
+    
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            yield Button("Settings", classes="settings-button", id="settings-button")
+            yield Button("Config", classes="config-button", id="config-button")
+            
+    def panel_ready(self) -> None:
+        self._settings_button = self.query_one(".settings-button", Button)
+        self._config_button = self.query_one(".config-button", Button)
+        self._settings_button.styles.border = ("round", "white")
+        self._config_button.styles.border = ("round", "white")
+        
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-button":
+            self._settings_button.pressed = True
+            self._config_button.pressed = False
+        elif event.button.id == "config-button":
+            self._config_button.pressed = True
+            self._settings_button.pressed = False
 
 class TelemetryPanel(AgentPanel):
     """Right-side panel showing raw agent telemetry data."""
 
     DEFAULT_CSS = """
     TelemetryPanel {
-        width: 48; 
-        height: 100%; 
+        width: 100%;
+        height: 1fr;
+        min-height: 0;
         overflow-y: auto;
         border: solid darkgray; 
         padding-left: 2;
@@ -701,5 +734,5 @@ class MissionControls(AgentPanel):
         inp.styles.padding = (0, 1, 0, 1)
         btn.styles.width = "auto"
         btn.styles.height = "3"
-        btn.styles.background = "transparent"
-        btn.styles.border = ("solid", "#9C9C9C")
+        # btn.styles.background = "transparent"
+        btn.styles.border = ("solid", "green")

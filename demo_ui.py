@@ -28,6 +28,7 @@ from utils.event_logger import BotEvent, EventType
 from demo_config import STARTING_URL, config, on_data_reported, on_user_question, setup_interceptors
 from demo_panels import (
     AgentState,
+    ConfigButtons,
     EventStream,
     IntroBanner,
     MissionControls,
@@ -314,12 +315,19 @@ class AgentView(Vertical):
                 yield TimelinePanel()
                 yield IntroBanner()
                 yield MissionControls(tab_id=tab_id)
-            yield TelemetryPanel()
+            with Vertical(classes="config-container"):
+                yield TelemetryPanel()
+                yield ConfigButtons()
 
     def on_mount(self) -> None:
+        config_container = self.query_one(".config-container", Vertical)
+        config_container.styles.layout = "vertical"
+        config_container.styles.height = "100%"
+        config_container.styles.min_height = 0
+        config_container.styles.width = "48"
         self.styles.width = "100%"
         self.styles.height = "100%"
-        self.styles.padding = (1, 2, 2, 2)
+        self.styles.padding = (1, 2, 1, 2)
 
 
 # ---------------------------------------------------------------------------
