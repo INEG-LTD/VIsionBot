@@ -541,3 +541,46 @@ def get_config_option_catalog() -> list[dict[str, Any]]:
 
     options = _flatten_schema_options(schema, schema_defs)
     return sorted(options, key=lambda item: str(item["path"]))
+
+
+def _section_type_name(annotation: Any) -> str:
+    """Best-effort section type name for Config model fields."""
+    type_name = getattr(annotation, "__name__", "")
+    if type_name:
+        return str(type_name)
+
+    origin = getattr(annotation, "__origin__", None)
+    if origin is not None:
+        origin_name = getattr(origin, "__name__", "")
+        if origin_name:
+            return str(origin_name)
+
+    return str(annotation).replace("typing.", "")
+
+
+def get_config_section_catalog() -> list[dict[str, str]]:
+    """
+    Return top-level Config sections with UI metadata.
+
+    This is intended for building section trees such as:
+    ModelConfig, ExecutionConfig, CacheConfig, etc.
+    """
+    items: list[dict[str, str]] = []
+    model_fields = getattr(Config, "model_fields", {})
+    if not isinstance(model_fields, dict):
+        return items
+
+    for section_key, model_field in model_fields.items():
+        annotation = getattr(model_field, "annotation", None)
+        section_type = _section_type_name(annotation)
+        section_description = str(getattr(model_field, "description", "") or "")
+        items.append(
+            {
+                "section": str(section_key),
+                "section_type": section_type,
+                "section_name": _humanize_identifier(section_key),
+                "section_description": section_description,
+            }
+        )
+
+    return sorted(items, key=lambda item: item["section_type"])

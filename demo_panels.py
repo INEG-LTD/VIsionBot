@@ -18,13 +18,14 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable, Optional
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Button, Collapsible, Input, Label
+from textual.widgets import Button, Collapsible, Input, Label, Select, Switch, TextArea, Tree
 
+from core.config import get_config_option_catalog, get_config_section_catalog
 from utils.event_logger import BotEvent, EventType
 
 
@@ -299,6 +300,17 @@ def _truncate(value: object, max_len: int = 72) -> str:
     if not text:
         return "n/a"
     return text if len(text) <= max_len else f"{text[:max_len - 3]}..."
+
+
+def _path_token(path: str) -> str:
+    safe = []
+    for ch in str(path):
+        safe.append(ch if ch.isalnum() else "-")
+    return "".join(safe).strip("-")
+
+
+def _section_for_path(path: str) -> str:
+    return str(path).split(".", 1)[0]
 
 
 _STATUS_META: dict[str, tuple[str, str]] = {
@@ -585,10 +597,16 @@ class ConfigButtons(AgentPanel):
     }
     """
     
+    def __init__(self, tab_id: str) -> None:
+        super().__init__()
+        self._tab_id = tab_id
+        self.settings_button_id = f"settings-button-{tab_id}"
+        self.config_button_id = f"open-config-{tab_id}"
+
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield Button("Settings", classes="settings-button", id="settings-button")
-            yield Button("Config", classes="config-button", id="config-button")
+            yield Button("Settings", classes="settings-button", id=self.settings_button_id)
+            yield Button("Config", classes="config-button", id=self.config_button_id)
             
     def panel_ready(self) -> None:
         self._settings_button = self.query_one(".settings-button", Button)
@@ -597,12 +615,687 @@ class ConfigButtons(AgentPanel):
         self._config_button.styles.border = ("round", "white")
         
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "settings-button":
+        if event.button.id == self.settings_button_id:
             self._settings_button.pressed = True
             self._config_button.pressed = False
-        elif event.button.id == "config-button":
+        elif event.button.id == self.config_button_id:
             self._config_button.pressed = True
             self._settings_button.pressed = False
+
+
+class AgentConfigEditor(Widget):
+    """Per-agent config editor with a section tree and dynamic detail pane."""
+
+    DEFAULT_CSS = """
+    AgentConfigEditor {
+        width: 100%;
+        height: 100%;
+    }
+    .agent-config-root {
+        layout: horizontal;
+        width: 100%;
+        height: 100%;
+    }
+    .config-sidebar {
+        width: 42;
+        min-width: 36;
+        border: solid #808080;
+        padding: 1 1;
+    }
+    .config-sidebar-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    .config-tree {
+        height: 1fr;
+        width: 100%;
+    }
+    .config-detail-scroll {
+        width: 1fr;
+        height: 100%;
+        min-height: 0;
+        border: solid #808080;
+        border-left: none;
+        padding: 1 2;
+    }
+    .config-detail-container {
+        width: 100%;
+        height: auto;
+        min-height: 100%;
+    }
+    .config-empty-state {
+        width: 100%;
+        height: 100%;
+        align: center middle;
+    }
+    .config-empty-text {
+        color: #a0a0a0;
+        text-align: center;
+        margin-bottom: 1;
+    }
+    .config-empty-actions {
+        width: 100%;
+        align: center middle;
+    }
+    .back-to-agent-button {
+        min-width: 18;
+        width: auto;
+    }
+    .config-detail-header {
+        width: 100%;
+        height: auto;
+        margin-bottom: 1;
+    }
+    .config-detail-header-row {
+        width: 100%;
+        height: auto;
+    }
+    .config-detail-title-wrap {
+        width: 1fr;
+        height: auto;
+    }
+    .config-detail-title {
+        text-style: bold;
+    }
+    .config-detail-description {
+        color: #a0a0a0;
+    }
+    .config-next-mission-note {
+        color: #bcae4a;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    .config-option-card {
+        width: 100%;
+        height: auto;
+        border: round #666666;
+        padding: 1;
+        margin-bottom: 1;
+    }
+    .config-option-card-selected {
+        border: round #ffffff;
+        background: rgba(255, 255, 255, 0.06);
+    }
+    .config-option-header-row {
+        width: 100%;
+        height: auto;
+    }
+    .config-option-copy {
+        width: 1fr;
+        height: auto;
+    }
+    .config-option-name {
+        text-style: bold;
+    }
+    .config-option-description {
+        color: #a0a0a0;
+    }
+    .config-option-readonly {
+        color: #8ea8c7;
+    }
+    .config-option-control {
+        width: 40;
+        height: auto;
+        align: right top;
+    }
+    .config-option-control Input,
+    .config-option-control Select,
+    .config-option-control TextArea {
+        width: 100%;
+    }
+    .config-option-control TextArea {
+        height: 5;
+    }
+    .config-clear-button {
+        margin-top: 1;
+        width: auto;
+        min-width: 10;
+    }
+    .config-option-error {
+        color: #f38ba8;
+        width: 100%;
+        margin-top: 1;
+    }
+    """
+
+    READ_ONLY_PATHS = {
+        "logging.screenshot_dir",
+        "logging.screenshot_stream_dir",
+        "error_handling.screenshot_dir",
+        "browser.user_data_dir",
+    }
+
+    _ENUM_FALLBACK_OPTIONS = {
+        "model.image_detail": ["low", "high", "auto"],
+        "browser.provider_type": ["local", "remote", "persistent", "mock"],
+        "execution.wait_for_load_state": ["load", "domcontentloaded", "networkidle"],
+    }
+
+    _LIST_TEXTAREA_PATHS = {"browser.extra_args"}
+
+    def __init__(
+        self,
+        *,
+        tab_id: str,
+        get_config: Callable[[], Any],
+        apply_change: Callable[[str, Any, bool], tuple[bool, str]],
+        on_back: Callable[[], None],
+        id: Optional[str] = None,
+    ) -> None:
+        super().__init__(id=id)
+        self._tab_id = tab_id
+        self._get_config = get_config
+        self._apply_change = apply_change
+        self._on_back = on_back
+
+        self.tree_id = f"config-tree-{tab_id}"
+        self.detail_id = f"config-detail-{tab_id}"
+        self.back_button_id = f"back-to-agent-{tab_id}"
+
+        self._tree: Tree | None = None
+        self._detail: Container | None = None
+
+        self._sections: dict[str, dict[str, str]] = {}
+        self._options_by_section: dict[str, list[dict[str, Any]]] = {}
+        self._option_meta: dict[str, dict[str, Any]] = {}
+
+        self._control_to_path: dict[str, str] = {}
+        self._clear_to_path: dict[str, str] = {}
+        self._error_labels: dict[str, Label] = {}
+        self._option_rows: dict[str, Container] = {}
+
+        self._selected_section: str | None = None
+        self._selected_path: str | None = None
+        self._hydrating_controls: bool = False
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="agent-config-root"):
+            with Vertical(classes="config-sidebar"):
+                yield Label("Config Options", classes="config-sidebar-title")
+                yield Tree("Config Options", id=self.tree_id, classes="config-tree")
+            with VerticalScroll(classes="config-detail-scroll"):
+                yield Container(id=self.detail_id, classes="config-detail-container")
+
+    def on_mount(self) -> None:
+        self._tree = self.query_one(f"#{self.tree_id}", Tree)
+        self._detail = self.query_one(f"#{self.detail_id}", Container)
+        try:
+            self._tree.show_root = False
+        except Exception:
+            pass
+        self._load_catalog()
+        self._populate_tree()
+        self._show_empty_state()
+
+    def refresh_from_config(self) -> None:
+        if self._selected_section:
+            self._render_section(self._selected_section, focus_path=self._selected_path)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        node_data = getattr(event.node, "data", None)
+        if not isinstance(node_data, dict):
+            return
+
+        kind = str(node_data.get("kind", ""))
+        section = str(node_data.get("section", "")).strip()
+        if not section:
+            return
+
+        if kind == "section":
+            try:
+                event.node.expand()
+            except Exception:
+                pass
+            self._selected_section = section
+            self._selected_path = None
+            self._render_section(section, focus_path=None)
+            return
+
+        if kind == "option":
+            try:
+                if event.node.parent is not None:
+                    event.node.parent.expand()
+            except Exception:
+                pass
+            path = str(node_data.get("path", "")).strip()
+            if not path:
+                return
+            self._selected_section = section
+            self._selected_path = path
+            self._render_section(section, focus_path=path)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = str(event.button.id or "")
+        if button_id == self.back_button_id:
+            self._on_back()
+            event.stop()
+            return
+
+        path = self._clear_to_path.get(button_id)
+        if not path:
+            return
+
+        success, error_text = self._apply_change(path, None, True)
+        if success:
+            self._clear_error(path)
+            section = _section_for_path(path)
+            self._selected_section = section
+            self._selected_path = path
+            self._render_section(section, focus_path=path)
+        else:
+            self._set_error(path, error_text or "Unable to clear this setting.")
+        event.stop()
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if self._hydrating_controls:
+            return
+        control_id = str(event.switch.id or "")
+        path = self._control_to_path.get(control_id)
+        if not path or path in self.READ_ONLY_PATHS:
+            return
+        success, error_text = self._apply_change(path, bool(event.value), False)
+        if success:
+            self._clear_error(path)
+        else:
+            self._set_error(path, error_text or "Invalid value.")
+            section = _section_for_path(path)
+            self._render_section(section, focus_path=path)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if self._hydrating_controls:
+            return
+        control_id = str(event.select.id or "")
+        path = self._control_to_path.get(control_id)
+        if not path or path in self.READ_ONLY_PATHS:
+            return
+        selected = event.value
+        blank_token = getattr(Select, "BLANK", None)
+        if blank_token is not None and selected == blank_token:
+            selected = None
+        success, error_text = self._apply_change(path, selected, False)
+        if success:
+            self._clear_error(path)
+        else:
+            self._set_error(path, error_text or "Invalid value.")
+            section = _section_for_path(path)
+            self._render_section(section, focus_path=path)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if self._hydrating_controls:
+            return
+        control_id = str(event.input.id or "")
+        path = self._control_to_path.get(control_id)
+        if not path or path in self.READ_ONLY_PATHS:
+            return
+
+        option_meta = self._option_meta.get(path, {})
+        control_kind = str(option_meta.get("control_kind", "string"))
+        parsed_value, parse_error = self._parse_input_value(control_kind, event.value)
+        if parse_error:
+            self._set_error(path, parse_error)
+            return
+
+        success, error_text = self._apply_change(path, parsed_value, False)
+        if success:
+            self._clear_error(path)
+        else:
+            self._set_error(path, error_text or "Invalid value.")
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if self._hydrating_controls:
+            return
+        text_area = event.text_area
+        control_id = str(text_area.id or "")
+        path = self._control_to_path.get(control_id)
+        if not path or path in self.READ_ONLY_PATHS:
+            return
+        text_value = str(getattr(text_area, "text", "") or "")
+        values = [line.strip() for line in text_value.splitlines() if line.strip()]
+        success, error_text = self._apply_change(path, values, False)
+        if success:
+            self._clear_error(path)
+        else:
+            self._set_error(path, error_text or "Invalid list value.")
+
+    def _load_catalog(self) -> None:
+        section_catalog = get_config_section_catalog()
+        option_catalog = get_config_option_catalog()
+
+        self._sections = {
+            str(item["section"]): {
+                "section": str(item["section"]),
+                "section_type": str(item.get("section_type", "") or ""),
+                "section_name": str(item.get("section_name", "") or ""),
+                "section_description": str(item.get("section_description", "") or ""),
+            }
+            for item in section_catalog
+        }
+        self._options_by_section = {}
+        for option in option_catalog:
+            path = str(option.get("path", "")).strip()
+            if not path:
+                continue
+            section = str(option.get("section", "")).strip() or _section_for_path(path)
+            if section not in self._sections:
+                self._sections[section] = {
+                    "section": section,
+                    "section_type": f"{_truncate(section, 64)}Config",
+                    "section_name": section.capitalize(),
+                    "section_description": "",
+                }
+            option_copy = dict(option)
+            option_copy["path"] = path
+            option_copy["section"] = section
+            option_copy["option_key"] = path.split(".")[-1]
+            self._options_by_section.setdefault(section, []).append(option_copy)
+
+        for options in self._options_by_section.values():
+            options.sort(key=lambda item: str(item.get("option_key", "")))
+
+    def _populate_tree(self) -> None:
+        if self._tree is None:
+            return
+        root = self._tree.root
+        try:
+            root.expand()
+        except Exception:
+            pass
+
+        section_keys = sorted(
+            self._options_by_section.keys(),
+            key=lambda key: str(self._sections.get(key, {}).get("section_type", key)).lower(),
+        )
+        for section in section_keys:
+            options = self._options_by_section.get(section, [])
+            if not options:
+                continue
+            section_meta = self._sections.get(section, {})
+            section_label = str(section_meta.get("section_type", "") or section)
+            section_node = root.add(section_label, data={"kind": "section", "section": section})
+            for option in options:
+                option_key = str(option.get("option_key", "") or option.get("path", ""))
+                section_node.add_leaf(
+                    option_key,
+                    data={
+                        "kind": "option",
+                        "section": section,
+                        "path": str(option.get("path", "")),
+                    },
+                )
+
+    def _clear_detail(self) -> None:
+        if self._detail is None:
+            return
+        for child in list(self._detail.children):
+            try:
+                child.remove()
+            except Exception:
+                pass
+
+    def _show_empty_state(self) -> None:
+        if self._detail is None:
+            return
+        self._clear_detail()
+        empty = Vertical(
+            Label(
+                "Select a config type/option to customise here",
+                classes="config-empty-text",
+            ),
+            Horizontal(
+                Button(
+                    "Back to Agent",
+                    id=self.back_button_id,
+                    classes="back-to-agent-button",
+                ),
+                classes="config-empty-actions",
+            ),
+            classes="config-empty-state",
+        )
+        self._detail.mount(empty)
+
+    def _render_section(self, section: str, *, focus_path: str | None) -> None:
+        if self._detail is None:
+            return
+
+        section_meta = self._sections.get(section)
+        if section_meta is None:
+            self._show_empty_state()
+            return
+
+        self._hydrating_controls = True
+        try:
+            self._control_to_path.clear()
+            self._clear_to_path.clear()
+            self._error_labels.clear()
+            self._option_rows.clear()
+            self._option_meta.clear()
+            self._clear_detail()
+
+            section_title = str(section_meta.get("section_type", "") or section)
+            section_description = str(section_meta.get("section_description", "") or "").strip()
+            if not section_description:
+                section_description = f"Configure {section_title} values."
+
+            header = Container(
+                Horizontal(
+                    Vertical(
+                        Label(section_title, classes="config-detail-title"),
+                        Label(section_description, classes="config-detail-description"),
+                        classes="config-detail-title-wrap",
+                    ),
+                    Button(
+                        "Back to Agent",
+                        id=self.back_button_id,
+                        classes="back-to-agent-button",
+                    ),
+                    classes="config-detail-header-row",
+                ),
+                Label(
+                    "Changes apply on next mission only.",
+                    classes="config-next-mission-note",
+                ),
+                classes="config-detail-header",
+            )
+            self._detail.mount(header)
+
+            options = self._options_by_section.get(section, [])
+            current_config = self._get_config()
+            for option in options:
+                path = str(option.get("path", ""))
+                control_kind = self._resolve_control_kind(option, path)
+                option_with_kind = dict(option)
+                option_with_kind["control_kind"] = control_kind
+                self._option_meta[path] = option_with_kind
+
+                copy_widgets: list[Widget] = [
+                    Label(str(option.get("option_key", path)), classes="config-option-name")
+                ]
+                description = str(option.get("description", "") or "").strip()
+                if description:
+                    copy_widgets.append(Label(description, classes="config-option-description"))
+                if path in self.READ_ONLY_PATHS:
+                    copy_widgets.append(
+                        Label("Read-only during runtime.", classes="config-option-readonly")
+                    )
+                copy_block = Vertical(*copy_widgets, classes="config-option-copy")
+
+                current_value = self._read_path_value(current_config, path)
+                control_widget, clear_button = self._build_control_widget(
+                    path=path,
+                    option=option,
+                    control_kind=control_kind,
+                    current_value=current_value,
+                )
+                control_widgets: list[Widget] = [control_widget]
+                if clear_button is not None:
+                    control_widgets.append(clear_button)
+                control_block = Vertical(*control_widgets, classes="config-option-control")
+
+                header_row = Horizontal(
+                    copy_block,
+                    control_block,
+                    classes="config-option-header-row",
+                )
+                error_label = Label("", classes="config-option-error")
+                row = Container(
+                    header_row,
+                    error_label,
+                    classes="config-option-card",
+                )
+                if focus_path and path == focus_path:
+                    row.add_class("config-option-card-selected")
+
+                self._error_labels[path] = error_label
+                self._option_rows[path] = row
+                self._detail.mount(row)
+        finally:
+            self.call_after_refresh(self._finish_hydration)
+
+        if focus_path and focus_path in self._option_rows:
+            target = self._option_rows[focus_path]
+            self.call_after_refresh(lambda: target.scroll_visible(animate=False))
+
+    def _build_control_widget(
+        self,
+        *,
+        path: str,
+        option: dict[str, Any],
+        control_kind: str,
+        current_value: Any,
+    ) -> tuple[Widget, Button | None]:
+        control_id = f"cfg-value-{self._tab_id}-{_path_token(path)}"
+        self._control_to_path[control_id] = path
+        read_only = path in self.READ_ONLY_PATHS
+        clear_button: Button | None = None
+
+        if control_kind == "bool":
+            widget = Switch(value=bool(current_value), id=control_id)
+            widget.disabled = read_only
+        elif control_kind == "enum":
+            choices = self._enum_choices(path, option)
+            current_token = self._enum_token(current_value)
+            if current_token and current_token not in choices:
+                choices = [*choices, current_token]
+            if not choices:
+                choices = [current_token] if current_token else [""]
+            option_tuples = [(str(choice), str(choice)) for choice in choices]
+            initial_value = current_token
+            if not initial_value:
+                initial_value = str(choices[0])
+            if initial_value not in choices:
+                lower_lookup = {str(choice).lower(): str(choice) for choice in choices}
+                initial_value = lower_lookup.get(initial_value.lower(), str(choices[0]))
+            widget = Select(
+                options=option_tuples,
+                value=initial_value,
+                id=control_id,
+            )
+            widget.disabled = read_only
+        elif control_kind == "list":
+            lines = []
+            if isinstance(current_value, list):
+                lines = [str(item) for item in current_value]
+            elif current_value is not None:
+                lines = [str(current_value)]
+            widget = TextArea(text="\n".join(lines), id=control_id)
+            widget.disabled = read_only
+        else:
+            text_value = "" if current_value is None else str(current_value)
+            widget = Input(value=text_value, id=control_id)
+            widget.disabled = read_only
+
+        constraints = option.get("constraints", {})
+        is_nullable = bool(isinstance(constraints, dict) and constraints.get("nullable"))
+        if is_nullable and not read_only:
+            clear_id = f"cfg-clear-{self._tab_id}-{_path_token(path)}"
+            clear_button = Button("Clear", id=clear_id, classes="config-clear-button")
+            self._clear_to_path[clear_id] = path
+
+        return widget, clear_button
+
+    def _resolve_control_kind(self, option: dict[str, Any], path: str) -> str:
+        type_name = str(option.get("type", "") or "").lower()
+        if path in self._LIST_TEXTAREA_PATHS or "array" in type_name:
+            return "list"
+        if self._enum_choices(path, option):
+            return "enum"
+        if "bool" in type_name or "boolean" in type_name:
+            return "bool"
+        if "integer" in type_name:
+            return "integer"
+        if "number" in type_name:
+            return "number"
+        return "string"
+
+    def _enum_choices(self, path: str, option: dict[str, Any]) -> list[str]:
+        constraints = option.get("constraints")
+        if isinstance(constraints, dict):
+            enum_values = constraints.get("enum")
+            if isinstance(enum_values, list) and enum_values:
+                normalized: list[str] = []
+                for value in enum_values:
+                    token = self._enum_token(value)
+                    if token and token not in normalized:
+                        normalized.append(token)
+                if normalized:
+                    return normalized
+        fallback = self._ENUM_FALLBACK_OPTIONS.get(path)
+        if fallback:
+            return list(fallback)
+        return []
+
+    @staticmethod
+    def _enum_token(value: Any) -> str:
+        if value is None:
+            return ""
+        member_value = getattr(value, "value", None)
+        if member_value is not None:
+            return str(member_value)
+        return str(value)
+
+    @staticmethod
+    def _read_path_value(config: Any, path: str) -> Any:
+        current = config
+        for part in str(path).split("."):
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = getattr(current, part, None)
+        return current
+
+    @staticmethod
+    def _parse_input_value(control_kind: str, raw: str) -> tuple[Any, str | None]:
+        value = str(raw or "")
+        if control_kind == "integer":
+            trimmed = value.strip()
+            if not trimmed:
+                return None, "Please enter an integer value."
+            try:
+                return int(trimmed), None
+            except ValueError:
+                return None, "Please enter a valid integer."
+        if control_kind == "number":
+            trimmed = value.strip()
+            if not trimmed:
+                return None, "Please enter a number."
+            try:
+                return float(trimmed), None
+            except ValueError:
+                return None, "Please enter a valid number."
+        return value, None
+
+    def _set_error(self, path: str, message: str) -> None:
+        label = self._error_labels.get(path)
+        if label is not None:
+            label.update(str(message or "Invalid value."))
+
+    def _clear_error(self, path: str) -> None:
+        label = self._error_labels.get(path)
+        if label is not None:
+            label.update("")
+
+    def _finish_hydration(self) -> None:
+        self._hydrating_controls = False
 
 class TelemetryPanel(AgentPanel):
     """Right-side panel showing raw agent telemetry data."""

@@ -15,6 +15,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -34,6 +35,7 @@ from demo_config import (
     setup_interceptors,
 )
 from demo_panels import (
+    AgentConfigEditor,
     AgentState,
     ConfigButtons,
     EventStream,
@@ -284,6 +286,8 @@ class AgentSession:
     tab_id: str
     label: str
     config: Config = field(default_factory=_clone_base_config)
+    config_revision: int = 0
+    agent_config_revision: int = -1
     status: str = "idle"
     agent: Agent | None = None
     agent_thread_id: int | None = None
@@ -314,6 +318,9 @@ class AgentView(Vertical):
     def __init__(self, session: AgentSession, view_id: str) -> None:
         super().__init__(id=view_id)
         self._session = session
+        self._main_view_id = f"agent-main-{session.tab_id}"
+        self._config_view_id = f"agent-config-{session.tab_id}"
+        self._switcher_id = f"agent-view-switcher-{session.tab_id}"
 
         # Create reactive state + event stream, wire to session immediately
         initial = AgentState(tab_id=session.tab_id, label=session.label)
@@ -324,27 +331,130 @@ class AgentView(Vertical):
 
     def compose(self) -> ComposeResult:
         tab_id = self._session.tab_id
-        # Panels inside here auto-subscribe by walking up to find
-        # _reactive_state and _event_stream on this AgentView.
-        with Container(classes="agent-page"):
-            with Vertical(classes="content-container"):
-                yield StatusRow()
-                yield TimelinePanel()
-                yield IntroBanner()
-                yield MissionControls(tab_id=tab_id)
-            with Vertical(classes="config-container"):
-                yield TelemetryPanel()
-                yield ConfigButtons()
+        with ContentSwitcher(
+            initial=self._main_view_id,
+            id=self._switcher_id,
+            classes="agent-view-switcher",
+        ):
+            # Panels inside here auto-subscribe by walking up to find
+            # _reactive_state and _event_stream on this AgentView.
+            with Container(id=self._main_view_id, classes="agent-main-view"):
+                with Container(classes="agent-page"):
+                    with Vertical(classes="content-container"):
+                        yield StatusRow()
+                        yield TimelinePanel()
+                        yield IntroBanner()
+                        yield MissionControls(tab_id=tab_id)
+                    with Vertical(classes="config-container"):
+                        yield TelemetryPanel()
+                        yield ConfigButtons(tab_id=tab_id)
+            yield AgentConfigEditor(
+                tab_id=tab_id,
+                id=self._config_view_id,
+                get_config=self._get_session_config,
+                apply_change=self._apply_config_change,
+                on_back=self.show_agent_main,
+            )
 
     def on_mount(self) -> None:
-        config_container = self.query_one(".config-container", Vertical)
+        main_view = self.query_one(f"#{self._main_view_id}", Container)
+        config_container = main_view.query_one(".config-container", Vertical)
         config_container.styles.layout = "vertical"
         config_container.styles.height = "100%"
         config_container.styles.min_height = 0
         config_container.styles.width = "48"
+        switcher = self.query_one(f"#{self._switcher_id}", ContentSwitcher)
+        switcher.styles.width = "100%"
+        switcher.styles.height = "100%"
         self.styles.width = "100%"
         self.styles.height = "100%"
         self.styles.padding = (1, 2, 1, 2)
+
+    def on_button_pressed(self, event) -> None:
+        button_id = str(event.button.id or "")
+        if button_id == f"open-config-{self._session.tab_id}":
+            self.show_config_editor()
+            event.stop()
+        elif button_id == f"settings-button-{self._session.tab_id}":
+            event.stop()
+
+    def show_config_editor(self) -> None:
+        switcher = self.query_one(f"#{self._switcher_id}", ContentSwitcher)
+        switcher.current = self._config_view_id
+        try:
+            editor = switcher.query_one(f"#{self._config_view_id}", AgentConfigEditor)
+            editor.refresh_from_config()
+        except Exception:
+            pass
+
+    def show_agent_main(self) -> None:
+        switcher = self.query_one(f"#{self._switcher_id}", ContentSwitcher)
+        switcher.current = self._main_view_id
+
+    def _get_session_config(self) -> Config:
+        return self._session.config
+
+    @staticmethod
+    def _set_path_value(target: dict[str, Any], dotted_path: str, value: Any) -> None:
+        parts = [part for part in str(dotted_path).split(".") if part]
+        if not parts:
+            return
+        node = target
+        for part in parts[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                node[part] = child
+            node = child
+        node[parts[-1]] = value
+
+    @staticmethod
+    def _format_validation_error(exc: Exception) -> str:
+        errors = getattr(exc, "errors", None)
+        if callable(errors):
+            try:
+                details = errors()
+                if isinstance(details, list) and details:
+                    message = str(details[0].get("msg", "") or "").strip()
+                    if message:
+                        return message
+            except Exception:
+                pass
+        text = str(exc).strip()
+        return text or "Invalid value."
+
+    def _apply_config_change(
+        self,
+        dotted_path: str,
+        value: Any,
+        clear: bool,
+    ) -> tuple[bool, str]:
+        path = str(dotted_path or "").strip()
+        if not path:
+            return False, "Missing config path."
+
+        try:
+            candidate_data = self._session.config.model_dump(mode="python")
+        except Exception:
+            return False, "Unable to read current config."
+
+        self._set_path_value(candidate_data, path, None if clear else value)
+        try:
+            updated_config = Config.model_validate(candidate_data)
+        except Exception as exc:
+            return False, self._format_validation_error(exc)
+
+        try:
+            before_dump = self._session.config.model_dump(mode="python")
+            after_dump = updated_config.model_dump(mode="python")
+            if before_dump == after_dump:
+                return True, ""
+        except Exception:
+            pass
+
+        self._session.config = updated_config
+        self._session.config_revision += 1
+        return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -571,10 +681,14 @@ class BrowserAgentApp(App):
 
     def _ensure_agent_for_session(self, session: AgentSession) -> Agent:
         current_thread_id = threading.get_ident()
-        if session.agent is not None and session.agent_thread_id == current_thread_id:
+        if (
+            session.agent is not None
+            and session.agent_thread_id == current_thread_id
+            and session.agent_config_revision == session.config_revision
+        ):
             return session.agent
 
-        # Different thread — teardown old agent
+        # Different thread or config revision mismatch — teardown old agent.
         if session.agent is not None:
             try:
                 session.agent.cancel()
@@ -587,6 +701,7 @@ class BrowserAgentApp(App):
                 pass
             session.agent = None
             session.agent_thread_id = None
+            session.agent_config_revision = -1
 
         agent = Agent(
             config=session.config,
@@ -604,6 +719,7 @@ class BrowserAgentApp(App):
         agent.event_logger.register_callback(_capture_event)
         session.agent = agent
         session.agent_thread_id = current_thread_id
+        session.agent_config_revision = session.config_revision
         return agent
 
     def _start_worker_for_session(self, session: AgentSession) -> None:
@@ -690,6 +806,7 @@ class BrowserAgentApp(App):
                     pass
             session.agent = None
             session.agent_thread_id = None
+            session.agent_config_revision = -1
             session.worker_thread = None
             if session.status not in {"error"}:
                 session.status = "idle"

@@ -4,6 +4,16 @@
     height: 100%;
 }
 
+.agent-view-switcher {
+    width: 100%;
+    height: 100%;
+}
+
+.agent-main-view {
+    width: 100%;
+    height: 100%;
+}
+
 .content-container {
     layout: vertical;
     width: 1fr;
