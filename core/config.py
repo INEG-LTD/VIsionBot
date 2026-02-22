@@ -8,8 +8,7 @@ object with grouped settings.
 """
 from __future__ import annotations
 
-from enum import Enum
-from typing import List, Optional
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 from lib.ai import ReasoningLevel
 from browser.provider import BrowserConfig as BrowserProviderConfig
@@ -323,10 +322,7 @@ class Config(BaseModel):
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
     )
-    execution: ExecutionConfig = Field(
-        default_factory=ExecutionConfig,
-        description="Mission execution configuration"
-    )
+
     class Config:
         arbitrary_types_allowed = True
     
@@ -354,3 +350,194 @@ class Config(BaseModel):
             Config with all default settings
         """
         return cls()
+
+
+_SCHEMA_CONSTRAINT_KEYS = (
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "multipleOf",
+    "pattern",
+    "format",
+)
+
+
+def _humanize_identifier(identifier: str) -> str:
+    parts = [part for part in identifier.replace("-", "_").split("_") if part]
+    if not parts:
+        return identifier
+    return " ".join(part.capitalize() for part in parts)
+
+
+def _resolve_schema_node(
+    node: dict[str, Any],
+    schema_defs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve local $ref / allOf entries from a model_json_schema tree."""
+    if not isinstance(node, dict):
+        return {}
+
+    # Typical nested-model form.
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        prefix = "#/$defs/"
+        if ref.startswith(prefix):
+            resolved = schema_defs.get(ref[len(prefix):])
+            if isinstance(resolved, dict):
+                merged = dict(resolved)
+                for key, value in node.items():
+                    if key != "$ref":
+                        merged[key] = value
+                return merged
+
+    # Alternate form used when metadata is attached alongside a reference.
+    all_of = node.get("allOf")
+    if isinstance(all_of, list) and len(all_of) == 1 and isinstance(all_of[0], dict):
+        all_of_ref = all_of[0].get("$ref")
+        if isinstance(all_of_ref, str):
+            prefix = "#/$defs/"
+            if all_of_ref.startswith(prefix):
+                resolved = schema_defs.get(all_of_ref[len(prefix):])
+                if isinstance(resolved, dict):
+                    merged = dict(resolved)
+                    for key, value in node.items():
+                        if key != "allOf":
+                            merged[key] = value
+                    return merged
+
+    return node
+
+
+def _schema_type_name(node: dict[str, Any]) -> str:
+    type_value = node.get("type")
+    if isinstance(type_value, str):
+        return type_value
+    if isinstance(type_value, list):
+        non_null = [value for value in type_value if value != "null"]
+        if not non_null:
+            return "null"
+        return "|".join(dict.fromkeys(non_null))
+
+    any_of = node.get("anyOf")
+    if isinstance(any_of, list):
+        detected: list[str] = []
+        for item in any_of:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "null":
+                continue
+            if isinstance(item_type, str):
+                detected.append(item_type)
+            elif "$ref" in item or isinstance(item.get("properties"), dict):
+                detected.append("object")
+        if detected:
+            return "|".join(dict.fromkeys(detected))
+
+    if "$ref" in node or isinstance(node.get("properties"), dict):
+        return "object"
+
+    return "unknown"
+
+
+def _schema_constraints(node: dict[str, Any]) -> dict[str, Any]:
+    constraints: dict[str, Any] = {}
+    for key in _SCHEMA_CONSTRAINT_KEYS:
+        if key in node:
+            constraints[key] = node[key]
+
+    enum_values = node.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        constraints["enum"] = enum_values
+
+    any_of = node.get("anyOf")
+    if isinstance(any_of, list):
+        nullable = any(
+            isinstance(item, dict) and item.get("type") == "null" for item in any_of
+        )
+        if nullable:
+            constraints["nullable"] = True
+
+    return constraints
+
+
+def _flatten_schema_options(
+    schema_node: dict[str, Any],
+    schema_defs: dict[str, dict[str, Any]],
+    *,
+    path_prefix: str = "",
+    section: str = "",
+    section_name: str = "",
+    section_description: str = "",
+) -> list[dict[str, Any]]:
+    properties = schema_node.get("properties")
+    if not isinstance(properties, dict):
+        return []
+
+    required_fields = schema_node.get("required")
+    required_lookup = set(required_fields) if isinstance(required_fields, list) else set()
+
+    items: list[dict[str, Any]] = []
+    for field_name, raw_field_node in properties.items():
+        if not isinstance(raw_field_node, dict):
+            continue
+
+        field_node = _resolve_schema_node(raw_field_node, schema_defs)
+        field_path = f"{path_prefix}.{field_name}" if path_prefix else field_name
+        field_display_name = str(
+            field_node.get("title") or _humanize_identifier(field_name)
+        )
+        field_description = str(field_node.get("description") or "")
+        is_nested_object = isinstance(field_node.get("properties"), dict)
+
+        if is_nested_object:
+            child_section = section or field_name
+            child_section_name = section_name or field_display_name
+            child_section_description = section_description or field_description
+            items.extend(
+                _flatten_schema_options(
+                    field_node,
+                    schema_defs,
+                    path_prefix=field_path,
+                    section=child_section,
+                    section_name=child_section_name,
+                    section_description=child_section_description,
+                )
+            )
+            continue
+
+        items.append(
+            {
+                "path": field_path,
+                "section": section or field_name,
+                "section_name": section_name or _humanize_identifier(section or field_name),
+                "section_description": section_description or field_description,
+                "name": field_display_name,
+                "description": field_description,
+                "type": _schema_type_name(field_node),
+                "default": field_node.get("default"),
+                "required": field_name in required_lookup,
+                "constraints": _schema_constraints(field_node),
+            }
+        )
+
+    return items
+
+
+def get_config_option_catalog() -> list[dict[str, Any]]:
+    """
+    Return flattened metadata for all leaf config options.
+
+    Each entry includes a stable dotted path plus a UI-friendly name and
+    description that can be used directly in a settings page.
+    """
+    schema = Config.model_json_schema()
+    schema_defs = schema.get("$defs")
+    if not isinstance(schema_defs, dict):
+        schema_defs = {}
+
+    options = _flatten_schema_options(schema, schema_defs)
+    return sorted(options, key=lambda item: str(item["path"]))

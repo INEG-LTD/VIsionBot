@@ -22,10 +22,17 @@ from textual.containers import Container, Vertical
 from textual.widgets import ContentSwitcher, Footer, Input, Tab, Tabs
 
 from agent.agent_controller import Agent
+from core.config import Config
 from core.executor import Executor
 from utils.event_logger import BotEvent, EventType
 
-from demo_config import STARTING_URL, config, on_data_reported, on_user_question, setup_interceptors
+from demo_config import (
+    STARTING_URL,
+    config as base_config,
+    on_data_reported,
+    on_user_question,
+    setup_interceptors,
+)
 from demo_panels import (
     AgentState,
     ConfigButtons,
@@ -37,6 +44,15 @@ from demo_panels import (
     TelemetryPanel,
     TimelinePanel,
 )
+
+
+def _clone_base_config() -> Config:
+    """Create an isolated per-agent config from demo_config defaults."""
+    try:
+        return base_config.model_copy(deep=True)
+    except AttributeError:
+        # Compatibility fallback for older Pydantic versions.
+        return base_config.copy(deep=True)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +283,7 @@ class AgentSession:
 
     tab_id: str
     label: str
+    config: Config = field(default_factory=_clone_base_config)
     status: str = "idle"
     agent: Agent | None = None
     agent_thread_id: int | None = None
@@ -572,7 +589,7 @@ class BrowserAgentApp(App):
             session.agent_thread_id = None
 
         agent = Agent(
-            config=config,
+            config=session.config,
             user_question_callback=on_user_question,
             data_report_callback=on_data_reported,
         )
