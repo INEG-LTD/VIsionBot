@@ -190,6 +190,27 @@ class ActionStep(BaseModel):
         if function_name == "send_email":
             to_str = arguments.get("to") or ""
             return f"send_email: to={to_str} | subject={arguments.get('subject', '')}".strip()
+        if function_name == "bash":
+            return f"bash: {arguments.get('command', '')}".strip()
+        if function_name == "read_file":
+            path = arguments.get("path", "")
+            start = arguments.get("start_line")
+            end = arguments.get("end_line")
+            if start is not None and end is not None:
+                suffix = f" (lines {start}-{end})"
+            elif start is not None:
+                suffix = f" (from line {start})"
+            elif end is not None:
+                suffix = f" (to line {end})"
+            else:
+                suffix = ""
+            return f"read_file: {path}{suffix}".strip()
+        if function_name == "find_files":
+            pattern = arguments.get("pattern", "")
+            directory = arguments.get("directory", "~")
+            return f"find_files: {pattern} in {directory}".strip()
+        if function_name == "read_clipboard":
+            return "read_clipboard"
         return f"{function_name}: {arguments}"
 
     def _parse_action(text: str) -> tuple[str, str]:

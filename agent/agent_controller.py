@@ -1591,6 +1591,317 @@ class Agent:
                         )
                         continue
 
+                    if function_name == "bash":
+                        import subprocess
+
+                        before_state = self.memory_store._capture_current_state()
+                        command = str(action_args.get("command", "")).strip()
+                        action_success = False
+                        action_error: Optional[str] = None
+
+                        if not command:
+                            action_error = "No command provided"
+                            state.last_action_summary = "bash FAILED: No command provided"
+                        else:
+                            try:
+                                proc = subprocess.run(
+                                    ["bash", "-lc", command],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30,
+                                )
+                                stdout = (proc.stdout or "").rstrip()
+                                stderr = (proc.stderr or "").rstrip()
+                                exit_code = proc.returncode
+
+                                parts = [f"bash: `{command}`", f"exit_code={exit_code}"]
+                                if stdout:
+                                    preview = stdout if len(stdout) <= 2000 else f"{stdout[:2000]}\n... (truncated)"
+                                    parts.append(f"stdout:\n{preview}")
+                                else:
+                                    parts.append("stdout: (no output)")
+                                if stderr:
+                                    parts.append(f"stderr: {stderr[:500]}")
+
+                                state.last_action_summary = "\n".join(parts)
+                                action_success = exit_code == 0
+                            except subprocess.TimeoutExpired:
+                                action_error = "Command timed out after 30s"
+                                state.last_action_summary = f"bash FAILED: {action_error}"
+                            except Exception as e:
+                                action_error = str(e)
+                                state.last_action_summary = f"bash FAILED: {action_error}"
+
+                        self._record_controller_action(
+                            action_type="bash",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"command": command},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
+                        _append_recent_action(f"bash: {command}" if command else "bash: (empty)")
+                        state.actions_since_progress += 1
+                        if action_success:
+                            state.user_facing_actions_since_progress += 1
+                        _set_checkpoint_pending(True)
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
+                        continue
+
+                    if function_name == "read_file":
+                        from pathlib import Path
+
+                        before_state = self.memory_store._capture_current_state()
+                        path_arg = str(action_args.get("path", "")).strip()
+                        start_line_raw = action_args.get("start_line")
+                        end_line_raw = action_args.get("end_line")
+                        start_line: Optional[int] = None
+                        end_line: Optional[int] = None
+                        action_success = False
+                        action_error: Optional[str] = None
+
+                        if start_line_raw is not None:
+                            try:
+                                start_line = max(1, int(start_line_raw))
+                            except (TypeError, ValueError):
+                                start_line = None
+                        if end_line_raw is not None:
+                            try:
+                                end_line = max(1, int(end_line_raw))
+                            except (TypeError, ValueError):
+                                end_line = None
+
+                        if not path_arg:
+                            action_error = "No path provided"
+                            state.last_action_summary = "read_file FAILED: No path provided"
+                        else:
+                            try:
+                                resolved = Path(path_arg).expanduser().resolve()
+                                lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
+                                total_lines = len(lines)
+
+                                if start_line and end_line and start_line > end_line:
+                                    action_error = f"Invalid line range: start_line={start_line} > end_line={end_line}"
+                                    state.last_action_summary = f"read_file FAILED: {action_error}"
+                                else:
+                                    start_idx = (start_line - 1) if start_line else 0
+                                    end_idx = end_line if end_line else total_lines
+                                    start_idx = min(max(start_idx, 0), total_lines)
+                                    end_idx = min(max(end_idx, start_idx), total_lines)
+
+                                    content = "\n".join(lines[start_idx:end_idx])
+                                    if len(content) > 4000:
+                                        content = f"{content[:4000]}\n... (truncated)"
+
+                                    if start_line or end_line:
+                                        range_note = f" (lines {start_idx + 1}-{end_idx} of {total_lines})"
+                                    else:
+                                        range_note = f" ({total_lines} lines)"
+
+                                    state.last_action_summary = f"read_file: {resolved}{range_note}\n{content}"
+                                    action_success = True
+                            except FileNotFoundError:
+                                action_error = f"File not found: {path_arg}"
+                                state.last_action_summary = f"read_file FAILED: {action_error}"
+                            except Exception as e:
+                                action_error = str(e)
+                                state.last_action_summary = f"read_file FAILED: {action_error}"
+
+                        self._record_controller_action(
+                            action_type="read_file",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={
+                                "path": path_arg,
+                                "start_line": start_line,
+                                "end_line": end_line,
+                            },
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
+                        _append_recent_action(f"read_file: {path_arg}")
+                        state.actions_since_progress += 1
+                        if action_success:
+                            state.user_facing_actions_since_progress += 1
+                        _set_checkpoint_pending(True)
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
+                        continue
+
+                    if function_name == "find_files":
+                        from pathlib import Path
+
+                        before_state = self.memory_store._capture_current_state()
+                        pattern = str(action_args.get("pattern", "")).strip()
+                        directory = str(action_args.get("directory", "~")).strip() or "~"
+                        recursive = bool(action_args.get("recursive", True))
+                        action_success = False
+                        action_error: Optional[str] = None
+
+                        if not pattern:
+                            action_error = "No pattern provided"
+                            state.last_action_summary = "find_files FAILED: No pattern provided"
+                        else:
+                            try:
+                                root = Path(directory).expanduser().resolve()
+                                glob_fn = root.rglob if recursive else root.glob
+                                max_results = 50
+                                found_matches: List[str] = []
+                                for path in glob_fn(pattern):
+                                    found_matches.append(str(path))
+                                    if len(found_matches) > max_results:
+                                        break
+
+                                has_more = len(found_matches) > max_results
+                                matches = sorted(found_matches[:max_results])
+
+                                if matches:
+                                    listing = "\n".join(matches)
+                                    note = (
+                                        f" (showing first {len(matches)}; more matches exist)"
+                                        if has_more
+                                        else f" ({len(matches)} found)"
+                                    )
+                                    state.last_action_summary = f"find_files: `{pattern}` in {root}{note}\n{listing}"
+                                else:
+                                    state.last_action_summary = f"find_files: `{pattern}` in {root} - no matches found"
+                                action_success = True
+                            except Exception as e:
+                                action_error = str(e)
+                                state.last_action_summary = f"find_files FAILED: {action_error}"
+
+                        self._record_controller_action(
+                            action_type="find_files",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={
+                                "pattern": pattern,
+                                "directory": directory,
+                                "recursive": recursive,
+                            },
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
+                        _append_recent_action(f"find_files: {pattern} in {directory}")
+                        state.actions_since_progress += 1
+                        if action_success:
+                            state.user_facing_actions_since_progress += 1
+                        _set_checkpoint_pending(True)
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
+                        continue
+
+                    if function_name == "read_clipboard":
+                        import subprocess
+                        import sys
+
+                        before_state = self.memory_store._capture_current_state()
+                        action_success = False
+                        action_error: Optional[str] = None
+                        content = ""
+
+                        try:
+                            if sys.platform == "darwin":
+                                proc = subprocess.run(
+                                    ["pbpaste"],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5,
+                                )
+                                if proc.returncode != 0:
+                                    stderr = (proc.stderr or "").strip() or "unknown error"
+                                    raise RuntimeError(f"pbpaste failed: {stderr}")
+                                content = proc.stdout
+                            elif sys.platform.startswith("linux"):
+                                for cmd in (
+                                    ["xclip", "-selection", "clipboard", "-o"],
+                                    ["xsel", "--clipboard", "--output"],
+                                ):
+                                    try:
+                                        proc = subprocess.run(
+                                            cmd,
+                                            capture_output=True,
+                                            text=True,
+                                            timeout=5,
+                                        )
+                                        if proc.returncode == 0:
+                                            content = proc.stdout
+                                            break
+                                    except FileNotFoundError:
+                                        continue
+                                else:
+                                    raise RuntimeError("No clipboard tool found (install xclip or xsel)")
+                            elif sys.platform == "win32":
+                                proc = subprocess.run(
+                                    ["powershell", "-command", "Get-Clipboard"],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5,
+                                )
+                                if proc.returncode != 0:
+                                    stderr = (proc.stderr or "").strip() or "unknown error"
+                                    raise RuntimeError(f"Get-Clipboard failed: {stderr}")
+                                content = proc.stdout
+                            else:
+                                raise RuntimeError(f"Unsupported platform: {sys.platform}")
+
+                            content = content.rstrip()
+                            if content:
+                                preview = content if len(content) <= 1000 else f"{content[:1000]}\n... (truncated)"
+                                state.last_action_summary = f"read_clipboard: {len(content)} chars\n{preview}"
+                            else:
+                                state.last_action_summary = "read_clipboard: clipboard is empty"
+                            action_success = True
+                        except Exception as e:
+                            action_error = str(e)
+                            state.last_action_summary = f"read_clipboard FAILED: {action_error}"
+
+                        self._record_controller_action(
+                            action_type="read_clipboard",
+                            action_step=action_step,
+                            success=action_success,
+                            error_message=action_error,
+                            action_params={"content_length": len(content)},
+                            before_state=before_state,
+                            after_state=self.memory_store._capture_current_state(),
+                        )
+                        _append_recent_action("read_clipboard")
+                        state.actions_since_progress += 1
+                        if action_success:
+                            state.user_facing_actions_since_progress += 1
+                        _set_checkpoint_pending(True)
+                        self.event_logger.action_complete(
+                            tool=function_name,
+                            narrative=narrative,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            duration_ms=0.0,
+                            iteration=self._current_iteration,
+                        )
+                        continue
+
                     result = self.action_executor.act(
                         action_step=action_step,
                         detected_elements=detected_elements,

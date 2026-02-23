@@ -782,6 +782,131 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": (
+                "Run a bash command on the local machine and get its output as context. "
+                "Use this when the data or action lives locally — not on a web page. "
+                "Good for: checking the current time or date, running CLI tools "
+                "(gh, aws, stripe, curl, jq), processing data with a script, reading "
+                "environment variables, listing directory contents, or running quick "
+                "calculations. Do not use this to navigate websites — use the browser "
+                "for anything with a web UI."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to run (e.g. 'date', 'gh pr list', 'jq . data.json')"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why you need to run this command"
+                    },
+                },
+                "required": ["command", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read a local file and get its contents as context. "
+                "Use when you need to read a CSV, JSON, text file, or any local data "
+                "before using it in the browser (e.g. 'read contacts.csv then fill the form'). "
+                "Supports an optional line range for large files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or ~ path to the file (e.g. '~/Desktop/data.csv', '/tmp/output.json')"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional: 1-indexed line to start reading from (default: 1)",
+                        "minimum": 1
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional: 1-indexed line to stop reading at (inclusive)",
+                        "minimum": 1
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why you need to read this file"
+                    },
+                },
+                "required": ["path", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_files",
+            "description": (
+                "Search for files matching a name pattern within a directory. "
+                "Use when you don't know the exact path but need to find a file "
+                "(e.g. 'find all CSVs in Downloads', 'is there a config.json somewhere here'). "
+                "Returns a list of matching paths."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Filename glob pattern to match (e.g. '*.csv', 'report_*.pdf', 'config.json')"
+                    },
+                    "directory": {
+                        "type": "string",
+                        "description": "Directory to search in (default: user home directory). Use ~ for home."
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Whether to search subdirectories recursively (default: true)",
+                        "default": True
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why you need to find these files"
+                    },
+                },
+                "required": ["pattern", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_clipboard",
+            "description": (
+                "Read the current contents of the system clipboard. "
+                "Use when the user has copied something they want you to use "
+                "(e.g. an email address, a URL, a block of text to paste into a form)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why you need to read the clipboard"
+                    },
+                },
+                "required": ["reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
 ]
 
 # Optional memory evidence on key decision-bearing tools.

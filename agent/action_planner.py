@@ -534,6 +534,10 @@ DATA & COMMUNICATION:
 • report_data - Send textual data back to the host callback
 • write_data - Write text data to disk
 • send_email - Send an email via the Resend API
+• bash - Run a local bash command and use output as context
+• read_file - Read a local file (optionally line-ranged) into context
+• find_files - Find files by glob pattern in a directory
+• read_clipboard - Read system clipboard contents into context
 • flag - Send non-blocking notification to user
 
 TAB MANAGEMENT:
