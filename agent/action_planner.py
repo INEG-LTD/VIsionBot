@@ -82,6 +82,7 @@ class ActionPlanner:
         element_index_text: Optional[str] = None,
         gallery_images: Optional[List[bytes]] = None,
         user_hints: Optional[List[str]] = None,
+        policy_constraints_block: Optional[str] = None,
         # Loop state
         in_loop: bool = False,
         loop_round: int = 0,
@@ -124,6 +125,7 @@ class ActionPlanner:
         self.element_index_text = element_index_text
         self.gallery_images = gallery_images
         self.user_hints = [hint.strip() for hint in (user_hints or []) if isinstance(hint, str) and hint.strip()]
+        self.policy_constraints_block = (policy_constraints_block or "").strip()
         # Loop state
         self.in_loop = in_loop
         self.loop_round = loop_round
@@ -449,6 +451,14 @@ OPEN TABS
         else:
             budget_reasoning_contract = """
 12. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
+        policy_section = ""
+        if self.policy_constraints_block:
+            policy_section = f"""
+═══════════════════════════════════════════════════════════════
+POLICY CONSTRAINTS
+═══════════════════════════════════════════════════════════════
+{self.policy_constraints_block}
+"""
         opening_instruction = (
             "You are controlling a web browser. You can see the current page "
             "as a screenshot." + gallery_note + "\n"
@@ -556,6 +566,8 @@ COGNITIVE ACTIONS:
   - stuck: switch strategy
 • assert_condition - Check if something is true from the screenshot
 • wait_for - Wait for a condition with timeout
+
+{policy_section}
 
 ═══════════════════════════════════════════════════════════════
 LOOPS

@@ -55,6 +55,11 @@ class EventType(str, Enum):
     SYSTEM_WARNING = "system_warning"
     SYSTEM_ERROR = "system_error"
     SYSTEM_DEBUG = "system_debug"
+    SANDBOX_DECISION = "sandbox_decision"
+    SANDBOX_BLOCKED_ACTION = "sandbox_blocked_action"
+    CLEANUP_START = "cleanup_start"
+    CLEANUP_DELETION = "cleanup_deletion"
+    CLEANUP_COMPLETE = "cleanup_complete"
 
     # Extraction
     EXTRACTION_START = "extraction_start"
@@ -523,6 +528,92 @@ class EventLogger:
     def system_debug(self, message: str, **details):
         try:
             self.emit(EventType.SYSTEM_DEBUG, message, LogLevel.DEBUG, **details)
+        except Exception:
+            pass
+
+    def sandbox_decision(
+        self,
+        *,
+        check_type: str,
+        target: str,
+        allowed: bool,
+        reason: str = "",
+        **details,
+    ) -> None:
+        try:
+            level = LogLevel.DEBUG if allowed else LogLevel.WARNING
+            msg = f"Sandbox decision: {check_type} -> {'allowed' if allowed else 'blocked'}"
+            if reason:
+                msg += f" ({reason})"
+            self.emit(
+                EventType.SANDBOX_DECISION,
+                msg,
+                level,
+                check_type=check_type,
+                target=target,
+                allowed=allowed,
+                reason=reason,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def sandbox_blocked_action(
+        self,
+        *,
+        check_type: str,
+        target: str,
+        reason: str,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SANDBOX_BLOCKED_ACTION,
+                f"Sandbox blocked action: {check_type} ({reason})",
+                LogLevel.WARNING,
+                check_type=check_type,
+                target=target,
+                reason=reason,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def cleanup_start(self, *, root: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.CLEANUP_START,
+                f"Storage cleanup start: {root}",
+                LogLevel.INFO,
+                root=root,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def cleanup_deletion(self, *, path: str, reason: str, bytes_removed: int = 0, **details) -> None:
+        try:
+            self.emit(
+                EventType.CLEANUP_DELETION,
+                f"Storage cleanup deletion: {path} ({reason})",
+                LogLevel.INFO,
+                path=path,
+                reason=reason,
+                bytes_removed=bytes_removed,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def cleanup_complete(self, *, root: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.CLEANUP_COMPLETE,
+                f"Storage cleanup complete: {root}",
+                LogLevel.INFO,
+                root=root,
+                **details,
+            )
         except Exception:
             pass
 

@@ -25,6 +25,7 @@ from textual.widgets import ContentSwitcher, Footer, Input, Tab, Tabs
 from agent.agent_controller import Agent
 from core.config import Config
 from core.executor import Executor
+from core.sandbox_policy import SandboxPolicyEngine
 from utils.event_logger import BotEvent, EventType
 
 from demo_config import (
@@ -588,6 +589,8 @@ class BrowserAgentApp(App):
         sv = self._sv
         execution_state = sv(snapshot, "execution_state")
         mission_result = sv(snapshot, "mission_result")
+        active_agent = session.agent
+        effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
 
         return AgentState(
             tab_id=session.tab_id,
@@ -632,6 +635,7 @@ class BrowserAgentApp(App):
             mission_reasoning=str(sv(mission_result, "reasoning", "") or ""),
             mission_final_url=str(sv(mission_result, "final_url", "") or ""),
             last_known_url=session.last_known_url,
+            sandbox_web_policy=SandboxPolicyEngine.summarize_web_policy(effective_config),
             thinking_active=session.thinking_active,
             thinking_text=session.thinking_text,
             render_frame=int(time.monotonic() * 3) % 4 if session.thinking_active else 0,
@@ -641,16 +645,18 @@ class BrowserAgentApp(App):
 
     def _record_session_event(self, session: AgentSession, event: BotEvent) -> None:
         """Update session derived state from an event, then push to stream."""
+        details = event.details or {}
+
         # Update last_known_url
         if event.event_type == EventType.BROWSER_NAVIGATION:
-            url = str((event.details or {}).get("url", "")).strip()
+            url = str(details.get("url", "")).strip()
             if url:
                 session.last_known_url = url
 
         # Track thinking state
         if event.event_type == EventType.ITERATION_START:
-            iteration = (event.details or {}).get("iteration", "?")
-            max_iterations = (event.details or {}).get("max_iterations", "?")
+            iteration = details.get("iteration", "?")
+            max_iterations = details.get("max_iterations", "?")
             session.thinking_active = True
             session.thinking_text = f"Thinking through iteration {iteration}/{max_iterations}"
         elif event.event_type == EventType.SYSTEM_INFO:

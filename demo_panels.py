@@ -76,6 +76,7 @@ class AgentState:
     mission_reasoning: str = ""
     mission_final_url: str = ""
     last_known_url: str = ""
+    sandbox_web_policy: str = ""
     thinking_active: bool = False
     thinking_text: str = "Thinking..."
     render_frame: int = 0  # incremented by poll timer to drive animations
@@ -1348,6 +1349,7 @@ class TelemetryPanel(AgentPanel):
                     "Budget: 0/0 (phase: normal)",
                     "Cost: $0.0000",
                     "Tokens: 0",
+                    f"Sandbox Web: {_truncate(state.sandbox_web_policy, 64)}",
                     f"Dropped Events: {state.dropped_event_count}",
                     "Hint: enter a mission and press Run.",
                 ]
@@ -1387,6 +1389,7 @@ class TelemetryPanel(AgentPanel):
                 f"Plan Batch Limit: {state.planning_batch_limit or '-'}",
                 f"Cost: ${state.llm_total_cost_usd:.4f}",
                 f"Tokens: {state.llm_total_tokens}",
+                f"Sandbox Web: {_truncate(state.sandbox_web_policy, 64)}",
                 f"URL: {current_url}",
                 f"Last Action: {_truncate(state.last_action_summary, 70)}",
                 f"Dropped Events: {state.dropped_event_count}",

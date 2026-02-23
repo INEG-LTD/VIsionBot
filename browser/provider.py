@@ -169,6 +169,7 @@ class LocalPlaywrightProvider(BrowserProvider):
         # Determine user data directory
         if self.config.user_data_dir:
             user_data_dir = self.config.user_data_dir
+            os.makedirs(os.path.expanduser(user_data_dir), exist_ok=True)
         else:
             # Create temporary profile
             user_data_dir = os.path.expanduser(
@@ -332,6 +333,8 @@ class PersistentContextProvider(BrowserProvider):
         
         if not self.config.user_data_dir:
             raise ValueError("user_data_dir is required for PersistentContextProvider")
+
+        os.makedirs(os.path.expanduser(self.config.user_data_dir), exist_ok=True)
         
         # Start Playwright
         self._playwright = sync_playwright().start()

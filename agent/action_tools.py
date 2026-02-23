@@ -369,7 +369,7 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                         "description": "Reasoning for the scroll action"
                     }
                 },
-                "required": ["direction", "reasoning"],
+                "required": ["reasoning"],
                 "additionalProperties": False
             }
         }

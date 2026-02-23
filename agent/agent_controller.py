@@ -19,6 +19,8 @@ from browser.dom import build_page_elements
 from browser.annotate import build_element_index, build_crop_gallery
 from core.browser import ExecutionTimer
 from core.executor.base import Executor
+from core.agent_workspace import AgentWorkspace, AgentWorkspaceManager
+from core.sandbox_policy import SandboxPolicyEngine
 from agent.memory import InteractionType, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
 from models.models import FailedAction
@@ -181,7 +183,27 @@ class Agent:
 
         # Execution timer for tracking mission, iteration, and action timings
         self.execution_timer = ExecutionTimer()
-        
+
+        # Per-agent storage workspace and temp-only cleanup.
+        self.workspace_manager = AgentWorkspaceManager(
+            base_dir=self.config.storage.base_dir,
+            cleanup_enabled=self.config.storage.cleanup.enabled,
+            temp_ttl_days=self.config.storage.cleanup.temp_ttl_days,
+            temp_keep_last_runs=self.config.storage.cleanup.temp_keep_last_runs,
+            temp_max_runs=self.config.storage.cleanup.temp_max_runs,
+            max_disk_mb=self.config.storage.cleanup.max_disk_mb,
+            event_logger=self.event_logger,
+        )
+        self.agent_workspace: AgentWorkspace = self.workspace_manager.create_agent(
+            persistence_mode=self.config.storage.default_persistence_mode,
+        )
+        self.workspace_manager.cleanup_temp_runs(exclude_agent_id=self.agent_workspace.agent_id)
+        self._active_run_id: Optional[str] = None
+        self._active_run_open: bool = False
+
+        # Route storage defaults into this agent workspace.
+        self._apply_workspace_paths()
+
         self.show_llm_costs = config.logging.show_llm_costs
         _show_overlay_candidates = config.logging.show_overlay_candidates
         self.save_screenshots = config.logging.save_screenshots
@@ -198,6 +220,11 @@ class Agent:
             persist_to_disk=self.config.logging.screenshot_stream_persist_to_disk,
             disk_dir=self.config.logging.screenshot_stream_dir,
             max_disk_files=self.config.logging.screenshot_stream_max_disk_files,
+        )
+        self.sandbox_policy = SandboxPolicyEngine(
+            config=self.config,
+            workspace_root=self.agent_workspace.workspace_root,
+            event_logger=self.event_logger,
         )
 
     def __enter__(self) -> 'Agent':
@@ -285,6 +312,61 @@ class Agent:
     def clear_screenshot_cache(self) -> None:
         self.screenshot_store.clear()
 
+    def _apply_workspace_paths(self) -> None:
+        """Route default storage paths into this agent's workspace."""
+        ws = self.agent_workspace
+        self.config.browser.user_data_dir = str(ws.browser_profile_dir)
+        self.config.logging.screenshot_dir = str(ws.screenshots_dir)
+        self.config.logging.screenshot_stream_dir = str(ws.stream_screenshots_dir)
+        self.config.error_handling.screenshot_dir = str(ws.screenshots_dir)
+
+        for path in (
+            ws.workspace_root,
+            ws.written_data_dir,
+            ws.browser_profile_dir,
+            ws.browser_downloads_dir,
+            ws.screenshots_dir,
+            ws.stream_screenshots_dir,
+            ws.runs_root,
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def _current_page_url(self) -> str:
+        """Best-effort current page URL from active browser page."""
+        try:
+            if self.browser and self.browser.page:
+                return str(self.browser.page.url or "").strip()
+        except Exception:
+            pass
+        return ""
+
+    def _enforce_current_page_policy(self, *, source: str) -> Tuple[bool, Optional[str], str]:
+        """
+        Validate current page URL against sandbox policy.
+
+        Returns:
+            (allowed, warning_message_or_none, current_url)
+        """
+        current_url = self._current_page_url()
+        if not current_url:
+            return True, None, current_url
+
+        decision = self.sandbox_policy.check_url(current_url)
+        if decision.allowed:
+            return True, None, current_url
+
+        warning = f"{source} landed on disallowed URL: {decision.reason}"
+        self.event_logger.system_warning(
+            warning,
+            source=source,
+            current_url=current_url,
+            sandbox_preset=self.sandbox_policy.preset,
+            sandbox_mode=self.sandbox_policy.mode,
+        )
+        if self.sandbox_policy.enforce:
+            return False, warning, current_url
+        return True, warning, current_url
+
     def _start(self) -> None:
         """Start the agent"""
         # Create browser without context manager - we'll manage its lifecycle
@@ -308,6 +390,10 @@ class Agent:
             agent_talk_callback=self.agent_talk_callback,
             data_report_callback=self.data_report_callback,
             user_messages_config=self.config.user_messages if self.config else None,
+            workspace_paths={
+                "written_data_dir": str(self.agent_workspace.written_data_dir),
+            },
+            sandbox_policy=self.sandbox_policy,
         )
         
         # State tracking
@@ -442,6 +528,21 @@ class Agent:
             self._pause_message = "Paused"
             self._pause_event.set()
         self.event_logger.agent_start(user_mission)
+        try:
+            self._active_run_id = self.workspace_manager.start_run(
+                self.agent_workspace,
+                mission=user_mission,
+            )
+            self._active_run_open = True
+            if self.config.sandbox.audit.enabled:
+                self.sandbox_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
+            else:
+                self.sandbox_policy.set_audit_log_path(None)
+        except Exception as e:
+            self._active_run_id = None
+            self._active_run_open = False
+            self.sandbox_policy.set_audit_log_path(None)
+            self.event_logger.system_warning(f"Failed to initialize run workspace: {e}")
 
         # Initialize tracking
         try:
@@ -464,6 +565,7 @@ class Agent:
             self.mission_result = self._build_mission_result(
                 success=False,
                 reasoning="Page is blank",
+                narrative="Page is blank",
                 state=self.execution_state,
             )
             return self.mission_result
@@ -497,7 +599,7 @@ class Agent:
         except Exception:
             final_url = ""
 
-        return MissionResult(
+        result = MissionResult(
             success=success,
             reasoning=reasoning,
             narrative=narrative,
@@ -511,6 +613,30 @@ class Agent:
             budget_remaining=int(getattr(state, "budget_remaining", 0) or 0),
             budget_phase=str(getattr(state, "budget_phase", "normal") or "normal"),
         )
+        if self._active_run_open:
+            try:
+                self.workspace_manager.finish_run(
+                    self.agent_workspace,
+                    success=bool(success),
+                    reasoning=reasoning,
+                    total_actions=int(getattr(state, "actions_since_progress", 0) or 0),
+                    total_iterations=int(self._current_iteration or 0),
+                    final_url=final_url,
+                    duration_s=duration_s,
+                )
+            except Exception as e:
+                self.event_logger.system_warning(f"Failed to finalize run workspace: {e}")
+            finally:
+                self._active_run_open = False
+                self.sandbox_policy.set_audit_log_path(None)
+                try:
+                    self.workspace_manager.cleanup_temp_runs()
+                except Exception:
+                    pass
+        else:
+            self.sandbox_policy.set_audit_log_path(None)
+
+        return result
 
     @staticmethod
     def _compute_budget_phase(remaining: int, total: int) -> str:
@@ -904,6 +1030,28 @@ class Agent:
             try:
                 try:
                     snapshot = self._capture_snapshot(full_page=False)
+                    snapshot_url = str(getattr(snapshot, "url", "") or "").strip()
+                    if snapshot_url:
+                        current_url_decision = self.sandbox_policy.check_url(snapshot_url)
+                        if not current_url_decision.allowed:
+                            warning = f"Current page blocked by sandbox: {current_url_decision.reason}"
+                            self.event_logger.system_warning(
+                                warning,
+                                current_url=snapshot_url,
+                                sandbox_preset=self.sandbox_policy.preset,
+                                sandbox_mode=self.sandbox_policy.mode,
+                            )
+                            if self.sandbox_policy.enforce:
+                                state.last_action_summary = f"sandbox FAILED: {warning} ({snapshot_url})"
+                                _append_recent_action(state.last_action_summary)
+                                return self._build_mission_result(
+                                    success=False,
+                                    reasoning=f"{warning} ({snapshot_url})",
+                                    narrative="Sandbox blocked disallowed current page",
+                                    state=state,
+                                )
+                            state.last_action_summary = f"sandbox(observe): {warning} ({snapshot_url})"
+                            _append_recent_action(state.last_action_summary)
                     page_info = self.page_utils.get_page_info()
                     detected_elements = build_page_elements(self.browser.page, page_info)
                 except Exception as e:
@@ -986,6 +1134,9 @@ class Agent:
                     self._pending_hints.clear()
 
                 active_strategy = self.memory_store.get_latest_strategy() or None
+                policy_constraints_block = None
+                if self.config.sandbox.prompt.include_policy_block:
+                    policy_constraints_block = self.sandbox_policy.render_prompt_policy_block()
                 if (
                     self.config.logging.debug_mode
                     and state.budget_constraints_enabled
@@ -1020,6 +1171,7 @@ class Agent:
                     current_iteration=self._current_iteration,
                     user_facing_actions_in_round=state.user_facing_actions_since_progress,
                     user_hints=pending_hints,
+                    policy_constraints_block=policy_constraints_block,
                     in_loop=state.in_loop,
                     loop_round=state.loop_round,
                     loop_count=state.loop_count,
@@ -1083,6 +1235,7 @@ class Agent:
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
                     narrative = action_args.get("narrative", "")
+                    policy_observe_warning: Optional[str] = None
                     if self.config.logging.debug_mode:
                         self.event_logger.system_debug(
                             "Budget telemetry",
@@ -1314,9 +1467,18 @@ class Agent:
                                 except Exception:
                                     pass
                                 state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
-                                state.user_facing_actions_since_progress += 1
+                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                                    source="switch_tab"
+                                )
                                 _set_checkpoint_pending(True)
-                                action_success = True
+                                if not policy_allowed:
+                                    action_error = f"{policy_warning} ({current_url})"
+                                    state.last_action_summary = f"switch_tab FAILED: {action_error}"
+                                else:
+                                    if policy_warning:
+                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
+                                    state.user_facing_actions_since_progress += 1
+                                    action_success = True
                             except ValueError as e:
                                 state.last_action_summary = f"switch_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1356,9 +1518,18 @@ class Agent:
                                 active = self.tab_manager.get_active()
                                 active_id = active.id if active else "?"
                                 state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
-                                state.user_facing_actions_since_progress += 1
+                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                                    source="close_tab"
+                                )
                                 _set_checkpoint_pending(True)
-                                action_success = True
+                                if not policy_allowed:
+                                    action_error = f"{policy_warning} ({current_url})"
+                                    state.last_action_summary = f"close_tab FAILED: {action_error}"
+                                else:
+                                    if policy_warning:
+                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
+                                    state.user_facing_actions_since_progress += 1
+                                    action_success = True
                             except ValueError as e:
                                 state.last_action_summary = f"close_tab FAILED: {e}"
                                 action_error = str(e)
@@ -1391,7 +1562,19 @@ class Agent:
                         action_success = False
                         action_error: Optional[str] = None
                         url = str(action_args.get("url", "")).strip() or None
-                        if self.tab_manager:
+                        observe_warning: Optional[str] = None
+                        if url:
+                            url_decision = self.sandbox_policy.check_url(url)
+                            if not url_decision.allowed:
+                                warning = f"open_tab blocked by sandbox: {url_decision.reason}"
+                                self.event_logger.system_warning(warning)
+                                if self.sandbox_policy.enforce:
+                                    action_error = warning
+                                    state.last_action_summary = f"open_tab FAILED: {url_decision.reason}"
+                                else:
+                                    observe_warning = warning
+
+                        if action_error is None and self.tab_manager:
                             try:
                                 new_page = self.tab_manager.open_tab(url)
                                 self.action_executor.set_page(new_page)
@@ -1400,13 +1583,24 @@ class Agent:
                                 state.last_action_summary = f"Opened new tab [{active_id}]"
                                 if url:
                                     state.last_action_summary += f" at {url}"
-                                state.user_facing_actions_since_progress += 1
+                                if observe_warning:
+                                    state.last_action_summary += f" | sandbox(observe): {observe_warning}"
                                 _set_checkpoint_pending(True)
-                                action_success = True
+                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                                    source="open_tab"
+                                )
+                                if not policy_allowed:
+                                    action_error = f"{policy_warning} ({current_url})"
+                                    state.last_action_summary = f"open_tab FAILED: {action_error}"
+                                else:
+                                    if policy_warning:
+                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
+                                    state.user_facing_actions_since_progress += 1
+                                    action_success = True
                             except Exception as e:
                                 state.last_action_summary = f"open_tab FAILED: {e}"
                                 action_error = str(e)
-                        else:
+                        elif action_error is None:
                             state.last_action_summary = "open_tab FAILED: Tab management not available"
                             action_error = "Tab management not available"
                         self._record_controller_action(
@@ -1596,41 +1790,56 @@ class Agent:
 
                         before_state = self.memory_store._capture_current_state()
                         command = str(action_args.get("command", "")).strip()
+                        command_timeout = self.sandbox_policy.command_timeout_seconds()
                         action_success = False
                         action_error: Optional[str] = None
+                        observe_warning: Optional[str] = None
 
                         if not command:
                             action_error = "No command provided"
                             state.last_action_summary = "bash FAILED: No command provided"
                         else:
-                            try:
-                                proc = subprocess.run(
-                                    ["bash", "-lc", command],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=30,
-                                )
-                                stdout = (proc.stdout or "").rstrip()
-                                stderr = (proc.stderr or "").rstrip()
-                                exit_code = proc.returncode
-
-                                parts = [f"bash: `{command}`", f"exit_code={exit_code}"]
-                                if stdout:
-                                    preview = stdout if len(stdout) <= 2000 else f"{stdout[:2000]}\n... (truncated)"
-                                    parts.append(f"stdout:\n{preview}")
+                            command_decision = self.sandbox_policy.check_command(command)
+                            if not command_decision.allowed:
+                                warning = f"bash blocked by sandbox: {command_decision.reason}"
+                                self.event_logger.system_warning(warning)
+                                if self.sandbox_policy.enforce:
+                                    action_error = warning
+                                    state.last_action_summary = f"bash FAILED: {command_decision.reason}"
                                 else:
-                                    parts.append("stdout: (no output)")
-                                if stderr:
-                                    parts.append(f"stderr: {stderr[:500]}")
+                                    observe_warning = warning
 
-                                state.last_action_summary = "\n".join(parts)
-                                action_success = exit_code == 0
-                            except subprocess.TimeoutExpired:
-                                action_error = "Command timed out after 30s"
-                                state.last_action_summary = f"bash FAILED: {action_error}"
-                            except Exception as e:
-                                action_error = str(e)
-                                state.last_action_summary = f"bash FAILED: {action_error}"
+                            if action_error is None:
+                                try:
+                                    proc = subprocess.run(
+                                        ["bash", "-lc", command],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=command_timeout,
+                                    )
+                                    stdout = (proc.stdout or "").rstrip()
+                                    stderr = (proc.stderr or "").rstrip()
+                                    exit_code = proc.returncode
+
+                                    parts = [f"bash: `{command}`", f"exit_code={exit_code}"]
+                                    if stdout:
+                                        preview = stdout if len(stdout) <= 2000 else f"{stdout[:2000]}\n... (truncated)"
+                                        parts.append(f"stdout:\n{preview}")
+                                    else:
+                                        parts.append("stdout: (no output)")
+                                    if stderr:
+                                        parts.append(f"stderr: {stderr[:500]}")
+
+                                    state.last_action_summary = "\n".join(parts)
+                                    if observe_warning:
+                                        state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
+                                    action_success = True  # command ran; agent sees exit_code in summary
+                                except subprocess.TimeoutExpired:
+                                    action_error = f"Command timed out after {command_timeout}s"
+                                    state.last_action_summary = f"bash FAILED: {action_error}"
+                                except Exception as e:
+                                    action_error = str(e)
+                                    state.last_action_summary = f"bash FAILED: {action_error}"
 
                         self._record_controller_action(
                             action_type="bash",
@@ -1667,6 +1876,7 @@ class Agent:
                         end_line: Optional[int] = None
                         action_success = False
                         action_error: Optional[str] = None
+                        observe_warning: Optional[str] = None
 
                         if start_line_raw is not None:
                             try:
@@ -1685,6 +1895,18 @@ class Agent:
                         else:
                             try:
                                 resolved = Path(path_arg).expanduser().resolve()
+                                path_decision = self.sandbox_policy.check_path(resolved, operation="read")
+                                if not path_decision.allowed:
+                                    warning = f"read_file blocked by sandbox: {path_decision.reason}"
+                                    self.event_logger.system_warning(warning)
+                                    if self.sandbox_policy.enforce:
+                                        action_error = warning
+                                        state.last_action_summary = f"read_file FAILED: {path_decision.reason}"
+                                    else:
+                                        observe_warning = warning
+
+                                if action_error is not None:
+                                    raise RuntimeError(action_error)
                                 lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
                                 total_lines = len(lines)
 
@@ -1707,6 +1929,8 @@ class Agent:
                                         range_note = f" ({total_lines} lines)"
 
                                     state.last_action_summary = f"read_file: {resolved}{range_note}\n{content}"
+                                    if observe_warning:
+                                        state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
                                     action_success = True
                             except FileNotFoundError:
                                 action_error = f"File not found: {path_arg}"
@@ -1752,6 +1976,7 @@ class Agent:
                         recursive = bool(action_args.get("recursive", True))
                         action_success = False
                         action_error: Optional[str] = None
+                        observe_warning: Optional[str] = None
 
                         if not pattern:
                             action_error = "No pattern provided"
@@ -1759,6 +1984,18 @@ class Agent:
                         else:
                             try:
                                 root = Path(directory).expanduser().resolve()
+                                path_decision = self.sandbox_policy.check_path(root, operation="find")
+                                if not path_decision.allowed:
+                                    warning = f"find_files blocked by sandbox: {path_decision.reason}"
+                                    self.event_logger.system_warning(warning)
+                                    if self.sandbox_policy.enforce:
+                                        action_error = warning
+                                        state.last_action_summary = f"find_files FAILED: {path_decision.reason}"
+                                    else:
+                                        observe_warning = warning
+
+                                if action_error is not None:
+                                    raise RuntimeError(action_error)
                                 glob_fn = root.rglob if recursive else root.glob
                                 max_results = 50
                                 found_matches: List[str] = []
@@ -1780,6 +2017,8 @@ class Agent:
                                     state.last_action_summary = f"find_files: `{pattern}` in {root}{note}\n{listing}"
                                 else:
                                     state.last_action_summary = f"find_files: `{pattern}` in {root} - no matches found"
+                                if observe_warning:
+                                    state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
                                 action_success = True
                             except Exception as e:
                                 action_error = str(e)
@@ -1821,8 +2060,21 @@ class Agent:
                         action_success = False
                         action_error: Optional[str] = None
                         content = ""
+                        observe_warning: Optional[str] = None
+
+                        clipboard_decision = self.sandbox_policy.check_clipboard_read()
+                        if not clipboard_decision.allowed:
+                            warning = f"read_clipboard blocked by sandbox: {clipboard_decision.reason}"
+                            self.event_logger.system_warning(warning)
+                            if self.sandbox_policy.enforce:
+                                action_error = warning
+                                state.last_action_summary = f"read_clipboard FAILED: {clipboard_decision.reason}"
+                            else:
+                                observe_warning = warning
 
                         try:
+                            if action_error is not None:
+                                raise RuntimeError(action_error)
                             if sys.platform == "darwin":
                                 proc = subprocess.run(
                                     ["pbpaste"],
@@ -1835,6 +2087,7 @@ class Agent:
                                     raise RuntimeError(f"pbpaste failed: {stderr}")
                                 content = proc.stdout
                             elif sys.platform.startswith("linux"):
+                                _any_tool_found = False
                                 for cmd in (
                                     ["xclip", "-selection", "clipboard", "-o"],
                                     ["xsel", "--clipboard", "--output"],
@@ -1846,13 +2099,19 @@ class Agent:
                                             text=True,
                                             timeout=5,
                                         )
+                                        _any_tool_found = True
                                         if proc.returncode == 0:
                                             content = proc.stdout
                                             break
                                     except FileNotFoundError:
                                         continue
                                 else:
-                                    raise RuntimeError("No clipboard tool found (install xclip or xsel)")
+                                    _msg = (
+                                        "Clipboard read failed (xclip/xsel returned non-zero)"
+                                        if _any_tool_found
+                                        else "No clipboard tool found (install xclip or xsel)"
+                                    )
+                                    raise RuntimeError(_msg)
                             elif sys.platform == "win32":
                                 proc = subprocess.run(
                                     ["powershell", "-command", "Get-Clipboard"],
@@ -1873,6 +2132,8 @@ class Agent:
                                 state.last_action_summary = f"read_clipboard: {len(content)} chars\n{preview}"
                             else:
                                 state.last_action_summary = "read_clipboard: clipboard is empty"
+                            if observe_warning:
+                                state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
                             action_success = True
                         except Exception as e:
                             action_error = str(e)
@@ -1902,6 +2163,42 @@ class Agent:
                         )
                         continue
 
+                    if function_name == "open_url":
+                        url = str(action_args.get("url", "")).strip()
+                        url_decision = self.sandbox_policy.check_url(url)
+                        if not url_decision.allowed:
+                            warning = f"open_url blocked by sandbox: {url_decision.reason}"
+                            self.event_logger.system_warning(warning)
+                            if self.sandbox_policy.enforce:
+                                before_state = self.memory_store._capture_current_state()
+                                state.last_action_summary = f"open_url FAILED: {url_decision.reason}"
+                                self._record_controller_action(
+                                    action_type=InteractionType.NAVIGATION.value,
+                                    action_step=action_step,
+                                    success=False,
+                                    error_message=warning,
+                                    action_params={
+                                        "operation": "open_url",
+                                        "url": url,
+                                        "sandbox_blocked": True,
+                                    },
+                                    before_state=before_state,
+                                    after_state=self.memory_store._capture_current_state(),
+                                )
+                                _append_recent_action(state.last_action_summary)
+                                state.actions_since_progress += 1
+                                _set_checkpoint_pending(True)
+                                self.event_logger.action_complete(
+                                    tool=function_name,
+                                    narrative=narrative,
+                                    success=False,
+                                    result_str="failed",
+                                    duration_ms=0.0,
+                                    iteration=self._current_iteration,
+                                )
+                                continue
+                            policy_observe_warning = warning
+
                     result = self.action_executor.act(
                         action_step=action_step,
                         detected_elements=detected_elements,
@@ -1911,6 +2208,31 @@ class Agent:
                         current_iteration=self._current_iteration,
                     )
 
+                    post_nav_sensitive_functions = {
+                        "click",
+                        "press_key",
+                        "open_url",
+                        "go_back",
+                        "go_forward",
+                    }
+                    if result.success and function_name in post_nav_sensitive_functions:
+                        try:
+                            current_url = self.browser.page.url if self.browser and self.browser.page else ""
+                        except Exception:
+                            current_url = ""
+                        post_nav_decision = self.sandbox_policy.check_url(current_url)
+                        if not post_nav_decision.allowed:
+                            warning = f"Post-navigation URL blocked by sandbox: {post_nav_decision.reason}"
+                            self.event_logger.system_warning(warning)
+                            if self.sandbox_policy.enforce:
+                                result.success = False
+                                result.error = warning
+                            else:
+                                if policy_observe_warning:
+                                    policy_observe_warning = f"{policy_observe_warning} | {warning}"
+                                else:
+                                    policy_observe_warning = warning
+
                     state.actions_since_progress += 1
                     result_str = "success" if result.success else "failed"
                     state.last_action_summary = (
@@ -1918,6 +2240,10 @@ class Agent:
                         if narrative
                         else self._build_action_summary(action_step, result_str)
                     )
+                    if policy_observe_warning:
+                        state.last_action_summary += f" | sandbox(observe): {policy_observe_warning}"
+                    if result.error:
+                        state.last_action_summary += f" | {result.error}"
                     _append_recent_action(state.last_action_summary)
                     _set_checkpoint_pending(True)
 

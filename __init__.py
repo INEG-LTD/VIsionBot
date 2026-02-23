@@ -9,7 +9,6 @@ from core.config import (
     ExecutionConfig,
     CacheConfig,
     ErrorHandlingConfig,
-    BrowserConfig as BotBrowserConfig,
 )
 
 # Browser provider
@@ -18,6 +17,7 @@ from browser.provider import (
     LocalPlaywrightProvider,
     create_browser_provider,
     BrowserConfig,
+    BrowserConfig as BotBrowserConfig,
 )
 
 # Result types

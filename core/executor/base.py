@@ -212,7 +212,9 @@ class Executor:
                  user_question_callback: Optional[Callable[[str, dict], str]] = None, 
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
                  data_report_callback: Optional[Callable[[str, dict], None]] = None,
-                 user_messages_config=None):
+                 user_messages_config=None,
+                 workspace_paths: Optional[Dict[str, str]] = None,
+                 sandbox_policy: Optional[Any] = None):
         self.browser = browser
         self.memory_store = memory_store
         self.page_utils = page_utils
@@ -222,6 +224,8 @@ class Executor:
         self.agent_talk_callback = agent_talk_callback
         self.data_report_callback = data_report_callback
         self.notebook = notebook  # Optional notebook for storing extraction results
+        self.workspace_paths = workspace_paths or {}
+        self.sandbox_policy = sandbox_policy
         # Click method configuration
         if preferred_click_method not in ["programmatic", "mouse"]:
             raise ValueError(f"preferred_click_method must be 'programmatic' or 'mouse', got '{preferred_click_method}'")
@@ -825,7 +829,13 @@ class Executor:
                 target = (Path.cwd() / target).resolve()
         else:
             used_default_location = True
-            target = (Path.cwd() / "bba-data" / session_segment / "written_data").resolve()
+            workspace_default = str(self.workspace_paths.get("written_data_dir", "")).strip()
+            if workspace_default:
+                target = Path(workspace_default).expanduser().resolve()
+            else:
+                error_message = "write_data default workspace path is not configured"
+                self.event_logger.system_warning(error_message)
+                return False, {"error": error_message}
 
         if explicit_dir_hint:
             target_is_directory = True
@@ -845,6 +855,19 @@ class Executor:
             target_file = target / (file_name or generated_name)
         else:
             target_file = target
+
+        observe_warning: Optional[str] = None
+        if self.sandbox_policy is not None:
+            try:
+                path_decision = self.sandbox_policy.check_path(target_file, operation="write")
+            except Exception as e:
+                path_decision = type("Decision", (), {"allowed": False, "reason": f"Policy engine error: {e}"})()
+            if not path_decision.allowed:
+                warning = f"write_data blocked by sandbox: {path_decision.reason}"
+                self.event_logger.system_warning(warning)
+                if bool(getattr(self.sandbox_policy, "enforce", True)):
+                    return False, {"error": warning}
+                observe_warning = warning
 
         try:
             target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -892,6 +915,7 @@ class Executor:
             "used_default_location": used_default_location,
             "provider_type": provider_type,
             "session_segment": session_segment,
+            "sandbox_warning": observe_warning,
         }
 
     def execute_clear_text(

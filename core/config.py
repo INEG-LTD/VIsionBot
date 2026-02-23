@@ -8,13 +8,10 @@ object with grouped settings.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 from pydantic import BaseModel, Field
 from lib.ai import ReasoningLevel
 from browser.provider import BrowserConfig as BrowserProviderConfig
-
-# Backwards-compat: alias for older imports
-BrowserConfig = BrowserProviderConfig
 
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
@@ -278,6 +275,200 @@ class UserMessagesConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class SandboxWebConfig(BaseModel):
+    """Website policy configuration for browser navigation."""
+
+    allowed_domains: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Allowed domains for web navigation (e.g. 'example.com', '*.example.com'). "
+            "When empty, behavior depends on allow_empty_allowlist."
+        ),
+    )
+    allow_empty_allowlist: bool = Field(
+        default=True,
+        description=(
+            "If true, an empty allowed_domains list permits navigation to any website. "
+            "If false, an empty allowed_domains list blocks web navigation checks."
+        ),
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxFilesystemConfig(BaseModel):
+    """Filesystem policy for local tools."""
+
+    allowed_roots: list[str] = Field(
+        default_factory=lambda: ["{agent.workspace_root}"],
+        description=(
+            "Allowed filesystem roots for local read/find operations. "
+            "Supports {agent.workspace_root} placeholder."
+        ),
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxCommandConfig(BaseModel):
+    """Command execution policy for bash tool."""
+
+    allowed_prefixes: list[list[str]] = Field(
+        default_factory=list,
+        description=(
+            "Allowed command prefixes. Example: [['date'], ['rg'], ['git', 'status']]. "
+            "Empty list blocks command execution checks (except strict preset defaults)."
+        ),
+    )
+    max_runtime_seconds: int = Field(
+        default=30,
+        ge=1,
+        description="Maximum runtime for a single bash command.",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxClipboardConfig(BaseModel):
+    """Clipboard policy."""
+
+    allow_read: bool = Field(
+        default=True,
+        description="Allow read_clipboard tool to access system clipboard.",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxPromptConfig(BaseModel):
+    """Prompt policy visibility settings."""
+
+    include_policy_block: bool = Field(
+        default=True,
+        description="Include sandbox allowlists in planner prompt so the agent knows constraints.",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxAuditConfig(BaseModel):
+    """Run-scoped sandbox audit logging settings."""
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Write sandbox policy decisions to run audit JSONL files when a run audit path is available."
+        ),
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SandboxConfig(BaseModel):
+    """Sandbox policy configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable sandbox policy checks for local tools and navigation.",
+    )
+    preset: Literal["trusted", "standard", "strict", "locked"] = Field(
+        default="standard",
+        description="High-level sandbox preset.",
+    )
+    mode: Literal["enforce", "observe"] = Field(
+        default="enforce",
+        description="enforce blocks disallowed actions; observe logs violations but allows execution.",
+    )
+    web: SandboxWebConfig = Field(
+        default_factory=SandboxWebConfig,
+        description="Website allowlist policy.",
+    )
+    fs: SandboxFilesystemConfig = Field(
+        default_factory=SandboxFilesystemConfig,
+        description="Filesystem allowlist policy.",
+    )
+    command: SandboxCommandConfig = Field(
+        default_factory=SandboxCommandConfig,
+        description="Command policy for bash tool.",
+    )
+    clipboard: SandboxClipboardConfig = Field(
+        default_factory=SandboxClipboardConfig,
+        description="Clipboard access policy.",
+    )
+    prompt: SandboxPromptConfig = Field(
+        default_factory=SandboxPromptConfig,
+        description="Planner prompt policy visibility.",
+    )
+    audit: SandboxAuditConfig = Field(
+        default_factory=SandboxAuditConfig,
+        description="Run-scoped sandbox audit logging policy.",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class StorageCleanupConfig(BaseModel):
+    """Cleanup policy for temporary runs only."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable cleanup for temporary runs.",
+    )
+    temp_ttl_days: int = Field(
+        default=7,
+        ge=0,
+        description="Delete temporary runs older than this many days (0 disables TTL pruning).",
+    )
+    temp_keep_last_runs: int = Field(
+        default=5,
+        ge=0,
+        description="Always keep this many most-recent runs per temporary agent.",
+    )
+    temp_max_runs: int = Field(
+        default=100,
+        ge=1,
+        description="Maximum number of runs to keep per temporary agent.",
+    )
+    max_disk_mb: int = Field(
+        default=4096,
+        ge=0,
+        description="Disk budget for temporary runs under the storage base directory (0 disables disk pruning).",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class StorageConfig(BaseModel):
+    """Per-agent workspace storage settings."""
+
+    base_dir: str = Field(
+        default="bba-data/agents",
+        description=(
+            "Storage base directory. Runtime normalizes this to an agents root: "
+            "if it already ends with 'agents' use it directly, otherwise use <base_dir>/agents."
+        ),
+    )
+    default_persistence_mode: Literal["temp", "persistent"] = Field(
+        default="temp",
+        description="Default persistence mode for newly created agents.",
+    )
+    cleanup: StorageCleanupConfig = Field(
+        default_factory=StorageCleanupConfig,
+        description="Cleanup policy (applies only to temporary runs).",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class Config(BaseModel):
     """
     Main configuration object for Agent.
@@ -321,6 +512,14 @@ class Config(BaseModel):
     user_messages: UserMessagesConfig = Field(
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
+    )
+    sandbox: SandboxConfig = Field(
+        default_factory=SandboxConfig,
+        description="Sandbox policy configuration",
+    )
+    storage: StorageConfig = Field(
+        default_factory=StorageConfig,
+        description="Per-agent workspace storage configuration",
     )
 
     class Config:
