@@ -58,6 +58,14 @@ class BrowserConfig(BaseModel):
         default=None,
         description="User data directory for persistent context"
     )
+    downloads_path: Optional[str] = Field(
+        default=None,
+        description="Directory for accepted browser downloads (persistent/local providers)."
+    )
+    accept_downloads: bool = Field(
+        default=True,
+        description="Automatically accept browser downloads."
+    )
     channel: str = Field(
         default="chrome",
         description="Browser channel: 'chrome', 'chromium', 'firefox', etc."
@@ -175,11 +183,16 @@ class LocalPlaywrightProvider(BrowserProvider):
             user_data_dir = os.path.expanduser(
                 f"~/Library/Application Support/Google/Chrome/Automation_{str(uuid.uuid4())[:8]}"
             )
+
+        downloads_path = None
+        if self.config.downloads_path:
+            downloads_path = os.path.expanduser(self.config.downloads_path)
+            os.makedirs(downloads_path, exist_ok=True)
         
         # Build browser args
         args = self.config.extra_args.copy()
         args.extend([
-            f"--window-position=0,0",
+            "--window-position=0,0",
             f"--window-size={self.config.viewport_width},{self.config.viewport_height}",
         ])
 
@@ -194,7 +207,9 @@ class LocalPlaywrightProvider(BrowserProvider):
             args=args,
             channel=self.config.channel,
             ignore_default_args=["--enable-automation"],
-            chromium_sandbox=self.config.chromium_sandbox
+            chromium_sandbox=self.config.chromium_sandbox,
+            downloads_path=downloads_path,
+            accept_downloads=self.config.accept_downloads,
         )
         
         # Get or create page
@@ -279,7 +294,8 @@ class RemoteBrowserProvider(BrowserProvider):
                 viewport={
                     "width": self.config.viewport_width,
                     "height": self.config.viewport_height
-                }
+                },
+                accept_downloads=self.config.accept_downloads,
             )
             self._page = self._remote_context.new_page()
 
@@ -335,6 +351,11 @@ class PersistentContextProvider(BrowserProvider):
             raise ValueError("user_data_dir is required for PersistentContextProvider")
 
         os.makedirs(os.path.expanduser(self.config.user_data_dir), exist_ok=True)
+
+        downloads_path = None
+        if self.config.downloads_path:
+            downloads_path = os.path.expanduser(self.config.downloads_path)
+            os.makedirs(downloads_path, exist_ok=True)
         
         # Start Playwright
         self._playwright = sync_playwright().start()
@@ -357,7 +378,9 @@ class PersistentContextProvider(BrowserProvider):
             args=args,
             channel=self.config.channel,
             ignore_default_args=["--enable-automation"],
-            chromium_sandbox=self.config.chromium_sandbox
+            chromium_sandbox=self.config.chromium_sandbox,
+            downloads_path=downloads_path,
+            accept_downloads=self.config.accept_downloads,
         )
         
         # Get or create page

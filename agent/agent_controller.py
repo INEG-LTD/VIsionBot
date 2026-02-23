@@ -8,6 +8,7 @@ Architecture overview:
 """
 
 import os
+import json
 import time
 import threading
 from dataclasses import dataclass, field
@@ -200,6 +201,7 @@ class Agent:
         self.workspace_manager.cleanup_temp_runs(exclude_agent_id=self.agent_workspace.agent_id)
         self._active_run_id: Optional[str] = None
         self._active_run_open: bool = False
+        self._run_event_log_callback: Optional[Callable[[Any], None]] = None
 
         # Route storage defaults into this agent workspace.
         self._apply_workspace_paths()
@@ -316,6 +318,7 @@ class Agent:
         """Route default storage paths into this agent's workspace."""
         ws = self.agent_workspace
         self.config.browser.user_data_dir = str(ws.browser_profile_dir)
+        self.config.browser.downloads_path = str(ws.browser_downloads_dir)
         self.config.logging.screenshot_dir = str(ws.screenshots_dir)
         self.config.logging.screenshot_stream_dir = str(ws.stream_screenshots_dir)
         self.config.error_handling.screenshot_dir = str(ws.screenshots_dir)
@@ -330,6 +333,45 @@ class Agent:
             ws.runs_root,
         ):
             path.mkdir(parents=True, exist_ok=True)
+
+    def _attach_run_event_log_sink(self) -> None:
+        """Stream event logger output into run-scoped JSONL."""
+        self._detach_run_event_log_sink()
+        event_log_path = self.agent_workspace.run_event_log_path
+        if not event_log_path:
+            return
+        try:
+            event_log_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return
+
+        def _sink(event: Any) -> None:
+            try:
+                if hasattr(event, "to_dict"):
+                    payload = event.to_dict()
+                else:
+                    payload = {"event": str(event)}
+                with event_log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload, sort_keys=True))
+                    handle.write("\n")
+            except Exception:
+                pass
+
+        try:
+            self.event_logger.register_callback(_sink)
+            self._run_event_log_callback = _sink
+        except Exception:
+            self._run_event_log_callback = None
+
+    def _detach_run_event_log_sink(self) -> None:
+        callback = self._run_event_log_callback
+        self._run_event_log_callback = None
+        if not callback:
+            return
+        try:
+            self.event_logger.unregister_callback(callback)
+        except Exception:
+            pass
 
     def _current_page_url(self) -> str:
         """Best-effort current page URL from active browser page."""
@@ -441,7 +483,12 @@ class Agent:
             )
         
         # Run the mission
-        mission_result = self._run_mission(user_prompt)
+        try:
+            mission_result = self._run_mission(user_prompt)
+        finally:
+            # Best-effort guard so per-run sink never leaks across missions.
+            self._detach_run_event_log_sink()
+            self.sandbox_policy.set_audit_log_path(None)
 
         self.event_logger.agent_complete(mission_result.success, mission_result.reasoning)
         
@@ -527,13 +574,14 @@ class Agent:
             self._paused = False
             self._pause_message = "Paused"
             self._pause_event.set()
-        self.event_logger.agent_start(user_mission)
+        self._detach_run_event_log_sink()
         try:
             self._active_run_id = self.workspace_manager.start_run(
                 self.agent_workspace,
                 mission=user_mission,
             )
             self._active_run_open = True
+            self._attach_run_event_log_sink()
             if self.config.sandbox.audit.enabled:
                 self.sandbox_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
             else:
@@ -541,8 +589,10 @@ class Agent:
         except Exception as e:
             self._active_run_id = None
             self._active_run_open = False
+            self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
             self.event_logger.system_warning(f"Failed to initialize run workspace: {e}")
+        self.event_logger.agent_start(user_mission)
 
         # Initialize tracking
         try:
@@ -593,6 +643,19 @@ class Agent:
         if self.mission_start_time is not None:
             duration_s = max(0.0, time.time() - self.mission_start_time)
 
+        event_count = 0
+        try:
+            history = self.event_logger.get_event_history()
+            if self.mission_start_time is not None:
+                event_count = sum(
+                    1 for event in history
+                    if float(getattr(event, "timestamp", 0.0) or 0.0) >= float(self.mission_start_time)
+                )
+            else:
+                event_count = len(history)
+        except Exception:
+            event_count = 0
+
         final_url = ""
         try:
             final_url = self.browser.page.url if self.browser and self.browser.page else ""
@@ -623,17 +686,20 @@ class Agent:
                     total_iterations=int(self._current_iteration or 0),
                     final_url=final_url,
                     duration_s=duration_s,
+                    event_count=event_count,
                 )
             except Exception as e:
                 self.event_logger.system_warning(f"Failed to finalize run workspace: {e}")
             finally:
                 self._active_run_open = False
+                self._detach_run_event_log_sink()
                 self.sandbox_policy.set_audit_log_path(None)
                 try:
                     self.workspace_manager.cleanup_temp_runs()
                 except Exception:
                     pass
         else:
+            self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
 
         return result

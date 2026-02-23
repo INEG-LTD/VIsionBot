@@ -28,7 +28,6 @@ class AgentWorkspace:
     stream_screenshots_dir: Path
     runs_root: Path
     meta_dir: Path
-    current_run_id: Optional[str] = None
     current_run_root: Optional[Path] = None
 
     @property
@@ -38,10 +37,10 @@ class AgentWorkspace:
         return self.current_run_root / "audit" / "sandbox_events.jsonl"
 
     @property
-    def run_summary_path(self) -> Optional[Path]:
+    def run_event_log_path(self) -> Optional[Path]:
         if not self.current_run_root:
             return None
-        return self.current_run_root / "summary.json"
+        return self.current_run_root / "logs" / "events.jsonl"
 
 
 class AgentWorkspaceManager:
@@ -58,16 +57,15 @@ class AgentWorkspaceManager:
         max_disk_mb: int,
         event_logger: Optional[Any] = None,
     ) -> None:
-        self.configured_base_dir = Path(base_dir).expanduser().resolve()
-        self.configured_base_dir.mkdir(parents=True, exist_ok=True)
-        self.agents_root = self._resolve_agents_root(self.configured_base_dir)
+        resolved_base_dir = Path(base_dir).expanduser().resolve()
+        resolved_base_dir.mkdir(parents=True, exist_ok=True)
+        self.agents_root = self._resolve_agents_root(resolved_base_dir)
         self.agents_root.mkdir(parents=True, exist_ok=True)
         self.base_dir = self.agents_root
         self.cleanup_enabled = bool(cleanup_enabled)
         self.temp_ttl_days = max(0, int(temp_ttl_days or 0))
         self.temp_keep_last_runs = max(0, int(temp_keep_last_runs or 0))
         self.temp_max_runs = max(1, int(temp_max_runs or 1))
-        self.max_disk_bytes = max(0, int(max_disk_mb or 0)) * 1024 * 1024
         self.event_logger = event_logger
         self.cleanup_service = StorageCleanupService(
             agents_root=self.agents_root,
@@ -124,7 +122,6 @@ class AgentWorkspaceManager:
         (run_root / "audit").mkdir(parents=True, exist_ok=True)
         (run_root / ".active").write_text("1", encoding="utf-8")
 
-        workspace.current_run_id = run_id
         workspace.current_run_root = run_root
         self._write_json(
             run_root / "summary.json",
@@ -150,6 +147,7 @@ class AgentWorkspaceManager:
         total_iterations: int,
         final_url: str,
         duration_s: float,
+        event_count: int = 0,
     ) -> None:
         run_root = workspace.current_run_root
         if not run_root:
@@ -167,6 +165,7 @@ class AgentWorkspaceManager:
                 "total_iterations": int(total_iterations or 0),
                 "final_url": final_url or "",
                 "duration_s": float(duration_s or 0.0),
+                "event_count": int(event_count or 0),
             }
         )
         self._write_json(summary_path, payload)
