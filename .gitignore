@@ -41,3 +41,4 @@ browser_vision_bot.egg-info/
 dist/
 build/
 *.egg-info/
+bba-data/

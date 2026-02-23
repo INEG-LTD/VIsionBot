@@ -489,10 +489,15 @@ class TimelinePanel(AgentPanel):
         layers: below above;
     }
     TimelinePanel VerticalScroll {
-        height: 1fr; 
+        height: 1fr;
         border: solid #9C9C9C;
-        padding: 0 0 0 1; 
+        padding: 0 0 0 1;
         overflow-y: auto;
+    }
+
+    TimelinePanel Label {
+        width: 100%;
+        height: auto;
     }
     
     .timeline-events {
@@ -533,16 +538,26 @@ class TimelinePanel(AgentPanel):
         self._intro.display = False
 
         if entry.kind == "collapsible":
+            body_label = Label(entry.body, markup=False, classes="collapsible-entry-body")
             widget: Widget = Collapsible(
-                Label(entry.body, markup=False, classes="collapsible-entry-body"),
+                body_label,
                 title=entry.title or "Details",
                 collapsed=True,
                 classes="collapsible-entry",
             )
         else:
             widget = Label(entry.text or "", markup=False)
+            widget.styles.width = "100%"
+            widget.styles.height = "auto"
 
         self._events.mount(widget)
+
+        if entry.kind == "collapsible":
+            def _set_body_styles(lbl: Label = body_label) -> None:
+                lbl.styles.width = "100%"
+                lbl.styles.height = "auto"
+            self.call_after_refresh(_set_body_styles)
+
         self._scroll.scroll_end(animate=False)
 
     def _format_event(self, event: BotEvent) -> TimelineEntry | None:
@@ -1306,50 +1321,64 @@ class TelemetryPanel(AgentPanel):
         width: 100%;
         height: 1fr;
         min-height: 0;
-        overflow-y: auto;
-        border: solid darkgray; 
+        border: solid darkgray;
         padding-left: 2;
         padding-top: 1;
         padding-bottom: 1
     }
-    
+
+    TelemetryPanel VerticalScroll {
+        width: 100%;
+        height: 100%;
+    }
+
+    TelemetryPanel Label {
+        width: 100%;
+        height: auto;
+    }
+
     .telemetry-intro {
         align: left bottom;
     }
     """
 
     def compose(self) -> ComposeResult:
-        yield Label(
-            "Telemetry: waiting for mission state",
-            markup=False,
-            classes="telemetry-label",
-        )
-        with Container(classes="telemetry-intro"):
-            yield Label("[gray]Internal agent state will appear here[/gray]")
-            yield Label("[darkgray]TELEMETRY[/darkgray]")
+        with VerticalScroll(classes="telemetry-scroll"):
+            yield Label(
+                "Telemetry: waiting for mission state",
+                markup=False,
+                classes="telemetry-label",
+            )
+            with Container(classes="telemetry-intro"):
+                yield Label("[gray]Internal agent state will appear here[/gray]")
+                yield Label("[darkgray]TELEMETRY[/darkgray]")
 
     def panel_ready(self) -> None:
         self._label = self.query_one(".telemetry-label", Label)
+        self._scroll = self.query_one(".telemetry-scroll", VerticalScroll)
         self._intro = self.query_one(".telemetry-intro", Container)
+        self._label.styles.width = "100%"
+        self._label.styles.height = "auto"
 
     def on_state_update(self, state: AgentState) -> None:
         if state.agent_attached:
             self._intro.display = False
         self._label.update(self._build_text(state))
+        self._scroll.refresh(layout=True)
 
     def _build_text(self, state: AgentState) -> str:
         if not state.agent_attached and state.status == "idle":
             return "\n".join(
                 [
                     f"Status: {state.status}",
-                    f"Message: {_truncate(state.last_message, 64)}",
+                    f"Message: {state.last_message or 'n/a'}",
                     f"Queue: {state.queue_depth}",
                     f"Worker: {'running' if state.worker_alive else 'stopped'}",
                     "Iteration: n/a",
                     "Budget: 0/0 (phase: normal)",
                     "Cost: $0.0000",
                     "Tokens: 0",
-                    f"Sandbox Web: {_truncate(state.sandbox_web_policy, 64)}",
+                    f"Sandbox Web: {state.sandbox_web_policy or 'n/a'}",
                     f"Dropped Events: {state.dropped_event_count}",
                     "Hint: enter a mission and press Run.",
                 ]
@@ -1357,8 +1386,7 @@ class TelemetryPanel(AgentPanel):
 
         loop_line = "off"
         if state.in_loop:
-            desc = _truncate(state.loop_description, 54)
-            loop_line = f"round {state.loop_round}/{state.loop_count or '?'} ({desc})"
+            loop_line = f"round {state.loop_round}/{state.loop_count or '?'} ({state.loop_description or ''})"
 
         result_line = (
             "Result: n/a"
@@ -1366,12 +1394,12 @@ class TelemetryPanel(AgentPanel):
             else f"Result: {'success' if state.mission_success else 'failed'}"
         )
 
-        current_url = _truncate(state.last_known_url or state.mission_final_url, 70)
+        current_url = state.last_known_url or state.mission_final_url or "n/a"
 
         return "\n".join(
             [
                 f"Status: {state.status}",
-                f"Message: {_truncate(state.last_message, 64)}",
+                f"Message: {state.last_message or 'n/a'}",
                 f"Queue: {state.queue_depth}",
                 f"Worker: {'running' if state.worker_alive else 'stopped'}",
                 f"Agent: {'attached' if state.agent_attached else 'no'}",
@@ -1389,9 +1417,9 @@ class TelemetryPanel(AgentPanel):
                 f"Plan Batch Limit: {state.planning_batch_limit or '-'}",
                 f"Cost: ${state.llm_total_cost_usd:.4f}",
                 f"Tokens: {state.llm_total_tokens}",
-                f"Sandbox Web: {_truncate(state.sandbox_web_policy, 64)}",
+                f"Sandbox Web: {state.sandbox_web_policy or 'n/a'}",
                 f"URL: {current_url}",
-                f"Last Action: {_truncate(state.last_action_summary, 70)}",
+                f"Last Action: {state.last_action_summary or 'n/a'}",
                 f"Dropped Events: {state.dropped_event_count}",
                 result_line,
             ]
