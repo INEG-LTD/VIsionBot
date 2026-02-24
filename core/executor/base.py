@@ -209,7 +209,7 @@ class Executor:
                  notebook: Notebook,
                  page_utils:PageUtils=None, 
                  preferred_click_method: str = "programmatic", 
-                 user_question_callback: Optional[Callable[[str, dict], str]] = None, 
+                 user_question_callback: Optional[Callable[[str, dict, List[str], bool, bool], str]] = None, 
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
                  data_report_callback: Optional[Callable[[str, dict], None]] = None,
                  user_messages_config=None,
@@ -595,9 +595,25 @@ class Executor:
         environment_state: EnvironmentState,
         base_knowledge: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+        _ = base_knowledge
+        skipped_answer = "(user skipped)"
+
+        def _normalize_options(raw_options: Any) -> List[str]:
+            if not isinstance(raw_options, list):
+                return []
+            normalized: List[str] = []
+            for item in raw_options:
+                text = str(item or "").strip()
+                if text:
+                    normalized.append(text)
+            return normalized
+
         def _handle_ask_command(
             question: str,
-            environment_state: EnvironmentState
+            environment_state: EnvironmentState,
+            options: List[str],
+            multi_select: bool,
+            yes_no: bool,
         ) -> Dict[str, Any]:
             if not self.user_question_callback:
                 self.event_logger.system_warning("Agent wants to ask a question but no callback configured")
@@ -615,30 +631,47 @@ class Executor:
                     self.browser._thinking_border_manager.disable_blocking()
 
                 try:
-                    answer = self.user_question_callback(question, context)
+                    answer = self.user_question_callback(
+                        question,
+                        context,
+                        options,
+                        multi_select,
+                        yes_no,
+                    )
                 finally:
                     # Re-enable page blocking after user responds
                     if hasattr(self.browser, '_thinking_border_manager'):
                         self.browser._thinking_border_manager.enable_blocking()
-                
-                if answer:
+
+                answer_text = str(answer or "").strip()
+                if answer_text:
                     self.event_logger.ask_command_answered(
                         question=question,
-                        response=answer,
+                        response=answer_text,
                     )
-                    return {"status": "answered", "answer": str(answer), "answered": True, "success": True}
+                    return {"status": "answered", "answer": answer_text, "answered": True, "success": True}
                 self.event_logger.ask_command_skipped(question=question)
-                return {"status": "skipped", "answer": "", "answered": False, "success": True}
+                return {"status": "skipped", "answer": skipped_answer, "answered": False, "success": True}
             except Exception as e:
                 self.event_logger.ask_command_failure(question=question, error=str(e), details=context)
                 return {"status": "failed", "answer": "", "answered": False, "success": False}
 
         args = self._get_action_args(step)
         question = str(args.get("question", "")).strip()
+        yes_no = bool(args.get("yes_no", False))
+        options = _normalize_options(args.get("options", []))
+        if yes_no:
+            options = ["Yes", "No"]
+        multi_select = bool(args.get("multi_select", False)) and not yes_no
         if not question:
             question = step.action.split(":", 1)[1].strip() if ":" in step.action else "Need assistance"
         try:
-            self.event_logger.ask_requested(question)
+            self.event_logger.ask_requested(
+                question,
+                options=options,
+                multi_select=multi_select,
+                yes_no=yes_no,
+            )
         except Exception:
             pass
 
@@ -652,7 +685,13 @@ class Executor:
         }
         try:
             before_state = self.memory_store._capture_current_state()
-            ask_result = _handle_ask_command(question, environment_state)
+            ask_result = _handle_ask_command(
+                question,
+                environment_state,
+                options,
+                multi_select,
+                yes_no,
+            )
             after_state = self.memory_store._capture_current_state()
         
             self.memory_store.record_interaction(
@@ -665,6 +704,9 @@ class Executor:
                     "answer": ask_result.get("answer", ""),
                     "answered": bool(ask_result.get("answered")),
                     "status": ask_result.get("status", "failed"),
+                    "options": options,
+                    "multi_select": multi_select,
+                    "yes_no": yes_no,
                 },
                 success=bool(ask_result.get("success")),
             )

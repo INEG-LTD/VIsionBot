@@ -81,6 +81,11 @@ class AgentState:
     thinking_text: str = "Thinking..."
     render_frame: int = 0  # incremented by poll timer to drive animations
     pending_question: str = ""
+    pending_options: tuple[str, ...] = ()
+    pending_multi_select: bool = False
+    pending_yes_no: bool = False
+    allow_custom: bool = True
+    allow_skip: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -519,8 +524,7 @@ class TimelinePanel(AgentPanel):
         border: round #6b7280;
         background: rgba(148, 163, 184, 0.08);
         padding: 1 1;
-        margin-left: 2;
-        margin-top: 1;
+        margin: 1 0 1 2;
         padding-left: 1;
     }
     .timeline-card-header {
@@ -698,7 +702,7 @@ class TimelinePanel(AgentPanel):
             return TimelineEntry(
                 kind="callout",
                 title="ANSWERED",
-                body=f"[bold]Q: {question}[/bold]\n[bold]A: {response}[/bold]",
+                body=f"[bold]{response}[/bold]",
                 variant="answered",
             )
 
@@ -707,7 +711,7 @@ class TimelinePanel(AgentPanel):
             return TimelineEntry(
                 kind="callout",
                 title="SKIPPED",
-                body=f"[bold]Q: {question}[/bold]\nYou didn't answer the question.",
+                body="You didn't answer the question.",
                 variant="skipped",
             )
 
@@ -717,7 +721,7 @@ class TimelinePanel(AgentPanel):
             return TimelineEntry(
                 kind="callout",
                 title="ASK ERROR",
-                body=f"[bold]Q: {question}[/bold]\n{error}",
+                body=f"{error}",
                 variant="error",
             )
 
@@ -1561,6 +1565,10 @@ class MissionControls(AgentPanel):
     MissionControls { height: auto; width: 99%; }
     MissionControls Horizontal { height: auto; }
     MissionControls Input { width: 1fr; }
+    MissionControls .choice-area { height: auto; width: 100%; }
+    MissionControls .choice-options { height: auto; width: 100%; }
+    MissionControls .choice-actions { height: auto; width: 100%; }
+    MissionControls .choice-question { color: #D4D4D4; padding: 0 0 1 0; }
     """
 
     def __init__(self, tab_id: str) -> None:
@@ -1568,42 +1576,221 @@ class MissionControls(AgentPanel):
         self._tab_id = tab_id
         self.input_id = f"mission-input-{tab_id}"
         self.button_id = f"run-mission-{tab_id}"
+        self.main_controls_id = f"main-controls-{tab_id}"
+        self.choice_area_id = f"choice-area-{tab_id}"
+        self._confirm_button_id = f"choice-confirm-{tab_id}"
+        self._selected_indices: set[int] = set()
+        self._current_options: list[str] = []
+        self._current_multi_select: bool = False
+        self._current_yes_no: bool = False
+        self._choice_render_key: tuple[Any, ...] = ()
 
     def compose(self) -> ComposeResult:
-        with Horizontal(classes="controls"):
+        with Horizontal(classes="controls", id=self.main_controls_id):
             yield Input(
                 placeholder="Describe the mission for this agent...",
                 id=self.input_id,
             )
             yield Button("RUN", id=self.button_id)
+        yield Container(id=self.choice_area_id, classes="choice-area")
 
     def panel_ready(self) -> None:
         inp = self.query_one(f"#{self.input_id}", Input)
         btn = self.query_one(f"#{self.button_id}", Button)
+        area = self.query_one(f"#{self.choice_area_id}", Container)
         inp.styles.border = ("solid", "#9C9C9C")
         inp.styles.background = "transparent"
         inp.styles.height = "auto"
         inp.styles.padding = (0, 1, 0, 1)
         btn.styles.width = "auto"
         btn.styles.height = "3"
-        # btn.styles.background = "transparent"
         btn.styles.border = ("solid", "green")
+        area.display = False
+
+    def clear_input(self) -> None:
+        try:
+            inp = self.query_one(f"#{self.input_id}", Input)
+            inp.value = ""
+        except Exception:
+            pass
+
+    def get_option_text(self, option_index: int) -> str | None:
+        if option_index < 0 or option_index >= len(self._current_options):
+            return None
+        return self._current_options[option_index]
+
+    def toggle_option(self, option_index: int) -> None:
+        if not self._current_multi_select:
+            return
+        if option_index < 0 or option_index >= len(self._current_options):
+            return
+        if option_index in self._selected_indices:
+            self._selected_indices.remove(option_index)
+        else:
+            self._selected_indices.add(option_index)
+        self._sync_choice_button_styles()
+        self._sync_confirm_button_state()
+
+    def get_selected_options(self) -> list[str]:
+        if not self._current_options:
+            return []
+        selected: list[str] = []
+        for idx in sorted(self._selected_indices):
+            if 0 <= idx < len(self._current_options):
+                selected.append(self._current_options[idx])
+        return selected
+
+    def _set_mode_widgets(self, *, show_main_controls: bool) -> tuple[Input, Button, Container]:
+        inp = self.query_one(f"#{self.input_id}", Input)
+        btn = self.query_one(f"#{self.button_id}", Button)
+        main_controls = self.query_one(f"#{self.main_controls_id}", Horizontal)
+        choice_area = self.query_one(f"#{self.choice_area_id}", Container)
+        main_controls.display = show_main_controls
+        inp.display = show_main_controls
+        btn.display = show_main_controls
+        return inp, btn, choice_area
+
+    def _clear_choice_area(self, choice_area: Container) -> None:
+        try:
+            choice_area.remove_children()
+        except Exception:
+            for child in list(choice_area.children):
+                try:
+                    child.remove()
+                except Exception:
+                    pass
+        self._selected_indices.clear()
+        self._current_options = []
+        self._current_multi_select = False
+        self._current_yes_no = False
+        self._choice_render_key = ()
+
+    def _style_choice_button(self, button: Button, option_text: str, selected: bool) -> None:
+        _ = option_text
+        base_color = "#8C8C8C"
+        selected_color = "#2563EB"
+        selected_text = "white"
+        if selected:
+            button.styles.border = ("solid", selected_color)
+            button.styles.background = selected_color
+            button.styles.color = selected_text
+        else:
+            button.styles.border = ("solid", base_color)
+            button.styles.background = "transparent"
+            button.styles.color = "white"
+
+    def _sync_choice_button_styles(self) -> None:
+        for idx, option_text in enumerate(self._current_options):
+            button_id = f"choice-opt-{idx}-{self._tab_id}"
+            try:
+                button = self.query_one(f"#{button_id}", Button)
+            except Exception:
+                continue
+            self._style_choice_button(button, option_text, idx in self._selected_indices)
+
+    def _sync_confirm_button_state(self) -> None:
+        try:
+            confirm_btn = self.query_one(f"#{self._confirm_button_id}", Button)
+        except Exception:
+            return
+        confirm_btn.disabled = len(self._selected_indices) == 0
+
+    def _rebuild_choice_area(self, state: AgentState, choice_area: Container) -> None:
+        self._clear_choice_area(choice_area)
+        self._current_options = [str(opt) for opt in state.pending_options]
+        self._current_multi_select = bool(state.pending_multi_select)
+        self._current_yes_no = bool(state.pending_yes_no)
+
+        question_text = str(state.pending_question or "Choose an option")
+        question_label = Label(
+            f"Question: {_truncate(question_text, 120)}",
+            classes="choice-question",
+        )
+        choice_area.mount(question_label)
+
+        options_row = Horizontal(classes="choice-options")
+        choice_area.mount(options_row)
+        for idx, option_text in enumerate(self._current_options):
+            button = Button(option_text, id=f"choice-opt-{idx}-{self._tab_id}")
+            button.styles.height = "3"
+            if self._current_yes_no:
+                button.styles.width = "8"
+            else:
+                button.styles.width = "auto"
+            self._style_choice_button(button, option_text, selected=False)
+            options_row.mount(button)
+        if state.allow_skip:
+            skip_btn = Button("SKIP", id=f"choice-skip-{self._tab_id}")
+            skip_btn.styles.height = "3"
+            skip_btn.styles.width = "8"
+            skip_btn.styles.border = ("solid", "#8C8C8C")
+            options_row.mount(skip_btn)
+
+        needs_actions_row = self._current_multi_select
+        if needs_actions_row:
+            actions_row = Horizontal(classes="choice-actions")
+            choice_area.mount(actions_row)
+            if self._current_multi_select:
+                confirm_btn = Button("CONFIRM", id=self._confirm_button_id)
+                confirm_btn.styles.height = "3"
+                confirm_btn.styles.width = "auto"
+                confirm_btn.styles.border = ("solid", "#60A5FA")
+                confirm_btn.disabled = True
+                actions_row.mount(confirm_btn)
 
     def on_state_update(self, state: AgentState) -> None:
         try:
-            inp = self.query_one(f"#{self.input_id}", Input)
-            btn = self.query_one(f"#{self.button_id}", Button)
+            inp, btn, choice_area = self._set_mode_widgets(show_main_controls=True)
         except Exception:
             return
 
-        if state.status == "asking":
-            if state.pending_question:
-                inp.placeholder = f"Answer: {_truncate(state.pending_question, 72)}"
-            else:
-                inp.placeholder = "Type your answer, or leave empty to skip..."
-            btn.label = "ANSWER"
-            btn.styles.border = ("solid", "#60A5FA")
-        else:
+        is_asking = state.status == "asking"
+        has_options = bool(state.pending_options)
+
+        if not is_asking:
+            choice_area.display = False
+            self._clear_choice_area(choice_area)
             inp.placeholder = "Describe the mission for this agent..."
             btn.label = "RUN"
             btn.styles.border = ("solid", "green")
+            return
+
+        if not has_options:
+            choice_area.display = False
+            self._clear_choice_area(choice_area)
+            if state.pending_question:
+                inp.placeholder = f"Answer: {_truncate(state.pending_question, 72)}"
+            elif state.allow_skip:
+                inp.placeholder = "Type your answer, or leave empty to skip..."
+            else:
+                inp.placeholder = "Type your answer..."
+            btn.label = "ANSWER"
+            btn.styles.border = ("solid", "#60A5FA")
+            return
+
+        choice_area.display = True
+        render_key = (
+            state.pending_question,
+            state.pending_options,
+            state.pending_multi_select,
+            state.pending_yes_no,
+            state.allow_custom,
+            state.allow_skip,
+        )
+        if render_key != self._choice_render_key:
+            self._rebuild_choice_area(state, choice_area)
+            self._choice_render_key = render_key
+        self._sync_choice_button_styles()
+        self._sync_confirm_button_state()
+
+        if state.allow_custom:
+            inp.placeholder = (
+                "Custom answer (blank to skip)..."
+                if state.allow_skip
+                else "Custom answer..."
+            )
+            btn.label = "ANSWER"
+            btn.styles.border = ("solid", "#60A5FA")
+            self._set_mode_widgets(show_main_controls=True)
+        else:
+            self._set_mode_widgets(show_main_controls=False)

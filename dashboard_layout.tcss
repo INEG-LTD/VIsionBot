@@ -44,6 +44,24 @@
     width: 1fr;
 }
 
+.choice-area {
+    display: none;
+    width: 100%;
+    height: auto;
+    padding-top: 1;
+}
+
+.choice-options {
+    width: 100%;
+    height: auto;
+}
+
+.choice-actions {
+    width: 100%;
+    height: auto;
+    padding-top: 1;
+}
+
 .right-pane {
     width: 48;
     height: 100%;

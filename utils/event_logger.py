@@ -478,9 +478,25 @@ class EventLogger:
 
     # ── User interaction (ask) ───────────────────────────────────────────
 
-    def ask_requested(self, question: str, **details):
+    def ask_requested(
+        self,
+        question: str,
+        options: Optional[List[str]] = None,
+        multi_select: bool = False,
+        yes_no: bool = False,
+        **details,
+    ):
         try:
-            self.emit(EventType.ASK_REQUESTED, f"Agent asking for help: {question}", LogLevel.INFO, question=question, **details)
+            self.emit(
+                EventType.ASK_REQUESTED,
+                f"Agent asking for help: {question}",
+                LogLevel.INFO,
+                question=question,
+                options=list(options or []),
+                multi_select=bool(multi_select),
+                yes_no=bool(yes_no),
+                **details,
+            )
         except Exception:
             pass
 

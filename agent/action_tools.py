@@ -671,6 +671,22 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
                         "description": "Why you need this information (helps user understand)",
                         "default": ""
                     },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of choices to present to the user",
+                        "default": []
+                    },
+                    "multi_select": {
+                        "type": "boolean",
+                        "description": "If true, user can select multiple options",
+                        "default": False
+                    },
+                    "yes_no": {
+                        "type": "boolean",
+                        "description": "If true, renders a Yes/No prompt with two distinct buttons",
+                        "default": False
+                    },
                     "reasoning": {
                         "type": "string",
                         "description": "Reasoning for asking the user the question"

@@ -52,8 +52,8 @@ from utils import PageUtils
 from core.browser import Browser
 
 # Type alias for user question callback (ask: command handler)
-# Callback receives: question (str), context (dict) -> returns user's answer (str) or None to skip
-UserQuestionCallback = Callable[[str, dict], str]
+# Callback receives: question, context, options, multi_select, yes_no.
+UserQuestionCallback = Callable[[str, dict, List[str], bool, bool], str]
 # Type alias for reported text callback (report_data: command handler)
 # Callback receives: payload (str), context (dict)
 DataReportCallback = Callable[[str, dict], None]
@@ -2316,17 +2316,32 @@ class Agent:
                     if function_name == "ask_user" and result.success:
                         ask_question = str(action_args.get("question", "")).strip()
                         ask_answer = ""
+                        ask_status = ""
                         if isinstance(result.data, dict):
                             ask_answer = str(result.data.get("answer", "") or "").strip()
+                            ask_status = str(result.data.get("status", "") or "").strip().lower()
                             if not ask_question:
                                 ask_question = str(result.data.get("question", "") or "").strip()
-                        if not ask_answer:
+                        if ask_status == "skipped":
+                            ask_answer = "(user skipped)"
+                            if isinstance(result.data, dict):
+                                result.data["answer"] = ask_answer
+                        elif not ask_answer:
                             recent_pairs = self.memory_store.get_recent_question_answers(n=1)
                             if recent_pairs:
                                 ask_answer = str(recent_pairs[0].get("answer", "") or "").strip()
                                 if not ask_question:
                                     ask_question = str(recent_pairs[0].get("question", "") or "").strip()
-                        if ask_answer:
+                        hint = ""
+                        if ask_status == "skipped":
+                            if ask_question:
+                                hint = (
+                                    f'User skipped the question: "{ask_question}". '
+                                    "Do not ask again; proceed with best judgment."
+                                )
+                            else:
+                                hint = "User skipped the question. Do not ask again; proceed with best judgment."
+                        elif ask_answer:
                             if ask_question:
                                 hint = (
                                     f'User answer received for "{ask_question}": "{ask_answer}". '
@@ -2337,6 +2352,7 @@ class Agent:
                                     f'User answer received: "{ask_answer}". '
                                     "Use this answer to continue and avoid re-asking it."
                                 )
+                        if hint:
                             with self._hints_lock:
                                 self._pending_hints.append(hint)
 

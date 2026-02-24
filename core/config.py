@@ -275,6 +275,22 @@ class UserMessagesConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class UserInteractionConfig(BaseModel):
+    """Policy for interactive user prompts."""
+
+    allow_custom: bool = Field(
+        default=True,
+        description="Allow user to type a custom answer when choices are presented",
+    )
+    allow_skip: bool = Field(
+        default=True,
+        description="Allow user to skip a question (agent is told 'user skipped')",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class SandboxWebConfig(BaseModel):
     """Website policy configuration for browser navigation."""
 
@@ -512,6 +528,10 @@ class Config(BaseModel):
     user_messages: UserMessagesConfig = Field(
         default_factory=UserMessagesConfig,
         description="User-facing messages configuration"
+    )
+    user_interaction: UserInteractionConfig = Field(
+        default_factory=UserInteractionConfig,
+        description="User interaction policy (custom answers, skipping)",
     )
     sandbox: SandboxConfig = Field(
         default_factory=SandboxConfig,

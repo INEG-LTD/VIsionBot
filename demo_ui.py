@@ -302,6 +302,9 @@ class AgentSession:
     thinking_active: bool = False
     thinking_text: str = "Thinking..."
     pending_question: str = ""
+    pending_options: list[str] = field(default_factory=list)
+    pending_multi_select: bool = False
+    pending_yes_no: bool = False
     pending_answer: str = ""
     awaiting_answer: bool = False
     answer_event: threading.Event = field(default_factory=threading.Event)
@@ -313,23 +316,43 @@ class AgentSession:
         """Unblock a waiting ask callback with user-provided text (or empty to skip)."""
         self.pending_answer = str(text or "").strip()
         self.pending_question = ""
+        self.pending_options = []
+        self.pending_multi_select = False
+        self.pending_yes_no = False
         self.awaiting_answer = False
         if self.status == "asking":
             self.status = "running"
         self.answer_event.set()
 
 
-def _make_session_question_callback(session: AgentSession) -> Callable[[str, dict], str]:
+def _make_session_question_callback(session: AgentSession) -> Callable[[str, dict, list[str], bool, bool], str]:
     """Build a per-session ask callback that blocks until the UI submits an answer."""
 
-    def _on_user_question(question: str, context: dict) -> str:
+    def _on_user_question(
+        question: str,
+        context: dict,
+        options: list[str] | None = None,
+        multi_select: bool = False,
+        yes_no: bool = False,
+    ) -> str:
         _ = context  # reserved for future context-aware prompts
+        normalized_options = [str(opt).strip() for opt in (options or []) if str(opt).strip()]
+        yes_no_mode = bool(yes_no)
+        if yes_no_mode:
+            normalized_options = ["Yes", "No"]
+            multi_select = False
+        session.pending_options = normalized_options
+        session.pending_multi_select = bool(multi_select and normalized_options)
+        session.pending_yes_no = yes_no_mode
         session.pending_question = str(question or "").strip()
         session.awaiting_answer = True
 
         while not session.answer_event.wait(timeout=0.1):
             if session.worker_stop_event.is_set():
                 session.pending_question = ""
+                session.pending_options = []
+                session.pending_multi_select = False
+                session.pending_yes_no = False
                 session.awaiting_answer = False
                 session.pending_answer = ""
                 session.answer_event.clear()
@@ -630,6 +653,7 @@ class BrowserAgentApp(App):
         mission_result = sv(snapshot, "mission_result")
         active_agent = session.agent
         effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
+        interaction_cfg = getattr(effective_config, "user_interaction", None)
 
         return AgentState(
             tab_id=session.tab_id,
@@ -679,6 +703,11 @@ class BrowserAgentApp(App):
             thinking_text=session.thinking_text,
             render_frame=int(time.monotonic() * 3) % 4 if session.thinking_active else 0,
             pending_question=session.pending_question,
+            pending_options=tuple(session.pending_options),
+            pending_multi_select=session.pending_multi_select,
+            pending_yes_no=session.pending_yes_no,
+            allow_custom=bool(getattr(interaction_cfg, "allow_custom", True)),
+            allow_skip=bool(getattr(interaction_cfg, "allow_skip", True)),
         )
 
     # ---- Event recording — called from worker thread via call_from_thread --
@@ -712,8 +741,17 @@ class BrowserAgentApp(App):
         elif event.event_type == EventType.ASK_REQUESTED:
             session.thinking_active = False
             question = str(details.get("question", "")).strip()
-            if question:
-                session.pending_question = question
+            raw_options = details.get("options", [])
+            options: list[str] = []
+            if isinstance(raw_options, list):
+                options = [str(opt).strip() for opt in raw_options if str(opt).strip()]
+            yes_no = bool(details.get("yes_no", False))
+            if yes_no:
+                options = ["Yes", "No"]
+            session.pending_options = options
+            session.pending_multi_select = bool(details.get("multi_select", False)) and bool(options) and not yes_no
+            session.pending_yes_no = yes_no
+            session.pending_question = question
             if session.worker_stop_event.is_set() or session.status in {
                 "stopping",
                 "cancel requested",
@@ -729,6 +767,9 @@ class BrowserAgentApp(App):
         }:
             session.thinking_active = False
             session.pending_question = ""
+            session.pending_options = []
+            session.pending_multi_select = False
+            session.pending_yes_no = False
             session.awaiting_answer = False
             if session.status == "asking":
                 session.status = "running"
@@ -974,37 +1015,133 @@ class BrowserAgentApp(App):
             return None
         return widget_id[len(prefix):] or None
 
+    @staticmethod
+    def _extract_choice_option_target(widget_id: str | None) -> tuple[str, int] | None:
+        prefix = "choice-opt-"
+        if not widget_id or not widget_id.startswith(prefix):
+            return None
+        remainder = widget_id[len(prefix):]
+        if "-" not in remainder:
+            return None
+        index_part, tab_id = remainder.split("-", 1)
+        try:
+            option_index = int(index_part)
+        except ValueError:
+            return None
+        if not tab_id:
+            return None
+        return tab_id, option_index
+
+    @staticmethod
+    def _interaction_policy(session: AgentSession) -> tuple[bool, bool]:
+        active_agent = session.agent
+        effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
+        interaction_cfg = getattr(effective_config, "user_interaction", None)
+        allow_custom = bool(getattr(interaction_cfg, "allow_custom", True))
+        allow_skip = bool(getattr(interaction_cfg, "allow_skip", True))
+        return allow_custom, allow_skip
+
+    def _resolve_mission_controls(self, tab_id: str) -> MissionControls | None:
+        view_id = self._tab_to_view.get(tab_id)
+        if not view_id:
+            return None
+        try:
+            switcher = self.query_one(ContentSwitcher)
+            view = switcher.query_one(f"#{view_id}", AgentView)
+            return view.query_one(MissionControls)
+        except Exception:
+            return None
+
     def on_button_pressed(self, event) -> None:
-        tab_id = self._extract_tab_id(event.button.id, "run-mission-")
+        button_id = event.button.id
+
+        choice_target = self._extract_choice_option_target(button_id)
+        if choice_target is not None:
+            tab_id, option_index = choice_target
+            session = self._sessions.get(tab_id)
+            if session is None or session.status != "asking":
+                return
+            controls = self._resolve_mission_controls(tab_id)
+            if controls is None:
+                self._emit_notice(f"{session.label}: question view is unavailable.", "error")
+                return
+            option_text = controls.get_option_text(option_index)
+            if option_text is None:
+                return
+            if session.pending_multi_select:
+                controls.toggle_option(option_index)
+                return
+            session.answer_question(option_text)
+            controls.clear_input()
+            return
+
+        confirm_tab_id = self._extract_tab_id(button_id, "choice-confirm-")
+        if confirm_tab_id is not None:
+            session = self._sessions.get(confirm_tab_id)
+            if session is None or session.status != "asking":
+                return
+            controls = self._resolve_mission_controls(confirm_tab_id)
+            if controls is None:
+                self._emit_notice(f"{session.label}: question view is unavailable.", "error")
+                return
+            selected_options = controls.get_selected_options()
+            if not selected_options:
+                self._emit_notice("Select at least one option before confirming.", "warning")
+                return
+            session.answer_question(", ".join(selected_options))
+            controls.clear_input()
+            return
+
+        skip_tab_id = self._extract_tab_id(button_id, "choice-skip-")
+        if skip_tab_id is not None:
+            session = self._sessions.get(skip_tab_id)
+            if session is None or session.status != "asking":
+                return
+            _, allow_skip = self._interaction_policy(session)
+            if not allow_skip:
+                self._emit_notice("Skipping is disabled for this prompt.", "warning")
+                return
+            controls = self._resolve_mission_controls(skip_tab_id)
+            if controls is not None:
+                controls.clear_input()
+            session.answer_question("")
+            return
+
+        tab_id = self._extract_tab_id(button_id, "run-mission-")
         if tab_id is None:
             return
         session = self._sessions.get(tab_id)
+        controls = self._resolve_mission_controls(tab_id)
         if session is not None and session.status == "asking":
-            view_id = self._tab_to_view.get(tab_id)
-            if not view_id:
+            if controls is None:
                 self._emit_notice(f"{session.label}: question view is unavailable.", "error")
                 return
             try:
-                switcher = self.query_one(ContentSwitcher)
-                view = switcher.query_one(f"#{view_id}", AgentView)
-                controls = view.query_one(MissionControls)
                 inp = controls.query_one(f"#{controls.input_id}", Input)
             except Exception as exc:
                 session.last_message = f"Unable to submit answer: {exc}"
                 self._emit_notice(f"{session.label}: unable to submit answer.", "error")
                 return
-            session.answer_question(inp.value)
+            answer = str(inp.value or "").strip()
+            allow_custom, allow_skip = self._interaction_policy(session)
+            if session.pending_options and not allow_custom:
+                self._emit_notice("Choose one of the provided options.", "warning")
+                return
+            if not answer:
+                if not allow_skip:
+                    self._emit_notice("An answer is required for this prompt.", "warning")
+                    inp.focus()
+                    return
+                session.answer_question("")
+            else:
+                session.answer_question(answer)
             inp.value = ""
             inp.focus()
             return
-        view_id = self._tab_to_view.get(tab_id)
-        if not view_id:
+        if controls is None:
             return
         mission = ""
         try:
-            switcher = self.query_one(ContentSwitcher)
-            view = switcher.query_one(f"#{view_id}", AgentView)
-            controls = view.query_one(MissionControls)
             inp = controls.query_one(f"#{controls.input_id}", Input)
             mission = inp.value
         except Exception:
@@ -1023,7 +1160,20 @@ class BrowserAgentApp(App):
             return
         session = self._sessions.get(tab_id)
         if session is not None and session.status == "asking":
-            session.answer_question(event.value)
+            answer = str(event.value or "").strip()
+            allow_custom, allow_skip = self._interaction_policy(session)
+            if session.pending_options and not allow_custom:
+                self._emit_notice("Choose one of the provided options.", "warning")
+                event.input.focus()
+                return
+            if not answer:
+                if not allow_skip:
+                    self._emit_notice("An answer is required for this prompt.", "warning")
+                    event.input.focus()
+                    return
+                session.answer_question("")
+            else:
+                session.answer_question(answer)
             event.input.value = ""
             event.input.focus()
             return
