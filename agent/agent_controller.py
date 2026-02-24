@@ -2313,6 +2313,33 @@ class Agent:
                     _append_recent_action(state.last_action_summary)
                     _set_checkpoint_pending(True)
 
+                    if function_name == "ask_user" and result.success:
+                        ask_question = str(action_args.get("question", "")).strip()
+                        ask_answer = ""
+                        if isinstance(result.data, dict):
+                            ask_answer = str(result.data.get("answer", "") or "").strip()
+                            if not ask_question:
+                                ask_question = str(result.data.get("question", "") or "").strip()
+                        if not ask_answer:
+                            recent_pairs = self.memory_store.get_recent_question_answers(n=1)
+                            if recent_pairs:
+                                ask_answer = str(recent_pairs[0].get("answer", "") or "").strip()
+                                if not ask_question:
+                                    ask_question = str(recent_pairs[0].get("question", "") or "").strip()
+                        if ask_answer:
+                            if ask_question:
+                                hint = (
+                                    f'User answer received for "{ask_question}": "{ask_answer}". '
+                                    "Use this answer to continue and avoid asking the same question again."
+                                )
+                            else:
+                                hint = (
+                                    f'User answer received: "{ask_answer}". '
+                                    "Use this answer to continue and avoid re-asking it."
+                                )
+                            with self._hints_lock:
+                                self._pending_hints.append(hint)
+
                     duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
                     self.event_logger.action_complete(
                         tool=function_name,

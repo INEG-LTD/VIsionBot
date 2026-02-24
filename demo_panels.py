@@ -80,6 +80,7 @@ class AgentState:
     thinking_active: bool = False
     thinking_text: str = "Thinking..."
     render_frame: int = 0  # incremented by poll timer to drive animations
+    pending_question: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +325,7 @@ _STATUS_META: dict[str, tuple[str, str]] = {
     "stopped": (" STOPPED ", "stopped"),
     "paused": (" PAUSED ", "paused"),
     "queued": (" QUEUED ", "queued"),
+    "asking": (" ASKING ", "asking"),
     "cancel requested": (" CANCELLING ", "cancel-requested"),
     "error": (" ERROR ", "error"),
 }
@@ -336,10 +338,11 @@ _STATUS_META: dict[str, tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class TimelineEntry:
-    kind: str  # "line" or "collapsible"
+    kind: str  # "line", "collapsible", or "callout"
     text: str = ""
     title: str = ""
     body: str = ""
+    variant: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +367,7 @@ class StatusPill(Widget):
     StatusPill .pill-text.status--stopped { background: #475569; color: #431407; }
     StatusPill .pill-text.status--paused { background: #EAB308; color: #422006; }
     StatusPill .pill-text.status--queued { background: #3B82F6; color: #0b1220; }
+    StatusPill .pill-text.status--asking { background: #60A5FA; color: #0b1220; }
     StatusPill .pill-text.status--cancel-requested { background: #FB7185; color: #431407; }
     StatusPill .pill-text.status--error { background: #DC2626; color: #431407; }
     StatusPill .pill-text.status--unknown { background: #64748b; color: #431407; }
@@ -478,6 +482,9 @@ class TimelinePanel(AgentPanel):
         EventType.ACTION_DETERMINED,
         EventType.LOOP_STATE_CHANGED,
         EventType.ASK_REQUESTED,
+        EventType.ASK_COMMAND_ANSWERED,
+        EventType.ASK_COMMAND_SKIPPED,
+        EventType.ASK_COMMAND_FAILURE,
         EventType.SYSTEM_ERROR,
     ]
 
@@ -501,7 +508,56 @@ class TimelinePanel(AgentPanel):
     }
     
     .timeline-events {
+        layout: vertical;
+        width: 100%;
+        height: auto;
         layers: above;
+    }
+    .timeline-card {
+        width: 60;
+        height: auto;
+        border: round #6b7280;
+        background: rgba(148, 163, 184, 0.08);
+        padding: 1 1;
+        margin-left: 2;
+        margin-top: 1;
+        padding-left: 1;
+    }
+    .timeline-card-header {
+        width: 100%;
+        text-style: bold;
+    }
+    .timeline-card-body {
+        width: 100%;
+        color: #d1d5db;
+        padding-left: 1;
+    }
+    .timeline-card--ask {
+        border: round #60A5FA;
+    }
+    .timeline-card--ask .timeline-card-header {
+        color: #bfdbfe;
+    }
+    .timeline-card--answered {
+        border: round #34D399;
+        background: rgba(52, 211, 153, 0.14);
+    }
+    .timeline-card--answered .timeline-card-header {
+        color: #a7f3d0;
+    }
+    .timeline-card--skipped {
+        border: round #FBBF24;
+        background: rgba(251, 191, 36, 0.13);
+    }
+    .timeline-card--skipped .timeline-card-header {
+        color: #fde68a;
+    }
+    .timeline-card--error {
+        border: round #F87171;
+        background: rgba(248, 113, 113, 0.13);
+    }
+    .timeline-card--error .timeline-card-header {
+        color: #fecaca;
     }
     
     .timeline-intro-text {
@@ -535,6 +591,7 @@ class TimelinePanel(AgentPanel):
         if entry is None:
             return
 
+        follow_tail = self._is_near_bottom()
         self._intro.display = False
 
         if entry.kind == "collapsible":
@@ -545,12 +602,25 @@ class TimelinePanel(AgentPanel):
                 collapsed=True,
                 classes="collapsible-entry",
             )
+        elif entry.kind == "callout":
+            # header_label = Label(entry.title or "NOTICE", markup=False, classes="timeline-card-header")
+            body_label = Label(entry.body or entry.text or "", classes="timeline-card-body")
+            card = Container(
+                # header_label,
+                body_label,
+                classes="timeline-card",
+            )
+            card.border_title = entry.title or "NOTICE"
+            AgentPanel.apply_variant_class(card, "timeline-card--", entry.variant or "default")
+            widget = card
         else:
-            widget = Label(entry.text or "", markup=False)
+            widget = Label(entry.text or "")
             widget.styles.width = "100%"
             widget.styles.height = "auto"
+            widget.styles.padding = (0, 1, 0, 0)
 
         self._events.mount(widget)
+        self._scroll.refresh(layout=True)
 
         if entry.kind == "collapsible":
             def _set_body_styles(lbl: Label = body_label) -> None:
@@ -558,7 +628,34 @@ class TimelinePanel(AgentPanel):
                 lbl.styles.height = "auto"
             self.call_after_refresh(_set_body_styles)
 
-        self._scroll.scroll_end(animate=False)
+        if follow_tail:
+            self.call_after_refresh(lambda: self._scroll.scroll_end(animate=False))
+
+    def _is_near_bottom(self, threshold: int = 3) -> bool:
+        """Return True when viewport is close enough to bottom to keep auto-follow enabled."""
+        try:
+            max_scroll = float(getattr(self._scroll, "max_scroll_y", 0.0) or 0.0)
+        except Exception:
+            max_scroll = 0.0
+
+        current_scroll: float | None = None
+        try:
+            current_scroll = float(getattr(self._scroll, "scroll_y"))
+        except Exception:
+            current_scroll = None
+
+        if current_scroll is None:
+            try:
+                offset = getattr(self._scroll, "scroll_offset")
+                current_scroll = float(getattr(offset, "y"))
+            except Exception:
+                current_scroll = None
+
+        if current_scroll is None:
+            return True
+        if max_scroll <= 0:
+            return True
+        return (max_scroll - current_scroll) <= float(threshold)
 
     def _format_event(self, event: BotEvent) -> TimelineEntry | None:
         details = event.details or {}
@@ -568,7 +665,7 @@ class TimelinePanel(AgentPanel):
             if details.get("iteration", 0) == 1:
                 return TimelineEntry(
                     kind="line",
-                    text=f"Your agent is currently: {details.get('mission', 'unknown')}",
+                    text=f"[bold]> {details.get('mission', 'unknown')}[/bold]",
                 )
 
         elif t == EventType.ACTION_DETERMINED:
@@ -589,8 +686,39 @@ class TimelinePanel(AgentPanel):
         elif t == EventType.ASK_REQUESTED:
             question = str(details.get("question", "")).strip()
             return TimelineEntry(
-                kind="line",
-                text=f"{question}\nThe agent is asking a question. Please respond...",
+                kind="callout",
+                title="QUESTION",
+                body=f"[bold]{question or 'The agent asked a question.'}[/bold]",
+                variant="ask",
+            )
+
+        elif t == EventType.ASK_COMMAND_ANSWERED:
+            question = str(details.get("question", "")).strip() or "No question provided."
+            response = str(details.get("response", "")).strip() or "(empty)"
+            return TimelineEntry(
+                kind="callout",
+                title="ANSWERED",
+                body=f"[bold]Q: {question}[/bold]\n[bold]A: {response}[/bold]",
+                variant="answered",
+            )
+
+        elif t == EventType.ASK_COMMAND_SKIPPED:
+            question = str(details.get("question", "")).strip() or "No question provided."
+            return TimelineEntry(
+                kind="callout",
+                title="SKIPPED",
+                body=f"[bold]Q: {question}[/bold]\nYou didn't answer the question.",
+                variant="skipped",
+            )
+
+        elif t == EventType.ASK_COMMAND_FAILURE:
+            question = str(details.get("question", "")).strip() or "No question provided."
+            error = str(details.get("error", "")).strip() or "Unknown ask callback error."
+            return TimelineEntry(
+                kind="callout",
+                title="ASK ERROR",
+                body=f"[bold]Q: {question}[/bold]\n{error}",
+                variant="error",
             )
 
         elif t == EventType.SYSTEM_ERROR:
@@ -1460,3 +1588,22 @@ class MissionControls(AgentPanel):
         btn.styles.height = "3"
         # btn.styles.background = "transparent"
         btn.styles.border = ("solid", "green")
+
+    def on_state_update(self, state: AgentState) -> None:
+        try:
+            inp = self.query_one(f"#{self.input_id}", Input)
+            btn = self.query_one(f"#{self.button_id}", Button)
+        except Exception:
+            return
+
+        if state.status == "asking":
+            if state.pending_question:
+                inp.placeholder = f"Answer: {_truncate(state.pending_question, 72)}"
+            else:
+                inp.placeholder = "Type your answer, or leave empty to skip..."
+            btn.label = "ANSWER"
+            btn.styles.border = ("solid", "#60A5FA")
+        else:
+            inp.placeholder = "Describe the mission for this agent..."
+            btn.label = "RUN"
+            btn.styles.border = ("solid", "green")

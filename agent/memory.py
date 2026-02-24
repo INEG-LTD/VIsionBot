@@ -124,6 +124,22 @@ class NarrativeMemory:
             {"question": question or "", "answer": answer or ""}
         )
 
+    def get_recent_question_answers(self, n: int = 5) -> List[Dict[str, str]]:
+        """Return the most recent user question/answer pairs."""
+        if n <= 0:
+            return []
+        recent_pairs = self.question_answer_pairs[-n:]
+        normalized: List[Dict[str, str]] = []
+        for pair in recent_pairs:
+            if not isinstance(pair, dict):
+                continue
+            question = str(pair.get("question", "") or "").strip()
+            answer = str(pair.get("answer", "") or "").strip()
+            if not question and not answer:
+                continue
+            normalized.append({"question": question, "answer": answer})
+        return normalized
+
     def set_current_action_reasoning(self, reasoning: Optional[str]) -> None:
         self._current_action_reasoning = reasoning
 

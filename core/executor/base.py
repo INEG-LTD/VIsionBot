@@ -594,14 +594,14 @@ class Executor:
         step: ActionStep,
         environment_state: EnvironmentState,
         base_knowledge: Optional[List[str]] = None,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         def _handle_ask_command(
             question: str,
             environment_state: EnvironmentState
-        ) -> Optional[str]:
+        ) -> Dict[str, Any]:
             if not self.user_question_callback:
                 self.event_logger.system_warning("Agent wants to ask a question but no callback configured")
-                return None
+                return {"status": "unavailable", "answer": "", "answered": False, "success": False}
             
             # Build context for the callback
             context = {
@@ -626,13 +626,12 @@ class Executor:
                         question=question,
                         response=answer,
                     )
-                    return answer
-                else:
-                    self.event_logger.ask_command_skipped(question=question)
-                    return None
+                    return {"status": "answered", "answer": str(answer), "answered": True, "success": True}
+                self.event_logger.ask_command_skipped(question=question)
+                return {"status": "skipped", "answer": "", "answered": False, "success": True}
             except Exception as e:
                 self.event_logger.ask_command_failure(question=question, error=str(e), details=context)
-                return None
+                return {"status": "failed", "answer": "", "answered": False, "success": False}
 
         args = self._get_action_args(step)
         question = str(args.get("question", "")).strip()
@@ -645,6 +644,12 @@ class Executor:
 
         # For now, return failure to indicate human intervention needed
         # In the future, this could pause and wait for user input
+        ask_result: Dict[str, Any] = {
+            "status": "failed",
+            "answer": "",
+            "answered": False,
+            "success": False,
+        }
         try:
             before_state = self.memory_store._capture_current_state()
             ask_result = _handle_ask_command(question, environment_state)
@@ -657,13 +662,16 @@ class Executor:
                 coordinates=None,
                 target_element_info={
                     "question": question,
+                    "answer": ask_result.get("answer", ""),
+                    "answered": bool(ask_result.get("answered")),
+                    "status": ask_result.get("status", "failed"),
                 },
-                success=ask_result,
+                success=bool(ask_result.get("success")),
             )
             
             # Store question/answer pair for agent context if answer was received
-            if ask_result:
-                self.memory_store.add_question_answer(question, ask_result)
+            if ask_result.get("answered"):
+                self.memory_store.add_question_answer(question, ask_result.get("answer", ""))
             
         except Exception:
             pass
@@ -2568,11 +2576,25 @@ class Executor:
             elif function_name == "wait_for":
                 executed = self.execute_wait_for(step=action_step)
             elif function_name == "ask_user":
-                executed = bool(self.execute_ask(
+                ask_result = self.execute_ask(
                     step=action_step,
                     environment_state=environment_state,
                     base_knowledge=base_knowledge,
-                ))
+                )
+                executed = bool(ask_result.get("success"))
+                ask_question = str(function_args.get("question", "")).strip()
+                if not ask_question:
+                    ask_question = (
+                        action_step.action.split(":", 1)[1].strip()
+                        if ":" in action_step.action
+                        else ""
+                    )
+                result_data = {
+                    "question": ask_question,
+                    "answer": ask_result.get("answer", ""),
+                    "answered": bool(ask_result.get("answered")),
+                    "status": ask_result.get("status", "failed"),
+                }
             elif function_name == "report_data":
                 executed, report_data = self.execute_report(
                     step=action_step,

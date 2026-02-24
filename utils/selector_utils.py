@@ -125,7 +125,7 @@ class SelectorUtils:
                 if (element.id) {{
                     // Check if ID contains characters that make it invalid for CSS ID selectors
                     // CSS ID selectors cannot contain: spaces, colons, periods, hashes, brackets, etc.
-                    const invalidChars = /[ :.#\[\]]/;
+                    const invalidChars = /[ :.#\\[\\]]/;
                     if (invalidChars.test(element.id)) {{
                         // Use attribute selector for IDs with invalid characters
                         const attrSelector = '[id="' + element.id.replace(/"/g, '\\"') + '"]';
@@ -261,7 +261,7 @@ class SelectorUtils:
                 // Just try the most basic selectors without validation
                 if (targetElement.id) {{
                     // Check if ID contains characters that make it invalid for CSS ID selectors
-                    const invalidChars = /[ :.#\[\]]/;
+                    const invalidChars = /[ :.#\\[\\]]/;
                     if (invalidChars.test(targetElement.id)) {{
                         return '[id="' + targetElement.id.replace(/"/g, '\\"') + '"]';
                     }} else {{

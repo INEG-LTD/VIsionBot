@@ -15,7 +15,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -32,7 +32,6 @@ from demo_config import (
     STARTING_URL,
     config as base_config,
     on_data_reported,
-    on_user_question,
     setup_interceptors,
 )
 from demo_panels import (
@@ -302,9 +301,47 @@ class AgentSession:
     dropped_event_count: int = 0
     thinking_active: bool = False
     thinking_text: str = "Thinking..."
+    pending_question: str = ""
+    pending_answer: str = ""
+    awaiting_answer: bool = False
+    answer_event: threading.Event = field(default_factory=threading.Event)
     # Wired by AgentView after it is mounted:
     reactive: ReactiveState | None = None
     stream: EventStream | None = None
+
+    def answer_question(self, text: str) -> None:
+        """Unblock a waiting ask callback with user-provided text (or empty to skip)."""
+        self.pending_answer = str(text or "").strip()
+        self.pending_question = ""
+        self.awaiting_answer = False
+        if self.status == "asking":
+            self.status = "running"
+        self.answer_event.set()
+
+
+def _make_session_question_callback(session: AgentSession) -> Callable[[str, dict], str]:
+    """Build a per-session ask callback that blocks until the UI submits an answer."""
+
+    def _on_user_question(question: str, context: dict) -> str:
+        _ = context  # reserved for future context-aware prompts
+        session.pending_question = str(question or "").strip()
+        session.awaiting_answer = True
+
+        while not session.answer_event.wait(timeout=0.1):
+            if session.worker_stop_event.is_set():
+                session.pending_question = ""
+                session.awaiting_answer = False
+                session.pending_answer = ""
+                session.answer_event.clear()
+                return ""
+
+        answer = session.pending_answer
+        session.pending_answer = ""
+        session.awaiting_answer = False
+        session.answer_event.clear()
+        return answer
+
+    return _on_user_question
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +569,8 @@ class BrowserAgentApp(App):
     def on_unmount(self) -> None:
         for session in self._sessions.values():
             session.worker_stop_event.set()
+            if session.awaiting_answer or session.pending_question:
+                session.answer_question("")
             try:
                 session.mission_queue.put_nowait(None)
             except Exception:
@@ -639,6 +678,7 @@ class BrowserAgentApp(App):
             thinking_active=session.thinking_active,
             thinking_text=session.thinking_text,
             render_frame=int(time.monotonic() * 3) % 4 if session.thinking_active else 0,
+            pending_question=session.pending_question,
         )
 
     # ---- Event recording — called from worker thread via call_from_thread --
@@ -669,10 +709,32 @@ class BrowserAgentApp(App):
                     )
                 elif message.startswith("⏳ Waiting for:"):
                     session.thinking_text = message
+        elif event.event_type == EventType.ASK_REQUESTED:
+            session.thinking_active = False
+            question = str(details.get("question", "")).strip()
+            if question:
+                session.pending_question = question
+            if session.worker_stop_event.is_set() or session.status in {
+                "stopping",
+                "cancel requested",
+            }:
+                session.answer_question("")
+            else:
+                session.awaiting_answer = True
+                session.status = "asking"
+        elif event.event_type in {
+            EventType.ASK_COMMAND_ANSWERED,
+            EventType.ASK_COMMAND_SKIPPED,
+            EventType.ASK_COMMAND_FAILURE,
+        }:
+            session.thinking_active = False
+            session.pending_question = ""
+            session.awaiting_answer = False
+            if session.status == "asking":
+                session.status = "running"
         elif event.event_type in {
             EventType.ACTION_DETERMINED,
             EventType.ACTION_COMPLETE,
-            EventType.ASK_REQUESTED,
             EventType.AGENT_COMPLETE,
             EventType.AGENT_ERROR,
             EventType.SYSTEM_ERROR,
@@ -711,7 +773,7 @@ class BrowserAgentApp(App):
 
         agent = Agent(
             config=session.config,
-            user_question_callback=on_user_question,
+            user_question_callback=_make_session_question_callback(session),
             data_report_callback=on_data_reported,
         )
         agent._start()
@@ -916,6 +978,25 @@ class BrowserAgentApp(App):
         tab_id = self._extract_tab_id(event.button.id, "run-mission-")
         if tab_id is None:
             return
+        session = self._sessions.get(tab_id)
+        if session is not None and session.status == "asking":
+            view_id = self._tab_to_view.get(tab_id)
+            if not view_id:
+                self._emit_notice(f"{session.label}: question view is unavailable.", "error")
+                return
+            try:
+                switcher = self.query_one(ContentSwitcher)
+                view = switcher.query_one(f"#{view_id}", AgentView)
+                controls = view.query_one(MissionControls)
+                inp = controls.query_one(f"#{controls.input_id}", Input)
+            except Exception as exc:
+                session.last_message = f"Unable to submit answer: {exc}"
+                self._emit_notice(f"{session.label}: unable to submit answer.", "error")
+                return
+            session.answer_question(inp.value)
+            inp.value = ""
+            inp.focus()
+            return
         view_id = self._tab_to_view.get(tab_id)
         if not view_id:
             return
@@ -939,6 +1020,12 @@ class BrowserAgentApp(App):
     def on_input_submitted(self, event) -> None:
         tab_id = self._extract_tab_id(event.input.id, "mission-input-")
         if tab_id is None:
+            return
+        session = self._sessions.get(tab_id)
+        if session is not None and session.status == "asking":
+            session.answer_question(event.value)
+            event.input.value = ""
+            event.input.focus()
             return
         enqueued = self._enqueue_mission_for_tab(tab_id, event.value)
         if enqueued:
@@ -964,6 +1051,8 @@ class BrowserAgentApp(App):
                 pass
         session.status = "stopping"
         session.last_message = f"Stop requested. Cleared {drained} queued mission(s)."
+        if session.awaiting_answer or session.pending_question:
+            session.answer_question("")
 
     def action_resume_agent(self) -> None:
         session = self.get_active_session()
@@ -1012,6 +1101,8 @@ class BrowserAgentApp(App):
             session.agent.cancel()
             session.status = "cancel requested"
             session.last_message = f"Cancel requested. Cleared {drained} queued mission(s)."
+            if session.awaiting_answer or session.pending_question:
+                session.answer_question("")
         except Exception as exc:
             session.status = "error"
             session.last_message = f"Cancel failed: {exc}"

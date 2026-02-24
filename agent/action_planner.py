@@ -407,6 +407,7 @@ Based on the screenshot, what is the best next action?
         memory_narrative_block = self._get_memory_narrative_block()
         memory_index_block = self._get_memory_entry_index()
         executed_action_ledger = self.memory_store.get_executed_action_ledger(n=20)
+        recent_user_answers_block = self._get_recent_user_answers_block()
         stuck_hint_lines = self.memory_store.get_stuck_pattern_hints()
         nav_summary = self._summarize_navigation_history(
             getattr(state, "url_history", []),
@@ -494,6 +495,8 @@ Executed action ledger (facts only):
 {executed_action_ledger}
 
 Mission: {self.user_prompt}
+
+{recent_user_answers_block}
 
 Budget status:
 - spent={self.budget_spent}
@@ -615,6 +618,7 @@ GUIDELINES
     how that action advances the ACTIVE STRATEGY
 11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
 {budget_reasoning_contract}
+13. If a cookie banner, consent popup, or overlay is blocking the page, dismiss it before attempting other interactions.
 {base_knowledge_section}
 {user_hints_section}
 
@@ -629,6 +633,43 @@ Choose the next action to take.
         if just_data:
             return narrative
         return f"Recent memory narrative:\n{narrative}"
+
+    def _get_recent_user_answers_block(self, limit: int = 5) -> str:
+        """Format recent ask_user answers so planner can leverage them directly."""
+        if not self.memory_store:
+            return (
+                "═══════════════════════════════════════════════════════════════\n"
+                "RECENT USER ANSWERS\n"
+                "═══════════════════════════════════════════════════════════════\n"
+                "No user answers recorded yet."
+            )
+
+        pairs = self.memory_store.get_recent_question_answers(n=limit)
+        if not pairs:
+            return (
+                "═══════════════════════════════════════════════════════════════\n"
+                "RECENT USER ANSWERS\n"
+                "═══════════════════════════════════════════════════════════════\n"
+                "No user answers recorded yet."
+            )
+
+        lines: List[str] = []
+        for idx, pair in enumerate(pairs, start=1):
+            question = str(pair.get("question", "") or "").strip() or "Unknown question"
+            answer = str(pair.get("answer", "") or "").strip() or "(empty answer)"
+            lines.append(f"{idx}. Q: {question}")
+            lines.append(f"   A: {answer}")
+
+        lines.append(
+            "Use these as authoritative user input. Avoid re-asking the same question unless needed."
+        )
+        body = "\n".join(lines)
+        return (
+            "═══════════════════════════════════════════════════════════════\n"
+            "RECENT USER ANSWERS\n"
+            "═══════════════════════════════════════════════════════════════\n"
+            f"{body}"
+        )
 
     def _get_memory_entry_index(self, max_lines: int = 120) -> str:
         if not self.memory_store or not self.memory_store.entries:
