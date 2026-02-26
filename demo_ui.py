@@ -26,7 +26,12 @@ from agent.agent_controller import Agent
 from core.config import Config
 from core.executor import Executor
 from core.sandbox_policy import SandboxPolicyEngine
-from utils.event_logger import BotEvent, EventType
+from utils.debug_print import (
+    DebugPrintRecord,
+    register_print_callback,
+    unregister_print_callback,
+)
+from utils.event_logger import BotEvent, EventType, LogLevel
 
 from demo_config import (
     STARTING_URL,
@@ -547,6 +552,7 @@ class BrowserAgentApp(App):
         self._create_session("agent-1")
         self._max_queue_depth = 40
         self._min_refresh_interval_s = 0.12
+        self._debug_print_callback = self._capture_debug_print
 
     # ---- Session lifecycle ------------------------------------------------
 
@@ -587,9 +593,11 @@ class BrowserAgentApp(App):
             switcher.styles.height = "1fr"
         except Exception:
             pass
+        register_print_callback(self._debug_print_callback)
         self.set_interval(0.5, self._poll_sessions)
 
     def on_unmount(self) -> None:
+        unregister_print_callback(self._debug_print_callback)
         for session in self._sessions.values():
             session.worker_stop_event.set()
             if session.awaiting_answer or session.pending_question:
@@ -605,6 +613,61 @@ class BrowserAgentApp(App):
                     worker.join(timeout=3.0)
                 except Exception:
                     pass
+
+    def _session_for_worker_thread(self, thread_id: int) -> AgentSession | None:
+        if thread_id <= 0:
+            return None
+        for session in self._sessions.values():
+            if session.agent_thread_id == thread_id:
+                return session
+        return None
+
+    def _capture_debug_print(self, record: DebugPrintRecord) -> None:
+        # EventLogger debug events already flow through structured callbacks.
+        # Skip their console mirror lines to avoid duplicate timeline entries.
+        if record.module == "utils.event_logger" and record.function == "_print_event":
+            return
+
+        session = self._session_for_worker_thread(record.thread_id)
+        if session is None:
+            return
+
+        text = str(record.text or "").replace("\r\n", "\n").replace("\r", "\n")
+        if not text.strip():
+            return
+
+        try:
+            self.call_from_thread(
+                self._record_debug_print_line,
+                session,
+                text,
+                record.module,
+                record.function,
+            )
+        except Exception:
+            pass
+
+    def _record_debug_print_line(
+        self,
+        session: AgentSession,
+        text: str,
+        source_module: str,
+        source_function: str,
+    ) -> None:
+        for raw_line in str(text).split("\n"):
+            if not raw_line.strip():
+                continue
+            event = BotEvent(
+                event_type=EventType.SYSTEM_DEBUG,
+                message=raw_line,
+                level=LogLevel.DEBUG,
+                details={
+                    "source": "dprint",
+                    "module": source_module,
+                    "function": source_function,
+                },
+            )
+            self._record_session_event(session, event)
 
     # ---- View factory ----------------------------------------------------
 
