@@ -71,7 +71,7 @@ class InterceptorContext:
         CONTEXT:
         URL: {snapshot.url}
         Page Title: {snapshot.title}
-        Visible Text (partial): {snapshot.visible_text[:2000] if snapshot.visible_text else "None"}
+        Visible Text: {snapshot.visible_text if snapshot.visible_text else "None"}
 
         QUESTION FROM SCRIPT:
         {query}
@@ -103,7 +103,7 @@ class InterceptorContext:
         CONTEXT:
         URL: {snapshot.url}
         Page Title: {snapshot.title}
-        Visible Text (partial): {snapshot.visible_text[:2000] if snapshot.visible_text else "None"}
+        Visible Text (partial): {snapshot.visible_text if snapshot.visible_text else "None"}
 
         QUESTION FROM SCRIPT:
         {query}

@@ -26,7 +26,7 @@ class EnvironmentState:
 
     def __post_init__(self):
         if self.visible_text is None and hasattr(self.browser_state, 'visible_text'):
-            self.visible_text = self.browser_state.visible_text[:2000] if self.browser_state.visible_text else ""
+            self.visible_text = self.browser_state.visible_text if self.browser_state.visible_text else ""
         if not self.url_history:
             self.url_history = []
         if self.url_pointer is None:
