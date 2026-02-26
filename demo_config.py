@@ -47,7 +47,7 @@ config = Config(
         agent_reasoning_level=ReasoningLevel.HIGH,
     ),
     execution=ExecutionConfig(
-        max_actions_per_mission=6,
+        max_actions_per_mission=600,
         max_actions_per_plan=1,
         # Quick tool selection with predefined presets:
         # - "minimal", "research", "web_safe", "full", "locked_down"
