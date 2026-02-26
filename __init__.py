@@ -7,8 +7,6 @@ from core.config import (
     Config,
     ModelConfig,
     ExecutionConfig,
-    CacheConfig,
-    ErrorHandlingConfig,
 )
 
 # Browser provider
@@ -63,8 +61,6 @@ __all__ = [
     "Config",
     "ModelConfig",
     "ExecutionConfig",
-    "CacheConfig",
-    "ErrorHandlingConfig",
     "BotBrowserConfig",
     # Browser provider
     "BrowserProvider",

@@ -109,25 +109,7 @@ class CacheConfig(BaseModel):
 
 class ElementConfig(BaseModel):
     """Element detection and overlay configuration."""
-    
-    max_detailed_elements: int = Field(
-        default=400,
-        ge=1,
-        description="Maximum number of detailed elements to include"
-    )
-    include_detailed_elements: bool = Field(
-        default=True,
-        description="Include detailed element information in prompts"
-    )
-    selection_retry_attempts: int = Field(
-        default=3,
-        ge=1,
-        description="Number of retry attempts for element selection"
-    )
-    selection_fallback_model: Optional[str] = Field(
-        default=None,
-        description="Fallback model for element selection retries"
-    )
+
     crops_per_gallery: int = Field(
         default=6,
         description="Number of element crops per gallery page in element_index mode. "
@@ -195,82 +177,6 @@ class DebugConfig(BaseModel):
         description="Maximum screenshot files retained on disk in stream directory."
     )
 
-    class Config:
-        arbitrary_types_allowed = True
-
-
-class ErrorHandlingConfig(BaseModel):
-    """Error handling and recovery configuration."""
-    
-    screenshot_on_error: bool = Field(
-        default=True,
-        description="Take screenshot when errors occur"
-    )
-    screenshot_dir: str = Field(
-        default="error_screenshots",
-        description="Directory for error screenshots"
-    )
-    max_retries: int = Field(
-        default=3,
-        ge=0,
-        description="Maximum retry attempts for recoverable errors"
-    )
-    retry_delay: float = Field(
-        default=2.0,
-        ge=0.0,
-        description="Delay between retries in seconds"
-    )
-    retry_backoff: float = Field(
-        default=2.0,
-        ge=1.0,
-        description="Backoff multiplier for exponential retry"
-    )
-    abort_on_critical: bool = Field(
-        default=True,
-        description="Abort automation on critical errors"
-    )
-    
-    class Config:
-        arbitrary_types_allowed = True
-
-
-class ActFunctionConfig(BaseModel):
-    """
-    Configuration for act() function parameters used by the agent.
-    
-    This allows you to selectively disable certain parameters when the agent
-    calls the act() function during execution.
-    """
-    
-    enable_target_context_guard: bool = Field(
-        default=True,
-        description="Enable target_context_guard parameter (contextual element filtering)"
-    )
-    enable_modifier: bool = Field(
-        default=True,
-        description="Enable modifier parameter (ordinal selection, etc.)"
-    )
-    enable_additional_context: bool = Field(
-        default=True,
-        description="Enable additional_context parameter (supplementary information)"
-    )
-    
-    class Config:
-        arbitrary_types_allowed = True
-
-
-class UserMessagesConfig(BaseModel):
-    """Configuration for user-facing messages."""
-    
-    file_upload_prompt: str = Field(
-        default="    ⏸️ Waiting for user to finish selecting a file. Press Enter to continue...",
-        description="Message shown when waiting for user to select a file for upload"
-    )
-    file_upload_interrupted: str = Field(
-        default="    ⚠️ Input unavailable or interrupted; continuing without confirmation.",
-        description="Message shown when file upload input is interrupted or unavailable"
-    )
-    
     class Config:
         arbitrary_types_allowed = True
 
@@ -430,38 +336,6 @@ class SandboxConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class StorageCleanupConfig(BaseModel):
-    """Cleanup policy for temporary runs only."""
-
-    enabled: bool = Field(
-        default=True,
-        description="Enable cleanup for temporary runs.",
-    )
-    temp_ttl_days: int = Field(
-        default=7,
-        ge=0,
-        description="Delete temporary runs older than this many days (0 disables TTL pruning).",
-    )
-    temp_keep_last_runs: int = Field(
-        default=5,
-        ge=0,
-        description="Always keep this many most-recent runs per temporary agent.",
-    )
-    temp_max_runs: int = Field(
-        default=100,
-        ge=1,
-        description="Maximum number of runs to keep per temporary agent.",
-    )
-    max_disk_mb: int = Field(
-        default=4096,
-        ge=0,
-        description="Disk budget for temporary runs under the storage base directory (0 disables disk pruning).",
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
 class StorageConfig(BaseModel):
     """Per-agent workspace storage settings."""
 
@@ -475,10 +349,6 @@ class StorageConfig(BaseModel):
     default_persistence_mode: Literal["temp", "persistent"] = Field(
         default="temp",
         description="Default persistence mode for newly created agents.",
-    )
-    cleanup: StorageCleanupConfig = Field(
-        default_factory=StorageCleanupConfig,
-        description="Cleanup policy (applies only to temporary runs).",
     )
 
     class Config:
@@ -501,10 +371,6 @@ class Config(BaseModel):
         default_factory=ExecutionConfig,
         description="Execution behavior configuration"
     )
-    cache: CacheConfig = Field(
-        default_factory=CacheConfig,
-        description="Plan caching configuration"
-    )
     elements: ElementConfig = Field(
         default_factory=ElementConfig,
         description="Element detection configuration"
@@ -516,18 +382,6 @@ class Config(BaseModel):
     browser: BrowserProviderConfig = Field(
         default_factory=BrowserProviderConfig,
         description="Browser provider configuration"
-    )
-    error_handling: ErrorHandlingConfig = Field(
-        default_factory=ErrorHandlingConfig,
-        description="Error handling and recovery configuration"
-    )
-    act_function: ActFunctionConfig = Field(
-        default_factory=ActFunctionConfig,
-        description="Act function parameter configuration"
-    )
-    user_messages: UserMessagesConfig = Field(
-        default_factory=UserMessagesConfig,
-        description="User-facing messages configuration"
     )
     user_interaction: UserInteractionConfig = Field(
         default_factory=UserInteractionConfig,
@@ -782,7 +636,7 @@ def get_config_section_catalog() -> list[dict[str, str]]:
     Return top-level Config sections with UI metadata.
 
     This is intended for building section trees such as:
-    ModelConfig, ExecutionConfig, CacheConfig, etc.
+    ModelConfig, ExecutionConfig, ElementConfig, etc.
     """
     items: list[dict[str, str]] = []
     model_fields = getattr(Config, "model_fields", {})

@@ -20,10 +20,8 @@ from agent.agent_controller import Agent
 from agent.interceptor_manager import Interceptor, InterceptorContext, InterceptorMode
 from browser.provider import BrowserConfig
 from core.config import (
-    ActFunctionConfig,
     Config,
     DebugConfig,
-    ElementConfig,
     ExecutionConfig,
     ModelConfig,
     UserMessagesConfig,
@@ -55,11 +53,6 @@ config = Config(
         wait_for_load_state="networkidle",
         wait_for_load_timeout_ms=5000,
     ),
-    elements=ElementConfig(
-        selection_fallback_model="gemini/gemini-2.5-flash-lite",
-        selection_retry_attempts=2,
-        crops_per_gallery=6,
-    ),
     logging=DebugConfig(
         debug_mode=False,
         show_overlay_candidates=True,
@@ -70,15 +63,6 @@ config = Config(
         provider_type="local",
         headless=False,
         apply_stealth=True,
-    ),
-    act_function=ActFunctionConfig(
-        enable_target_context_guard=False,
-        enable_modifier=True,
-        enable_additional_context=True,
-    ),
-    user_messages=UserMessagesConfig(
-        file_upload_prompt="⏸️ Please select the file you would like to upload. Press [Enter] when done...",
-        file_upload_interrupted="⚠️ Upload interrupted. Please try again.",
     ),
 )
 
