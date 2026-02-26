@@ -8,6 +8,7 @@ before the viewport changes, relying only on what is visible.
 from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
+import time
 
 from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
@@ -19,7 +20,6 @@ from agent.prompts import (
     render_decision_context,
 )
 from lib.ai import (
-    generate_model,
     generate_action_with_tools,
     ReasoningLevel,
     get_default_agent_model,
@@ -64,7 +64,6 @@ class ActionPlanner:
         model_name: Optional[str] = None,
         reasoning_level: Union[ReasoningLevel, str, None] = None,
         image_detail: str = "high",
-        interaction_summary_limit: Optional[int] = None,
         include_visible_text_in_agent_context: bool = False,
         max_actions_per_plan: int = 6,
         current_iteration: int = 0,
@@ -95,6 +94,7 @@ class ActionPlanner:
         budget_phase: str = "normal",
         low_budget_mode: bool = False,
         budget_constraints_enabled: bool = True,
+        allowed_tool_names: Optional[List[str]] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -106,7 +106,6 @@ class ActionPlanner:
         self.reasoning_level: ReasoningLevel = reasoning
         self.image_detail = image_detail
         self._system_prompt_cache: dict[str, str] = {}
-        self.interaction_summary_limit = interaction_summary_limit
         self.include_visible_text_in_agent_context = include_visible_text_in_agent_context
         self.memory_store: NarrativeMemory = memory_store
         self.max_actions_per_plan = max_actions_per_plan
@@ -138,6 +137,14 @@ class ActionPlanner:
         self.budget_phase = str(budget_phase or "normal").strip().lower() or "normal"
         self.low_budget_mode = bool(low_budget_mode)
         self.budget_constraints_enabled = bool(budget_constraints_enabled)
+        self.allowed_tool_names = [
+            str(name).strip()
+            for name in (allowed_tool_names or [])
+            if str(name).strip()
+        ]
+        self.last_call_telemetry: dict[str, Any] = {}
+        self.last_failure_code: Optional[str] = None
+        self.last_failure_stage: Optional[str] = None
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -146,7 +153,7 @@ class ActionPlanner:
         - LOOP STATUS: current loop round/count when in a loop
         - ACTIVE STRATEGY: persistent reasoning from the last think(continue)
         - LAST ACTION: what the agent just did and the result
-        - RECENT ACTIONS: compact log of last ~10 actions
+        - RECENT ACTIONS: compact log of recent actions
         - TAB EVENTS: tab opens/closes/dialog events since the last iteration
         """
         parts = []
@@ -253,8 +260,12 @@ class ActionPlanner:
         """
         from agent.action_tools import get_filtered_tools
 
+        self.last_call_telemetry = {}
+        self.last_failure_code = None
+        self.last_failure_stage = None
+
         try:
-            # Build reflection block (active strategy + last action + tab events)
+            # Build reflection block (last action + tab events)
             reflection = self._build_reflection_block()
 
             # Dialog notice goes at the very top of user prompt (highest attention)
@@ -312,7 +323,7 @@ CHECKPOINT — choose via think():
 Decision context:
 {decision_context_block}
 
-Based on the screenshot, what is the best next action?
+Based on the screenshot, decision context, and the mission, what is the best next action?
 
 {SHARED_CONTRADICTION_GATE}
 """
@@ -322,7 +333,12 @@ Based on the screenshot, what is the best next action?
                 checkpoint_mode=self.checkpoint_mode,
                 dialog_pending=self.dialog_pending,
                 budget_constraints_enabled=self.budget_constraints_enabled,
+                allowed_tool_names=self.allowed_tool_names or None,
             )
+            if not tools:
+                self.last_failure_code = "tool_allowlist_empty"
+                self.last_failure_stage = "planner_tool_selection"
+                return None, "No tools available for the active tool profile in this mode."
 
             system_prompt = self._build_function_calling_system_prompt(
                 environment_state,
@@ -339,20 +355,25 @@ Based on the screenshot, what is the best next action?
                 multi_image_arg = [screenshot] + self.gallery_images
                 image_arg = None
 
+            developer_prompt = get_memory_developer_policy(self.budget_constraints_enabled)
+            planner_model = self.model_name
+
             # Generate action using function calling
+            call_started_at = time.perf_counter()
             result = generate_action_with_tools(
                 prompt=user_prompt,
                 tools=tools,
                 system_prompt=system_prompt,
-                developer_prompt=get_memory_developer_policy(self.budget_constraints_enabled),
+                developer_prompt=developer_prompt,
                 image=image_arg,
                 multi_image=multi_image_arg,
                 image_detail=self.image_detail,
-                model=self.model_name,
+                model=planner_model,
                 reasoning_level=self.reasoning_level,
                 tool_choice="required",
                 parallel_tool_calls=self.max_actions_per_plan > 1,
             )
+            llm_latency_ms = (time.perf_counter() - call_started_at) * 1000.0
 
             actions = []
             # Limit to max_actions_per_plan to prevent excessive batching
@@ -374,28 +395,133 @@ Based on the screenshot, what is the best next action?
                 )
                 actions.append(action_step)
 
+            usage = {}
+            if result and isinstance(result[0], dict):
+                usage = result[0].get("usage") or {}
+            input_tokens = int(usage.get("input_tokens", 0) or 0)
+            output_tokens = int(usage.get("output_tokens", 0) or 0)
+            total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+            image_count = 1 + len(self.gallery_images or [])
+            self.last_call_telemetry = {
+                "llm_latency_ms": llm_latency_ms,
+                "tokens_in": input_tokens,
+                "tokens_out": output_tokens,
+                "tokens_total": total_tokens,
+                "image_count": image_count,
+                "planner_retries": 0,
+                "model": planner_model,
+            }
             return actions, None
 
         except Exception as e:
+            self.last_failure_code = "planner_generation_failed"
+            self.last_failure_stage = "planner_model_call"
             get_event_logger().system_error(f"Error generating action with function calling: {e}")
             import traceback
             traceback.print_exc()
             return None, f"Error generating action: {e}"
 
-    def _build_function_calling_system_prompt(
-        self,
-        state: EnvironmentState,
-        notebook: Notebook,
-        element_data: PageElements,
-    ) -> str:
-        """Build system prompt for function calling action generation."""
-
+    def _build_function_calling_static_prompt(self) -> str:
+        """Build static planner instructions for function-calling planning."""
         # Build base knowledge section if provided
         base_knowledge_section = ""
         if self.base_knowledge:
             base_knowledge_section = "\n\nCUSTOM RULES:\n"
             for i, knowledge in enumerate(self.base_knowledge, 1):
                 base_knowledge_section += f"{i}. {knowledge}\n"
+
+        budget_constraints_status = "enabled" if self.budget_constraints_enabled else "disabled"
+        if self.budget_constraints_enabled:
+            budget_reasoning_contract = """
+11. Every tool call arguments object must include:
+    - budget_spent
+    - budget_remaining
+    - budget_total
+    and these values must exactly match the Budget status shown above."""
+        else:
+            budget_reasoning_contract = """
+11. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
+
+        policy_section = ""
+        if self.policy_constraints_block:
+            policy_section = f"""
+═══════════════════════════════════════════════════════════════
+POLICY CONSTRAINTS
+═══════════════════════════════════════════════════════════════
+{self.policy_constraints_block}
+"""
+
+        return f"""
+You are controlling a web browser.
+Use the dynamic context to understand current state and choose the best next action.
+
+Tool schemas are provided as function definitions. Categories:
+• Browser: click, type_text, clear_text, select_option, upload_file, set_datetime, press_key, scroll_down, scroll_up, scroll_container, scroll_to_element, open_url, go_back, go_forward
+• Data/Comm: extract_data, ask_user, report_data, write_data, send_email, bash, read_file, find_files, read_clipboard, flag
+• Tabs: switch_tab, close_tab, open_tab, dismiss_dialog
+• Cognitive: think (next_action: continue|start_loop|advance|end_loop|done|stuck), assert_condition, wait_for
+
+Scroll rules:
+• scroll_down / scroll_up: only for the main page (no element_id).
+• scroll_container: for modals/sidebars/lists; pass element_id inside that container.
+• scroll_to_element: bring a specific [id] into view.
+
+{policy_section}
+
+═══════════════════════════════════════════════════════════════
+LOOPS
+═══════════════════════════════════════════════════════════════
+When you need to repeat an action for multiple targets:
+1. Do the first action normally.
+2. At the checkpoint, call think(next_action="start_loop", loop_count=N, loop_description="...").
+   N includes the action you already did (round 1).
+3. Each subsequent round: do the action, then think(next_action="advance").
+4. Elements you've already interacted with show [DONE] in the element index.
+5. The loop auto-completes after the last round, or use think(next_action="end_loop") to exit early.
+
+═══════════════════════════════════════════════════════════════
+ERROR RECOVERY
+═══════════════════════════════════════════════════════════════
+If something isn't working:
+• Try a different element or approach
+• Scroll if you can't find what you need
+• Use think() to reason about what's wrong
+• Use flag() to notify the user of issues
+• Don't repeat the exact same failed action
+
+STUCK STRATEGY SWITCH RULE:
+• If my recent attempts did not create visible progress, I should not keep the same strategy
+• I should call think(next_action=stuck)
+• In that call:
+  - reasoning should be natural first-person language for a meaningfully different approach
+  - recommended_next_step should be one concrete immediate action
+
+{SHARED_CONTRADICTION_GATE}
+
+═══════════════════════════════════════════════════════════════
+GUIDELINES
+═══════════════════════════════════════════════════════════════
+1. Only act on elements visible in the screenshot — click by their visual position
+2. Be specific in element descriptions
+3. type_text REPLACES content (doesn't append)
+4. Check focused=true before clicking to focus
+5. Don't repeat failed actions
+6. think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
+7. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
+8. Stick exactly to the mission. Do not add extra steps, verification, confirmations, or sub-tasks that the mission did not ask for.
+9. If you call think(next_action=stuck), propose a meaningfully different approach and one concrete immediate action.
+10. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
+{budget_reasoning_contract}
+{base_knowledge_section}
+"""
+
+    def _build_function_calling_dynamic_context(
+        self,
+        state: EnvironmentState,
+        notebook: Notebook,
+        element_data: PageElements,
+    ) -> str:
+        """Build dynamic planner context that changes every iteration."""
 
         user_hints_section = ""
         if self.user_hints:
@@ -406,7 +532,9 @@ Based on the screenshot, what is the best next action?
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
         memory_index_block = self._get_memory_entry_index()
-        executed_action_ledger = self.memory_store.get_executed_action_ledger(n=20)
+        executed_action_ledger = self.memory_store.get_executed_action_ledger(
+            n=max(1, len(self.memory_store.entries))
+        )
         recent_user_answers_block = self._get_recent_user_answers_block()
         stuck_hint_lines = self.memory_store.get_stuck_pattern_hints()
         nav_summary = self._summarize_navigation_history(
@@ -441,25 +569,7 @@ OPEN TABS
                 f"after the screenshot. Elements marked 'SEE CROP GALLERY' in the "
                 f"index have visual crops in these gallery images."
             )
-        budget_constraints_status = "enabled" if self.budget_constraints_enabled else "disabled"
-        if self.budget_constraints_enabled:
-            budget_reasoning_contract = """
-12. Every tool call arguments object must include:
-    - budget_spent
-    - budget_remaining
-    - budget_total
-    and these values must exactly match the Budget status shown above."""
-        else:
-            budget_reasoning_contract = """
-12. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
-        policy_section = ""
-        if self.policy_constraints_block:
-            policy_section = f"""
-═══════════════════════════════════════════════════════════════
-POLICY CONSTRAINTS
-═══════════════════════════════════════════════════════════════
-{self.policy_constraints_block}
-"""
+
         opening_instruction = (
             "You are controlling a web browser. You can see the current page "
             "as a screenshot." + gallery_note + "\n"
@@ -481,7 +591,11 @@ FOCUS STATE:
 • focused → Element already has keyboard focus
 • If you need to type and input is focused → Just call type_text (don't click first)"""
 
-        return f"""{opening_instruction}
+        return f"""
+═══════════════════════════════════════════════════════════════
+DYNAMIC CONTEXT
+═══════════════════════════════════════════════════════════════
+{opening_instruction}
 
 {forced_think_prompt}
 
@@ -498,14 +612,6 @@ Mission: {self.user_prompt}
 
 {recent_user_answers_block}
 
-Budget status:
-- spent={self.budget_spent}
-- remaining={self.iterations_remaining}
-- total={self.max_iterations}
-- phase={self.budget_phase}
-- low_budget_mode={"on" if self.low_budget_mode else "off"}
-- constraints={budget_constraints_status}
-
 Potential stuck patterns from memory scan: {stuck_hints}
 
 Memory ID ledger (for citing any prior memory entry):
@@ -518,123 +624,35 @@ Navigation history:
 
 {self._format_notebook(notebook)}
 
-═══════════════════════════════════════════════════════════════
-AVAILABLE FUNCTIONS
-═══════════════════════════════════════════════════════════════
-
-BROWSER ACTIONS:
-• click - Click an element
-• type_text - Type text into an input
-• clear_text - Clear text from an input field
-• select_option - Select option from dropdown
-• upload_file - Upload a file
-• set_datetime - Set date/time in picker
-• press_key - Press keyboard key (Enter, Tab, Escape, etc.)
-• scroll_page - Scroll the page or a specific container
-  Examples:
-    scroll_page(direction="down")                              ← scroll main page
-    scroll_page(direction="down", element_id=42)               ← scroll the modal/sidebar/panel containing element 42
-    scroll_page(direction="up", element_id=17)                 ← scroll up inside a sidebar (pass any element inside it)
-    scroll_page(direction="down", scroll_to_element_id=55)     ← bring element 55 into view
-  When to use element_id: any time you see a modal, drawer, dropdown list, chat panel, or overflow
-  area — pick any element visible inside it and pass its id. The system finds the scrollable container.
-• open_url - Navigate to URL
-• go_back / go_forward - Browser navigation
-
-DATA & COMMUNICATION:
-• extract_data - Extract and store data in notebook
-• ask_user - Ask user for clarification
-• report_data - Send textual data back to the host callback
-• write_data - Write text data to disk
-• send_email - Send an email via the Resend API
-• bash - Run a local bash command and use output as context
-• read_file - Read a local file (optionally line-ranged) into context
-• find_files - Find files by glob pattern in a directory
-• read_clipboard - Read system clipboard contents into context
-• flag - Send non-blocking notification to user
-
-TAB MANAGEMENT:
-• switch_tab - Switch to a different browser tab
-• close_tab - Close a browser tab
-• open_tab - Open a new tab (optionally with URL)
-• dismiss_dialog - Accept or dismiss a JavaScript dialog
-
-COGNITIVE ACTIONS:
-• think - Stop and reason; decide next via next_action param
-  - continue: keep working
-  - start_loop: begin repeating an action (provide loop_count, loop_description)
-  - advance: (in loop) current iteration done, move to next round
-  - end_loop: exit loop early
-  - done: mission complete
-  - stuck: switch strategy
-• assert_condition - Check if something is true from the screenshot
-• wait_for - Wait for a condition with timeout
-
-{policy_section}
-
-═══════════════════════════════════════════════════════════════
-LOOPS
-═══════════════════════════════════════════════════════════════
-When you need to repeat an action for multiple targets:
-1. Do the first action normally.
-2. At the checkpoint, call think(next_action="start_loop", loop_count=N, loop_description="...").
-   N includes the action you already did (round 1).
-3. Each subsequent round: do the action, then think(next_action="advance").
-4. Elements you've already interacted with show [DONE] in the element index.
-5. The loop auto-completes after the last round, or use think(next_action="end_loop") to exit early.
-
-═══════════════════════════════════════════════════════════════
-ERROR RECOVERY
-═══════════════════════════════════════════════════════════════
-If something isn't working:
-• Try a different element or approach
-• Scroll if you can't find what you need
-• Use think() to reason about what's wrong
-• Use flag() to notify the user of issues
-• Don't repeat the exact same failed action
-
-STUCK STRATEGY SWITCH RULE:
-• If my recent attempts did not create visible progress, I should not keep the same strategy
-• I should call think(next_action=stuck)
-• In that call:
-  - reasoning should be natural first-person language for my new ACTIVE STRATEGY
-  - recommended_next_step should be one concrete immediate action
-
-{SHARED_CONTRADICTION_GATE}
-
-═══════════════════════════════════════════════════════════════
-GUIDELINES
-═══════════════════════════════════════════════════════════════
-1. Only act on elements visible in the screenshot — click by their visual position
-2. Be specific in element descriptions
-3. type_text REPLACES content (doesn't append)
-4. Check focused=true before clicking to focus
-5. Don't repeat failed actions
-6. When ACTIVE STRATEGY is present, think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
-7. If what you planned conflicts with the current screenshot, follow the screenshot and adjust plan
-8. Stick exactly to the mission. Do not add extra steps, verification, confirmations, or sub-tasks that the mission did not ask for. If the mission is simple, your strategy should be simple.
-9. When setting an ACTIVE STRATEGY, keep it minimal — only describe what is directly required to complete the mission as stated. Do not elaborate beyond that.
-10. When ACTIVE STRATEGY is present, each non-think tool call reasoning should explicitly state
-    how that action advances the ACTIVE STRATEGY
-11. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
-{budget_reasoning_contract}
-13. If a cookie banner, consent popup, or overlay is blocking the page, dismiss it before attempting other interactions.
-{base_knowledge_section}
 {user_hints_section}
 
 Choose the next action to take.
 """
 
+    def _build_function_calling_system_prompt(
+        self,
+        state: EnvironmentState,
+        notebook: Notebook,
+        element_data: PageElements,
+    ) -> str:
+        """Backward-compatible full prompt builder for HTTP path."""
+        static_prompt = self._build_function_calling_static_prompt()
+        dynamic_prompt = self._build_function_calling_dynamic_context(
+            state, notebook, element_data
+        )
+        return f"{static_prompt}\n\n{dynamic_prompt}"
+
     def _get_memory_narrative_block(self, just_data: bool = False) -> str:
         if not self.memory_store:
             return ""
-        limit = self.interaction_summary_limit or 20
-        narrative = self.memory_store.get_narrative(n=limit)
+        narrative = self.memory_store.get_narrative(
+            n=max(1, len(self.memory_store.entries))
+        )
         if just_data:
             return narrative
         return f"Recent memory narrative:\n{narrative}"
 
-    def _get_recent_user_answers_block(self, limit: int = 5) -> str:
+    def _get_recent_user_answers_block(self) -> str:
         """Format recent ask_user answers so planner can leverage them directly."""
         if not self.memory_store:
             return (
@@ -644,7 +662,8 @@ Choose the next action to take.
                 "No user answers recorded yet."
             )
 
-        pairs = self.memory_store.get_recent_question_answers(n=limit)
+        total_pairs = len(self.memory_store.question_answer_pairs)
+        pairs = self.memory_store.get_recent_question_answers(n=total_pairs)
         if not pairs:
             return (
                 "═══════════════════════════════════════════════════════════════\n"
@@ -671,30 +690,15 @@ Choose the next action to take.
             f"{body}"
         )
 
-    def _get_memory_entry_index(self, max_lines: int = 120) -> str:
+    def _get_memory_entry_index(self) -> str:
         if not self.memory_store or not self.memory_store.entries:
             return "No memory entries yet."
 
-        entries = self.memory_store.entries
-        total = len(entries)
-
-        if total <= max_lines:
-            selected = entries
-        else:
-            head = max_lines // 3
-            tail = max_lines // 3
-            middle = max_lines - head - tail
-            mid_start = max((total // 2) - (middle // 2), 0)
-            selected = entries[:head] + entries[mid_start: mid_start + middle] + entries[-tail:]
-
         lines: List[str] = []
-        for entry in selected:
+        for entry in self.memory_store.entries:
             lines.append(
                 f"[{entry.memory_id}] {entry.entry_kind} | {entry.action_type} -> {entry.outcome}"
             )
-
-        if total > len(selected):
-            lines.append(f"... {total - len(selected)} additional memory entries omitted for prompt size ...")
 
         return "\n".join(lines)
 
@@ -730,9 +734,8 @@ NOTEBOOK (Your Stored Data)
         prev_url = url_history[pointer - 1] if pointer > 0 else None
         next_url = url_history[pointer + 1] if pointer < total - 1 else None
 
-        start_idx = max(0, total - 3)  # Reduced for speed
         lines = []
-        for idx in range(start_idx, total):
+        for idx in range(total):
             marker = " (current)" if idx == pointer else ""
             lines.append(f"{idx}: {url_history[idx]}{marker}")
 

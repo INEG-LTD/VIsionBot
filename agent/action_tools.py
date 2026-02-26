@@ -1109,6 +1109,7 @@ def get_filtered_tools(
     checkpoint_mode: bool = False,
     dialog_pending: bool = False,
     budget_constraints_enabled: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get the appropriate tool list based on current state.
@@ -1117,6 +1118,7 @@ def get_filtered_tools(
         checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of the normal action tools
         dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
         budget_constraints_enabled: If False, strip budget fields from tool schemas
+        allowed_tool_names: Optional allowlist of tool names.
 
     Returns:
         Filtered list of tools available to the agent
@@ -1127,10 +1129,18 @@ def get_filtered_tools(
     else:
         selected = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
 
-    if budget_constraints_enabled:
-        return selected
+    filtered = selected
+    if allowed_tool_names is not None:
+        allow = {str(name).strip() for name in allowed_tool_names if str(name).strip()}
+        filtered = [
+            tool for tool in filtered
+            if str(tool.get("function", {}).get("name", "")).strip() in allow
+        ]
 
-    stripped = deepcopy(selected)
+    if budget_constraints_enabled:
+        return filtered
+
+    stripped = deepcopy(filtered)
     for tool in stripped:
         params = tool.get("function", {}).get("parameters", {})
         if not isinstance(params, dict):

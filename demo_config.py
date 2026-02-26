@@ -24,7 +24,7 @@ from core.config import (
     DebugConfig,
     ExecutionConfig,
     ModelConfig,
-    UserMessagesConfig,
+    ToolPreset,
 )
 from lib.ai import ReasoningLevel
 
@@ -49,6 +49,9 @@ config = Config(
     execution=ExecutionConfig(
         max_actions_per_mission=6,
         max_actions_per_plan=1,
+        # Quick tool selection with predefined presets:
+        # - "minimal", "research", "web_safe", "full", "locked_down"
+        tool_preset=ToolPreset.WEB_SAFE,
         wait_for_load_before_iteration=True,
         wait_for_load_state="networkidle",
         wait_for_load_timeout_ms=5000,

@@ -8,10 +8,161 @@ object with grouped settings.
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from lib.ai import ReasoningLevel
 from browser.provider import BrowserConfig as BrowserProviderConfig
+
+
+DEFAULT_TOOL_ALLOWLIST: list[str] = [
+    "click",
+    "type_text",
+    "clear_text",
+    "select_option",
+    "upload_file",
+    "set_datetime",
+    "press_key",
+    "open_url",
+    "go_back",
+    "go_forward",
+    "scroll_down",
+    "scroll_up",
+    "scroll_container",
+    "scroll_to_element",
+    "extract_data",
+    "ask_user",
+    "report_data",
+    "write_data",
+    "wait_for",
+    "send_email",
+    "bash",
+    "read_file",
+    "find_files",
+    "read_clipboard",
+    "switch_tab",
+    "close_tab",
+    "open_tab",
+    "dismiss_dialog",
+    "think",
+    "assert_condition",
+    "flag",
+]
+
+class ToolPreset(str, Enum):
+    MINIMAL = "minimal"
+    RESEARCH = "research"
+    WEB_SAFE = "web_safe"
+    FULL = "full"
+    LOCKED_DOWN = "locked_down"
+
+
+TOOL_PRESETS: dict[ToolPreset, list[str]] = {
+    # Smallest useful interactive browsing set.
+    ToolPreset.MINIMAL: [
+        "click",
+        "type_text",
+        "press_key",
+        "open_url",
+        "go_back",
+        "go_forward",
+        "scroll_down",
+        "scroll_up",
+        "scroll_container",
+        "scroll_to_element",
+        "wait_for",
+        "think",
+        "flag",
+    ],
+    # Practical web research + extraction/reporting, no local shell/fs tools.
+    ToolPreset.RESEARCH: [
+        "click",
+        "type_text",
+        "clear_text",
+        "select_option",
+        "press_key",
+        "open_url",
+        "go_back",
+        "go_forward",
+        "scroll_down",
+        "scroll_up",
+        "scroll_container",
+        "scroll_to_element",
+        "extract_data",
+        "ask_user",
+        "report_data",
+        "write_data",
+        "wait_for",
+        "switch_tab",
+        "close_tab",
+        "open_tab",
+        "dismiss_dialog",
+        "think",
+        "assert_condition",
+        "flag",
+    ],
+    # Browser-only actions; excludes local/host access tools.
+    ToolPreset.WEB_SAFE: [
+        "click",
+        "type_text",
+        "clear_text",
+        "select_option",
+        "upload_file",
+        "set_datetime",
+        "press_key",
+        "open_url",
+        "go_back",
+        "go_forward",
+        "scroll_down",
+        "scroll_up",
+        "scroll_container",
+        "scroll_to_element",
+        "extract_data",
+        "ask_user",
+        "report_data",
+        "write_data",
+        "wait_for",
+        "send_email",
+        "switch_tab",
+        "close_tab",
+        "open_tab",
+        "dismiss_dialog",
+        "think",
+        "assert_condition",
+        "flag",
+    ],
+    # Full legacy default set.
+    ToolPreset.FULL: list(DEFAULT_TOOL_ALLOWLIST),
+    # Intentional no-op planner sandbox for diagnostics/guardrail checks.
+    ToolPreset.LOCKED_DOWN: [
+        "ask_user",
+        "report_data",
+        "write_data",
+        "think",
+        "flag",
+    ],
+}
+
+
+def tool_preset(name: ToolPreset | str) -> list[str]:
+    """Resolve a named tool preset to a concrete tool allowlist."""
+    preset = (
+        name
+        if isinstance(name, ToolPreset)
+        else ToolPreset(str(name or "").strip().lower())
+    )
+    # Return a copy to avoid accidental mutation of the shared preset tables.
+    return list(TOOL_PRESETS[preset])
+
+
+def resolve_tool_preset(name: ToolPreset | str) -> tuple[str, list[str]]:
+    """Resolve preset id + allowlist for runtime/planner enforcement."""
+    preset = (
+        name
+        if isinstance(name, ToolPreset)
+        else ToolPreset(str(name or "").strip().lower())
+    )
+    return f"preset:{preset.value}", tool_preset(preset)
 
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
@@ -55,6 +206,13 @@ class ExecutionConfig(BaseModel):
         le=20,
         description="Maximum number of actions to generate in a single action plan. Default is 6. Valid range: 1-20."
     )
+    tool_preset: ToolPreset = Field(
+        default=ToolPreset.FULL,
+        description=(
+            "Tool preset used for planner/runtime allowlist enforcement. "
+            "Allowed values: minimal, research, web_safe, full, locked_down."
+        ),
+    )
     budget_constraints_enabled: bool = Field(
         default=True,
         description=(
@@ -80,29 +238,37 @@ class ExecutionConfig(BaseModel):
         ge=0,
         description="Maximum repeated validation failures before escalating to partial/blocked mission result."
     )
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-class CacheConfig(BaseModel):
-    """Plan caching configuration."""
-    
-    enabled: bool = Field(
-        default=True,
-        description="Enable plan caching"
-    )
-    ttl: float = Field(
-        default=6.0,
+    iteration_stall_soft_timeout_s: float = Field(
+        default=20.0,
         ge=0.0,
-        description="Time-to-live for cached plans in seconds"
+        description=(
+            "Soft watchdog timeout in seconds for a single iteration before any action result is produced. "
+            "0 disables the soft watchdog."
+        ),
     )
-    max_reuse: int = Field(
-        default=1,
-        ge=-1,
-        description="Maximum times a plan can be reused (-1 = unlimited)"
+    iteration_stall_hard_timeout_s: float = Field(
+        default=40.0,
+        ge=0.0,
+        description=(
+            "Hard watchdog timeout in seconds for a single iteration before any action result is produced. "
+            "When reached, the current iteration is force-ended and the agent replans. 0 disables hard timeout."
+        ),
     )
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_tool_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        removed_fields = ("tool_profile_id", "tool_profiles", "allowed_tools", "disabled_tools")
+        found = [name for name in removed_fields if name in data]
+        if not found:
+            return data
+        raise ValueError(
+            "ExecutionConfig no longer supports legacy tool fields: "
+            f"{', '.join(found)}. Use tool_preset only."
+        )
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -148,6 +314,14 @@ class DebugConfig(BaseModel):
     show_llm_costs: bool = Field(
         default=True,
         description="Show LLM cost information in debug mode"
+    )
+    telemetry_live_enabled: bool = Field(
+        default=True,
+        description="Emit per-iteration factual telemetry summaries.",
+    )
+    telemetry_final_summary_enabled: bool = Field(
+        default=True,
+        description="Emit mission-final factual telemetry summary.",
     )
     stream_screenshots: bool = Field(
         default=False,
