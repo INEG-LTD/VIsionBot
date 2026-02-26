@@ -69,7 +69,6 @@ class ActionPlanner:
         current_iteration: int = 0,
         user_facing_actions_in_round: int = 0,
         checkpoint_mode: bool = False,
-        active_strategy: Optional[str] = None,
         last_action_summary: Optional[str] = None,
         tab_bar: Optional[str] = None,
         dialog_notice: Optional[str] = None,
@@ -112,7 +111,6 @@ class ActionPlanner:
         self.current_iteration = current_iteration
         self.user_facing_actions_in_round = user_facing_actions_in_round
         self.checkpoint_mode = checkpoint_mode
-        self.active_strategy = active_strategy
         self.last_action_summary = last_action_summary
         self.tab_bar = tab_bar
         self.dialog_notice = dialog_notice
@@ -151,7 +149,6 @@ class ActionPlanner:
 
         Contains:
         - LOOP STATUS: current loop round/count when in a loop
-        - ACTIVE STRATEGY: persistent reasoning from the last think(continue)
         - LAST ACTION: what the agent just did and the result
         - RECENT ACTIONS: compact log of recent actions
         - TAB EVENTS: tab opens/closes/dialog events since the last iteration
@@ -188,9 +185,6 @@ class ActionPlanner:
                 f"{remaining} round{'s' if remaining != 1 else ''} remaining.\n"
                 f"After completing this round, call think(next_action=advance).\n"
             )
-
-        if self.active_strategy:
-            parts.append(f"ACTIVE STRATEGY:\n{self.active_strategy}\n")
 
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
@@ -273,22 +267,6 @@ class ActionPlanner:
             if self.dialog_notice:
                 dialog_prefix = f"{self.dialog_notice}\n"
 
-            continuation_mode = ""
-            if self.active_strategy:
-                continuation_mode = """
-ACTIVE STRATEGY CONTINUATION MODE
-You already have an ACTIVE STRATEGY. Continue it.
-
-Rules:
-1. Do not create a new plan unless stuck or page changed enough.
-2. The screenshot is the source of truth. If ACTIVE STRATEGY conflicts with what's visible, update immediately.
-3. Do not restate the full plan.
-4. If you call think with next_action=continue, only provide a brief first-person status + next step.
-5. If your recent attempts didn't create visible progress, call think(next_action=stuck).
-6. You should keep working after next_action=stuck — it's a strategy switch, not completion.
-7. For every non-think tool call, reasoning must explain how the action advances the ACTIVE STRATEGY.
-"""
-
             decision_context_block = (
                 render_decision_context(self.decision_context)
                 if self.decision_context is not None
@@ -304,7 +282,7 @@ Rules:
             )
 
             if self.checkpoint_mode:
-                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Mission: {self.user_prompt}
+                user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
 Decision context:
 {decision_context_block}
 
@@ -318,7 +296,7 @@ CHECKPOINT — choose via think():
 {SHARED_CONTRADICTION_GATE}
 """
             else:
-                user_prompt = f"""{dialog_prefix}{reflection}{continuation_mode}Mission: {self.user_prompt}
+                user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
 
 Decision context:
 {decision_context_block}

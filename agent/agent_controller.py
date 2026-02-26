@@ -2143,7 +2143,6 @@ class Agent:
                     pending_hints = list(self._pending_hints)
                     self._pending_hints.clear()
 
-                active_strategy = self.memory_store.get_latest_strategy() or None
                 policy_constraints_block = None
                 if self.config.sandbox.prompt.include_policy_block:
                     policy_constraints_block = self.sandbox_policy.render_prompt_policy_block()
@@ -2167,7 +2166,6 @@ class Agent:
                     image_detail=self.config.model.image_detail,
                     max_actions_per_plan=state.planning_batch_limit,
                     checkpoint_mode=state.checkpoint_pending,
-                    active_strategy=active_strategy,
                     last_action_summary=state.last_action_summary,
                     tab_bar=tab_bar,
                     dialog_notice=dialog_notice,

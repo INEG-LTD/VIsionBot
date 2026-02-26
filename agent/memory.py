@@ -801,15 +801,6 @@ class NarrativeMemory:
             )
         return "\n".join(lines)
 
-    def get_latest_strategy(self) -> str:
-        for entry in reversed(self.entries):
-            if entry.entry_kind != MemoryEntryKind.REFLECTION.value:
-                continue
-            next_action = str(entry.action_params.get("next_action", "")).lower()
-            if next_action in {"continue", "stuck"} and entry.because:
-                return entry.because
-        return ""
-
     def get_stuck_pattern_hints(self) -> List[str]:
         hints: List[str] = []
         recent = self.get_recent(6)
