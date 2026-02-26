@@ -1,4 +1,4 @@
-"""Per-agent workspace and temporary run cleanup management."""
+"""Per-agent workspace management."""
 
 from __future__ import annotations
 
@@ -7,9 +7,7 @@ from pathlib import Path
 import json
 import time
 import uuid
-from typing import Any, Optional
-
-from core.storage_cleanup import StorageCleanupService
+from typing import Any, Optional, List, Dict
 
 
 @dataclass
@@ -42,19 +40,21 @@ class AgentWorkspace:
             return None
         return self.current_run_root / "logs" / "events.jsonl"
 
+    @property
+    def run_checkpoint_path(self) -> Optional[Path]:
+        """Path for mission-resume checkpoint of the currently attached run."""
+        if not self.current_run_root:
+            return None
+        return self.current_run_root / "state" / "checkpoint.json"
+
 
 class AgentWorkspaceManager:
-    """Creates, tracks, and cleans agent workspace directories."""
+    """Creates and tracks agent workspace directories."""
 
     def __init__(
         self,
         *,
         base_dir: str,
-        cleanup_enabled: bool,
-        temp_ttl_days: int,
-        temp_keep_last_runs: int,
-        temp_max_runs: int,
-        max_disk_mb: int,
         event_logger: Optional[Any] = None,
     ) -> None:
         resolved_base_dir = Path(base_dir).expanduser().resolve()
@@ -62,20 +62,7 @@ class AgentWorkspaceManager:
         self.agents_root = self._resolve_agents_root(resolved_base_dir)
         self.agents_root.mkdir(parents=True, exist_ok=True)
         self.base_dir = self.agents_root
-        self.cleanup_enabled = bool(cleanup_enabled)
-        self.temp_ttl_days = max(0, int(temp_ttl_days or 0))
-        self.temp_keep_last_runs = max(0, int(temp_keep_last_runs or 0))
-        self.temp_max_runs = max(1, int(temp_max_runs or 1))
         self.event_logger = event_logger
-        self.cleanup_service = StorageCleanupService(
-            agents_root=self.agents_root,
-            cleanup_enabled=self.cleanup_enabled,
-            temp_ttl_days=self.temp_ttl_days,
-            temp_keep_last_runs=self.temp_keep_last_runs,
-            temp_max_runs=self.temp_max_runs,
-            max_disk_mb=max_disk_mb,
-            event_logger=self.event_logger,
-        )
 
     def create_agent(
         self,
@@ -120,6 +107,7 @@ class AgentWorkspaceManager:
         run_root = workspace.runs_root / run_id
         (run_root / "logs").mkdir(parents=True, exist_ok=True)
         (run_root / "audit").mkdir(parents=True, exist_ok=True)
+        (run_root / "state").mkdir(parents=True, exist_ok=True)
         (run_root / ".active").write_text("1", encoding="utf-8")
 
         workspace.current_run_root = run_root
@@ -136,6 +124,144 @@ class AgentWorkspaceManager:
         )
         self._write_agent_meta(workspace, created=False)
         return run_id
+
+    def attach_existing_run(self, workspace: AgentWorkspace, *, run_id: str) -> Optional[Path]:
+        """Attach a workspace to an existing run directory by run_id."""
+        run_id_clean = str(run_id or "").strip()
+        if not run_id_clean:
+            return None
+        run_root = workspace.runs_root / run_id_clean
+        if not run_root.is_dir():
+            return None
+        workspace.current_run_root = run_root
+        return run_root
+
+    def list_agent_ids(self) -> List[str]:
+        """Return known agent ids under the storage root."""
+        try:
+            ids = [path.name for path in self.agents_root.iterdir() if path.is_dir()]
+        except Exception:
+            return []
+        ids.sort()
+        return ids
+
+    def list_runs(self, workspace: AgentWorkspace) -> List[Dict[str, Any]]:
+        """
+        Return run metadata sorted newest-first.
+
+        Each item includes:
+        - run_id
+        - started_at
+        - status
+        - mission
+        - active (bool)
+        - has_checkpoint (bool)
+        """
+        runs: List[Dict[str, Any]] = []
+        try:
+            run_dirs = [path for path in workspace.runs_root.iterdir() if path.is_dir()]
+        except Exception:
+            return runs
+
+        for run_root in run_dirs:
+            run_id = run_root.name
+            summary = self._read_json(run_root / "summary.json")
+            started_at = float(summary.get("started_at", 0.0) or 0.0)
+            active = bool((run_root / ".active").exists())
+            checkpoint_path = run_root / "state" / "checkpoint.json"
+            has_checkpoint = bool(checkpoint_path.exists())
+            runs.append(
+                {
+                    "run_id": run_id,
+                    "started_at": started_at,
+                    "status": str(summary.get("status", "") or ""),
+                    "mission": str(summary.get("mission", "") or ""),
+                    "active": active,
+                    "has_checkpoint": has_checkpoint,
+                }
+            )
+
+        runs.sort(
+            key=lambda item: (
+                float(item.get("started_at", 0.0) or 0.0),
+                str(item.get("run_id", "")),
+            ),
+            reverse=True,
+        )
+        return runs
+
+    def resolve_resume_run_id(
+        self,
+        workspace: AgentWorkspace,
+        *,
+        requested_run_id: Optional[str] = None,
+        prefer_active: bool = True,
+    ) -> Optional[str]:
+        """
+        Resolve which run should be used for resume loading.
+
+        Preference order:
+        1) requested run id (if it exists)
+        2) newest active run with checkpoint (when prefer_active=True)
+        3) newest run with checkpoint
+        4) newest active run
+        5) newest run
+        """
+        requested = str(requested_run_id or "").strip()
+        if requested:
+            run_root = workspace.runs_root / requested
+            if run_root.is_dir():
+                return requested
+
+        runs = self.list_runs(workspace)
+        if not runs:
+            return None
+
+        if prefer_active:
+            for item in runs:
+                if item.get("active") and item.get("has_checkpoint"):
+                    return str(item.get("run_id", "")).strip() or None
+
+        for item in runs:
+            if item.get("has_checkpoint"):
+                return str(item.get("run_id", "")).strip() or None
+
+        if prefer_active:
+            for item in runs:
+                if item.get("active"):
+                    return str(item.get("run_id", "")).strip() or None
+
+        return str(runs[0].get("run_id", "")).strip() or None
+
+    def write_run_checkpoint(self, workspace: AgentWorkspace, payload: Dict[str, Any]) -> bool:
+        """Write checkpoint JSON for the currently attached run."""
+        path = workspace.run_checkpoint_path
+        if path is None:
+            return False
+        try:
+            self._write_json(path, payload)
+            return True
+        except Exception:
+            return False
+
+    def read_run_checkpoint(
+        self,
+        workspace: AgentWorkspace,
+        *,
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read checkpoint JSON for a run (current run when run_id is omitted)."""
+        if run_id:
+            run_root = workspace.runs_root / str(run_id).strip()
+            if not run_root.is_dir():
+                return {}
+            path = run_root / "state" / "checkpoint.json"
+            return self._read_json(path)
+
+        path = workspace.run_checkpoint_path
+        if path is None:
+            return {}
+        return self._read_json(path)
 
     def finish_run(
         self,
@@ -174,9 +300,6 @@ class AgentWorkspaceManager:
         except Exception:
             pass
         self._write_agent_meta(workspace, created=False)
-
-    def cleanup_temp_runs(self, *, exclude_agent_id: Optional[str] = None) -> None:
-        self.cleanup_service.cleanup_temp_runs(exclude_agent_id=exclude_agent_id)
 
     @staticmethod
     def _resolve_agents_root(base_dir: Path) -> Path:

@@ -11,7 +11,7 @@ import os
 import json
 import time
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
 import hashlib
 import copy
@@ -74,7 +74,7 @@ class ExecutionState:
     loop_count: Optional[int] = None
     loop_round: int = 0
     loop_description: str = ""
-    # Recent action log (compact summaries, last ~10)
+    # Recent action log (compact summaries)
     recent_actions: List[str] = field(default_factory=list)
     # Budget telemetry
     budget_total: int = 0
@@ -84,6 +84,30 @@ class ExecutionState:
     low_budget_mode: bool = False
     budget_constraints_enabled: bool = True
     planning_batch_limit: int = 0
+    # Aggregated telemetry
+    iteration_ms_samples: List[float] = field(default_factory=list)
+    llm_latency_ms_samples: List[float] = field(default_factory=list)
+    tool_latency_ms_samples: List[float] = field(default_factory=list)
+    navigation_latency_ms_samples: List[float] = field(default_factory=list)
+    tokens_in_total: int = 0
+    tokens_out_total: int = 0
+    image_count_total: int = 0
+    llm_call_count: int = 0
+    tool_call_count: int = 0
+    retry_count: int = 0
+    # Last-iteration telemetry values
+    iteration_ms: float = 0.0
+    llm_latency_ms: float = 0.0
+    tool_latency_ms: float = 0.0
+    navigation_latency_ms: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    image_count: int = 0
+    tool_calls: int = 0
+    retries: int = 0
+    # Failure tagging
+    failure_code: Optional[str] = None
+    failure_stage: Optional[str] = None
 
 
 @dataclass
@@ -120,6 +144,8 @@ class Agent:
         data_report_callback: Optional[DataReportCallback] = None,
         # Callback to request a hint when the agent declares itself stuck
         on_stuck_callback: Optional[Callable[[str, int], Optional[str]]] = None,
+        # Optional existing agent id to reuse/load its workspace.
+        agent_id: Optional[str] = None,
     ):
         self.config = config
         self.mission_result = MissionResult()
@@ -165,6 +191,14 @@ class Agent:
         self.command_model_name: str = self.config.model.command_model
         self.command_reasoning_level: ReasoningLevel = self.config.model.command_reasoning_level
         self.image_detail: str = config.model.image_detail
+        self.wait_for_load_state: str = str(self.config.execution.wait_for_load_state or "networkidle")
+        self.wait_for_load_timeout_ms: int = int(self.config.execution.wait_for_load_timeout_ms or 0)
+        self.active_tool_preset_id: str = f"preset:{str(self.config.execution.tool_preset.value)}"
+        self.allowed_tool_names: List[str] = []
+        self._cached_snapshot: Optional[MemoryState] = None
+        self._cached_snapshot_fingerprint: Optional[str] = None
+        self._cached_page_info: Optional[PageInfo] = None
+        self._cached_detected_elements: Optional[PageElements] = None
         set_default_model(self.command_model_name)
         set_default_reasoning_level(self.command_reasoning_level)
         set_default_agent_model(self.agent_model_name)
@@ -184,24 +218,26 @@ class Agent:
 
         # Execution timer for tracking mission, iteration, and action timings
         self.execution_timer = ExecutionTimer()
+        self.agent_id: Optional[str] = (str(agent_id).strip() if agent_id else None)
+        self._loaded_resume_run_id: Optional[str] = None
+        self._loaded_resume_mission: str = ""
+        self._resume_checkpoint_loaded: bool = False
 
-        # Per-agent storage workspace and temp-only cleanup.
+        # Per-agent storage workspace.
         self.workspace_manager = AgentWorkspaceManager(
             base_dir=self.config.storage.base_dir,
-            cleanup_enabled=self.config.storage.cleanup.enabled,
-            temp_ttl_days=self.config.storage.cleanup.temp_ttl_days,
-            temp_keep_last_runs=self.config.storage.cleanup.temp_keep_last_runs,
-            temp_max_runs=self.config.storage.cleanup.temp_max_runs,
-            max_disk_mb=self.config.storage.cleanup.max_disk_mb,
             event_logger=self.event_logger,
         )
         self.agent_workspace: AgentWorkspace = self.workspace_manager.create_agent(
             persistence_mode=self.config.storage.default_persistence_mode,
+            agent_id=self.agent_id,
         )
-        self.workspace_manager.cleanup_temp_runs(exclude_agent_id=self.agent_workspace.agent_id)
+        # Mirror resolved workspace id (new or loaded) for callers.
+        self.agent_id = self.agent_workspace.agent_id
         self._active_run_id: Optional[str] = None
         self._active_run_open: bool = False
         self._run_event_log_callback: Optional[Callable[[Any], None]] = None
+        self._run_event_log_handle = None
 
         # Route storage defaults into this agent workspace.
         self._apply_workspace_paths()
@@ -288,6 +324,8 @@ class Agent:
             "paused": paused,
             "pause_message": pause_message,
             "cancel_requested": self._cancel_event.is_set(),
+            "resume_loaded": self.has_loaded_checkpoint,
+            "loaded_run_id": self.loaded_resume_run_id,
             "current_iteration": self._current_iteration,
             "pending_hints": pending_hints,
             "execution_state": copy.deepcopy(self.execution_state),
@@ -314,6 +352,344 @@ class Agent:
     def clear_screenshot_cache(self) -> None:
         self.screenshot_store.clear()
 
+    @property
+    def has_loaded_checkpoint(self) -> bool:
+        """True when `load_checkpoint()` has prepared a resumable mission state."""
+        return bool(self._resume_checkpoint_loaded and self._loaded_resume_mission)
+
+    @property
+    def loaded_resume_run_id(self) -> str:
+        """Run id currently loaded for resume (empty when none)."""
+        return str(self._loaded_resume_run_id or "")
+
+    @property
+    def loaded_resume_mission(self) -> str:
+        """Mission text currently loaded for resume (empty when none)."""
+        return str(self._loaded_resume_mission or "")
+
+    @staticmethod
+    def _serialize_failed_actions(failed_elements: Optional[List[FailedAction]]) -> List[Dict[str, Any]]:
+        serialized: List[Dict[str, Any]] = []
+        for item in (failed_elements or []):
+            try:
+                if hasattr(item, "model_dump"):
+                    serialized.append(item.model_dump(mode="python"))
+                elif isinstance(item, dict):
+                    serialized.append(dict(item))
+            except Exception:
+                continue
+        return serialized
+
+    @staticmethod
+    def _deserialize_failed_actions(raw_items: Any) -> List[FailedAction]:
+        restored: List[FailedAction] = []
+        if not isinstance(raw_items, list):
+            return restored
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                if hasattr(FailedAction, "model_validate"):
+                    restored.append(FailedAction.model_validate(item))
+                else:  # pragma: no cover - legacy fallback
+                    restored.append(FailedAction.parse_obj(item))
+            except Exception:
+                continue
+        return restored
+
+    @classmethod
+    def _execution_state_from_payload(cls, payload: Any) -> ExecutionState:
+        source = payload if isinstance(payload, dict) else {}
+        allowed = set(ExecutionState.__dataclass_fields__.keys())
+        clean: Dict[str, Any] = {
+            key: value
+            for key, value in source.items()
+            if key in allowed and key != "failed_elements"
+        }
+        clean["failed_elements"] = cls._deserialize_failed_actions(source.get("failed_elements", []))
+        try:
+            return ExecutionState(**clean)
+        except Exception:
+            return ExecutionState()
+
+    @staticmethod
+    def _execution_state_to_payload(state: Optional[ExecutionState]) -> Dict[str, Any]:
+        if state is None:
+            return {}
+        payload = copy.deepcopy(getattr(state, "__dict__", {}))
+        payload["failed_elements"] = Agent._serialize_failed_actions(
+            getattr(state, "failed_elements", None)
+        )
+        return payload
+
+    @staticmethod
+    def _mission_result_from_payload(payload: Any) -> MissionResult:
+        source = payload if isinstance(payload, dict) else {}
+        allowed = set(MissionResult.__dataclass_fields__.keys())
+        clean = {key: value for key, value in source.items() if key in allowed}
+        try:
+            return MissionResult(**clean)
+        except Exception:
+            return MissionResult()
+
+    @staticmethod
+    def _mission_result_to_payload(result: MissionResult) -> Dict[str, Any]:
+        try:
+            return asdict(result)
+        except Exception:
+            return {}
+
+    def _build_resume_checkpoint_payload(
+        self,
+        *,
+        mission: str,
+        state: Optional[ExecutionState],
+        status: str,
+    ) -> Dict[str, Any]:
+        with self._hints_lock:
+            pending_hints = list(self._pending_hints)
+        with self._pause_lock:
+            paused = bool(self._paused)
+            pause_message = str(self._pause_message or "Paused")
+        return {
+            "schema_version": 1,
+            "captured_at": time.time(),
+            "status": str(status or "running"),
+            "agent_id": str(self.agent_workspace.agent_id or ""),
+            "run_id": str(self._active_run_id or ""),
+            "mission": str(mission or ""),
+            "current_iteration": int(self._current_iteration or 0),
+            "mission_start_url": str(self.mission_start_url or ""),
+            "mission_start_time": float(self.mission_start_time or 0.0),
+            "execution_state": self._execution_state_to_payload(state),
+            "mission_result": self._mission_result_to_payload(self.mission_result),
+            "memory": self.memory_store.to_payload() if hasattr(self, "memory_store") else {},
+            "llm_totals": {
+                "total_cost_usd": float(self.event_logger.total_cost_usd or 0.0),
+                "total_tokens": int(self.event_logger.total_tokens or 0),
+            },
+            "pause": {
+                "paused": paused,
+                "message": pause_message,
+            },
+            "cancel_requested": bool(self._cancel_event.is_set()),
+            "pending_hints": pending_hints,
+        }
+
+    def _persist_resume_checkpoint(
+        self,
+        *,
+        mission: str,
+        state: Optional[ExecutionState],
+        status: str = "running",
+    ) -> None:
+        """
+        Best-effort checkpoint persistence.
+
+        We intentionally write at iteration boundaries so crash recovery resumes from
+        the last completed iteration.
+        """
+        if not self.agent_workspace.current_run_root:
+            return
+        payload = self._build_resume_checkpoint_payload(
+            mission=mission,
+            state=state,
+            status=status,
+        )
+        wrote = self.workspace_manager.write_run_checkpoint(self.agent_workspace, payload)
+        if not wrote:
+            self.event_logger.system_warning(
+                "Failed to persist mission checkpoint",
+                run_id=self._active_run_id,
+                iteration=self._current_iteration,
+            )
+
+    def load_checkpoint(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        prefer_active: bool = True,
+    ) -> Tuple[bool, str]:
+        """
+        Load a persisted mission checkpoint into memory.
+
+        After loading, the agent is paused and ready for `resume_loaded_mission()`.
+        """
+        if not getattr(self, "started", False):
+            return False, "Agent must be started before loading a checkpoint."
+        if not hasattr(self, "memory_store"):
+            return False, "Agent memory is not initialized."
+
+        resolved_run_id = self.workspace_manager.resolve_resume_run_id(
+            self.agent_workspace,
+            requested_run_id=run_id,
+            prefer_active=prefer_active,
+        )
+        if not resolved_run_id:
+            return False, "No runs found for this agent."
+
+        run_root = self.workspace_manager.attach_existing_run(
+            self.agent_workspace,
+            run_id=resolved_run_id,
+        )
+        if run_root is None:
+            return False, f"Run '{resolved_run_id}' was not found."
+
+        payload = self.workspace_manager.read_run_checkpoint(
+            self.agent_workspace,
+            run_id=resolved_run_id,
+        )
+        if not payload:
+            return False, f"Run '{resolved_run_id}' has no checkpoint yet."
+
+        mission = str(payload.get("mission", "") or "").strip()
+        if not mission:
+            return False, f"Checkpoint for run '{resolved_run_id}' is missing mission text."
+
+        self._current_iteration = int(payload.get("current_iteration", 0) or 0)
+        self.mission_start_url = str(payload.get("mission_start_url", "") or "")
+        self.mission_start_time = float(payload.get("mission_start_time", 0.0) or 0.0) or None
+        self.execution_state = self._execution_state_from_payload(payload.get("execution_state", {}))
+        self.mission_result = self._mission_result_from_payload(payload.get("mission_result", {}))
+
+        memory_payload = payload.get("memory", {})
+        if isinstance(memory_payload, dict):
+            self.memory_store.load_payload(memory_payload)
+        else:
+            self.memory_store.start_mission(mission)
+
+        llm_totals = payload.get("llm_totals", {}) if isinstance(payload.get("llm_totals", {}), dict) else {}
+        self.event_logger.set_usage_totals(
+            total_cost_usd=float(llm_totals.get("total_cost_usd", 0.0) or 0.0),
+            total_tokens=int(llm_totals.get("total_tokens", 0) or 0),
+        )
+
+        with self._hints_lock:
+            self._pending_hints = [
+                str(item).strip()
+                for item in (payload.get("pending_hints", []) or [])
+                if str(item).strip()
+            ]
+        with self._pause_lock:
+            self._paused = True
+            self._pause_message = "Loaded from checkpoint. Press Resume to continue."
+            self._pause_event.clear()
+        self._cancel_event.clear()
+
+        # Clear per-page caches to avoid stale derived state after restore.
+        self._cached_snapshot = None
+        self._cached_snapshot_fingerprint = None
+        self._cached_page_info = None
+        self._cached_detected_elements = None
+
+        self._loaded_resume_run_id = resolved_run_id
+        self._loaded_resume_mission = mission
+        self._resume_checkpoint_loaded = True
+        self._active_run_id = resolved_run_id
+        self._active_run_open = False
+
+        self.event_logger.system_info(
+            "Checkpoint loaded",
+            agent_id=self.agent_workspace.agent_id,
+            run_id=resolved_run_id,
+            current_iteration=self._current_iteration,
+            checkpoint_pending=bool(getattr(self.execution_state, "checkpoint_pending", False)),
+        )
+        return True, (
+            f"Loaded {self.agent_workspace.agent_id} / {resolved_run_id} at "
+            f"iteration {self._current_iteration}."
+        )
+
+    def resume_loaded_mission(self) -> MissionResult:
+        """Continue a mission from a loaded checkpoint."""
+        if not self.has_loaded_checkpoint:
+            return MissionResult(
+                success=False,
+                reasoning="No checkpoint is loaded.",
+                narrative="No checkpoint is loaded.",
+            )
+
+        mission = str(self._loaded_resume_mission or "").strip()
+        if not mission:
+            return MissionResult(
+                success=False,
+                reasoning="Loaded checkpoint has no mission.",
+                narrative="Loaded checkpoint has no mission.",
+            )
+        run_id = str(self._loaded_resume_run_id or "").strip()
+        if not run_id:
+            return MissionResult(
+                success=False,
+                reasoning="Loaded checkpoint has no run id.",
+                narrative="Loaded checkpoint has no run id.",
+            )
+
+        # Register pre-configured interceptors before execution (same flow as execute_mission()).
+        for interceptor_data in self.interceptor_stack:
+            self.register_interceptor(
+                trigger=interceptor_data["trigger"],
+                mode=interceptor_data["mode"],
+                handler=interceptor_data["handler"],
+            )
+
+        try:
+            run_root = self.workspace_manager.attach_existing_run(
+                self.agent_workspace,
+                run_id=run_id,
+            )
+            if run_root is None:
+                return MissionResult(
+                    success=False,
+                    reasoning=f"Run '{run_id}' no longer exists.",
+                    narrative="Run is missing.",
+                )
+
+            self._detach_run_event_log_sink()
+            self._active_run_id = run_id
+            self._active_run_open = True
+            self._attach_run_event_log_sink()
+            if self.config.sandbox.audit.enabled:
+                self.sandbox_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
+            else:
+                self.sandbox_policy.set_audit_log_path(None)
+
+            self._cancel_event.clear()
+            with self._pause_lock:
+                self._paused = False
+                self._pause_event.set()
+            if self.mission_start_time is None:
+                self.mission_start_time = time.time()
+            self.memory_store.start_mission(mission)
+            self.execution_timer.start_mission()
+            self.event_logger.system_info(
+                "Resuming mission from checkpoint",
+                agent_id=self.agent_workspace.agent_id,
+                run_id=run_id,
+                current_iteration=self._current_iteration,
+            )
+
+            resumed_state = copy.deepcopy(self.execution_state) if self.execution_state else None
+            mission_result = self._run_execution_loop(
+                mission,
+                start_in_checkpoint=bool(
+                    getattr(self.execution_state, "checkpoint_pending", True)
+                    if self.execution_state is not None
+                    else True
+                ),
+                existing_state=resumed_state,
+            )
+            if self.execution_timer.mission_start_time is not None:
+                self.execution_timer.end_mission()
+            self.mission_result = mission_result
+        finally:
+            # Best-effort guard so per-run sink never leaks across missions.
+            self._detach_run_event_log_sink()
+            self.sandbox_policy.set_audit_log_path(None)
+
+        self.event_logger.agent_complete(self.mission_result.success, self.mission_result.reasoning)
+        self._resume_checkpoint_loaded = False
+        return self.mission_result
+
     def _apply_workspace_paths(self) -> None:
         """Route default storage paths into this agent's workspace."""
         ws = self.agent_workspace
@@ -321,7 +697,6 @@ class Agent:
         self.config.browser.downloads_path = str(ws.browser_downloads_dir)
         self.config.logging.screenshot_dir = str(ws.screenshots_dir)
         self.config.logging.screenshot_stream_dir = str(ws.stream_screenshots_dir)
-        self.config.error_handling.screenshot_dir = str(ws.screenshots_dir)
 
         for path in (
             ws.workspace_root,
@@ -342,7 +717,9 @@ class Agent:
             return
         try:
             event_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._run_event_log_handle = event_log_path.open("a", encoding="utf-8")
         except Exception:
+            self._run_event_log_handle = None
             return
 
         def _sink(event: Any) -> None:
@@ -351,9 +728,12 @@ class Agent:
                     payload = event.to_dict()
                 else:
                     payload = {"event": str(event)}
-                with event_log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(payload, sort_keys=True))
-                    handle.write("\n")
+                handle = self._run_event_log_handle
+                if handle is None:
+                    return
+                handle.write(json.dumps(payload, sort_keys=True))
+                handle.write("\n")
+                handle.flush()
             except Exception:
                 pass
 
@@ -362,16 +742,37 @@ class Agent:
             self._run_event_log_callback = _sink
         except Exception:
             self._run_event_log_callback = None
+            handle = self._run_event_log_handle
+            self._run_event_log_handle = None
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
 
     def _detach_run_event_log_sink(self) -> None:
         callback = self._run_event_log_callback
         self._run_event_log_callback = None
         if not callback:
+            handle = self._run_event_log_handle
+            self._run_event_log_handle = None
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             return
         try:
             self.event_logger.unregister_callback(callback)
         except Exception:
             pass
+        handle = self._run_event_log_handle
+        self._run_event_log_handle = None
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
 
     def _current_page_url(self) -> str:
         """Best-effort current page URL from active browser page."""
@@ -431,7 +832,6 @@ class Agent:
             user_question_callback=self.user_question_callback,
             agent_talk_callback=self.agent_talk_callback,
             data_report_callback=self.data_report_callback,
-            user_messages_config=self.config.user_messages if self.config else None,
             workspace_paths={
                 "written_data_dir": str(self.agent_workspace.written_data_dir),
             },
@@ -549,9 +949,43 @@ class Agent:
                     timeout=self.wait_for_load_timeout_ms,
                     state=self.wait_for_load_state,
                 )
+                self._wait_for_dom_stable(timeout_ms=min(self.wait_for_load_timeout_ms, 1500))
         except Exception:
             # Best-effort wait; do not block on load wait errors.
             pass
+
+    def _wait_for_dom_stable(self, timeout_ms: int = 1200, sample_interval_ms: int = 120) -> None:
+        """Best-effort DOM stability wait to reduce no-op iterations."""
+        page = getattr(self.browser, "page", None)
+        if page is None:
+            return
+        deadline = time.monotonic() + max(0.0, float(timeout_ms) / 1000.0)
+        previous_sig: Optional[str] = None
+        stable_samples = 0
+        while time.monotonic() < deadline:
+            try:
+                current_sig = str(
+                    page.evaluate(
+                        """() => {
+                            const body = document.body;
+                            const txt = body ? (body.innerText || "") : "";
+                            const len = txt.length;
+                            const ready = document.readyState || "unknown";
+                            return `${ready}:${len}:${window.scrollX || 0}:${window.scrollY || 0}`;
+                        }"""
+                    )
+                    or ""
+                )
+            except Exception:
+                return
+            if current_sig == previous_sig and current_sig:
+                stable_samples += 1
+                if stable_samples >= 2:
+                    return
+            else:
+                stable_samples = 0
+                previous_sig = current_sig
+            time.sleep(max(0.01, float(sample_interval_ms) / 1000.0))
     
     def _run_mission(self, user_mission: str) -> MissionResult:
         """
@@ -567,8 +1001,15 @@ class Agent:
         """
         self._mission_tracker = {}
         self._original_user_mission = user_mission
+        self._loaded_resume_run_id = None
+        self._loaded_resume_mission = ""
+        self._resume_checkpoint_loaded = False
         self._current_iteration = 0
         self.execution_state = None
+        self._cached_snapshot = None
+        self._cached_snapshot_fingerprint = None
+        self._cached_page_info = None
+        self._cached_detected_elements = None
         self._cancel_event.clear()
         with self._pause_lock:
             self._paused = False
@@ -606,6 +1047,12 @@ class Agent:
         if self.base_knowledge:
             self.memory_store.set_base_knowledge(self.base_knowledge)
         self.memory_store.start_mission(user_mission)
+        # Persist an initial checkpoint so a crash before iteration 1 is still resumable.
+        self._persist_resume_checkpoint(
+            mission=user_mission,
+            state=self.execution_state,
+            status="running",
+        )
 
         # Check if starting from a blank page
         if self.browser.page.url.startswith("about:blank"):
@@ -662,12 +1109,29 @@ class Agent:
         except Exception:
             final_url = ""
 
+        avg_iteration_ms = self._mean(getattr(state, "iteration_ms_samples", []) if state else [])
+        p95_iteration_ms = self._p95(getattr(state, "iteration_ms_samples", []) if state else [])
+        avg_llm_ms = self._mean(getattr(state, "llm_latency_ms_samples", []) if state else [])
+        avg_tool_ms = self._mean(getattr(state, "tool_latency_ms_samples", []) if state else [])
+        llm_calls = int(getattr(state, "llm_call_count", 0) or 0)
+        tokens_in_total = int(getattr(state, "tokens_in_total", 0) or 0)
+        tokens_out_total = int(getattr(state, "tokens_out_total", 0) or 0)
+        image_count_total = int(getattr(state, "image_count_total", 0) or 0)
+        tool_call_count = int(getattr(state, "tool_call_count", 0) or 0)
+        retry_count = int(getattr(state, "retry_count", 0) or 0)
+        avg_tokens_in = float(tokens_in_total) / float(llm_calls) if llm_calls > 0 else 0.0
+        avg_tokens_out = float(tokens_out_total) / float(llm_calls) if llm_calls > 0 else 0.0
+        avg_images_per_call = float(image_count_total) / float(llm_calls) if llm_calls > 0 else 0.0
+        retries_per_mission = float(retry_count) / max(1.0, float(self._current_iteration or 1))
+        failure_code = str(getattr(state, "failure_code", "") or "")
+        failure_stage = str(getattr(state, "failure_stage", "") or "")
+
         result = MissionResult(
             success=success,
             reasoning=reasoning,
             narrative=narrative,
             total_iterations=self._current_iteration,
-            total_actions=state.actions_since_progress if state else 0,
+            total_actions=int(getattr(state, "total_actions", 0) or 0),
             final_url=final_url,
             duration_s=duration_s,
             total_cost_usd=self.event_logger.total_cost_usd,
@@ -675,14 +1139,54 @@ class Agent:
             budget_spent=int(getattr(state, "budget_spent", 0) or 0),
             budget_remaining=int(getattr(state, "budget_remaining", 0) or 0),
             budget_phase=str(getattr(state, "budget_phase", "normal") or "normal"),
+            mission_ms=duration_s * 1000.0,
+            tool_calls=tool_call_count,
+            tokens_in=tokens_in_total,
+            tokens_out=tokens_out_total,
+            image_count=image_count_total,
+            retry_count=retry_count,
+            failure_code=failure_code,
+            failure_stage=failure_stage,
+            avg_iteration_ms=avg_iteration_ms,
+            p95_iteration_ms=p95_iteration_ms,
+            avg_llm_ms=avg_llm_ms,
+            avg_tool_ms=avg_tool_ms,
+            avg_tokens_in=avg_tokens_in,
+            avg_tokens_out=avg_tokens_out,
+            avg_images_per_call=avg_images_per_call,
+            retries_per_mission=retries_per_mission,
         )
+        self._persist_resume_checkpoint(
+            mission=self.memory_store.current_mission if hasattr(self, "memory_store") else "",
+            state=state,
+            status="success" if bool(success) else "failed",
+        )
+        if bool(getattr(self.config.logging, "telemetry_final_summary_enabled", True)):
+            self.event_logger.system_info(
+                "Final telemetry summary",
+                mission_ms=round(result.mission_ms, 3),
+                iterations=int(result.total_iterations or 0),
+                tool_calls=int(result.tool_calls or 0),
+                tokens_in=int(result.tokens_in or 0),
+                tokens_out=int(result.tokens_out or 0),
+                avg_iteration_ms=round(result.avg_iteration_ms, 3),
+                p95_iteration_ms=round(result.p95_iteration_ms, 3),
+                avg_llm_ms=round(result.avg_llm_ms, 3),
+                avg_tool_ms=round(result.avg_tool_ms, 3),
+                avg_tokens_in=round(result.avg_tokens_in, 3),
+                avg_tokens_out=round(result.avg_tokens_out, 3),
+                avg_images_per_call=round(result.avg_images_per_call, 3),
+                retries_per_mission=round(result.retries_per_mission, 3),
+                failure_code=result.failure_code or None,
+                failure_stage=result.failure_stage or None,
+            )
         if self._active_run_open:
             try:
                 self.workspace_manager.finish_run(
                     self.agent_workspace,
                     success=bool(success),
                     reasoning=reasoning,
-                    total_actions=int(getattr(state, "actions_since_progress", 0) or 0),
+                    total_actions=int(getattr(state, "total_actions", 0) or 0),
                     total_iterations=int(self._current_iteration or 0),
                     final_url=final_url,
                     duration_s=duration_s,
@@ -694,10 +1198,6 @@ class Agent:
                 self._active_run_open = False
                 self._detach_run_event_log_sink()
                 self.sandbox_policy.set_audit_log_path(None)
-                try:
-                    self.workspace_manager.cleanup_temp_runs()
-                except Exception:
-                    pass
         else:
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
@@ -732,6 +1232,85 @@ class Agent:
             return remaining_i, True
         return count, False
 
+    @staticmethod
+    def _mean(values: List[float]) -> float:
+        if not values:
+            return 0.0
+        return float(sum(values) / len(values))
+
+    @staticmethod
+    def _p95(values: List[float]) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(float(v) for v in values)
+        idx = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * 0.95))))
+        return float(ordered[idx])
+
+    def _resolve_active_tool_preset(self) -> tuple[str, list[str]]:
+        """Resolve active tool preset into runtime allowlist."""
+        from core.config import resolve_tool_preset
+
+        return resolve_tool_preset(self.config.execution.tool_preset)
+
+    def _refresh_tool_allowlist_from_preset(self) -> None:
+        """Load active tool preset into controller runtime state."""
+        preset_id, allowed = self._resolve_active_tool_preset()
+        self.active_tool_preset_id = preset_id
+        self.allowed_tool_names = [
+            str(name).strip()
+            for name in (allowed or [])
+            if str(name).strip()
+        ]
+
+    def _is_tool_allowed(self, function_name: str) -> bool:
+        allowed = {name for name in (self.allowed_tool_names or []) if name}
+        if not allowed:
+            return False
+        return str(function_name or "").strip() in allowed
+
+    @staticmethod
+    def _record_failure(state: ExecutionState, *, code: str, stage: str) -> None:
+        state.failure_code = str(code or "").strip() or None
+        state.failure_stage = str(stage or "").strip() or None
+
+    def _emit_live_telemetry(self, state: ExecutionState) -> None:
+        """Emit factual rolling telemetry per iteration."""
+        if not bool(getattr(self.config.logging, "telemetry_live_enabled", True)):
+            return
+        avg_iteration = self._mean(state.iteration_ms_samples)
+        avg_llm = self._mean(state.llm_latency_ms_samples)
+        avg_tool = self._mean(state.tool_latency_ms_samples)
+        avg_tokens_in = (
+            float(state.tokens_in_total) / float(state.llm_call_count)
+            if state.llm_call_count > 0
+            else 0.0
+        )
+        avg_tokens_out = (
+            float(state.tokens_out_total) / float(state.llm_call_count)
+            if state.llm_call_count > 0
+            else 0.0
+        )
+        avg_images = (
+            float(state.image_count_total) / float(state.llm_call_count)
+            if state.llm_call_count > 0
+            else 0.0
+        )
+        retries_per_mission = (
+            float(state.retry_count) / max(1.0, float(self._current_iteration or 1))
+        )
+        self.event_logger.system_info(
+            "Live telemetry",
+            avg_iteration_ms=round(avg_iteration, 3),
+            p95_iteration_ms=round(self._p95(state.iteration_ms_samples), 3),
+            avg_llm_ms=round(avg_llm, 3),
+            avg_tool_ms=round(avg_tool, 3),
+            avg_tokens_in=round(avg_tokens_in, 3),
+            avg_tokens_out=round(avg_tokens_out, 3),
+            avg_images_per_call=round(avg_images, 3),
+            retries_per_mission=round(retries_per_mission, 3),
+            mission_ms=round(sum(state.iteration_ms_samples), 3),
+        )
+
 
 
 
@@ -745,17 +1324,18 @@ class Agent:
         """
         snapshot = self.memory_store._capture_current_state()
         
-        # Always capture screenshot - agent needs it to see the page
-        try:
-            if full_page:
-                snapshot.screenshot = self.browser.page.screenshot(full_page=True)
-                dprint("📸 Using full-page screenshot for exploration mode")
-            else:
-                # Capture viewport screenshot (agent needs this to see what's visible)
-                snapshot.screenshot = self.browser.page.screenshot(full_page=False)
-        except Exception as e:
-            dprint(f"⚠️ Failed to capture screenshot: {e}")
-            snapshot.screenshot = None
+        # _capture_current_state already captures viewport screenshot. Re-capture only when
+        # caller explicitly requests full-page or when screenshot is missing.
+        if full_page or snapshot.screenshot is None:
+            try:
+                if full_page:
+                    snapshot.screenshot = self.browser.page.screenshot(full_page=True)
+                    dprint("📸 Using full-page screenshot for exploration mode")
+                else:
+                    snapshot.screenshot = self.browser.page.screenshot(full_page=False)
+            except Exception as e:
+                dprint(f"⚠️ Failed to capture screenshot: {e}")
+                snapshot.screenshot = None
 
         # Save screenshot for debugging if enabled
         if self.save_screenshots and snapshot.screenshot:
@@ -886,9 +1466,16 @@ class Agent:
             option = args.get("option", "")
             dropdown = args.get("dropdown_description", "dropdown")
             return f"You selected \"{option}\" in {dropdown}. Result: {result_str}."
-        elif fn == "scroll_page":
+        elif fn == "scroll_down":
+            return f"You scrolled down. Result: {result_str}."
+        elif fn == "scroll_up":
+            return f"You scrolled up. Result: {result_str}."
+        elif fn == "scroll_container":
             direction = args.get("direction", "down")
-            return f"You scrolled {direction}. Result: {result_str}."
+            return f"You scrolled a container {direction}. Result: {result_str}."
+        elif fn == "scroll_to_element":
+            element_id = args.get("element_id")
+            return f"You scrolled to element [id={element_id}]. Result: {result_str}."
         elif fn == "press_key":
             key = args.get("key", "")
             return f"You pressed {key}. Result: {result_str}."
@@ -990,6 +1577,7 @@ class Agent:
         mission: str,
         *,
         start_in_checkpoint: bool = False,
+        existing_state: Optional[ExecutionState] = None,
     ) -> MissionResult:
         """
         Unified mission execution loop.
@@ -1007,15 +1595,35 @@ class Agent:
         from agent.action_planner import ActionPlanner
 
         max_actions = self.config.execution.max_actions_per_mission
+        self._refresh_tool_allowlist_from_preset()
+        active_preset_id, _ = self._resolve_active_tool_preset()
+        profile_max_steps = max(1, int(self.config.execution.max_actions_per_plan or 1))
+        profile_timeout_s = 45.0
 
-        state = ExecutionState(
-            checkpoint_pending=bool(start_in_checkpoint),
-            budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
-        )
+        if existing_state is None:
+            state = ExecutionState(
+                checkpoint_pending=bool(start_in_checkpoint),
+                budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
+            )
+        else:
+            # Resume path: continue from the loaded state snapshot.
+            state = copy.deepcopy(existing_state)
+            state.checkpoint_pending = bool(start_in_checkpoint)
+            state.budget_constraints_enabled = bool(self.config.execution.budget_constraints_enabled)
         state.budget_total = max_actions
-        state.planning_batch_limit = self.config.execution.max_actions_per_plan
+        state.planning_batch_limit = min(
+            int(self.config.execution.max_actions_per_plan or 1),
+            profile_max_steps,
+        )
         self.execution_state = state
         self.memory_store.start_mission(mission)
+        self.event_logger.system_info(
+            "Tool preset active",
+            tool_preset_id=active_preset_id,
+            allowed_tools_count=len(self.allowed_tool_names or []),
+            max_steps=profile_max_steps,
+            timeout_s=profile_timeout_s,
+        )
 
         last_checkpoint_pending = state.checkpoint_pending
         self.event_logger.checkpoint_changed(pending=state.checkpoint_pending)
@@ -1030,8 +1638,6 @@ class Agent:
 
         def _append_recent_action(summary: str) -> None:
             state.recent_actions.append(summary)
-            if len(state.recent_actions) > 10:
-                state.recent_actions.pop(0)
 
         def _refresh_budget_state() -> None:
             state.budget_spent = max(0, int(state.total_actions or 0))
@@ -1045,7 +1651,7 @@ class Agent:
             state.planning_batch_limit = (
                 1
                 if (state.budget_constraints_enabled and state.low_budget_mode)
-                else self.config.execution.max_actions_per_plan
+                else min(int(self.config.execution.max_actions_per_plan or 1), profile_max_steps)
             )
 
         def _exit_loop() -> None:
@@ -1058,11 +1664,283 @@ class Agent:
             except Exception:
                 pass
 
+        stall_soft_timeout_s = float(
+            max(0.0, getattr(self.config.execution, "iteration_stall_soft_timeout_s", 0.0) or 0.0)
+        )
+        stall_hard_timeout_s = float(
+            max(0.0, getattr(self.config.execution, "iteration_stall_hard_timeout_s", 0.0) or 0.0)
+        )
+        if (
+            stall_hard_timeout_s > 0.0
+            and stall_soft_timeout_s > 0.0
+            and stall_hard_timeout_s < stall_soft_timeout_s
+        ):
+            self.event_logger.system_warning(
+                "Iteration hard timeout was lower than soft timeout; clamping hard timeout to soft timeout",
+                soft_timeout_seconds=stall_soft_timeout_s,
+                hard_timeout_seconds=stall_hard_timeout_s,
+            )
+            stall_hard_timeout_s = stall_soft_timeout_s
+        if stall_soft_timeout_s > 0.0 or stall_hard_timeout_s > 0.0:
+            self.event_logger.system_info(
+                "Iteration stall watchdog enabled",
+                soft_timeout_seconds=stall_soft_timeout_s,
+                hard_timeout_seconds=stall_hard_timeout_s,
+            )
+        watchdog_state: Dict[str, Any] = {
+            "iteration": 0,
+            "started_at_monotonic": 0.0,
+            "result_count": 0,
+            "soft_triggered": False,
+            "hard_triggered": False,
+            "hard_reason": "",
+            "last_stage": "idle",
+        }
+        watchdog_lock = threading.Lock()
+        watchdog_stop_event = threading.Event()
+        watchdog_thread: Optional[threading.Thread] = None
+        watchdog_poll_interval_s = 0.25
+
+        class _IterationHardTimeout(Exception):
+            """Raised when an iteration exceeds hard watchdog timeout before first result."""
+            pass
+
+        def _emit_soft_watchdog_warning(
+            *,
+            iteration: int,
+            stage: str,
+            elapsed_s: float,
+            source: str,
+            invoke_stuck_callback: bool,
+        ) -> None:
+            self.event_logger.system_warning(
+                "Iteration appears stalled: soft timeout reached before first action result",
+                iteration=iteration,
+                stage=stage,
+                elapsed_seconds=round(elapsed_s, 3),
+                soft_timeout_seconds=stall_soft_timeout_s,
+                source=source,
+            )
+            with self._hints_lock:
+                self._pending_hints.append(
+                    "This iteration appears stalled. Switch strategy, avoid repeating the same attempt, "
+                    "and produce a concrete result."
+                )
+
+            if invoke_stuck_callback and self.on_stuck_callback:
+                try:
+                    hint = self.on_stuck_callback(
+                        (
+                            "Iteration stalled: no action result produced after "
+                            f"{elapsed_s:.1f}s."
+                        ),
+                        iteration,
+                    )
+                    if hint:
+                        with self._hints_lock:
+                            self._pending_hints.append(hint.strip())
+                except Exception as e:
+                    self.event_logger.system_warning(f"on_stuck_callback failed: {e}")
+
+        def _watchdog_poll_loop() -> None:
+            while not watchdog_stop_event.wait(watchdog_poll_interval_s):
+                if stall_soft_timeout_s <= 0.0 and stall_hard_timeout_s <= 0.0:
+                    continue
+
+                with watchdog_lock:
+                    started_at_monotonic = float(watchdog_state.get("started_at_monotonic", 0.0) or 0.0)
+                    result_count = int(watchdog_state.get("result_count", 0) or 0)
+                    soft_triggered = bool(watchdog_state.get("soft_triggered", False))
+                    hard_triggered = bool(watchdog_state.get("hard_triggered", False))
+                    iteration = int(watchdog_state.get("iteration", 0) or 0)
+                    stage = str(watchdog_state.get("last_stage", "watchdog_poll") or "watchdog_poll")
+
+                if started_at_monotonic <= 0.0 or result_count > 0:
+                    continue
+
+                elapsed_s = max(0.0, time.monotonic() - started_at_monotonic)
+
+                if stall_soft_timeout_s > 0.0 and (not soft_triggered) and elapsed_s >= stall_soft_timeout_s:
+                    should_emit_soft = False
+                    with watchdog_lock:
+                        if (
+                            int(watchdog_state.get("result_count", 0) or 0) <= 0
+                            and not bool(watchdog_state.get("soft_triggered", False))
+                        ):
+                            watchdog_state["soft_triggered"] = True
+                            should_emit_soft = True
+                            iteration = int(watchdog_state.get("iteration", 0) or 0)
+                            stage = str(watchdog_state.get("last_stage", stage) or stage)
+                    if should_emit_soft:
+                        _emit_soft_watchdog_warning(
+                            iteration=iteration,
+                            stage=stage,
+                            elapsed_s=elapsed_s,
+                            source="realtime_watchdog",
+                            invoke_stuck_callback=False,
+                        )
+
+                if stall_hard_timeout_s > 0.0 and (not hard_triggered) and elapsed_s >= stall_hard_timeout_s:
+                    hard_reason = (
+                        "Iteration hard timeout reached before first action result "
+                        f"({elapsed_s:.1f}s >= {stall_hard_timeout_s:.1f}s)."
+                    )
+                    should_mark_hard = False
+                    with watchdog_lock:
+                        if (
+                            int(watchdog_state.get("result_count", 0) or 0) <= 0
+                            and not bool(watchdog_state.get("hard_triggered", False))
+                        ):
+                            watchdog_state["hard_triggered"] = True
+                            watchdog_state["hard_reason"] = hard_reason
+                            should_mark_hard = True
+                            iteration = int(watchdog_state.get("iteration", 0) or 0)
+                            stage = str(watchdog_state.get("last_stage", stage) or stage)
+                    if should_mark_hard:
+                        self.event_logger.system_warning(
+                            "Iteration hard timeout reached before first action result",
+                            iteration=iteration,
+                            stage=stage,
+                            elapsed_seconds=round(elapsed_s, 3),
+                            hard_timeout_seconds=stall_hard_timeout_s,
+                            source="realtime_watchdog",
+                        )
+
+        def _ensure_watchdog_thread() -> None:
+            nonlocal watchdog_thread
+            if stall_soft_timeout_s <= 0.0 and stall_hard_timeout_s <= 0.0:
+                return
+            if watchdog_thread is not None and watchdog_thread.is_alive():
+                return
+            watchdog_stop_event.clear()
+            watchdog_thread = threading.Thread(
+                target=_watchdog_poll_loop,
+                name="iteration-watchdog",
+                daemon=True,
+            )
+            watchdog_thread.start()
+
+        def _stop_watchdog_thread() -> None:
+            nonlocal watchdog_thread
+            watchdog_stop_event.set()
+            current_thread = threading.current_thread()
+            thread_ref = watchdog_thread
+            watchdog_thread = None
+            if thread_ref is not None and thread_ref.is_alive() and thread_ref is not current_thread:
+                thread_ref.join(timeout=1.0)
+
+        def _start_iteration_watchdog(iteration: int) -> None:
+            with watchdog_lock:
+                watchdog_state["iteration"] = int(iteration or 0)
+                watchdog_state["started_at_monotonic"] = time.monotonic()
+                watchdog_state["result_count"] = 0
+                watchdog_state["soft_triggered"] = False
+                watchdog_state["hard_triggered"] = False
+                watchdog_state["hard_reason"] = ""
+                watchdog_state["last_stage"] = "iteration_start"
+            _ensure_watchdog_thread()
+
+        def _check_iteration_watchdog(stage: str) -> None:
+            if stall_soft_timeout_s <= 0.0 and stall_hard_timeout_s <= 0.0:
+                return
+            with watchdog_lock:
+                watchdog_state["last_stage"] = stage
+                hard_triggered = bool(watchdog_state.get("hard_triggered", False))
+                hard_reason = str(watchdog_state.get("hard_reason", "") or "")
+                started_at_monotonic = float(watchdog_state.get("started_at_monotonic", 0.0) or 0.0)
+                result_count = int(watchdog_state.get("result_count", 0) or 0)
+                soft_triggered = bool(watchdog_state.get("soft_triggered", False))
+                iteration = int(watchdog_state.get("iteration", 0) or 0)
+
+            if hard_triggered:
+                raise _IterationHardTimeout(
+                    hard_reason.strip()
+                    or "Iteration hard timeout reached before first action result."
+                )
+            if started_at_monotonic <= 0.0:
+                return
+            if result_count > 0:
+                return
+
+            elapsed_s = max(0.0, time.monotonic() - started_at_monotonic)
+
+            if (
+                stall_soft_timeout_s > 0.0
+                and not soft_triggered
+                and elapsed_s >= stall_soft_timeout_s
+            ):
+                should_emit_soft = False
+                with watchdog_lock:
+                    if (
+                        int(watchdog_state.get("result_count", 0) or 0) <= 0
+                        and not bool(watchdog_state.get("soft_triggered", False))
+                    ):
+                        watchdog_state["soft_triggered"] = True
+                        should_emit_soft = True
+                        iteration = int(watchdog_state.get("iteration", iteration) or iteration)
+                if should_emit_soft:
+                    _emit_soft_watchdog_warning(
+                        iteration=iteration,
+                        stage=stage,
+                        elapsed_s=elapsed_s,
+                        source="checkpoint",
+                        invoke_stuck_callback=True,
+                    )
+
+            if stall_hard_timeout_s > 0.0 and elapsed_s >= stall_hard_timeout_s:
+                hard_reason = (
+                    "Iteration hard timeout reached before first action result "
+                    f"({elapsed_s:.1f}s >= {stall_hard_timeout_s:.1f}s)."
+                )
+                with watchdog_lock:
+                    if (
+                        int(watchdog_state.get("result_count", 0) or 0) <= 0
+                        and not bool(watchdog_state.get("hard_triggered", False))
+                    ):
+                        watchdog_state["hard_triggered"] = True
+                        watchdog_state["hard_reason"] = hard_reason
+                raise _IterationHardTimeout(
+                    hard_reason
+                )
+
+        def _mission_result(*, success: bool, reasoning: str, narrative: str, state: ExecutionState) -> MissionResult:
+            _stop_watchdog_thread()
+            if not success and not state.failure_code:
+                self._record_failure(
+                    state,
+                    code="mission_failed",
+                    stage="execution_loop",
+                )
+            self._persist_resume_checkpoint(
+                mission=mission,
+                state=state,
+                status="success" if success else "failed",
+            )
+            return self._build_mission_result(
+                success=success,
+                reasoning=reasoning,
+                narrative=narrative,
+                state=state,
+            )
+
+        def _record_action_result(
+            action_step: Any,
+            *,
+            success: bool,
+            result_str: str,
+            summary: Optional[str] = None,
+            error: Optional[str] = None,
+            extra: Optional[dict[str, Any]] = None,
+        ) -> None:
+            with watchdog_lock:
+                watchdog_state["result_count"] = int(watchdog_state.get("result_count", 0) or 0) + 1
+            return
+
         _refresh_budget_state()
 
         while state.total_actions < max_actions:
             if self._cancel_event.is_set():
-                return self._build_mission_result(
+                return _mission_result(
                     success=False,
                     reasoning="Mission cancelled",
                     narrative="Mission cancelled",
@@ -1071,7 +1949,7 @@ class Agent:
 
             self._pause_event.wait()
             if self._cancel_event.is_set():
-                return self._build_mission_result(
+                return _mission_result(
                     success=False,
                     reasoning="Mission cancelled",
                     narrative="Mission cancelled",
@@ -1079,10 +1957,25 @@ class Agent:
                 )
 
             iteration_started_at = time.time()
+            stage_timings_ms: Dict[str, float] = {
+                "load_wait_ms": 0.0,
+                "dom_read_ms": 0.0,
+                "screenshot_ms": 0.0,
+                "plan_ms": 0.0,
+            }
+            iteration_tool_latency_ms = 0.0
+            iteration_navigation_latency_ms = 0.0
+            iteration_tool_calls = 0
+            iteration_llm_latency_ms = 0.0
+            iteration_tokens_in = 0
+            iteration_tokens_out = 0
+            iteration_image_count = 0
+            iteration_retries = 0
             state.total_actions += 1
             _refresh_budget_state()
             self._current_iteration += 1
             self.execution_state = state
+            _start_iteration_watchdog(self._current_iteration)
             self.event_logger.iteration_start(
                 iteration=self._current_iteration,
                 max_iterations=max_actions,
@@ -1094,7 +1987,12 @@ class Agent:
             )
 
             try:
+                _check_iteration_watchdog(stage="iteration_start")
                 try:
+                    load_wait_started = time.perf_counter()
+                    self._maybe_wait_for_iteration_load(reason="iteration")
+                    stage_timings_ms["load_wait_ms"] = (time.perf_counter() - load_wait_started) * 1000.0
+                    _check_iteration_watchdog(stage="before_snapshot")
                     snapshot = self._capture_snapshot(full_page=False)
                     snapshot_url = str(getattr(snapshot, "url", "") or "").strip()
                     if snapshot_url:
@@ -1110,7 +2008,7 @@ class Agent:
                             if self.sandbox_policy.enforce:
                                 state.last_action_summary = f"sandbox FAILED: {warning} ({snapshot_url})"
                                 _append_recent_action(state.last_action_summary)
-                                return self._build_mission_result(
+                                return _mission_result(
                                     success=False,
                                     reasoning=f"{warning} ({snapshot_url})",
                                     narrative="Sandbox blocked disallowed current page",
@@ -1118,10 +2016,48 @@ class Agent:
                                 )
                             state.last_action_summary = f"sandbox(observe): {warning} ({snapshot_url})"
                             _append_recent_action(state.last_action_summary)
-                    page_info = self.page_utils.get_page_info()
-                    detected_elements = build_page_elements(self.browser.page, page_info)
+                    dom_read_started = time.perf_counter()
+                    snapshot_hash = str(getattr(snapshot, "screenshot_hash", "") or "")
+                    snapshot_fingerprint = "|".join(
+                        [
+                            snapshot_url,
+                            str(getattr(snapshot, "title", "") or ""),
+                            str(getattr(snapshot, "scroll_x", 0) or 0),
+                            str(getattr(snapshot, "scroll_y", 0) or 0),
+                            snapshot_hash,
+                        ]
+                    )
+                    can_reuse_dom = (
+                        (not state.in_loop)
+                        and bool(snapshot_fingerprint)
+                        and snapshot_fingerprint == self._cached_snapshot_fingerprint
+                        and self._cached_page_info is not None
+                        and self._cached_detected_elements is not None
+                    )
+                    if can_reuse_dom:
+                        page_info = self._cached_page_info
+                        detected_elements = self._cached_detected_elements
+                        self.event_logger.system_debug(
+                            "Reused cached DOM/page state for iteration",
+                            iteration=self._current_iteration,
+                        )
+                    else:
+                        page_info = self.page_utils.get_page_info()
+                        detected_elements = build_page_elements(self.browser.page, page_info)
+                        self._cached_snapshot = snapshot
+                        self._cached_snapshot_fingerprint = snapshot_fingerprint
+                        self._cached_page_info = page_info
+                        self._cached_detected_elements = detected_elements
+                    stage_timings_ms["dom_read_ms"] = (time.perf_counter() - dom_read_started) * 1000.0
+                except _IterationHardTimeout:
+                    raise
                 except Exception as e:
-                    return self._build_mission_result(
+                    self._record_failure(
+                        state,
+                        code="state_capture_failed",
+                        stage="iteration_state_capture",
+                    )
+                    return _mission_result(
                         success=False,
                         reasoning=f"Failed to capture state: {str(e)}",
                         state=state,
@@ -1143,14 +2079,20 @@ class Agent:
                     text_poor=text_poor,
                 )
 
+                screenshot_started = time.perf_counter()
                 prep = self._prepare_screenshot_for_mode(snapshot, detected_elements, page_info)
                 annotated_screenshot_bytes = prep.screenshot_bytes
                 element_index_text = prep.element_index_text
                 gallery_images = prep.gallery_images
+                stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
 
-                memory_recent = self.memory_store.get_recent(20)
-                recent_executed_ids = self.memory_store.get_recent_executed_action_ids(n=20)
-                recent_reflection_ids = self.memory_store.get_recent_reflection_ids(n=20)
+                memory_recent = list(self.memory_store.entries)
+                recent_executed_ids = self.memory_store.get_recent_executed_action_ids(
+                    n=max(1, len(self.memory_store.entries))
+                )
+                recent_reflection_ids = self.memory_store.get_recent_reflection_ids(
+                    n=max(1, len(self.memory_store.entries))
+                )
                 recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
 
                 decision_context = DecisionContext(
@@ -1171,7 +2113,9 @@ class Agent:
 
                 environment_state = EnvironmentState(
                     browser_state=snapshot,
-                    memory_narrative=self.memory_store.get_narrative(n=20),
+                    memory_narrative=self.memory_store.get_narrative(
+                        n=max(1, len(self.memory_store.entries))
+                    ),
                     memory_recent_ids=[entry.memory_id for entry in memory_recent],
                     user_prompt=mission,
                     mission_start_url=self.mission_start_url,
@@ -1233,7 +2177,7 @@ class Agent:
                     recommended_next_step_source_id=recommended_step_source_id,
                     decision_context=decision_context,
                     element_index_text=element_index_text,
-                    gallery_images=None if state.checkpoint_pending else gallery_images,
+                    gallery_images=gallery_images,
                     current_iteration=self._current_iteration,
                     user_facing_actions_in_round=state.user_facing_actions_since_progress,
                     user_hints=pending_hints,
@@ -1249,17 +2193,37 @@ class Agent:
                     budget_phase=state.budget_phase,
                     low_budget_mode=state.low_budget_mode,
                     budget_constraints_enabled=state.budget_constraints_enabled,
+                    allowed_tool_names=self.allowed_tool_names,
                 )
 
+                actions_list: Optional[list] = None
+                error: Optional[str] = None
+                _check_iteration_watchdog(stage="before_planner_call")
                 try:
+                    planner_started_at = time.perf_counter()
                     actions_list, error = action_planner.get_next_actions_with_function_calling(
                         environment_state=environment_state,
                         screenshot=annotated_screenshot_bytes,
                         notebook=self.notebook,
                         element_data=detected_elements,
                     )
+                    stage_timings_ms["plan_ms"] += (time.perf_counter() - planner_started_at) * 1000.0
+                    planner_stats = dict(getattr(action_planner, "last_call_telemetry", {}) or {})
+                    iteration_llm_latency_ms += float(planner_stats.get("llm_latency_ms", 0.0) or 0.0)
+                    iteration_tokens_in += int(planner_stats.get("tokens_in", 0) or 0)
+                    iteration_tokens_out += int(planner_stats.get("tokens_out", 0) or 0)
+                    iteration_image_count += int(planner_stats.get("image_count", 0) or 0)
+                    iteration_retries += int(planner_stats.get("planner_retries", 0) or 0)
+                    _check_iteration_watchdog(stage="after_planner_call")
+                except _IterationHardTimeout:
+                    raise
                 except Exception as e:
-                    return self._build_mission_result(
+                    self._record_failure(
+                        state,
+                        code="planner_call_exception",
+                        stage="planner_model_call",
+                    )
+                    return _mission_result(
                         success=False,
                         reasoning=f"Error: {str(e)}",
                         state=state,
@@ -1267,12 +2231,32 @@ class Agent:
                     )
 
                 if not actions_list:
+                    planner_failure_code = str(getattr(action_planner, "last_failure_code", "") or "").strip()
+                    planner_failure_stage = str(getattr(action_planner, "last_failure_stage", "") or "").strip()
+                    if planner_failure_code:
+                        self._record_failure(
+                            state,
+                            code=planner_failure_code,
+                            stage=planner_failure_stage or "planner_generation",
+                        )
+                    if planner_failure_code == "tool_allowlist_empty":
+                        return _mission_result(
+                            success=False,
+                            reasoning=error or "No tools are enabled for the active profile.",
+                            state=state,
+                            narrative="Active tool profile produced an empty allowlist for this mode.",
+                        )
                     state.validation_failures += 1
                     if state.validation_failures <= self.config.execution.validation_failure_escalation_limit:
                         state.last_action_summary = f"Action validation issue: {error or 'No action generated'}. Retrying."
                         _set_checkpoint_pending(False)
                         continue
-                    return self._build_mission_result(
+                    self._record_failure(
+                        state,
+                        code="action_validation_failure",
+                        stage="planner_validation",
+                    )
+                    return _mission_result(
                         success=False,
                         reasoning=f"Repeated action validation failures: {error or 'No action generated'}",
                         state=state,
@@ -1281,7 +2265,7 @@ class Agent:
 
                 for action_step in actions_list:
                     if self._cancel_event.is_set():
-                        return self._build_mission_result(
+                        return _mission_result(
                             success=False,
                             reasoning="Mission cancelled",
                             narrative="Mission cancelled",
@@ -1289,7 +2273,7 @@ class Agent:
                         )
                     self._pause_event.wait()
                     if self._cancel_event.is_set():
-                        return self._build_mission_result(
+                        return _mission_result(
                             success=False,
                             reasoning="Mission cancelled",
                             narrative="Mission cancelled",
@@ -1301,7 +2285,47 @@ class Agent:
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
                     narrative = action_args.get("narrative", "")
+                    iteration_tool_calls += 1
+                    _check_iteration_watchdog(stage=f"before_action:{function_name or 'unknown'}")
                     policy_observe_warning: Optional[str] = None
+                    if function_name:
+                        if not self._is_tool_allowed(function_name):
+                            tool_error = (
+                                f"Tool '{function_name}' is not allowed by preset "
+                                f"'{self.active_tool_preset_id}'."
+                            )
+                            self.event_logger.system_warning(
+                                "Runtime preset allowlist blocked action",
+                                tool=function_name,
+                                tool_preset_id=self.active_tool_preset_id,
+                                allowed_tools=self.allowed_tool_names,
+                                iteration=self._current_iteration,
+                            )
+                            self._record_failure(
+                                state,
+                                code="tool_disallowed_by_profile",
+                                stage="runtime_tool_enforcement",
+                            )
+                            state.last_action_summary = tool_error
+                            _append_recent_action(tool_error)
+                            _set_checkpoint_pending(False)
+                            _record_action_result(
+                                action_step,
+                                success=False,
+                                result_str="failed",
+                                summary=tool_error,
+                                error=tool_error,
+                                extra={
+                                    "failure_code": "tool_disallowed_by_profile",
+                                    "failure_stage": "runtime_tool_enforcement",
+                                },
+                            )
+                            return _mission_result(
+                                success=False,
+                                reasoning=tool_error,
+                                narrative="Runtime tool allowlist blocked planner action.",
+                                state=state,
+                            )
                     if self.config.logging.debug_mode:
                         self.event_logger.system_debug(
                             "Budget telemetry",
@@ -1335,6 +2359,7 @@ class Agent:
                             current_iteration=self._current_iteration,
                         )
                         duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
+                        iteration_tool_latency_ms += max(0.0, duration_ms)
                         state.actions_since_progress += 1
 
                         think_reasoning = str(action_args.get("reasoning", "")).strip()
@@ -1445,7 +2470,18 @@ class Agent:
                                 duration_ms=duration_ms,
                                 iteration=self._current_iteration,
                             )
-                            return self._build_mission_result(
+                            _record_action_result(
+                                action_step,
+                                success=bool(result.success),
+                                result_str=result_str,
+                                summary=state.last_action_summary,
+                                error=result.error,
+                                extra={
+                                    "next_action": think_next_action,
+                                    "reasoning": think_reasoning,
+                                },
+                            )
+                            return _mission_result(
                                 success=True,
                                 reasoning=think_reasoning or "Mission complete",
                                 narrative=narrative,
@@ -1488,6 +2524,17 @@ class Agent:
                             duration_ms=duration_ms,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=bool(result.success),
+                            result_str=result_str,
+                            summary=state.last_action_summary,
+                            error=result.error,
+                            extra={
+                                "next_action": think_next_action,
+                                "reasoning": think_reasoning,
+                            },
+                        )
                         continue
 
                     if function_name in {"assert_condition", "flag"}:
@@ -1499,6 +2546,7 @@ class Agent:
                             current_iteration=self._current_iteration,
                         )
                         duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
+                        iteration_tool_latency_ms += max(0.0, duration_ms)
                         action_type = "assert" if function_name == "assert_condition" else "flag"
                         action_content = str(
                             action_args.get("condition") if function_name == "assert_condition" else action_args.get("message", "")
@@ -1515,6 +2563,14 @@ class Agent:
                             result_str=result_str,
                             duration_ms=duration_ms,
                             iteration=self._current_iteration,
+                        )
+                        _record_action_result(
+                            action_step,
+                            success=bool(result.success),
+                            result_str=result_str,
+                            summary=state.last_action_summary,
+                            error=result.error,
+                            extra={"action_type": action_type},
                         )
                         continue
 
@@ -1570,6 +2626,14 @@ class Agent:
                             duration_ms=0.0,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "switch_tab", "tab_id": tab_id},
+                        )
                         continue
 
                     if function_name == "close_tab":
@@ -1620,6 +2684,14 @@ class Agent:
                             result_str="success" if action_success else "failed",
                             duration_ms=0.0,
                             iteration=self._current_iteration,
+                        )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "close_tab", "tab_id": tab_id},
                         )
                         continue
 
@@ -1688,6 +2760,14 @@ class Agent:
                             duration_ms=0.0,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "open_tab", "url": url},
+                        )
                         continue
 
                     if function_name == "dismiss_dialog":
@@ -1727,6 +2807,14 @@ class Agent:
                             result_str="success" if action_success else "failed",
                             duration_ms=0.0,
                             iteration=self._current_iteration,
+                        )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "dismiss_dialog", "accept": accept},
                         )
                         continue
 
@@ -1849,6 +2937,20 @@ class Agent:
                             duration_ms=0.0,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={
+                                "operation": "send_email",
+                                "to": to_list,
+                                "subject": subject,
+                                "message_id": message_id,
+                                "duplicate_of": duplicate_of,
+                            },
+                        )
                         continue
 
                     if function_name == "bash":
@@ -1928,6 +3030,14 @@ class Agent:
                             result_str="success" if action_success else "failed",
                             duration_ms=0.0,
                             iteration=self._current_iteration,
+                        )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "bash", "command": command},
                         )
                         continue
 
@@ -2031,6 +3141,19 @@ class Agent:
                             duration_ms=0.0,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={
+                                "operation": "read_file",
+                                "path": path_arg,
+                                "start_line": start_line,
+                                "end_line": end_line,
+                            },
+                        )
                         continue
 
                     if function_name == "find_files":
@@ -2115,6 +3238,18 @@ class Agent:
                             result_str="success" if action_success else "failed",
                             duration_ms=0.0,
                             iteration=self._current_iteration,
+                        )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={
+                                "operation": "find_files",
+                                "pattern": pattern,
+                                "directory": directory,
+                            },
                         )
                         continue
 
@@ -2227,6 +3362,14 @@ class Agent:
                             duration_ms=0.0,
                             iteration=self._current_iteration,
                         )
+                        _record_action_result(
+                            action_step,
+                            success=action_success,
+                            result_str="success" if action_success else "failed",
+                            summary=state.last_action_summary,
+                            error=action_error,
+                            extra={"operation": "read_clipboard"},
+                        )
                         continue
 
                     if function_name == "open_url":
@@ -2261,6 +3404,14 @@ class Agent:
                                     result_str="failed",
                                     duration_ms=0.0,
                                     iteration=self._current_iteration,
+                                )
+                                _record_action_result(
+                                    action_step,
+                                    success=False,
+                                    result_str="failed",
+                                    summary=state.last_action_summary,
+                                    error=warning,
+                                    extra={"operation": "open_url", "url": url},
                                 )
                                 continue
                             policy_observe_warning = warning
@@ -2357,6 +3508,9 @@ class Agent:
                                 self._pending_hints.append(hint)
 
                     duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
+                    iteration_tool_latency_ms += max(0.0, duration_ms)
+                    if function_name in {"open_url", "go_back", "go_forward"}:
+                        iteration_navigation_latency_ms += max(0.0, duration_ms)
                     self.event_logger.action_complete(
                         tool=function_name,
                         narrative=narrative,
@@ -2364,6 +3518,17 @@ class Agent:
                         result_str=result_str,
                         duration_ms=duration_ms,
                         iteration=self._current_iteration,
+                    )
+                    _record_action_result(
+                        action_step,
+                        success=bool(result.success),
+                        result_str=result_str,
+                        summary=state.last_action_summary,
+                        error=result.error,
+                        extra={
+                            "message": result.message,
+                            "data": result.data,
+                        },
                     )
 
                     user_facing_functions = {
@@ -2377,7 +3542,10 @@ class Agent:
                         "open_url",
                         "go_back",
                         "go_forward",
-                        "scroll_page",
+                        "scroll_down",
+                        "scroll_up",
+                        "scroll_container",
+                        "scroll_to_element",
                         "extract_data",
                         "report_data",
                         "write_data",
@@ -2429,8 +3597,26 @@ class Agent:
 
                 state.validation_failures = 0
 
+            except _IterationHardTimeout as timeout_exc:
+                timeout_reason = str(timeout_exc).strip() or "Iteration hard timeout reached."
+                state.last_action_summary = timeout_reason
+                _append_recent_action(f"[ITERATION TIMEOUT] {timeout_reason}")
+                _set_checkpoint_pending(False)
+                self.event_logger.system_warning(
+                    "Iteration hard timeout triggered; forcing replan on next iteration",
+                    iteration=self._current_iteration,
+                    timeout_reason=timeout_reason,
+                    soft_timeout_seconds=stall_soft_timeout_s,
+                    hard_timeout_seconds=stall_hard_timeout_s,
+                )
+                continue
             except Exception as e:
-                return self._build_mission_result(
+                self._record_failure(
+                    state,
+                    code="execution_loop_exception",
+                    stage="iteration_action_execution",
+                )
+                return _mission_result(
                     success=False,
                     reasoning=f"Error: {str(e)}",
                     narrative="Error",
@@ -2438,12 +3624,88 @@ class Agent:
                 )
             finally:
                 iteration_duration_ms = (time.time() - iteration_started_at) * 1000.0
+                state.iteration_ms = float(iteration_duration_ms)
+                state.llm_latency_ms = float(iteration_llm_latency_ms)
+                state.tool_latency_ms = float(iteration_tool_latency_ms)
+                state.navigation_latency_ms = float(iteration_navigation_latency_ms)
+                state.tokens_in = int(iteration_tokens_in)
+                state.tokens_out = int(iteration_tokens_out)
+                state.image_count = int(iteration_image_count)
+                state.tool_calls = int(iteration_tool_calls)
+                state.retries = int(iteration_retries)
+
+                state.iteration_ms_samples.append(state.iteration_ms)
+                state.llm_latency_ms_samples.append(state.llm_latency_ms)
+                state.tool_latency_ms_samples.append(state.tool_latency_ms)
+                state.navigation_latency_ms_samples.append(state.navigation_latency_ms)
+                state.tokens_in_total += state.tokens_in
+                state.tokens_out_total += state.tokens_out
+                state.image_count_total += state.image_count
+                state.tool_call_count += state.tool_calls
+                state.retry_count += state.retries
+                if stage_timings_ms["plan_ms"] > 0.0:
+                    state.llm_call_count += 1
+
+                avg_iteration_ms = self._mean(state.iteration_ms_samples)
+                avg_llm_ms = self._mean(state.llm_latency_ms_samples)
+                avg_tool_ms = self._mean(state.tool_latency_ms_samples)
+                avg_tokens_in = (
+                    float(state.tokens_in_total) / float(state.llm_call_count)
+                    if state.llm_call_count > 0
+                    else 0.0
+                )
+                avg_tokens_out = (
+                    float(state.tokens_out_total) / float(state.llm_call_count)
+                    if state.llm_call_count > 0
+                    else 0.0
+                )
+                avg_images = (
+                    float(state.image_count_total) / float(state.llm_call_count)
+                    if state.llm_call_count > 0
+                    else 0.0
+                )
+                retries_per_mission = (
+                    float(state.retry_count) / max(1.0, float(self._current_iteration or 1))
+                )
                 self.event_logger.iteration_complete(
                     iteration=self._current_iteration,
                     duration_ms=iteration_duration_ms,
+                    iteration_ms=round(state.iteration_ms, 3),
+                    mission_ms=round(sum(state.iteration_ms_samples), 3),
+                    llm_latency_ms=round(state.llm_latency_ms, 3),
+                    tool_latency_ms=round(state.tool_latency_ms, 3),
+                    navigation_latency_ms=round(state.navigation_latency_ms, 3),
+                    tokens_in=state.tokens_in,
+                    tokens_out=state.tokens_out,
+                    image_count=state.image_count,
+                    tool_calls=state.tool_calls,
+                    retries=state.retries,
+                    avg_iteration_ms=round(avg_iteration_ms, 3),
+                    p95_iteration_ms=round(self._p95(state.iteration_ms_samples), 3),
+                    avg_llm_ms=round(avg_llm_ms, 3),
+                    avg_tool_ms=round(avg_tool_ms, 3),
+                    avg_tokens_in=round(avg_tokens_in, 3),
+                    avg_tokens_out=round(avg_tokens_out, 3),
+                    avg_images_per_call=round(avg_images, 3),
+                    retries_per_mission=round(retries_per_mission, 3),
+                    stage_plan_ms=round(stage_timings_ms["plan_ms"], 3),
+                    stage_dom_read_ms=round(stage_timings_ms["dom_read_ms"], 3),
+                    stage_screenshot_ms=round(stage_timings_ms["screenshot_ms"], 3),
+                    stage_load_wait_ms=round(stage_timings_ms["load_wait_ms"], 3),
+                )
+                self._emit_live_telemetry(state)
+                self._persist_resume_checkpoint(
+                    mission=mission,
+                    state=state,
+                    status="running",
                 )
 
-        return self._build_mission_result(
+        self._record_failure(
+            state,
+            code="max_actions_reached",
+            stage="execution_budget_exhaustion",
+        )
+        return _mission_result(
             success=False,
             reasoning=f"Max actions ({max_actions}) reached without completion",
             narrative="Max actions reached without completion",

@@ -223,7 +223,7 @@ class NarrativeMemory:
             scroll_y = 0
 
         try:
-            visible_text = (page.evaluate("document.body ? document.body.innerText : ''") or "")[:2000]
+            visible_text = page.evaluate("document.body ? document.body.innerText : ''") or ""
         except Exception:
             visible_text = ""
 
@@ -255,7 +255,7 @@ class NarrativeMemory:
             "scroll_y": state.scroll_y,
             "page_width": state.page_width,
             "page_height": state.page_height,
-            "visible_text": (state.visible_text or "")[:500],
+            "visible_text": state.visible_text or "",
         }
 
     def _has_meaningful_change(
@@ -838,6 +838,130 @@ class NarrativeMemory:
 
     def get_last_interaction_overlay_index(self) -> Optional[int]:
         return self._last_overlay_index
+
+    # ---------------------------------------------------------------------
+    # Persistence helpers
+    # ---------------------------------------------------------------------
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Serialize memory state for run checkpointing."""
+        entries_payload: List[Dict[str, Any]] = []
+        for entry in self.entries:
+            entries_payload.append(
+                {
+                    "memory_id": entry.memory_id,
+                    "timestamp": float(entry.timestamp or 0.0),
+                    "memory_entry_index": int(entry.memory_entry_index or 0),
+                    "i_did": str(entry.i_did or ""),
+                    "because": str(entry.because or ""),
+                    "and_then": str(entry.and_then or ""),
+                    "action_type": str(entry.action_type or ""),
+                    "action_params": dict(entry.action_params or {}),
+                    "outcome": str(entry.outcome or ""),
+                    "state_before": dict(entry.state_before or {}),
+                    "state_after": dict(entry.state_after or {}),
+                    "mission": str(entry.mission or ""),
+                    "entry_kind": str(entry.entry_kind or MemoryEntryKind.EXECUTED_ACTION.value),
+                    "memory_tags": list(entry.memory_tags or []),
+                    "reference_memory_ids": list(entry.reference_memory_ids or []),
+                }
+            )
+
+        return {
+            "current_mission": str(self.current_mission or ""),
+            "memory_entry_counter": int(self.memory_entry_counter or 1),
+            "base_knowledge": list(self.base_knowledge or []),
+            "question_answer_pairs": list(self.question_answer_pairs or []),
+            "url_history": list(self.url_history or []),
+            "url_pointer": int(self.url_pointer or 0),
+            "last_overlay_index": self._last_overlay_index,
+            "entries": entries_payload,
+        }
+
+    def load_payload(self, payload: Dict[str, Any]) -> None:
+        """Restore memory state from checkpoint payload."""
+        source = payload if isinstance(payload, dict) else {}
+        self.current_mission = str(source.get("current_mission", "") or "")
+        self.memory_entry_counter = int(source.get("memory_entry_counter", 1) or 1)
+        if self.memory_entry_counter < 1:
+            self.memory_entry_counter = 1
+        self.base_knowledge = [
+            str(item)
+            for item in (source.get("base_knowledge", []) or [])
+        ]
+        self.question_answer_pairs = [
+            pair
+            for pair in (source.get("question_answer_pairs", []) or [])
+            if isinstance(pair, dict)
+        ]
+        self.url_history = [
+            str(url)
+            for url in (source.get("url_history", []) or [])
+            if str(url).strip()
+        ]
+        self.url_pointer = int(source.get("url_pointer", -1) or -1)
+        if self.url_history:
+            self.url_pointer = max(-1, min(self.url_pointer, len(self.url_history) - 1))
+        else:
+            self.url_pointer = -1
+        last_overlay_index = source.get("last_overlay_index", None)
+        if isinstance(last_overlay_index, int):
+            self._last_overlay_index = last_overlay_index
+        else:
+            self._last_overlay_index = None
+
+        restored_entries: List[MemoryEntry] = []
+        restored_by_id: Dict[str, MemoryEntry] = {}
+        raw_entries = source.get("entries", []) or []
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            memory_id = str(raw_entry.get("memory_id", "") or "").strip()
+            if not memory_id:
+                continue
+            entry = MemoryEntry(
+                memory_id=memory_id,
+                timestamp=float(raw_entry.get("timestamp", 0.0) or 0.0),
+                memory_entry_index=int(raw_entry.get("memory_entry_index", 0) or 0),
+                i_did=str(raw_entry.get("i_did", "") or ""),
+                because=str(raw_entry.get("because", "") or ""),
+                and_then=str(raw_entry.get("and_then", "") or ""),
+                action_type=str(raw_entry.get("action_type", "") or ""),
+                action_params=dict(raw_entry.get("action_params", {}) or {}),
+                outcome=str(raw_entry.get("outcome", "") or ""),
+                state_before=dict(raw_entry.get("state_before", {}) or {}),
+                state_after=dict(raw_entry.get("state_after", {}) or {}),
+                mission=str(raw_entry.get("mission", "") or ""),
+                entry_kind=str(
+                    raw_entry.get("entry_kind", MemoryEntryKind.EXECUTED_ACTION.value)
+                    or MemoryEntryKind.EXECUTED_ACTION.value
+                ),
+                memory_tags=list(raw_entry.get("memory_tags", []) or []),
+                reference_memory_ids=[
+                    str(item).strip()
+                    for item in (raw_entry.get("reference_memory_ids", []) or [])
+                    if str(item).strip()
+                ],
+            )
+            restored_entries.append(entry)
+            restored_by_id[entry.memory_id] = entry
+
+        # Keep entry ordering stable by memory_entry_index, then timestamp fallback.
+        restored_entries.sort(
+            key=lambda item: (
+                int(item.memory_entry_index or 0),
+                float(item.timestamp or 0.0),
+            )
+        )
+        self.entries = restored_entries
+        self._entries_by_id = restored_by_id
+
+        # Ensure counter always advances beyond highest restored entry index.
+        highest_index = max(
+            [int(entry.memory_entry_index or 0) for entry in restored_entries],
+            default=0,
+        )
+        self.memory_entry_counter = max(self.memory_entry_counter, highest_index + 1, 1)
 
 __all__ = [
     "InteractionType",

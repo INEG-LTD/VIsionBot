@@ -66,6 +66,26 @@ class AgentState:
     low_budget_mode: bool = False
     budget_constraints_enabled: bool = True
     planning_batch_limit: int = 0
+    iteration_ms: float = 0.0
+    llm_latency_ms: float = 0.0
+    tool_latency_ms: float = 0.0
+    navigation_latency_ms: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    image_count: int = 0
+    tool_calls: int = 0
+    retries: int = 0
+    avg_iteration_ms: float = 0.0
+    p95_iteration_ms: float = 0.0
+    avg_llm_ms: float = 0.0
+    avg_tool_ms: float = 0.0
+    avg_tokens_in: float = 0.0
+    avg_tokens_out: float = 0.0
+    avg_images_per_call: float = 0.0
+    retries_per_mission: float = 0.0
+    mission_ms: float = 0.0
+    failure_code: str = ""
+    failure_stage: str = ""
     checkpoint_pending: bool = False
     last_action_summary: str = ""
     in_loop: bool = False
@@ -348,6 +368,7 @@ class TimelineEntry:
     title: str = ""
     body: str = ""
     variant: str = ""
+    markup: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -412,16 +433,11 @@ class StatusPill(Widget):
 
 
 class StatusRow(AgentPanel):
-    """Horizontal row: colored status pill + thinking status label."""
+    """Horizontal row: colored status pill."""
 
     DEFAULT_CSS = """
     StatusRow { height: auto; width: 99%; }
     StatusRow Horizontal { height: 1; width: 100%; }
-    .thinking-label {
-        color: #F0D264;
-        text-align: right;
-        width: 1fr;
-    }
     """
     
     label = "IDLE"
@@ -429,11 +445,9 @@ class StatusRow(AgentPanel):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield StatusPill(label=self.label, variant="idle")
-            yield Label("THINKING: idle", classes="thinking-label")
 
     def panel_ready(self) -> None:
         self._pill = self.query_one(StatusPill)
-        self._thinking = self.query_one(".thinking-label", Label)
 
     def on_state_update(self, state: AgentState) -> None:
         status_key = str(state.status or "").strip().lower()
@@ -441,13 +455,6 @@ class StatusRow(AgentPanel):
         label_text, variant = _STATUS_META.get(status_key, (fallback_label, "unknown"))
         self._pill.set_status(label_text, variant)
         self.label = label_text
-        if state.thinking_active:
-            frame = state.render_frame % 4
-            dots = "." * frame + " " * (3 - frame)
-            text = _truncate(state.thinking_text or "Thinking...", 84)
-            self._thinking.update(f"THINKING: 🤔 {text}{dots}")
-        else:
-            self._thinking.update("")
 
 
 class IntroBanner(AgentPanel):
@@ -482,16 +489,8 @@ class IntroBanner(AgentPanel):
 class TimelinePanel(AgentPanel):
     """Scrollable list of timeline entries. Appends a widget per event."""
 
-    listens_to = [
-        EventType.ITERATION_START,
-        EventType.ACTION_DETERMINED,
-        EventType.LOOP_STATE_CHANGED,
-        EventType.ASK_REQUESTED,
-        EventType.ASK_COMMAND_ANSWERED,
-        EventType.ASK_COMMAND_SKIPPED,
-        EventType.ASK_COMMAND_FAILURE,
-        EventType.SYSTEM_ERROR,
-    ]
+    listens_to = list(EventType)
+    max_entries = 600
 
     DEFAULT_CSS = """
     TimelinePanel {
@@ -500,9 +499,21 @@ class TimelinePanel(AgentPanel):
         width: 99%;
         layers: below above;
     }
+    .timeline-block {
+        height: 1fr;
+        min-height: 0;
+        border: solid #9C9C9C;
+    }
+    .timeline-thinking-label {
+        color: #F0D264;
+        height: 1;
+        width: 100%;
+        text-align: left;
+        padding: 0 1;
+        border-top: solid #4B5563;
+    }
     TimelinePanel VerticalScroll {
         height: 1fr;
-        border: solid #9C9C9C;
         padding: 0 0 0 1;
         overflow-y: auto;
     }
@@ -577,18 +588,30 @@ class TimelinePanel(AgentPanel):
     """
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="timeline-scroll"):
-            yield Container(classes="timeline-events")
-            with Container(classes="timeline-intro-text"):
-                yield Label(
-                    "[gray]The history of agent work will appear here[/gray]"
-                )
-                yield Label("[darkgray]TIMELINE[/darkgray]", classes="timeline-intro-text-label")
+        with Vertical(classes="timeline-block"):
+            with VerticalScroll(classes="timeline-scroll"):
+                yield Container(classes="timeline-events")
+                with Container(classes="timeline-intro-text"):
+                    yield Label(
+                        "[gray]The history of agent work will appear here[/gray]"
+                    )
+                    yield Label("[darkgray]TIMELINE[/darkgray]", classes="timeline-intro-text-label")
+            yield Label("", classes="timeline-thinking-label")
 
     def panel_ready(self) -> None:
+        self._thinking = self.query_one(".timeline-thinking-label", Label)
         self._scroll = self.query_one(".timeline-scroll", VerticalScroll)
         self._events = self.query_one(".timeline-events", Container)
         self._intro = self.query_one(".timeline-intro-text", Container)
+
+    def on_state_update(self, state: AgentState) -> None:
+        if state.thinking_active:
+            frame = state.render_frame % 4
+            dots = "." * frame + " " * (3 - frame)
+            text = _truncate(state.thinking_text or "Thinking...", 84)
+            self._thinking.update(f"THINKING: 🤔 {text}{dots}")
+        else:
+            self._thinking.update("")
 
     def on_agent_event(self, event: BotEvent) -> None:
         entry = self._format_event(event)
@@ -608,7 +631,11 @@ class TimelinePanel(AgentPanel):
             )
         elif entry.kind == "callout":
             # header_label = Label(entry.title or "NOTICE", markup=False, classes="timeline-card-header")
-            body_label = Label(entry.body or entry.text or "", classes="timeline-card-body")
+            body_label = Label(
+                entry.body or entry.text or "",
+                markup=False,
+                classes="timeline-card-body",
+            )
             card = Container(
                 # header_label,
                 body_label,
@@ -618,12 +645,13 @@ class TimelinePanel(AgentPanel):
             AgentPanel.apply_variant_class(card, "timeline-card--", entry.variant or "default")
             widget = card
         else:
-            widget = Label(entry.text or "")
+            widget = Label(entry.text or "", markup=entry.markup)
             widget.styles.width = "100%"
             widget.styles.height = "auto"
             widget.styles.padding = (0, 1, 0, 0)
 
         self._events.mount(widget)
+        self._trim_entries()
         self._scroll.refresh(layout=True)
 
         if entry.kind == "collapsible":
@@ -634,6 +662,14 @@ class TimelinePanel(AgentPanel):
 
         if follow_tail:
             self.call_after_refresh(lambda: self._scroll.scroll_end(animate=False))
+
+    def _trim_entries(self) -> None:
+        while len(self._events.children) > self.max_entries:
+            oldest = self._events.children[0]
+            try:
+                oldest.remove()
+            except Exception:
+                break
 
     def _is_near_bottom(self, threshold: int = 3) -> bool:
         """Return True when viewport is close enough to bottom to keep auto-follow enabled."""
@@ -661,6 +697,24 @@ class TimelinePanel(AgentPanel):
             return True
         return (max_scroll - current_scroll) <= float(threshold)
 
+    @staticmethod
+    def _format_event_details(details: dict[str, Any]) -> str:
+        lines: list[str] = []
+        for key, value in details.items():
+            if value is None or key in {"timestamp", "timestamp_iso"}:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                lines.append(f"{key}: {value}")
+                continue
+            if isinstance(value, list):
+                lines.append(f"{key}: list[{len(value)}]")
+                continue
+            if isinstance(value, dict):
+                lines.append(f"{key}: dict[{len(value)}]")
+                continue
+            lines.append(f"{key}: {type(value).__name__}")
+        return "\n".join(lines)
+
     def _format_event(self, event: BotEvent) -> TimelineEntry | None:
         details = event.details or {}
         t = event.event_type
@@ -669,7 +723,7 @@ class TimelinePanel(AgentPanel):
             if details.get("iteration", 0) == 1:
                 return TimelineEntry(
                     kind="line",
-                    text=f"[bold]> {details.get('mission', 'unknown')}[/bold]",
+                    text=f"> {details.get('mission', 'unknown')}",
                 )
 
         elif t == EventType.ACTION_DETERMINED:
@@ -692,22 +746,20 @@ class TimelinePanel(AgentPanel):
             return TimelineEntry(
                 kind="callout",
                 title="QUESTION",
-                body=f"[bold]{question or 'The agent asked a question.'}[/bold]",
+                body=question or "The agent asked a question.",
                 variant="ask",
             )
 
         elif t == EventType.ASK_COMMAND_ANSWERED:
-            question = str(details.get("question", "")).strip() or "No question provided."
             response = str(details.get("response", "")).strip() or "(empty)"
             return TimelineEntry(
                 kind="callout",
                 title="ANSWERED",
-                body=f"[bold]{response}[/bold]",
+                body=response,
                 variant="answered",
             )
 
         elif t == EventType.ASK_COMMAND_SKIPPED:
-            question = str(details.get("question", "")).strip() or "No question provided."
             return TimelineEntry(
                 kind="callout",
                 title="SKIPPED",
@@ -716,7 +768,6 @@ class TimelinePanel(AgentPanel):
             )
 
         elif t == EventType.ASK_COMMAND_FAILURE:
-            question = str(details.get("question", "")).strip() or "No question provided."
             error = str(details.get("error", "")).strip() or "Unknown ask callback error."
             return TimelineEntry(
                 kind="callout",
@@ -725,10 +776,35 @@ class TimelinePanel(AgentPanel):
                 variant="error",
             )
 
+        elif t == EventType.SYSTEM_WARNING:
+            return TimelineEntry(kind="line", text=f"WARNING {event.message}")
+
         elif t == EventType.SYSTEM_ERROR:
             return TimelineEntry(kind="line", text=f"ERROR {event.message}")
 
-        return None
+        elif t == EventType.SYSTEM_DEBUG:
+            source = str(details.get("source", "")).strip().lower()
+            message = str(event.message or "").strip()
+            if source == "dprint":
+                return TimelineEntry(kind="line", text=message, markup=False)
+            return TimelineEntry(kind="line", text=f"DEBUG {message}", markup=False)
+
+        elif t == EventType.SYSTEM_INFO:
+            message = str(event.message or "").strip()
+            return TimelineEntry(kind="line", text=f"INFO {message}", markup=False)
+
+        label = str(t.value or "event").upper()
+        message = str(event.message or "").strip()
+        if not message:
+            message = label
+        detail_text = self._format_event_details(details)
+        if detail_text:
+            return TimelineEntry(
+                kind="collapsible",
+                title=f"{label}: {message}",
+                body=detail_text,
+            )
+        return TimelineEntry(kind="line", text=f"{label}: {message}", markup=False)
 
 class ConfigButtons(AgentPanel):
     """Buttons for the agent configuration."""
@@ -748,27 +824,19 @@ class ConfigButtons(AgentPanel):
     def __init__(self, tab_id: str) -> None:
         super().__init__()
         self._tab_id = tab_id
-        self.settings_button_id = f"settings-button-{tab_id}"
         self.config_button_id = f"open-config-{tab_id}"
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield Button("Settings", classes="settings-button", id=self.settings_button_id)
             yield Button("Config", classes="config-button", id=self.config_button_id)
             
     def panel_ready(self) -> None:
-        self._settings_button = self.query_one(".settings-button", Button)
         self._config_button = self.query_one(".config-button", Button)
-        self._settings_button.styles.border = ("round", "white")
         self._config_button.styles.border = ("round", "white")
         
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == self.settings_button_id:
-            self._settings_button.pressed = True
-            self._config_button.pressed = False
-        elif event.button.id == self.config_button_id:
+        if event.button.id == self.config_button_id:
             self._config_button.pressed = True
-            self._settings_button.pressed = False
 
 
 class AgentConfigEditor(Widget):
@@ -909,7 +977,6 @@ class AgentConfigEditor(Widget):
     READ_ONLY_PATHS = {
         "logging.screenshot_dir",
         "logging.screenshot_stream_dir",
-        "error_handling.screenshot_dir",
         "browser.user_data_dir",
     }
 
@@ -1548,10 +1615,28 @@ class TelemetryPanel(AgentPanel):
                 f"Low Budget Mode: {'on' if state.low_budget_mode else 'off'}",
                 f"Plan Batch Limit: {state.planning_batch_limit or '-'}",
                 f"Cost: ${state.llm_total_cost_usd:.4f}",
-                f"Tokens: {state.llm_total_tokens}",
+                f"Tokens (all): {state.llm_total_tokens}",
+                f"Iteration ms: {state.iteration_ms:.2f}",
+                f"LLM ms: {state.llm_latency_ms:.2f}",
+                f"Tool ms: {state.tool_latency_ms:.2f}",
+                f"Navigation ms: {state.navigation_latency_ms:.2f}",
+                f"Tokens in/out (iter): {state.tokens_in}/{state.tokens_out}",
+                f"Images (iter): {state.image_count}",
+                f"Tool calls (iter): {state.tool_calls}",
+                f"Retries (iter): {state.retries}",
+                f"Avg iteration ms: {state.avg_iteration_ms:.2f}",
+                f"P95 iteration ms: {state.p95_iteration_ms:.2f}",
+                f"Avg LLM ms: {state.avg_llm_ms:.2f}",
+                f"Avg tool ms: {state.avg_tool_ms:.2f}",
+                f"Avg tokens in/out: {state.avg_tokens_in:.2f}/{state.avg_tokens_out:.2f}",
+                f"Avg images/call: {state.avg_images_per_call:.2f}",
+                f"Retries/mission: {state.retries_per_mission:.2f}",
+                f"Mission ms: {state.mission_ms:.2f}",
                 f"Sandbox Web: {state.sandbox_web_policy or 'n/a'}",
                 f"URL: {current_url}",
                 f"Last Action: {state.last_action_summary or 'n/a'}",
+                f"Failure code: {state.failure_code or 'n/a'}",
+                f"Failure stage: {state.failure_stage or 'n/a'}",
                 f"Dropped Events: {state.dropped_event_count}",
                 result_line,
             ]

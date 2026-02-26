@@ -173,6 +173,15 @@ class EventLogger:
     def total_tokens(self) -> int:
         return self._total_tokens
 
+    def set_usage_totals(self, *, total_cost_usd: float, total_tokens: int) -> None:
+        """Restore aggregate usage counters from checkpoint state."""
+        try:
+            self._total_cost_usd = max(0.0, float(total_cost_usd or 0.0))
+            self._total_tokens = max(0, int(total_tokens or 0))
+        except Exception:
+            self._total_cost_usd = 0.0
+            self._total_tokens = 0
+
     def get_event_history(self) -> List[BotEvent]:
         return list(self._event_history)
 
