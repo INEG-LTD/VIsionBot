@@ -37,7 +37,18 @@ DOM_SMART_CLICK_POINT_SCRIPT = """
         return null;
     }
 
-    const el = document.querySelector(`[data-dom-index="${overlayIndex}"]`);
+    const findByShadow = (idx, root) => {
+        const found = root.querySelector(`[data-dom-index="${idx}"]`);
+        if (found) return found;
+        for (const host of root.querySelectorAll('*')) {
+            if (host.shadowRoot) {
+                const deep = findByShadow(idx, host.shadowRoot);
+                if (deep) return deep;
+            }
+        }
+        return null;
+    };
+    const el = findByShadow(overlayIndex, document);
     if (!el) {
         return null;
     }
@@ -157,7 +168,15 @@ DOM_SMART_CLICK_POINT_SCRIPT = """
         }
     }
 
-    return null;
+    // All hit-test points failed — return sentinel for JS direct click.
+    const elRect = el.getBoundingClientRect();
+    return {
+        x: Math.round(elRect.left + elRect.width * 0.5),
+        y: Math.round(elRect.top + elRect.height * 0.5),
+        source: "js-click-fallback",
+        targetTag: (el.tagName || "").toLowerCase(),
+        baseTag: (el.tagName || "").toLowerCase(),
+    };
 }
 """
 
@@ -212,14 +231,12 @@ class Executor:
                  user_question_callback: Optional[Callable[[str, dict, List[str], bool, bool], str]] = None, 
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
                  data_report_callback: Optional[Callable[[str, dict], None]] = None,
-                 user_messages_config=None,
                  workspace_paths: Optional[Dict[str, str]] = None,
                  sandbox_policy: Optional[Any] = None):
         self.browser = browser
         self.memory_store = memory_store
         self.page_utils = page_utils
         self.last_failure_reason: Optional[str] = None
-        self.user_messages_config = user_messages_config  # Store user messages config
         self.user_question_callback = user_question_callback
         self.agent_talk_callback = agent_talk_callback
         self.data_report_callback = data_report_callback
@@ -334,6 +351,19 @@ class Executor:
         """Return normalized function arguments for a step."""
         args = getattr(step, "function_arguments", None)
         return args if isinstance(args, dict) else {}
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> Optional[int]:
+        """Coerce a value to a positive integer; return None for missing/invalid values."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
     def _get_action_command(self, step: ActionStep) -> str:
         """Human-readable command string for logging/history."""
@@ -483,6 +513,7 @@ class Executor:
 
         args = self._get_action_args(step)
         x, y = None, None
+        use_js_click = False
         overlay_index = None
 
         # Resolve element_id from the INTERACTIVE ELEMENTS index
@@ -498,7 +529,7 @@ class Executor:
                     break
             if matched is not None:
                 overlay_index = matched.overlay_number
-                x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+                x, y, use_js_click = self.get_click_coordinates(overlay_index, elements, page_info)
                 self.event_logger.system_debug(
                     f"Matched element [id={element_id}] → overlay={overlay_index} "
                     f"(type={getattr(matched, 'element_type', '?')}, "
@@ -524,7 +555,7 @@ class Executor:
             if overlay_index is None:
                 self.event_logger.command_failure(step.action, error="Could not determine best overlay")
                 return False
-            x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+            x, y, use_js_click = self.get_click_coordinates(overlay_index, elements, page_info)
 
         if x is None or y is None:
             self.event_logger.command_failure(step.action, error="Could not determine click coordinates")
@@ -549,9 +580,36 @@ class Executor:
 
         try:
             highlight_click_location(self, x, y)
-            # self._human_mouse_move(x, y)
-            self.browser.page.mouse.click(x, y)
-            
+            if use_js_click:
+                self.browser.page.evaluate(
+                    """(overlayIndex) => {
+                        const findByShadow = (idx, root) => {
+                            const found = root.querySelector(`[data-dom-index="${idx}"]`);
+                            if (found) return found;
+                            for (const host of root.querySelectorAll('*')) {
+                                if (host.shadowRoot) {
+                                    const deep = findByShadow(idx, host.shadowRoot);
+                                    if (deep) return deep;
+                                }
+                            }
+                            return null;
+                        };
+                        const el = findByShadow(overlayIndex, document);
+                        if (el && typeof el.click === 'function') { el.click(); }
+                    }""",
+                    overlay_index,
+                )
+                try:
+                    self.event_logger.system_info(
+                        f"JS direct click used for overlay {overlay_index} "
+                        f"(elementFromPoint blocked by overlapping element)"
+                    )
+                except Exception:
+                    pass
+            else:
+                # self._human_mouse_move(x, y)
+                self.browser.page.mouse.click(x, y)
+
             # Capture state after click
             after_state = self.memory_store._capture_current_state()
 
@@ -1028,7 +1086,7 @@ class Executor:
                 base_knowledge=self.memory_store.base_knowledge,
             )
 
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
         if x is None or y is None:
             error_msg = "Could not determine coordinates for clear_text"
         else:
@@ -1159,7 +1217,7 @@ class Executor:
             )
 
         # Get coordinates for the element to type into
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
         
         # Click first to focus the element
         if x is not None and y is not None:
@@ -1289,8 +1347,21 @@ class Executor:
         args = self._get_action_args(step)
         direction = (str(args.get("direction", "")).strip() or "down").lower()
         amount_label = (str(args.get("amount", "")).strip() or "medium").lower()
-        element_id = args.get("element_id")
-        scroll_to_element_id = args.get("scroll_to_element_id")
+        raw_element_id = args.get("element_id")
+        raw_scroll_to_element_id = args.get("scroll_to_element_id")
+        element_id = self._coerce_positive_int(raw_element_id)
+        scroll_to_element_id = self._coerce_positive_int(raw_scroll_to_element_id)
+        allow_scroll_to_fallback = bool(args.get("_allow_scroll_to_fallback", True))
+        allow_container_fallback = bool(args.get("_allow_container_fallback", True))
+
+        if raw_scroll_to_element_id is not None and scroll_to_element_id is None:
+            self.event_logger.system_debug(
+                f"[Scroll] Ignoring invalid scroll_to_element_id={raw_scroll_to_element_id!r}; expected positive integer"
+            )
+        if raw_element_id is not None and element_id is None:
+            self.event_logger.system_debug(
+                f"[Scroll] Ignoring invalid element_id={raw_element_id!r}; expected positive integer"
+            )
 
         amount_px = {"small": 150, "medium": 400, "large": 800}.get(amount_label, 400)
         axis = "horizontal" if direction in ("left", "right") else "vertical"
@@ -1305,9 +1376,11 @@ class Executor:
         try:
             if scroll_to_element_id is not None:
                 # Mode 3: bring element into view
+                before_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                before_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
                 js = """
                     (idx) => {
-                        const el = document.querySelector('[data-domIndex="' + idx + '"]');
+                        const el = document.querySelector('[data-dom-index="' + idx + '"]');
                         if (!el) return false;
                         el.scrollIntoView({behavior: 'instant', block: 'nearest', inline: 'nearest'});
                         return true;
@@ -1318,13 +1391,51 @@ class Executor:
                     error_msg = f"scroll_to_element_id={scroll_to_element_id} not found in DOM"
                     success = False
                 else:
-                    success = True
+                    after_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                    after_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                    if self.page_utils:
+                        self.page_utils.last_scroll_y = after_y
+                        self.page_utils.last_scroll_x = after_x
+
+                    if after_y != before_y or after_x != before_x:
+                        success = True
+                    else:
+                        # Element is already in view (or scrollIntoView had no effect).
+                        if not allow_scroll_to_fallback:
+                            self.event_logger.system_debug(
+                                f"[Scroll] scroll_to_element_id={scroll_to_element_id} caused no movement; "
+                                "treated as success (no fallback requested)"
+                            )
+                            success = True
+                        else:
+                            # Fall back to directional window scroll so "scroll down" still tries to move.
+                            target_x = before_x + dx
+                            target_y = before_y + dy
+                            self.browser.page.evaluate(f"window.scrollBy({dx}, {dy})")
+                            fallback_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                            fallback_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                            if self.page_utils:
+                                self.page_utils.last_scroll_y = fallback_y
+                                self.page_utils.last_scroll_x = fallback_x
+
+                            if fallback_y == before_y and fallback_x == before_x:
+                                boundary = "bottom" if dy > 0 else "top" if dy < 0 else "right" if dx > 0 else "left"
+                                error_msg = (
+                                    f"scroll_to_element_id={scroll_to_element_id} already in view and page already at {boundary} boundary"
+                                )
+                                success = False
+                            else:
+                                self.event_logger.system_debug(
+                                    f"[Scroll] scroll_to_element_id={scroll_to_element_id} caused no movement; "
+                                    "fell back to directional window scroll"
+                                )
+                                success = True
 
             elif element_id is not None:
                 # Mode 2: scroll the nearest scrollable ancestor of this element
                 js = """
                     ([idx, dx, dy]) => {
-                        const el = document.querySelector('[data-domIndex="' + idx + '"]');
+                        const el = document.querySelector('[data-dom-index="' + idx + '"]');
                         if (!el) return {found: false};
                         let node = el.parentElement;
                         while (node && node !== document.body && node !== document.documentElement) {
@@ -1349,10 +1460,30 @@ class Executor:
                     error_msg = f"element_id={element_id} not found in DOM"
                     success = False
                 elif result.get("no_ancestor"):
-                    # No scrollable ancestor — fall back to window scroll
-                    self.browser.page.evaluate(f"window.scrollBy({dx}, {dy})")
-                    self.event_logger.system_debug(f"[Scroll] No scrollable ancestor for element {element_id}, fell back to window scroll")
-                    success = True
+                    if not allow_container_fallback:
+                        error_msg = f"No scrollable ancestor for element {element_id}"
+                        success = False
+                    else:
+                        # No scrollable ancestor — fall back to window scroll
+                        before_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                        before_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                        target_x = before_x + dx
+                        target_y = before_y + dy
+                        self.browser.page.evaluate(f"window.scrollBy({dx}, {dy})")
+                        after_x = int(self.browser.page.evaluate("window.pageXOffset || window.scrollX") or 0)
+                        after_y = int(self.browser.page.evaluate("window.pageYOffset || window.scrollY") or 0)
+                        if self.page_utils:
+                            self.page_utils.last_scroll_y = after_y
+                            self.page_utils.last_scroll_x = after_x
+                        if after_y == before_y and after_x == before_x:
+                            boundary = "bottom" if dy > 0 else "top" if dy < 0 else "right" if dx > 0 else "left"
+                            error_msg = f"No scrollable ancestor for element {element_id}; page already at {boundary} boundary"
+                            success = False
+                        else:
+                            self.event_logger.system_debug(
+                                f"[Scroll] No scrollable ancestor for element {element_id}, fell back to window scroll"
+                            )
+                            success = True
                 else:
                     delta_y = result.get("delta_y", 0)
                     delta_x = result.get("delta_x", 0)
@@ -1399,7 +1530,85 @@ class Executor:
             success=success,
             error_message=error_msg,
         )
+        self.last_failure_reason = error_msg if not success else None
         return success
+
+    def execute_scroll_down(self, step: ActionStep) -> bool:
+        """Scroll the main page down."""
+        args = self._get_action_args(step)
+        amount_label = (str(args.get("amount", "")).strip() or "medium").lower()
+        synthetic_step = ActionStep(
+            action="scroll: down",
+            function_name="scroll_down",
+            function_arguments={
+                "direction": "down",
+                "amount": amount_label,
+            },
+        )
+        return self.execute_scroll(step=synthetic_step)
+
+    def execute_scroll_up(self, step: ActionStep) -> bool:
+        """Scroll the main page up."""
+        args = self._get_action_args(step)
+        amount_label = (str(args.get("amount", "")).strip() or "medium").lower()
+        synthetic_step = ActionStep(
+            action="scroll: up",
+            function_name="scroll_up",
+            function_arguments={
+                "direction": "up",
+                "amount": amount_label,
+            },
+        )
+        return self.execute_scroll(step=synthetic_step)
+
+    def execute_scroll_container(self, step: ActionStep) -> bool:
+        """Scroll a specific container (requires element_id)."""
+        args = self._get_action_args(step)
+        raw_element_id = args.get("element_id")
+        element_id = self._coerce_positive_int(raw_element_id)
+        if element_id is None:
+            self.last_failure_reason = (
+                f"scroll_container requires a valid element_id; got {raw_element_id!r}"
+            )
+            return False
+
+        direction = (str(args.get("direction", "")).strip() or "down").lower()
+        if direction not in ("up", "down"):
+            direction = "down"
+        amount_label = (str(args.get("amount", "")).strip() or "medium").lower()
+        synthetic_step = ActionStep(
+            action=f"scroll_container: {direction} [id={element_id}]",
+            function_name="scroll_container",
+            function_arguments={
+                "direction": direction,
+                "amount": amount_label,
+                "element_id": element_id,
+                "_allow_container_fallback": False,
+            },
+        )
+        return self.execute_scroll(step=synthetic_step)
+
+    def execute_scroll_to_element(self, step: ActionStep) -> bool:
+        """Bring a specific element into view without directional fallback."""
+        args = self._get_action_args(step)
+        raw_element_id = args.get("element_id")
+        element_id = self._coerce_positive_int(raw_element_id)
+        if element_id is None:
+            self.last_failure_reason = (
+                f"scroll_to_element requires a valid element_id; got {raw_element_id!r}"
+            )
+            return False
+
+        synthetic_step = ActionStep(
+            action=f"scroll_to: [id={element_id}]",
+            function_name="scroll_to_element",
+            function_arguments={
+                "direction": "to_element",
+                "scroll_to_element_id": element_id,
+                "_allow_scroll_to_fallback": False,
+            },
+        )
+        return self.execute_scroll(step=synthetic_step)
 
     def execute_press(self, step: ActionStep) -> bool:
         """Execute a key press action"""
@@ -1580,9 +1789,9 @@ class Executor:
             playwright_key = key_map.get(keys_string, keys_string)
             self.browser.page.keyboard.press(playwright_key)
 
-    def get_click_coordinates(self, overlay_index: int, elements: PageElements, page_info: PageInfo) -> Tuple[Optional[int], Optional[int]]:
+    def get_click_coordinates(self, overlay_index: Optional[int], elements: PageElements, page_info: PageInfo) -> Tuple[Optional[int], Optional[int], bool]:
         if overlay_index is None or not getattr(elements, "elements", None):
-            return None, None
+            return None, None, False
 
         w, h = page_info.width, page_info.height
         selected_element = None
@@ -1610,15 +1819,17 @@ class Executor:
                         cx, cy = int(round(sx)), int(round(sy))
                         if 0 <= cx < w and 0 <= cy < h:
                             source = smart_point.get("source", "smart")
+                            use_js = source == "js-click-fallback"
                             target_tag = smart_point.get("targetTag", "")
                             try:
                                 self.event_logger.system_debug(
                                     f"Smart click point for overlay {overlay_index}: ({cx}, {cy}) "
                                     f"source={source} target_tag={target_tag}"
+                                    + (" [JS-CLICK FALLBACK]" if use_js else "")
                                 )
                             except Exception:
                                 pass
-                            return cx, cy
+                            return cx, cy, use_js
             except Exception as e:
                 try:
                     self.event_logger.system_debug(
@@ -1652,9 +1863,9 @@ class Executor:
                 cx, cy = int((x0 + x1) / 2), int((y0 + y1) / 2)
 
             if 0 <= cx < w and 0 <= cy < h:
-                return cx, cy
+                return cx, cy, False
 
-        return None, None
+        return None, None, False
     
     def execute_open(
         self,
@@ -1800,7 +2011,7 @@ class Executor:
                 base_knowledge=self.memory_store.base_knowledge,
             )
 
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
         success = False
         error_msg: Optional[str] = None
         selector: Optional[str] = None
@@ -1886,7 +2097,7 @@ class Executor:
                 base_knowledge=self.memory_store.base_knowledge,
             )
 
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
 
         success = False
         error_msg: Optional[str] = None
@@ -1957,7 +2168,7 @@ class Executor:
                 screenshot=current_screenshot,
                 base_knowledge=self.memory_store.base_knowledge,
             )
-        x, y = self.get_click_coordinates(overlay_index, elements, page_info)
+        x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
 
         success = False
         error_msg: Optional[str] = None
@@ -2138,14 +2349,14 @@ class Executor:
         
         # Try extraction with retries
         try:
+            extraction_user_prompt = f"""
+                        Extract the following information from this webpage screenshot:
+                        {extraction_prompt}
+
+                        Your goal is to extract the following information from the webpage screenshot: {extraction_prompt}
+                        Do not make up text that isn't in the provided content."""
             if not extraction_schema:
                 # Simple text extraction using vision, grounded with page text
-                extraction_user_prompt = f"""
-                            Extract the following information from this webpage screenshot:
-                            {extraction_prompt}
-
-                            Your goal is to extract the following information from the webpage screenshot: {extraction_prompt} 
-                            Do not make up text that isn't in the provided content."""
                 result_text = generate_text(
                     prompt=extraction_user_prompt,
                     system_prompt=extraction_system_prompt,
@@ -2450,6 +2661,7 @@ class Executor:
             action_id = str(uuid.uuid4())[:8]
 
         function_args = self._get_action_args(action_step)
+        self.last_failure_reason = None
         try:
             self.memory_store.set_current_action_context(
                 reasoning=getattr(action_step, "reasoning", None) or function_args.get("reasoning"),
@@ -2489,7 +2701,10 @@ class Executor:
                     "type_text",
                     "clear_text",
                     "select_option",
-                    "scroll_page",
+                    "scroll_down",
+                    "scroll_up",
+                    "scroll_container",
+                    "scroll_to_element",
                     "press_key",
                     "open_url",
                     "go_back",
@@ -2596,8 +2811,14 @@ class Executor:
                 executed = self.execute_back(step=action_step)
             elif function_name == "go_forward":
                 executed = self.execute_forward(step=action_step)
-            elif function_name == "scroll_page":
-                executed = self.execute_scroll(step=action_step)
+            elif function_name == "scroll_down":
+                executed = self.execute_scroll_down(step=action_step)
+            elif function_name == "scroll_up":
+                executed = self.execute_scroll_up(step=action_step)
+            elif function_name == "scroll_container":
+                executed = self.execute_scroll_container(step=action_step)
+            elif function_name == "scroll_to_element":
+                executed = self.execute_scroll_to_element(step=action_step)
             elif function_name == "extract_data":
                 extract_result = self.extract(
                     step=action_step,
@@ -2665,15 +2886,27 @@ class Executor:
 
             executed = bool(executed)
             duration = time.time() - start_time
+            failure_detail: Optional[str] = None
+            if isinstance(result_data, dict):
+                result_error = result_data.get("error")
+                if isinstance(result_error, str) and result_error.strip():
+                    failure_detail = result_error.strip()
+            if not failure_detail:
+                last_reason = (self.last_failure_reason or "").strip()
+                if last_reason:
+                    failure_detail = last_reason
             if executed:
                 try:
                     self.event_logger.command_success(command)
                 except Exception:
                     pass
             else:
+                error_message = f"{function_name} execution failed"
+                if failure_detail:
+                    error_message = f"{error_message}: {failure_detail}"
                 self.event_logger.command_failure(
                     command=command,
-                    error=f"{function_name} execution failed",
+                    error=error_message,
                     duration_ms=duration * 1000,
                 )
 
@@ -2685,6 +2918,7 @@ class Executor:
             return _create_result(
                 executed,
                 "Action executed successfully" if executed else "Action failed",
+                error=None if executed else (failure_detail or f"{function_name} execution failed"),
                 action_id=action_id,
                 duration=duration,
                 additional_metadata=metadata,

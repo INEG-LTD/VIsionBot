@@ -111,7 +111,7 @@ class ActionStep(BaseModel):
             action=action_string,
             reasoning=arguments.get("reasoning"),
             function_name=function_name,
-            function_arguments=arguments
+            function_arguments=arguments,
         )
 
     @staticmethod
@@ -145,8 +145,18 @@ class ActionStep(BaseModel):
             return f"go_back: {arguments.get('steps', 1)}"
         if function_name == "go_forward":
             return f"go_forward: {arguments.get('steps', 1)}"
-        if function_name == "scroll_page":
-            return f"scroll: {arguments.get('direction', 'down')}"
+        if function_name == "scroll_down":
+            return "scroll: down"
+        if function_name == "scroll_up":
+            return "scroll: up"
+        if function_name == "scroll_container":
+            eid = arguments.get("element_id")
+            direction = arguments.get("direction", "down")
+            suffix = f" [id={eid}]" if eid is not None else ""
+            return f"scroll_container: {direction}{suffix}".strip()
+        if function_name == "scroll_to_element":
+            eid = arguments.get("element_id")
+            return f"scroll_to: [id={eid}]".strip()
         if function_name == "extract_data":
             return f"extract: {arguments.get('data_description', '')}".strip()
         if function_name == "think":

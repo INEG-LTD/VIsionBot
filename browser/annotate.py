@@ -175,7 +175,8 @@ def build_element_index(
             if css_id:
                 ident = f" #{css_id}"
             elif css_class:
-                ident = " ." + css_class.split()[0]
+                classes = css_class.split()[:3]
+                ident = " ." + ".".join(classes)
             label_text = elem.element_label or ""
             if label_text:
                 ident += f' "{label_text}"'
@@ -189,7 +190,8 @@ def build_element_index(
             if css_id:
                 css_hint = f" #{css_id}"
             elif css_class:
-                css_hint = " ." + css_class.split()[0]
+                classes = css_class.split()[:3]
+                css_hint = " ." + ".".join(classes)
             return f"  [{elem.overlay_number}] {etype}{subtype}: {label}{css_hint}{focused}{done_tag}"
 
     # Group elements by region, separate focused ones

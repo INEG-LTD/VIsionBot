@@ -324,52 +324,118 @@ ACTION_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "scroll_page",
+            "name": "scroll_down",
             "description": (
-                "Scroll the page or a specific scrollable container (modal, sidebar, overflow panel, list). "
-                "Three modes:\n"
-                "1. Window scroll: omit element_id and scroll_to_element_id — scrolls the main page.\n"
-                "2. Container scroll: provide element_id of ANY element inside the container — the system "
-                "finds the nearest scrollable ancestor and scrolls it. Use this for modals, sidebars, "
-                "dropdown lists, chat panels, or any overflow area.\n"
-                "3. Scroll-to: provide scroll_to_element_id — brings that element into view regardless "
-                "of where it is. direction and amount are ignored in this mode."
+                "Scroll the main page downward. "
+                "Does not target specific elements or containers."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "amount": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "How far to scroll: small=150px, medium=400px, large=800px. Default: medium.",
+                        "default": "medium"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for scrolling down"
+                    }
+                },
+                "required": ["reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scroll_up",
+            "description": (
+                "Scroll the main page upward. "
+                "Does not target specific elements or containers."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "How far to scroll: small=150px, medium=400px, large=800px. Default: medium.",
+                        "default": "medium"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for scrolling up"
+                    }
+                },
+                "required": ["reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scroll_container",
+            "description": (
+                "Scroll a specific scrollable container (modal, sidebar, overflow panel, dropdown, chat list). "
+                "Pass element_id of any element inside that container; the system finds the nearest scrollable ancestor."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "ID of any element inside the container to scroll."
+                        )
+                    },
                     "direction": {
                         "type": "string",
-                        "enum": ["up", "down", "left", "right"],
-                        "description": "Direction to scroll. Ignored when scroll_to_element_id is set."
+                        "enum": ["up", "down"],
+                        "description": "Direction to scroll within the container."
                     },
                     "amount": {
                         "type": "string",
                         "enum": ["small", "medium", "large"],
-                        "description": "How far to scroll: small=150px, medium=400px, large=800px. Default: medium. Ignored when scroll_to_element_id is set.",
+                        "description": "How far to scroll: small=150px, medium=400px, large=800px. Default: medium.",
                         "default": "medium"
-                    },
-                    "element_id": {
-                        "type": "integer",
-                        "description": (
-                            "ID of any element inside the scrollable container you want to scroll. "
-                            "The system walks up the DOM to find the nearest scrollable ancestor and scrolls it. "
-                            "Example: to scroll a modal, pass the ID of any element visible inside the modal."
-                        )
-                    },
-                    "scroll_to_element_id": {
-                        "type": "integer",
-                        "description": (
-                            "ID of an element to bring into view. Scrolls whatever container is needed. "
-                            "When set, direction and amount are ignored."
-                        )
                     },
                     "reasoning": {
                         "type": "string",
-                        "description": "Reasoning for the scroll action"
+                        "description": "Reasoning for scrolling the container"
                     }
                 },
-                "required": ["reasoning"],
+                "required": ["element_id", "direction", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scroll_to_element",
+            "description": (
+                "Bring a specific element into view by its [id]. "
+                "This only performs scroll-into-view for that target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Target [id] to bring into view."
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Reasoning for scrolling to this element"
+                    }
+                },
+                "required": ["element_id", "reasoning"],
                 "additionalProperties": False
             }
         }

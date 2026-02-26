@@ -50,6 +50,18 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
     const seen = new Set();
     const elements = [];
     const MAX_ELEMENTS = 800;
+
+    // ── Shadow DOM: collect all shadow roots (depth-first) ──
+    const shadowRoots = [];
+    const collectShadowRoots = (root) => {
+        root.querySelectorAll('*').forEach(el => {
+            if (el.shadowRoot) {
+                shadowRoots.push(el.shadowRoot);
+                collectShadowRoots(el.shadowRoot);
+            }
+        });
+    };
+    collectShadowRoots(document);
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
     const vpArea = viewportWidth * viewportHeight;
@@ -137,10 +149,9 @@ DOM_ELEMENT_CAPTURE_SCRIPT = """
 
     // ── Pass 1: Selector-based detection (semantic HTML) ──
     selectors.forEach((selector) => {
-        const nodes = document.querySelectorAll(selector);
-        nodes.forEach((node) => {
-            addNode(node);
-        });
+        document.querySelectorAll(selector).forEach(node => addNode(node));
+        // Also query inside shadow roots (cookie banners, CMPs, etc.)
+        shadowRoots.forEach(sr => sr.querySelectorAll(selector).forEach(node => addNode(node)));
     });
 
     // ── Pass 2: interactivity-signal detection ──
