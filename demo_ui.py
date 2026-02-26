@@ -20,9 +20,11 @@ from typing import Any, Callable
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
-from textual.widgets import ContentSwitcher, Footer, Input, Tab, Tabs
+from textual.screen import ModalScreen
+from textual.widgets import Button, ContentSwitcher, Footer, Input, Label, Tab, Tabs
 
 from agent.agent_controller import Agent
+from core.agent_workspace import AgentWorkspaceManager
 from core.config import Config
 from core.executor import Executor
 from core.sandbox_policy import SandboxPolicyEngine
@@ -60,6 +62,73 @@ def _clone_base_config() -> Config:
     except AttributeError:
         # Compatibility fallback for older Pydantic versions.
         return base_config.copy(deep=True)
+
+
+@dataclass(frozen=True)
+class LoadCandidate:
+    """One resumable agent+run pair shown in the load picker."""
+
+    agent_id: str
+    run_id: str
+    mission: str
+    status: str
+    active: bool
+    started_at: float
+
+
+class LoadAgentScreen(ModalScreen[LoadCandidate | None]):
+    """Simple modal picker for selecting an agent run to load."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, candidates: list[LoadCandidate]) -> None:
+        super().__init__()
+        self._candidates = list(candidates)
+
+    @staticmethod
+    def _candidate_label(index: int, item: LoadCandidate) -> str:
+        active_marker = "active" if item.active else "inactive"
+        mission_preview = (item.mission or "").strip().replace("\n", " ")
+        if len(mission_preview) > 88:
+            mission_preview = f"{mission_preview[:85]}..."
+        mission_text = mission_preview or "(no mission text)"
+        return (
+            f"[{index + 1}] {item.agent_id} / {item.run_id} "
+            f"({item.status or 'unknown'}, {active_marker})\n{mission_text}"
+        )
+
+    def compose(self) -> ComposeResult:
+        with Container(id="load-agent-modal"):
+            yield Label("Load Agent Checkpoint", id="load-agent-title")
+            if not self._candidates:
+                yield Label("No resumable checkpoints were found.")
+            else:
+                yield Label("Choose which checkpoint to load:")
+                for idx, item in enumerate(self._candidates):
+                    yield Button(
+                        self._candidate_label(idx, item),
+                        id=f"load-candidate-{idx}",
+                    )
+            yield Button("Cancel", id="load-cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = str(event.button.id or "")
+        if button_id == "load-cancel":
+            self.dismiss(None)
+            return
+        if not button_id.startswith("load-candidate-"):
+            return
+        raw_index = button_id.replace("load-candidate-", "", 1)
+        try:
+            idx = int(raw_index)
+        except ValueError:
+            return
+        if idx < 0 or idx >= len(self._candidates):
+            return
+        self.dismiss(self._candidates[idx])
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +365,9 @@ class AgentSession:
     status: str = "idle"
     agent: Agent | None = None
     agent_thread_id: int | None = None
+    load_agent_id: str = ""
+    load_run_id: str = ""
+    resume_ready: bool = False
     current_mission: str = ""
     worker_thread: threading.Thread | None = None
     mission_queue: queue.Queue = field(default_factory=queue.Queue)
@@ -545,7 +617,9 @@ class BrowserAgentApp(App):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._add_tab_id = "agent-add"
+        self._load_tab_id = "agent-load"
         self._switcher_id = "agent-switcher"
+        self._resume_queue_token = "__resume_loaded_checkpoint__"
         self._tab_to_view: dict[str, str] = {"agent-1": "data-1"}
         self._tab_label: dict[str, str] = {"agent-1": "Agent 1"}
         self._sessions: dict[str, AgentSession] = {}
@@ -580,6 +654,7 @@ class BrowserAgentApp(App):
     def compose(self) -> ComposeResult:
         yield Tabs(
             Tab("Agent 1", id="agent-1"),
+            Tab("+ Load Agent", id=self._load_tab_id),
             Tab("+ New Agent", id=self._add_tab_id),
         )
         with ContentSwitcher(initial="data-1", id=self._switcher_id):
@@ -717,6 +792,38 @@ class BrowserAgentApp(App):
         active_agent = session.agent
         effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
         interaction_cfg = getattr(effective_config, "user_interaction", None)
+        iteration_samples = list(sv(execution_state, "iteration_ms_samples", []) or [])
+        llm_samples = list(sv(execution_state, "llm_latency_ms_samples", []) or [])
+        tool_samples = list(sv(execution_state, "tool_latency_ms_samples", []) or [])
+
+        def _mean(values: list[float]) -> float:
+            return float(sum(values) / len(values)) if values else 0.0
+
+        def _p95(values: list[float]) -> float:
+            if not values:
+                return 0.0
+            ordered = sorted(float(v) for v in values)
+            idx = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * 0.95))))
+            return float(ordered[idx])
+
+        llm_call_count = int(sv(execution_state, "llm_call_count", 0) or 0)
+        tokens_in_total = int(sv(execution_state, "tokens_in_total", 0) or 0)
+        tokens_out_total = int(sv(execution_state, "tokens_out_total", 0) or 0)
+        image_count_total = int(sv(execution_state, "image_count_total", 0) or 0)
+        retry_count = int(sv(execution_state, "retry_count", 0) or 0)
+        avg_tokens_in_live = float(tokens_in_total) / float(llm_call_count) if llm_call_count > 0 else 0.0
+        avg_tokens_out_live = float(tokens_out_total) / float(llm_call_count) if llm_call_count > 0 else 0.0
+        avg_images_live = float(image_count_total) / float(llm_call_count) if llm_call_count > 0 else 0.0
+        retries_per_mission_live = float(retry_count) / max(1.0, float(sv(snapshot, "current_iteration", 0) or 1))
+        avg_iteration_value = float(sv(mission_result, "avg_iteration_ms", 0.0) or _mean(iteration_samples))
+        p95_iteration_value = float(sv(mission_result, "p95_iteration_ms", 0.0) or _p95(iteration_samples))
+        avg_llm_value = float(sv(mission_result, "avg_llm_ms", 0.0) or _mean(llm_samples))
+        avg_tool_value = float(sv(mission_result, "avg_tool_ms", 0.0) or _mean(tool_samples))
+        avg_tokens_in_value = float(sv(mission_result, "avg_tokens_in", 0.0) or avg_tokens_in_live)
+        avg_tokens_out_value = float(sv(mission_result, "avg_tokens_out", 0.0) or avg_tokens_out_live)
+        avg_images_value = float(sv(mission_result, "avg_images_per_call", 0.0) or avg_images_live)
+        retries_per_mission_value = float(sv(mission_result, "retries_per_mission", 0.0) or retries_per_mission_live)
+        mission_ms_value = float(sv(mission_result, "mission_ms", 0.0) or sum(iteration_samples))
 
         return AgentState(
             tab_id=session.tab_id,
@@ -751,6 +858,26 @@ class BrowserAgentApp(App):
                 sv(execution_state, "budget_constraints_enabled", True)
             ),
             planning_batch_limit=int(sv(execution_state, "planning_batch_limit", 0) or 0),
+            iteration_ms=float(sv(execution_state, "iteration_ms", 0.0) or 0.0),
+            llm_latency_ms=float(sv(execution_state, "llm_latency_ms", 0.0) or 0.0),
+            tool_latency_ms=float(sv(execution_state, "tool_latency_ms", 0.0) or 0.0),
+            navigation_latency_ms=float(sv(execution_state, "navigation_latency_ms", 0.0) or 0.0),
+            tokens_in=int(sv(execution_state, "tokens_in", 0) or 0),
+            tokens_out=int(sv(execution_state, "tokens_out", 0) or 0),
+            image_count=int(sv(execution_state, "image_count", 0) or 0),
+            tool_calls=int(sv(execution_state, "tool_calls", 0) or 0),
+            retries=int(sv(execution_state, "retries", 0) or 0),
+            avg_iteration_ms=avg_iteration_value,
+            p95_iteration_ms=p95_iteration_value,
+            avg_llm_ms=avg_llm_value,
+            avg_tool_ms=avg_tool_value,
+            avg_tokens_in=avg_tokens_in_value,
+            avg_tokens_out=avg_tokens_out_value,
+            avg_images_per_call=avg_images_value,
+            retries_per_mission=retries_per_mission_value,
+            mission_ms=mission_ms_value,
+            failure_code=str(sv(mission_result, "failure_code", "") or sv(execution_state, "failure_code", "") or ""),
+            failure_stage=str(sv(mission_result, "failure_stage", "") or sv(execution_state, "failure_stage", "") or ""),
             checkpoint_pending=bool(sv(execution_state, "checkpoint_pending", False)),
             last_action_summary=str(sv(execution_state, "last_action_summary", "") or ""),
             in_loop=bool(sv(execution_state, "in_loop", False)),
@@ -879,10 +1006,31 @@ class BrowserAgentApp(App):
             config=session.config,
             user_question_callback=_make_session_question_callback(session),
             data_report_callback=on_data_reported,
+            agent_id=(session.load_agent_id or None),
         )
         agent._start()
         setup_interceptors(agent)
-        agent.browser.page.goto(STARTING_URL)
+        if session.load_agent_id and session.resume_ready:
+            loaded, message = agent.load_checkpoint(run_id=(session.load_run_id or None))
+            if loaded:
+                session.resume_ready = True
+                session.current_mission = agent.loaded_resume_mission or session.current_mission
+                session.status = "paused"
+                session.last_message = f"{message} Press Resume to continue."
+                try:
+                    session.last_snapshot = agent.get_state_snapshot()
+                except Exception:
+                    pass
+            else:
+                session.resume_ready = False
+                session.status = "error"
+                session.last_message = f"Checkpoint load failed: {message}"
+                try:
+                    agent.browser.page.goto(STARTING_URL)
+                except Exception:
+                    pass
+        elif not session.load_agent_id:
+            agent.browser.page.goto(STARTING_URL)
         apply_thinking_border(agent)
 
         def _capture_event(event: BotEvent) -> None:
@@ -922,19 +1070,36 @@ class BrowserAgentApp(App):
                     break
 
                 mission = str(queued_mission).strip()
-                if not mission:
+                is_resume_request = mission == self._resume_queue_token
+                if not mission and not is_resume_request:
                     session.mission_queue.task_done()
                     continue
 
                 try:
                     pending = session.mission_queue.qsize()
                     session.status = "running"
-                    session.current_mission = mission
-                    session.last_message = f"Initializing mission ({pending} queued)..."
+                    if is_resume_request:
+                        session.last_message = f"Resuming mission ({pending} queued)..."
+                    else:
+                        session.current_mission = mission
+                        session.last_message = f"Initializing mission ({pending} queued)..."
 
                     agent = self._ensure_agent_for_session(session)
-                    session.last_message = "Mission executing..."
-                    result = agent.execute_mission(mission)
+                    if is_resume_request:
+                        if not agent.has_loaded_checkpoint:
+                            session.status = "error"
+                            session.last_message = "No checkpoint is loaded for resume."
+                            session.resume_ready = False
+                            continue
+                        session.current_mission = (
+                            agent.loaded_resume_mission or session.current_mission
+                        )
+                        session.last_message = "Resuming loaded mission..."
+                        result = agent.resume_loaded_mission()
+                        session.resume_ready = False
+                    else:
+                        session.last_message = "Mission executing..."
+                        result = agent.execute_mission(mission)
 
                     session.last_snapshot = agent.get_state_snapshot()
                     session.status = "completed" if result.success else "failed"
@@ -955,7 +1120,11 @@ class BrowserAgentApp(App):
                     error_event = BotEvent(
                         event_type=EventType.SYSTEM_ERROR,
                         message=f"Runtime error: {exc}",
-                        details={"source": "worker", "tab_id": tab_id, "mission": mission},
+                        details={
+                            "source": "worker",
+                            "tab_id": tab_id,
+                            "mission": session.current_mission,
+                        },
                     )
                     self.call_from_thread(
                         self._record_session_event, session, error_event
@@ -989,10 +1158,6 @@ class BrowserAgentApp(App):
     def _enqueue_mission_for_tab(self, tab_id: str, mission: str) -> bool:
         session = self._ensure_session(tab_id)
         mission_text = (mission or "").strip()
-        if not mission_text:
-            session.last_message = "Please enter a mission before running."
-            self._emit_notice(f"{session.label}: mission text is required.", "warning")
-            return False
 
         self._start_worker_for_session(session)
         current_depth = session.mission_queue.qsize()
@@ -1004,6 +1169,21 @@ class BrowserAgentApp(App):
             self._emit_notice(f"{session.label}: queue is full.", "warning")
             return False
 
+        if not mission_text:
+            if session.resume_ready:
+                session.mission_queue.put(self._resume_queue_token)
+                pending = session.mission_queue.qsize()
+                if session.status not in {"running", "paused", "cancel requested", "stopping"}:
+                    session.status = "queued"
+                session.last_message = f"Resume queued ({pending} pending)."
+                return True
+            session.last_message = "Please enter a mission before running."
+            self._emit_notice(f"{session.label}: mission text is required.", "warning")
+            return False
+
+        # User entered a fresh mission, so this session is no longer in "resume checkpoint" mode.
+        session.resume_ready = False
+        session.load_run_id = ""
         session.mission_queue.put(mission_text)
         pending = session.mission_queue.qsize()
         if session.status not in {"running", "paused", "cancel requested", "stopping"}:
@@ -1034,8 +1214,115 @@ class BrowserAgentApp(App):
 
     # ---- Tab management --------------------------------------------------
 
+    def _fallback_tab_id(self) -> str:
+        for tab_id in self._tab_to_view.keys():
+            return tab_id
+        return "agent-1"
+
+    def _next_tab_identity(self) -> tuple[int, str, str, str]:
+        """Return (index, label, tab_id, view_id) for the next agent tab."""
+        new_index = len(self._tab_to_view) + 1
+        new_label = f"Agent {new_index}"
+        new_tab_id = f"agent-{new_index}"
+        view_id = f"data-{new_index}"
+        return new_index, new_label, new_tab_id, view_id
+
+    def _discover_load_candidates(self) -> list[LoadCandidate]:
+        """Discover resumable checkpoints across all known agents."""
+        manager = AgentWorkspaceManager(base_dir=base_config.storage.base_dir)
+        candidates: list[LoadCandidate] = []
+        for agent_id in manager.list_agent_ids():
+            workspace = manager.create_agent(
+                persistence_mode=base_config.storage.default_persistence_mode,
+                agent_id=agent_id,
+            )
+            run_id = manager.resolve_resume_run_id(workspace, prefer_active=True)
+            if not run_id:
+                continue
+            checkpoint = manager.read_run_checkpoint(workspace, run_id=run_id)
+            if not checkpoint:
+                continue
+            runs = manager.list_runs(workspace)
+            run_record = next(
+                (item for item in runs if str(item.get("run_id", "")) == run_id),
+                {},
+            )
+            mission = str(
+                checkpoint.get("mission", "")
+                or run_record.get("mission", "")
+                or ""
+            ).strip()
+            candidates.append(
+                LoadCandidate(
+                    agent_id=agent_id,
+                    run_id=run_id,
+                    mission=mission,
+                    status=str(run_record.get("status", "") or ""),
+                    active=bool(run_record.get("active", False)),
+                    started_at=float(run_record.get("started_at", 0.0) or 0.0),
+                )
+            )
+
+        candidates.sort(
+            key=lambda item: (
+                1 if item.active else 0,
+                item.started_at,
+                item.agent_id,
+                item.run_id,
+            ),
+            reverse=True,
+        )
+        return candidates
+
+    def _open_loaded_candidate_tab(self, candidate: LoadCandidate) -> None:
+        tabs = self.query_one(Tabs)
+        switcher = self.query_one(ContentSwitcher)
+        _, new_label, new_tab_id, view_id = self._next_tab_identity()
+        new_label = f"{new_label} ({candidate.agent_id})"
+        self._tab_label[new_tab_id] = new_label
+        self._tab_to_view[new_tab_id] = view_id
+        session = self._create_session(new_tab_id)
+        session.load_agent_id = candidate.agent_id
+        session.load_run_id = candidate.run_id
+        session.resume_ready = True
+        session.current_mission = candidate.mission
+        session.status = "paused"
+        session.last_message = (
+            f"Checkpoint selected: {candidate.agent_id}/{candidate.run_id}. "
+            "Press Resume to continue."
+        )
+
+        tabs.add_tab(Tab(new_label, id=new_tab_id), before=self._load_tab_id)
+
+        def _mount_and_show() -> None:
+            switcher.mount(self._make_agent_view(new_tab_id))
+            tabs.active = new_tab_id
+            switcher.current = view_id
+
+        self.call_after_refresh(_mount_and_show)
+
+    def action_load(self) -> None:
+        candidates = self._discover_load_candidates()
+        if not candidates:
+            self._emit_notice("No resumable checkpoints found.", "warning")
+            tabs = self.query_one(Tabs)
+            tabs.active = self._fallback_tab_id()
+            return
+
+        def _on_dismissed(selection: LoadCandidate | None) -> None:
+            if selection is None:
+                tabs = self.query_one(Tabs)
+                tabs.active = self._fallback_tab_id()
+                return
+            self._open_loaded_candidate_tab(selection)
+
+        self.push_screen(LoadAgentScreen(candidates), _on_dismissed)
+
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         if event.tab is None:
+            return
+        if event.tab.id == self._load_tab_id:
+            self.action_load()
             return
         if event.tab.id == self._add_tab_id:
             self.action_add()
@@ -1054,14 +1341,11 @@ class BrowserAgentApp(App):
     def action_add(self) -> None:
         tabs = self.query_one(Tabs)
         switcher = self.query_one(ContentSwitcher)
-        new_index = len(self._tab_to_view) + 1
-        new_label = f"Agent {new_index}"
-        new_tab_id = f"agent-{new_index}"
-        view_id = f"data-{new_index}"
+        _, new_label, new_tab_id, view_id = self._next_tab_identity()
         self._tab_label[new_tab_id] = new_label
         self._tab_to_view[new_tab_id] = view_id
         self._create_session(new_tab_id)
-        tabs.add_tab(Tab(new_label, id=new_tab_id), before=self._add_tab_id)
+        tabs.add_tab(Tab(new_label, id=new_tab_id), before=self._load_tab_id)
 
         def _mount_and_show() -> None:
             switcher.mount(self._make_agent_view(new_tab_id))
@@ -1270,6 +1554,20 @@ class BrowserAgentApp(App):
     def action_resume_agent(self) -> None:
         session = self.get_active_session()
         if session is None:
+            return
+        if session.resume_ready:
+            self._start_worker_for_session(session)
+            current_depth = session.mission_queue.qsize()
+            if current_depth >= self._max_queue_depth:
+                session.status = "error"
+                session.last_message = (
+                    f"Unable to resume: queue full ({current_depth}/{self._max_queue_depth})."
+                )
+                return
+            session.mission_queue.put(self._resume_queue_token)
+            pending = session.mission_queue.qsize()
+            session.status = "queued"
+            session.last_message = f"Resume queued ({pending} pending)."
             return
         if session.agent is None:
             session.last_message = "No active mission to resume."
