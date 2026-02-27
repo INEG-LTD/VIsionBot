@@ -24,7 +24,7 @@ from core.browser import ExecutionTimer
 from core.executor.base import Executor
 from core.agent_workspace import AgentWorkspace, AgentWorkspaceManager
 from core.sandbox_policy import SandboxPolicyEngine
-from agent.memory import InteractionType, MemoryState, NarrativeMemory
+from agent.memory import InteractionType, MemoryEntryKind, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
 from models.models import ActionStep, FailedAction
 from agent.results import MissionResult
@@ -78,6 +78,7 @@ class ExecutionState:
     last_action_summary: Optional[str] = None
     last_response_id: Optional[str] = None
     last_tool_call_ids: List[str] = field(default_factory=list)
+    notebook_entries_sent: int = 0
     failed_elements: List[FailedAction] = field(default_factory=list)
     validation_failures: int = 0
     # Loop state
@@ -175,6 +176,8 @@ Runs missions through the execution loop with inline loops for repetition.
 """
 
 DEFAULT_RESEND_FROM_EMAIL = "Acme <onboarding@resend.dev>"
+DECISION_CONTEXT_EXECUTED_ID_WINDOW = 8
+DECISION_CONTEXT_REFLECTION_ID_WINDOW = 6
 
 
 def _load_dotenv_if_available() -> None:
@@ -2648,13 +2651,19 @@ class Agent:
                 )
 
                 # --- Phase 2: Build context while gallery generates in background ---
-                memory_recent = list(self.memory_store.entries)
-                recent_executed_ids = self.memory_store.get_recent_executed_action_ids(
-                    n=max(1, len(self.memory_store.entries))
-                )
-                recent_reflection_ids = self.memory_store.get_recent_reflection_ids(
-                    n=max(1, len(self.memory_store.entries))
-                )
+                memory_entries = list(self.memory_store.entries)
+                executed_ids = [
+                    entry.memory_id
+                    for entry in memory_entries
+                    if entry.entry_kind == MemoryEntryKind.EXECUTED_ACTION.value
+                ]
+                reflection_ids = [
+                    entry.memory_id
+                    for entry in memory_entries
+                    if entry.entry_kind == MemoryEntryKind.REFLECTION.value
+                ]
+                recent_executed_ids = executed_ids[-DECISION_CONTEXT_EXECUTED_ID_WINDOW:]
+                recent_reflection_ids = reflection_ids[-DECISION_CONTEXT_REFLECTION_ID_WINDOW:]
                 recommended_step, recommended_step_source_id = self._get_latest_recommended_next_step()
 
                 decision_context = DecisionContext(
@@ -2665,7 +2674,9 @@ class Agent:
                     recommended_next_step=recommended_step,
                     recommended_from_memory_id=recommended_step_source_id,
                     executed_memory_ids=recent_executed_ids,
+                    executed_memory_older_count=max(0, len(executed_ids) - len(recent_executed_ids)),
                     reflection_memory_ids=recent_reflection_ids,
+                    reflection_memory_older_count=max(0, len(reflection_ids) - len(recent_reflection_ids)),
                     budget_spent=state.budget_spent,
                     budget_remaining=state.budget_remaining,
                     budget_total=state.budget_total,
@@ -2674,19 +2685,17 @@ class Agent:
                 )
 
                 _narrative_n = max(1, int(
-                    len(self.memory_store.entries)
+                    len(memory_entries)
                     * float(self.config.execution.memory_narrative_recent_percent or 1.0)
                 ))
                 environment_state = EnvironmentState(
                     browser_state=snapshot,
                     memory_narrative=self.memory_store.get_narrative(n=_narrative_n),
-                    memory_recent_ids=[entry.memory_id for entry in memory_recent],
                     user_prompt=mission,
                     mission_start_url=self.mission_start_url,
                     mission_start_time=self.mission_start_time,
                     current_url=snapshot.url,
                     page_title=snapshot.title,
-                    visible_text=snapshot.visible_text,
                     url_history=self.memory_store.url_history.copy(),
                     url_pointer=self.memory_store.url_pointer,
                     decision_context=decision_context,
@@ -2751,6 +2760,9 @@ class Agent:
                     max_actions_per_plan=state.planning_batch_limit,
                     previous_response_id=effective_response_id,
                     tool_call_outputs=pending_tool_outputs,
+                    notebook_last_sent_index=(
+                        state.notebook_entries_sent if effective_response_id else 0
+                    ),
                     memory_narrative_n=_narrative_n,
                     last_action_summary=state.last_action_summary,
                     tab_bar=tab_bar,
@@ -2833,6 +2845,7 @@ class Agent:
                     if planner_outcome.response_id:
                         state.last_response_id = planner_outcome.response_id
                         state.last_tool_call_ids = list(planner_outcome.tool_call_ids or [])
+                        state.notebook_entries_sent = len(self.notebook)
                     elif str(iteration_hint_path or "").startswith("hint_accept"):
                         # Keep chain state coherent when planner output is bypassed.
                         state.last_response_id = None

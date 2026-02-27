@@ -13,7 +13,6 @@ class EnvironmentState:
     """
     browser_state: Any
     memory_narrative: str
-    memory_recent_ids: List[str]
     user_prompt: str
     mission_start_url: str
     mission_start_time: float

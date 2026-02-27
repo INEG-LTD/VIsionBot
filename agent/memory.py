@@ -57,6 +57,8 @@ class MemoryState:
     scroll_x: int
     scroll_y: int
     visible_text: str = ""
+    text_hash: str = ""
+    text_len: int = 0
     screenshot: Optional[bytes] = None
 
 
@@ -194,6 +196,8 @@ class NarrativeMemory:
                 scroll_x=0,
                 scroll_y=0,
                 visible_text="",
+                text_hash="",
+                text_len=0,
                 screenshot=None,
             )
 
@@ -220,16 +224,29 @@ class NarrativeMemory:
                 """() => ({
                     sx: window.scrollX || 0,
                     sy: window.scrollY || 0,
-                    txt: document.body ? document.body.innerText : ''
+                    ...(() => {
+                        const txt = document.body ? (document.body.innerText || "") : "";
+                        let hash = 2166136261;
+                        for (let i = 0; i < txt.length; i += 1) {
+                            hash ^= txt.charCodeAt(i);
+                            hash = Math.imul(hash, 16777619);
+                        }
+                        return {
+                            txt_len: txt.length,
+                            txt_hash: (hash >>> 0).toString(16),
+                        };
+                    })()
                 })"""
             ) or {}
             scroll_x = int(_state.get("sx", 0))
             scroll_y = int(_state.get("sy", 0))
-            visible_text = _state.get("txt", "") or ""
+            text_hash = str(_state.get("txt_hash", "") or "")
+            text_len = int(_state.get("txt_len", 0) or 0)
         except Exception:
             scroll_x = 0
             scroll_y = 0
-            visible_text = ""
+            text_hash = ""
+            text_len = 0
 
         screenshot = None
         try:
@@ -245,7 +262,9 @@ class NarrativeMemory:
             page_height=page_height,
             scroll_x=scroll_x,
             scroll_y=scroll_y,
-            visible_text=visible_text,
+            visible_text="",
+            text_hash=text_hash,
+            text_len=text_len,
             screenshot=screenshot,
         )
 
@@ -259,7 +278,8 @@ class NarrativeMemory:
             "scroll_y": state.scroll_y,
             "page_width": state.page_width,
             "page_height": state.page_height,
-            "visible_text": state.visible_text or "",
+            "text_hash": state.text_hash or "",
+            "text_len": int(state.text_len or 0),
         }
 
     def _has_meaningful_change(
@@ -280,9 +300,20 @@ class NarrativeMemory:
         if abs((before_state.scroll_x or 0) - (after_state.scroll_x or 0)) > 10:
             return True
 
+        # Compact text signal comparison for the common case.
+        if before_state.text_hash or after_state.text_hash:
+            return (
+                (before_state.text_hash or "") != (after_state.text_hash or "")
+                or int(before_state.text_len or 0) != int(after_state.text_len or 0)
+            )
+
+        # Legacy fallback for historical states that only had raw visible text.
         before_text = " ".join((before_state.visible_text or "").split())
         after_text = " ".join((after_state.visible_text or "").split())
-        return before_text != after_text
+        if before_text or after_text:
+            return before_text != after_text
+
+        return int(before_state.text_len or 0) != int(after_state.text_len or 0)
 
     def _determine_outcome(
         self,

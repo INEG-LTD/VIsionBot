@@ -1246,6 +1246,7 @@ def generate_action_with_tools(
             input=openai_messages,
             tools=responses_tools,
             tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
             **kwargs,
         )
 

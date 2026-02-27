@@ -125,6 +125,232 @@ def _candidate_action_preview(candidate: HintCandidate) -> str:
     return f"{candidate.function_name}{suffix}"
 
 
+def _compact_text(value: Any, max_chars: int = 90) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max(0, max_chars - 3)].rstrip()}..."
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _build_fallback_narrative(function_name: str, args: Dict[str, Any]) -> str:
+    tool = _safe_lower(function_name)
+    element_id = _safe_int(args.get("element_id"))
+    if element_id is None:
+        element_id = _safe_int(args.get("overlay_index"))
+
+    if tool == "click":
+        description = _compact_text(args.get("description"), 110)
+        if description:
+            return f"I'm clicking {description}."
+        if element_id is not None:
+            return f"I'm clicking element [id={element_id}]."
+        return "I'm clicking an element."
+
+    if tool == "type_text":
+        field = _compact_text(args.get("field_description"), 100)
+        if field:
+            return f"I'm entering text into the {field}."
+        return "I'm entering text into an input field."
+
+    if tool == "clear_text":
+        field = _compact_text(args.get("field_description"), 100)
+        if field:
+            return f"I'm clearing the text in the {field}."
+        return "I'm clearing an input field."
+
+    if tool == "select_option":
+        option = _compact_text(args.get("option"), 60)
+        dropdown = _compact_text(args.get("dropdown_description"), 90)
+        if option and dropdown:
+            return f"I'm selecting '{option}' in the {dropdown}."
+        if option:
+            return f"I'm selecting '{option}'."
+        if dropdown:
+            return f"I'm choosing an option in the {dropdown}."
+        return "I'm selecting an option."
+
+    if tool == "upload_file":
+        file_path = _compact_text(args.get("file_path"), 100)
+        target = _compact_text(args.get("target_description"), 90)
+        if file_path and target:
+            return f"I'm uploading {file_path} to the {target}."
+        if file_path:
+            return f"I'm uploading {file_path}."
+        if target:
+            return f"I'm uploading a file to the {target}."
+        return "I'm uploading a file."
+
+    if tool == "set_datetime":
+        value = _compact_text(args.get("value"), 70)
+        picker = _compact_text(args.get("picker_description"), 90)
+        if value and picker:
+            return f"I'm setting the {picker} to {value}."
+        if value:
+            return f"I'm setting a date/time value to {value}."
+        if picker:
+            return f"I'm setting the {picker}."
+        return "I'm setting the date/time value."
+
+    if tool == "press_key":
+        key = _compact_text(args.get("key"), 40)
+        if key:
+            return f"I'm pressing {key}."
+        return "I'm pressing a key."
+
+    if tool == "open_url":
+        url = _compact_text(args.get("url"), 140)
+        if url:
+            return f"I'm opening {url}."
+        return "I'm opening the target page."
+
+    if tool == "go_back":
+        steps = _safe_int(args.get("steps")) or 1
+        if steps > 1:
+            return f"I'm going back {steps} pages."
+        return "I'm going back to the previous page."
+
+    if tool == "go_forward":
+        steps = _safe_int(args.get("steps")) or 1
+        if steps > 1:
+            return f"I'm going forward {steps} pages."
+        return "I'm going forward to the next page."
+
+    if tool == "scroll_down":
+        return "I'm scrolling down the page."
+
+    if tool == "scroll_up":
+        return "I'm scrolling up the page."
+
+    if tool == "scroll_container":
+        direction = _safe_lower(args.get("direction")) or "down"
+        if element_id is not None:
+            return f"I'm scrolling {direction} inside element [id={element_id}]."
+        return f"I'm scrolling {direction} inside a container."
+
+    if tool == "scroll_to_element":
+        if element_id is not None:
+            return f"I'm scrolling to element [id={element_id}]."
+        return "I'm scrolling to the target element."
+
+    if tool == "extract_data":
+        description = _compact_text(args.get("data_description"), 110)
+        if description:
+            return f"I'm extracting {description}."
+        return "I'm extracting the requested data."
+
+    if tool == "think":
+        next_action = _safe_lower(args.get("next_action"))
+        if next_action and next_action != "continue":
+            return f"I'm thinking through the next step ({next_action})."
+        return "I'm thinking through the next step."
+
+    if tool == "assert_condition":
+        condition = _compact_text(args.get("condition"), 120)
+        if condition:
+            return f"I'm checking whether {condition}."
+        return "I'm checking that the expected condition is true."
+
+    if tool == "flag":
+        message = _compact_text(args.get("message"), 120)
+        if message:
+            return f"I'm flagging this to the user: {message}"
+        return "I'm flagging an issue for the user."
+
+    if tool == "wait_for":
+        condition = _compact_text(args.get("condition"), 120)
+        timeout = _safe_int(args.get("timeout_seconds"))
+        if condition and timeout and timeout > 0:
+            return f"I'm waiting for {condition} (up to {timeout} seconds)."
+        if condition:
+            return f"I'm waiting for {condition}."
+        return "I'm waiting for the page to update."
+
+    if tool == "ask_user":
+        question = _compact_text(args.get("question"), 120)
+        if question:
+            return f"I'm asking the user: {question}"
+        return "I'm asking the user for clarification."
+
+    if tool == "report_data":
+        return "I'm sharing the requested data with the user."
+
+    if tool == "write_data":
+        target = _compact_text(args.get("path"), 100) or _compact_text(args.get("file_name"), 80)
+        if target:
+            return f"I'm writing data to {target}."
+        return "I'm writing the data to a file."
+
+    if tool == "switch_tab":
+        tab_id = _compact_text(args.get("tab_id"), 20)
+        if tab_id:
+            return f"I'm switching to tab {tab_id}."
+        return "I'm switching browser tabs."
+
+    if tool == "close_tab":
+        tab_id = _compact_text(args.get("tab_id"), 20)
+        if tab_id:
+            return f"I'm closing tab {tab_id}."
+        return "I'm closing the current tab."
+
+    if tool == "open_tab":
+        url = _compact_text(args.get("url"), 140)
+        if url:
+            return f"I'm opening a new tab at {url}."
+        return "I'm opening a new browser tab."
+
+    if tool == "dismiss_dialog":
+        accept = args.get("accept")
+        if accept is True:
+            return "I'm accepting the browser dialog."
+        if accept is False:
+            return "I'm dismissing the browser dialog."
+        return "I'm handling the browser dialog."
+
+    if tool == "send_email":
+        recipient = _compact_text(args.get("to"), 80)
+        subject = _compact_text(args.get("subject"), 90)
+        if recipient and subject:
+            return f"I'm sending an email to {recipient} with subject '{subject}'."
+        if recipient:
+            return f"I'm sending an email to {recipient}."
+        return "I'm sending an email."
+
+    if tool == "bash":
+        command = _compact_text(args.get("command"), 120)
+        if command:
+            return f"I'm running this shell command: {command}"
+        return "I'm running a shell command."
+
+    if tool == "read_file":
+        path = _compact_text(args.get("path"), 120)
+        if path:
+            return f"I'm reading {path}."
+        return "I'm reading a file."
+
+    if tool == "find_files":
+        pattern = _compact_text(args.get("pattern"), 80)
+        directory = _compact_text(args.get("directory"), 80)
+        if pattern and directory:
+            return f"I'm searching for files matching '{pattern}' in {directory}."
+        if pattern:
+            return f"I'm searching for files matching '{pattern}'."
+        return "I'm searching for matching files."
+
+    if tool == "read_clipboard":
+        return "I'm reading the clipboard contents."
+
+    return "I'm taking the next step to keep the task moving."
+
+
 def filter_candidates_deterministic(
     *,
     hint_bundle: HintBundle,
@@ -329,7 +555,7 @@ def hydrate_candidate_to_action_step(
             f"Using validated speculative hint candidate {candidate.candidate_id}."
         )
     if not str(args.get("narrative", "")).strip():
-        args["narrative"] = "I am executing a validated predicted next action."
+        args["narrative"] = _build_fallback_narrative(candidate.function_name, args)
 
     if (
         _tool_needs_element(candidate.function_name)

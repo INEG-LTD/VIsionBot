@@ -30,6 +30,27 @@ from models.models import ActionPlan, ActionStep, FailedAction, NotebookEntryTyp
 from agent.speculative_hints import HintBundle, HintCandidate, HintTargetSignature
 from utils.event_logger import get_event_logger
 
+# Compact hint envelope key map (used in next_hint_json):
+# - s: status ("c" candidate | "n" none)
+# - f: function_name
+# - a: function_arguments
+# - oi: overlay_index
+# - c: confidence
+# - r: reason
+# - id: candidate_id (optional)
+_NEXT_HINT_COMPACT_KEYS: Dict[str, str] = {
+    "s": "status",
+    "f": "function_name",
+    "a": "function_arguments",
+    "oi": "overlay_index",
+    "c": "confidence",
+    "r": "reason",
+    "id": "candidate_id",
+}
+
+_NOTEBOOK_ENTRY_DESCRIPTION_MAX_CHARS = 100
+_NOTEBOOK_ENTRY_DATA_MAX_CHARS = 240
+
 
 def strip_targeting_data(step: str) -> str:
     """Remove element_ids from a recommended step string.
@@ -72,6 +93,7 @@ class ActionPlanner:
         user_facing_actions_in_round: int = 0,
         previous_response_id: Optional[str] = None,
         tool_call_outputs: Optional[List[dict]] = None,
+        notebook_last_sent_index: int = 0,
         memory_narrative_n: Optional[int] = None,
         last_action_summary: Optional[str] = None,
         tab_bar: Optional[str] = None,
@@ -116,6 +138,7 @@ class ActionPlanner:
         self.user_facing_actions_in_round = user_facing_actions_in_round
         self.previous_response_id = previous_response_id
         self.tool_call_outputs = tool_call_outputs
+        self.notebook_last_sent_index = max(0, int(notebook_last_sent_index or 0))
         self.memory_narrative_n = memory_narrative_n
         self.last_response_id: Optional[str] = None
         self.last_tool_call_ids: List[str] = []
@@ -171,33 +194,37 @@ class ActionPlanner:
         if not isinstance(payload, dict):
             return None, "invalid", "invalid_payload", 0.0
 
-        status = str(payload.get("status", "") or "").strip().lower()
-        if status not in {"candidate", "none"}:
-            if str(payload.get("function_name", "") or "").strip():
+        status = str(payload.get("s", payload.get("status", "")) or "").strip().lower()
+        if status in {"c", "candidate"}:
+            status = "candidate"
+        elif status in {"n", "none"}:
+            status = "none"
+        elif status not in {"candidate", "none"}:
+            if str(payload.get("f", payload.get("function_name", "")) or "").strip():
                 # Backward compatibility with pre-envelope hints.
                 status = "candidate"
             else:
                 status = "none"
 
-        raw_confidence = payload.get("confidence", 0.0)
+        raw_confidence = payload.get("c", payload.get("confidence", 0.0))
         try:
             confidence = float(raw_confidence)
         except Exception:
             confidence = 0.0
         confidence = max(0.0, min(1.0, confidence))
 
-        reason = str(payload.get("reason", "") or "").strip()
+        reason = str(payload.get("r", payload.get("reason", "")) or "").strip()
         if status == "none":
             return None, "none", reason or "unspecified", confidence
 
-        function_name = str(payload.get("function_name", "") or "").strip()
+        function_name = str(payload.get("f", payload.get("function_name", "")) or "").strip()
         if not function_name:
             return None, "invalid", "missing_function_name", confidence
-        function_arguments = payload.get("function_arguments")
+        function_arguments = payload.get("a", payload.get("function_arguments"))
         if not isinstance(function_arguments, dict):
             function_arguments = {}
 
-        overlay_index = payload.get("overlay_index")
+        overlay_index = payload.get("oi", payload.get("overlay_index"))
         target_signature: Optional[HintTargetSignature] = None
         if isinstance(overlay_index, bool):
             overlay_index = None
@@ -207,7 +234,9 @@ class ActionPlanner:
             except Exception:
                 target_signature = None
 
-        candidate_id = str(payload.get("candidate_id", "planner_hint_1") or "").strip() or "planner_hint_1"
+        candidate_id = str(
+            payload.get("id", payload.get("candidate_id", "planner_hint_1")) or ""
+        ).strip() or "planner_hint_1"
         return (
             HintCandidate(
                 candidate_id=candidate_id,
@@ -540,6 +569,10 @@ POLICY CONSTRAINTS
 ═══════════════════════════════════════════════════════════════
 {self.policy_constraints_block}
 """
+        next_hint_key_map = ", ".join(
+            f"{compact_key}={full_name}"
+            for compact_key, full_name in _NEXT_HINT_COMPACT_KEYS.items()
+        )
 
         return f"""
 You are controlling a web browser.
@@ -602,11 +635,13 @@ GUIDELINES
 9. If you call think(next_action=stuck), propose a meaningfully different approach and one concrete immediate action.
 10. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
 11. `next_hint_json` is REQUIRED on every tool call and must always be valid JSON.
+    Compact key map (must follow exactly): {next_hint_key_map}
+    Status values: "c" for candidate, "n" for none.
     Use exactly one envelope:
     - Candidate envelope:
-      {{"status":"candidate","function_name":"...","function_arguments":{{...}},"overlay_index":123,"confidence":0.0-1.0,"reason":"..."}}
+      {{"s":"c","f":"...","a":{{...}},"oi":123,"c":0.0-1.0,"r":"...","id":"optional_id"}}
     - None envelope (when uncertain):
-      {{"status":"none","reason":"why uncertain","confidence":0.0}}
+      {{"s":"n","r":"why uncertain","c":0.0}}
 {budget_reasoning_contract}
 {base_knowledge_section}
 """
@@ -873,6 +908,23 @@ Choose the next action to take.
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _truncate_compact_text(value: Any, max_chars: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max(0, max_chars - 3)]}..."
+
+    def _format_notebook_data_preview(self, data: Any) -> str:
+        if isinstance(data, (dict, list)):
+            try:
+                serialized = json.dumps(data, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+            except Exception:
+                serialized = str(data)
+        else:
+            serialized = str(data)
+        return self._truncate_compact_text(serialized, _NOTEBOOK_ENTRY_DATA_MAX_CHARS)
+
     def _format_notebook(self, notebook: Notebook) -> str:
         """Format notebook entries for inclusion in the prompt."""
 
@@ -880,15 +932,35 @@ Choose the next action to take.
         if not entries:
             return ""
 
-        notebook_str = ""
-        for i, entry in enumerate(entries, 1):
-            notebook_str += f"{i}. {entry.description} → {entry.data}\n"
+        start_index = 0
+        heading = "NOTEBOOK (Your Stored Data)"
+        summary = ""
+        if self.previous_response_id:
+            # Delta mode: prior notebook entries are already in the Responses API chain context.
+            start_index = min(self.notebook_last_sent_index, len(entries))
+            if start_index >= len(entries):
+                return ""
+            heading = "NOTEBOOK (New Since Last Turn)"
+            summary = (
+                f"Showing {len(entries) - start_index} new entries. "
+                f"{start_index} earlier entries are already in prior context.\n"
+            )
 
+        lines: List[str] = []
+        for i, entry in enumerate(entries[start_index:], start=start_index + 1):
+            description = self._truncate_compact_text(
+                getattr(entry, "description", ""),
+                _NOTEBOOK_ENTRY_DESCRIPTION_MAX_CHARS,
+            )
+            data_preview = self._format_notebook_data_preview(getattr(entry, "data", ""))
+            lines.append(f"{i}. {description} -> {data_preview}")
+
+        notebook_str = "\n".join(lines)
         return f"""
 ═══════════════════════════════════════════════════════════════
-NOTEBOOK (Your Stored Data)
+{heading}
 ═══════════════════════════════════════════════════════════════
-{notebook_str}
+{summary}{notebook_str}
 • Use extract_data to store information
 • Check notebook to see what you've already collected
 """

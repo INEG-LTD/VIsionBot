@@ -22,7 +22,9 @@ class DecisionContext:
     recommended_next_step: Optional[str] = None
     recommended_from_memory_id: Optional[str] = None
     executed_memory_ids: List[str] = field(default_factory=list)
+    executed_memory_older_count: int = 0
     reflection_memory_ids: List[str] = field(default_factory=list)
+    reflection_memory_older_count: int = 0
     budget_spent: int = 0
     budget_remaining: int = 0
     budget_total: int = 0
@@ -101,10 +103,22 @@ MEMORY_DEVELOPER_POLICY = get_memory_developer_policy(True)
 
 def render_decision_context(context: DecisionContext) -> str:
     """Render a compact decision context block for prompts."""
+    def _render_memory_id_summary(ids: List[str], older_count: int) -> str:
+        text = ", ".join(ids) if ids else "none"
+        if older_count > 0:
+            return f"{text} (+{older_count} older)"
+        return text
+
     recommended_from = context.recommended_from_memory_id or "none"
     recommended_step = context.recommended_next_step or "none"
-    executed = ", ".join(context.executed_memory_ids) or "none"
-    reflections = ", ".join(context.reflection_memory_ids) or "none"
+    executed = _render_memory_id_summary(
+        context.executed_memory_ids,
+        int(context.executed_memory_older_count or 0),
+    )
+    reflections = _render_memory_id_summary(
+        context.reflection_memory_ids,
+        int(context.reflection_memory_older_count or 0),
+    )
 
     return (
         f"Action iteration: {context.action_iteration}\n"
@@ -118,4 +132,3 @@ def render_decision_context(context: DecisionContext) -> str:
         f"Recent executed-action memory IDs: {executed}\n"
         f"Recent reflection memory IDs: {reflections}"
     )
-# go to bing then search for anthropic then look for its wikipedia page and go to it

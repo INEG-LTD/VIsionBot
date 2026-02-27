@@ -1027,12 +1027,14 @@ _PLANNER_NEXT_HINT_PROPERTY: Dict[str, Any] = {
     "next_hint_json": {
         "type": "string",
         "description": (
-            "Required JSON object string describing hint envelope for next planner cycle. "
-            "Use either candidate envelope: "
-            "{\"status\":\"candidate\",\"function_name\":\"...\",\"function_arguments\":{...},"
-            "\"overlay_index\":123,\"confidence\":0.0-1.0,\"reason\":\"...\"} "
-            "or none envelope: "
-            "{\"status\":\"none\",\"reason\":\"...\",\"confidence\":0.0}."
+            "Required JSON object string describing hint envelope for the next planner cycle. "
+            "Compact key map (documented): s=status, f=function_name, a=function_arguments, "
+            "oi=overlay_index, c=confidence, r=reason, id=candidate_id(optional). "
+            "Status values: s='c' (candidate) or s='n' (none). "
+            "Candidate envelope example: "
+            "{\"s\":\"c\",\"f\":\"click\",\"a\":{\"element_id\":12},\"oi\":12,\"c\":0.86,\"r\":\"CTA still visible\",\"id\":\"optional_id\"}. "
+            "None envelope example: "
+            "{\"s\":\"n\",\"r\":\"layout changed\",\"c\":0.0}."
         ),
     }
 }
