@@ -11,6 +11,7 @@ import os
 import json
 import time
 import threading
+import re
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
@@ -173,6 +174,62 @@ Agent Controller - Mission Execution
 Runs missions through the execution loop with inline loops for repetition.
 """
 
+DEFAULT_RESEND_FROM_EMAIL = "Acme <onboarding@resend.dev>"
+
+
+def _load_dotenv_if_available() -> None:
+    """Load local .env values when python-dotenv is available."""
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+    try:
+        load_dotenv(override=False)
+    except Exception:
+        return
+
+
+def _resolve_resend_from_email() -> str:
+    configured = str(os.environ.get("RESEND_FROM_EMAIL", "")).strip()
+    return configured or DEFAULT_RESEND_FROM_EMAIL
+
+
+def _parse_email_recipients(raw_to: Any) -> List[str]:
+    if raw_to is None:
+        return []
+    if isinstance(raw_to, (list, tuple, set)):
+        pieces = [str(item).strip() for item in raw_to]
+    else:
+        pieces = [piece.strip() for piece in re.split(r"[;,]", str(raw_to))]
+    recipients: List[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        if not piece:
+            continue
+        key = piece.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        recipients.append(piece)
+    return recipients
+
+
+def _format_resend_error(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    details: List[str] = []
+    code = getattr(exc, "code", None)
+    if code not in (None, ""):
+        details.append(f"code={code}")
+    error_type = str(getattr(exc, "error_type", "")).strip()
+    if error_type:
+        details.append(f"type={error_type}")
+    suggested_action = str(getattr(exc, "suggested_action", "")).strip()
+    if suggested_action:
+        details.append(f"suggested_action={suggested_action}")
+    if details:
+        return f"{message} ({'; '.join(details)})"
+    return message
+
 class Agent:
     """
     Agent controller running mission execution.
@@ -196,6 +253,7 @@ class Agent:
         # Optional existing agent id to reuse/load its workspace.
         agent_id: Optional[str] = None,
     ):
+        _load_dotenv_if_available()
         self.config = config
         self.mission_result = MissionResult()
 
@@ -3377,16 +3435,13 @@ class Agent:
                         message_id: Optional[str] = None
 
                         raw_to = action_args.get("to")
-                        if raw_to:
-                            to_list = [str(raw_to).strip()]
-                        else:
-                            to_list = []
+                        to_list = _parse_email_recipients(raw_to)
 
                         subject = str(action_args.get("subject", "")).strip()
                         body = str(action_args.get("body", "")).strip()
                         body_preview = body if len(body) <= 200 else f"{body[:197]}..."
                         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body else ""
-                        effective_from_email = "Acme <onboarding@resend.dev>"
+                        effective_from_email = _resolve_resend_from_email()
 
                         canonical_to = sorted({email.lower() for email in to_list})
                         signature_source = f"{'|'.join(canonical_to)}\n{subject.lower()}\n{body}"
@@ -3408,10 +3463,15 @@ class Agent:
 
                         try:
                             if duplicate_of is None:
-                                import resend
-                                api_key = os.environ.get("RESEND_API_KEY")
+                                api_key = str(os.environ.get("RESEND_API_KEY", "")).strip()
                                 if not api_key:
                                     action_error = "RESEND_API_KEY is not set"
+                                    state.last_action_summary = f"send_email FAILED: {action_error}"
+                                elif "@" not in effective_from_email:
+                                    action_error = (
+                                        "RESEND_FROM_EMAIL is invalid; expected an email address "
+                                        "or display-name format like 'Team <team@example.com>'"
+                                    )
                                     state.last_action_summary = f"send_email FAILED: {action_error}"
                                 elif not to_list:
                                     action_error = "No recipients (to) provided"
@@ -3423,31 +3483,39 @@ class Agent:
                                     action_error = "Body is required"
                                     state.last_action_summary = f"send_email FAILED: {action_error}"
                                 else:
-                                    resend.api_key = api_key
-                                    params = {
-                                        "from": effective_from_email,
-                                        "to": to_list,
-                                        "subject": subject,
-                                        "html": body,
-                                    }
-                                    send_result = resend.Emails.send(params)
-                                    raw_message_id = (
-                                        send_result.get("id")
-                                        if isinstance(send_result, dict)
-                                        else getattr(send_result, "id", None)
-                                    )
-                                    if raw_message_id:
-                                        message_id = str(raw_message_id).strip()
+                                    try:
+                                        import resend
+                                    except ImportError:
+                                        action_error = (
+                                            "resend package is not installed in the active Python environment"
+                                        )
+                                        state.last_action_summary = f"send_email FAILED: {action_error}"
+                                    else:
+                                        resend.api_key = api_key
+                                        params = {
+                                            "from": effective_from_email,
+                                            "to": to_list,
+                                            "subject": subject,
+                                            "html": body,
+                                        }
+                                        send_result = resend.Emails.send(params)
+                                        raw_message_id = (
+                                            send_result.get("id")
+                                            if isinstance(send_result, dict)
+                                            else getattr(send_result, "id", None)
+                                        )
+                                        if raw_message_id:
+                                            message_id = str(raw_message_id).strip()
 
-                                    state.last_action_summary = (
-                                        f"Email sent to {', '.join(to_list)}: \"{subject}\" "
-                                        f"| body=\"{body_preview}\""
-                                    )
-                                    if message_id:
-                                        state.last_action_summary += f" | message_id={message_id}"
-                                    action_success = True
+                                        state.last_action_summary = (
+                                            f"Email sent to {', '.join(to_list)}: \"{subject}\" "
+                                            f"| body=\"{body_preview}\""
+                                        )
+                                        if message_id:
+                                            state.last_action_summary += f" | message_id={message_id}"
+                                        action_success = True
                         except Exception as e:
-                            action_error = str(e)
+                            action_error = _format_resend_error(e)
                             state.last_action_summary = f"send_email FAILED: {action_error}"
                         self._record_controller_action(
                             action_type="send_email",
