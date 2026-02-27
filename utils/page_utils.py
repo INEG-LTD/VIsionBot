@@ -25,26 +25,32 @@ class PageUtils:
         """Get current page information"""
         try:
             viewport = self.page.viewport_size
-            scroll_info = self.page.evaluate("""
+            # Single evaluate round-trip instead of 7 separate CDP calls.
+            info = self.page.evaluate("""
                 () => ({
                     scrollX: window.scrollX || 0,
-                    scrollY: window.scrollY || 0
+                    scrollY: window.scrollY || 0,
+                    dpr: window.devicePixelRatio || 1,
+                    innerW: window.innerWidth || 0,
+                    innerH: window.innerHeight || 0,
+                    docW: document.body ? document.body.scrollWidth : 0,
+                    docH: document.body ? document.body.scrollHeight : 0
                 })
             """)
-            
+
             return PageInfo(
                 width=viewport["width"],
                 height=viewport["height"],
-                scroll_x=int(scroll_info["scrollX"]),
-                scroll_y=int(scroll_info["scrollY"]),
+                scroll_x=int(info["scrollX"]),
+                scroll_y=int(info["scrollY"]),
                 url=self.page.url,
                 title=self.page.title(),
-                dpr=self.page.evaluate("window.devicePixelRatio"),
-                ss_pixel_w=int(self.page.evaluate("window.innerWidth")),
-                ss_pixel_h=int(self.page.evaluate("window.innerHeight")),
-                css_scale=self.page.evaluate("window.devicePixelRatio"),
-                doc_width=int(self.page.evaluate("document.body.scrollWidth")),
-                doc_height=int(self.page.evaluate("document.body.scrollHeight"))
+                dpr=info["dpr"],
+                ss_pixel_w=int(info["innerW"]),
+                ss_pixel_h=int(info["innerH"]),
+                css_scale=info["dpr"],
+                doc_width=int(info["docW"]),
+                doc_height=int(info["docH"]),
             )
         except Exception as e:
             try:

@@ -562,8 +562,17 @@ class Executor:
             return False
         
         try:
-            # Small delay to show the highlight
-            time.sleep(0.3)
+            # Configurable pre-click delay to show the highlight overlay.
+            # Defaults to 0 (no delay); set click_pre_highlight_ms in ExecutionConfig for visual feedback.
+            _highlight_ms = int(
+                getattr(
+                    getattr(getattr(self.browser, "config", None), "execution", None),
+                    "click_pre_highlight_ms",
+                    0,
+                ) or 0
+            )
+            if _highlight_ms > 0:
+                time.sleep(_highlight_ms / 1000.0)
         except Exception as e:
             # Continue even if highlight fails
             try:

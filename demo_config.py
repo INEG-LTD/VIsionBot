@@ -48,7 +48,7 @@ config = Config(
     ),
     execution=ExecutionConfig(
         max_actions_per_mission=600,
-        max_actions_per_plan=1,
+        max_actions_per_plan=3,
         # Quick tool selection with predefined presets:
         # - "minimal", "research", "web_safe", "full", "locked_down"
         tool_preset=ToolPreset.WEB_SAFE,

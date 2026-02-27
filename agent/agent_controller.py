@@ -929,6 +929,51 @@ class Agent:
             self.event_logger.system_error(f"❌ Scripted Interceptor Failed: {e}")
             return False
 
+    def _warm_prompt_cache_background(self) -> None:
+        """Fire a background thread to pre-warm the OpenAI prompt cache.
+
+        Builds the exact static system prompt that the first iteration will use,
+        then sends it to OpenAI with a minimal user message and max_output_tokens=1.
+        By the time the agent finishes the initial page load and DOM capture
+        (~500-800ms), the cache is already warm — so iteration 1 gets a cache hit
+        instead of a cold miss.
+        """
+        import threading
+        from agent.action_planner import ActionPlanner
+
+        try:
+            planner = ActionPlanner(
+                user_prompt="",
+                memory_store=self.memory_store,
+                model_name=self.config.model.agent_model,
+                budget_constraints_enabled=bool(
+                    getattr(self.config.execution, "budget_constraints_enabled", True)
+                ),
+            )
+            static_prompt = planner._build_function_calling_static_prompt()
+        except Exception:
+            return
+
+        model = self.config.model.agent_model
+
+        def _warm() -> None:
+            try:
+                from openai import OpenAI
+                import os
+                client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+                client.responses.create(
+                    model=model,
+                    input=[
+                        {"role": "system", "content": static_prompt},
+                        {"role": "user", "content": "."},
+                    ],
+                    max_output_tokens=1,
+                )
+            except Exception:
+                pass  # Best-effort; never block the mission
+
+        threading.Thread(target=_warm, daemon=True, name="prompt-cache-warmer").start()
+
     def _maybe_wait_for_iteration_load(self, reason: str = "iteration") -> None:
         if not self.config.execution.wait_for_load_before_iteration:
             return
@@ -1618,6 +1663,9 @@ class Agent:
             max_steps=profile_max_steps,
             timeout_s=profile_timeout_s,
         )
+
+        # Pre-warm the OpenAI prompt cache so iteration 1 gets a cache hit.
+        self._warm_prompt_cache_background()
 
         def _append_recent_action(summary: str) -> None:
             state.recent_actions.append(summary)
@@ -2526,7 +2574,9 @@ class Agent:
                                 "reasoning": think_reasoning,
                             },
                         )
-                        continue
+                        if think_next_action == "continue":
+                            continue
+                        break
 
                     if function_name in {"assert_condition", "flag"}:
                         result = self.action_executor.act(
@@ -3411,6 +3461,7 @@ class Agent:
                         "go_back",
                         "go_forward",
                     }
+                    _nav_break = False
                     if result.success and function_name in post_nav_sensitive_functions:
                         try:
                             current_url = self.browser.page.url if self.browser and self.browser.page else ""
@@ -3428,6 +3479,9 @@ class Agent:
                                     policy_observe_warning = f"{policy_observe_warning} | {warning}"
                                 else:
                                     policy_observe_warning = warning
+                        # URL changed mid-batch — signal break after logging completes
+                        if current_url and current_url != snapshot_url:
+                            _nav_break = True
 
                     state.actions_since_progress += 1
                     result_str = "success" if result.success else "failed"
@@ -3572,6 +3626,9 @@ class Agent:
                             state.failed_elements.append(failed_action)
                         except Exception:
                             pass
+                        break
+                    if _nav_break:
+                        break
 
                 state.validation_failures = 0
 

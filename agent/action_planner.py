@@ -281,7 +281,26 @@ class ActionPlanner:
                 )
             )
 
-            user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
+            # On iteration 2+ (previous_response_id set): send only the current page
+            # state and fresh element index. The model recalls history, ledger, and
+            # narrative from its KV cache via previous_response_id.
+            # On iteration 1: send the full dynamic context as normal.
+            if self.previous_response_id:
+                dynamic_context = self._build_function_calling_delta_context(
+                    environment_state,
+                    notebook,
+                    element_data,
+                )
+            else:
+                dynamic_context = self._build_function_calling_dynamic_context(
+                    environment_state,
+                    notebook,
+                    element_data,
+                )
+
+            user_prompt = f"""{dynamic_context}
+
+{dialog_prefix}{reflection}Mission: {self.user_prompt}
 
 Decision context:
 {decision_context_block}
@@ -302,11 +321,8 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 self.last_failure_stage = "planner_tool_selection"
                 return None, "No tools available for the active tool profile in this mode."
 
-            system_prompt = self._build_function_calling_system_prompt(
-                environment_state,
-                notebook,
-                element_data,
-            )
+            # Static only — identical every iteration → cache fires from iteration 2 onward
+            system_prompt = self._build_function_calling_static_prompt()
 
             # Build image arguments
             # Element index mode: clean screenshot + gallery pages
@@ -595,6 +611,82 @@ Navigation history:
 {self._format_notebook(notebook)}
 
 {user_hints_section}
+
+Choose the next action to take.
+"""
+
+    def _build_function_calling_delta_context(
+        self,
+        state: EnvironmentState,
+        notebook: Notebook,
+        element_data: PageElements,
+    ) -> str:
+        """Minimal context for iterations 2+ when previous_response_id is active.
+
+        The model already has the full history (narrative, action ledger, navigation
+        history, memory index, Q&A pairs) in its KV cache from prior iterations.
+        We only send what is genuinely new: the current page URL/title, the fresh
+        element index, and anything session-scoped that may have changed (tabs,
+        notebook, user hints).
+        """
+        # Gallery note (new each iteration if crop gallery is present)
+        gallery_note = ""
+        if self.gallery_images:
+            n = len(self.gallery_images)
+            gallery_note = (
+                f"You are also shown {n} CROP GALLERY image{'s' if n > 1 else ''} "
+                f"after the screenshot. Elements marked 'SEE CROP GALLERY' in the "
+                f"index have visual crops in these gallery images.\n"
+            )
+
+        # Tab bar — only when 2+ tabs are open
+        tab_section = ""
+        if self.tab_bar:
+            tab_section = f"""
+═══════════════════════════════════════════════════════════════
+OPEN TABS
+═══════════════════════════════════════════════════════════════
+{self.tab_bar}
+"""
+
+        # User hints — always include so the agent doesn't miss new guidance
+        user_hints_section = ""
+        if self.user_hints:
+            hints_str = "\n".join(f"- {h}" for h in self.user_hints)
+            user_hints_section = f"\nHINTS FROM USER:\n{hints_str}\n"
+
+        # Element index — always fresh (page may have changed)
+        element_section = f"""═══════════════════════════════════════════════════════════════
+INTERACTIVE ELEMENTS
+═══════════════════════════════════════════════════════════════
+{self.element_index_text or "No interactive elements detected."}
+
+HOW TO CLICK:
+• Pick the [id] number from the list above and pass it as element_id.
+• For elements marked 'SEE CROP GALLERY', look at the gallery images to
+  visually identify the element before clicking.
+• The system clicks the element directly by its DOM reference — no coordinate
+  estimation needed.
+
+FOCUS STATE:
+• focused → Element already has keyboard focus
+• If you need to type and input is focused → Just call type_text (don't click first)"""
+
+        # Notebook — include if non-empty (agent needs to see what it has collected)
+        notebook_section = self._format_notebook(notebook)
+
+        return f"""
+═══════════════════════════════════════════════════════════════
+CURRENT PAGE
+═══════════════════════════════════════════════════════════════
+URL: {state.current_url}
+Title: {state.page_title}
+{gallery_note}
+(Prior context — mission history, action ledger, navigation history, memory entries — is available from your previous conversation turns.)
+{tab_section}{user_hints_section}
+{element_section}
+
+{notebook_section}
 
 Choose the next action to take.
 """

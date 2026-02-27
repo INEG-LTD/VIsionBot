@@ -243,6 +243,15 @@ class ExecutionConfig(BaseModel):
             "Lower values reduce prompt size on long missions."
         ),
     )
+    click_pre_highlight_ms: int = Field(
+        default=0,
+        ge=0,
+        le=2000,
+        description=(
+            "Milliseconds to pause before a click so the highlight overlay is visible. "
+            "0 = no delay (fastest). 300 = original behaviour."
+        ),
+    )
     validation_failure_escalation_limit: int = Field(
         default=3,
         ge=0,
