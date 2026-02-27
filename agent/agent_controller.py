@@ -11,6 +11,7 @@ import os
 import json
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
 import hashlib
@@ -113,10 +114,12 @@ class ExecutionState:
 
 @dataclass
 class ScreenshotPreparation:
-    """Result of _prepare_screenshot_for_mode()."""
+    """Result of _build_element_index_and_start_gallery()."""
     screenshot_bytes: bytes
     gallery_images: Optional[List[bytes]] = None
     element_index_text: Optional[str] = None
+    text_rich_count: int = 0
+    text_poor_count: int = 0
 
 
 """
@@ -214,6 +217,7 @@ class Agent:
         self._cancel_event = threading.Event()
         self._hints_lock = threading.Lock()
         self._pending_hints: List[str] = []
+        self._gallery_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gallery")
 
         self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
@@ -932,27 +936,47 @@ class Agent:
     def _warm_prompt_cache_background(self) -> None:
         """Fire a background thread to pre-warm the OpenAI prompt cache.
 
-        Builds the exact static system prompt that the first iteration will use,
-        then sends it to OpenAI with a minimal user message and max_output_tokens=1.
-        By the time the agent finishes the initial page load and DOM capture
-        (~500-800ms), the cache is already warm — so iteration 1 gets a cache hit
-        instead of a cold miss.
+        Builds the exact static system prompt and developer prompt that the
+        first iteration will use, then sends them to OpenAI with a minimal
+        user message and max_output_tokens=1.  By the time the agent finishes
+        the initial page load and DOM capture (~500-800ms), the cache is
+        already warm — so iteration 1 gets a cache hit instead of a cold miss.
         """
         import threading
         from agent.action_planner import ActionPlanner
+        from agent.prompts import get_memory_developer_policy
+
+        budget_enabled = bool(
+            getattr(self.config.execution, "budget_constraints_enabled", True)
+        )
+
+        # Build policy block (mission-constant) so the static prompt matches.
+        policy_block = None
+        if getattr(self.config, "sandbox", None) and getattr(self.config.sandbox, "prompt", None):
+            if self.config.sandbox.prompt.include_policy_block:
+                try:
+                    policy_block = self.sandbox_policy.render_prompt_policy_block()
+                except Exception:
+                    pass
 
         try:
             planner = ActionPlanner(
                 user_prompt="",
                 memory_store=self.memory_store,
                 model_name=self.config.model.agent_model,
-                budget_constraints_enabled=bool(
-                    getattr(self.config.execution, "budget_constraints_enabled", True)
-                ),
+                budget_constraints_enabled=budget_enabled,
+                base_knowledge=self.base_knowledge,
+                policy_constraints_block=policy_block,
             )
             static_prompt = planner._build_function_calling_static_prompt()
         except Exception:
             return
+
+        # Developer prompt also contributes to the cached prefix.
+        try:
+            developer_prompt = get_memory_developer_policy(budget_enabled)
+        except Exception:
+            developer_prompt = None
 
         model = self.config.model.agent_model
 
@@ -961,12 +985,15 @@ class Agent:
                 from openai import OpenAI
                 import os
                 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+                messages = [
+                    {"role": "system", "content": static_prompt},
+                ]
+                if developer_prompt:
+                    messages.append({"role": "developer", "content": developer_prompt})
+                messages.append({"role": "user", "content": "."})
                 client.responses.create(
                     model=model,
-                    input=[
-                        {"role": "system", "content": static_prompt},
-                        {"role": "user", "content": "."},
-                    ],
+                    input=messages,
                     max_output_tokens=1,
                 )
             except Exception:
@@ -989,12 +1016,12 @@ class Agent:
                     timeout=self.wait_for_load_timeout_ms,
                     state=self.wait_for_load_state,
                 )
-                self._wait_for_dom_stable(timeout_ms=min(self.wait_for_load_timeout_ms, 1500))
+                self._wait_for_dom_stable(timeout_ms=min(self.wait_for_load_timeout_ms, 600))
         except Exception:
             # Best-effort wait; do not block on load wait errors.
             pass
 
-    def _wait_for_dom_stable(self, timeout_ms: int = 1200, sample_interval_ms: int = 120) -> None:
+    def _wait_for_dom_stable(self, timeout_ms: int = 600, sample_interval_ms: int = 80) -> None:
         """Best-effort DOM stability wait to reduce no-op iterations."""
         page = getattr(self.browser, "page", None)
         if page is None:
@@ -1558,16 +1585,17 @@ class Agent:
             action_str = getattr(action_step, "action", str(action_step))
             return f"You performed: {action_str}. Result: {result_str}."
 
-    def _prepare_screenshot_for_mode(
+    def _build_element_index_and_start_gallery(
         self,
         snapshot,
         detected_elements: PageElements,
-        page_info: PageInfo,
     ) -> ScreenshotPreparation:
-        """Prepare screenshot, element index, and crop gallery for the LLM.
+        """Build element index and kick off gallery generation in background.
 
-        Returns a ScreenshotPreparation with the clean screenshot bytes,
-        optional gallery images, and element index text.
+        Returns a ScreenshotPreparation immediately with element index text
+        and counts populated.  If text-poor elements exist, gallery generation
+        runs in ``_gallery_executor`` — call ``_collect_gallery()`` on the
+        returned prep object before passing it to the planner.
         """
         screenshot = snapshot.screenshot
 
@@ -1579,18 +1607,44 @@ class Agent:
             max_elements=self.config.elements.max_index_elements,
             viewport_only=True,
         )
-        gallery_images = None
+
+        prep = ScreenshotPreparation(
+            screenshot_bytes=screenshot,
+            element_index_text=result.index_text,
+            text_rich_count=result.text_rich_count,
+            text_poor_count=result.text_poor_count,
+        )
+
+        # Start gallery generation in background thread so the main thread
+        # can build context (memory, decision, tabs, etc.) in parallel.
         if result.text_poor_elements:
             crops_per = self.config.elements.crops_per_gallery
-            gallery_images = build_crop_gallery(
+            prep._gallery_future = self._gallery_executor.submit(
+                build_crop_gallery,
                 screenshot,
                 result.text_poor_elements,
-                crops_per_page=crops_per,
+                crops_per,
             )
-            dprint(f"📸 Built {len(gallery_images)} gallery page(s) for {len(result.text_poor_elements)} text-poor elements")
 
-        # Save debug screenshots
-        if self.save_screenshots:
+        return prep
+
+    def _collect_gallery(self, prep: ScreenshotPreparation) -> None:
+        """Block until gallery generation completes and attach results.
+
+        Also saves debug screenshots when ``save_screenshots`` is enabled.
+        """
+        future = getattr(prep, "_gallery_future", None)
+        if future is not None:
+            try:
+                gallery_images = future.result()
+            except Exception:
+                gallery_images = None
+            prep.gallery_images = gallery_images
+            if gallery_images:
+                dprint(f"📸 Built {len(gallery_images)} gallery page(s)")
+            delattr(prep, "_gallery_future")
+
+        if self.save_screenshots and prep.screenshot_bytes:
             try:
                 from pathlib import Path
                 from datetime import datetime
@@ -1599,21 +1653,15 @@ class Agent:
                 ts = datetime.now().strftime("%H%M%S")
                 clean_path = str(ss_dir / f"iter{self._current_iteration:03d}_clean_{ts}.png")
                 with open(clean_path, "wb") as f:
-                    f.write(screenshot)
-                if gallery_images:
-                    for gi_idx, gi_bytes in enumerate(gallery_images):
+                    f.write(prep.screenshot_bytes)
+                if prep.gallery_images:
+                    for gi_idx, gi_bytes in enumerate(prep.gallery_images):
                         gp = str(ss_dir / f"iter{self._current_iteration:03d}_gallery{gi_idx + 1}_{ts}.png")
                         with open(gp, "wb") as f:
                             f.write(gi_bytes)
-                dprint(f"📸 Saved clean + {len(gallery_images or [])} gallery screenshot(s)")
+                dprint(f"📸 Saved clean + {len(prep.gallery_images or [])} gallery screenshot(s)")
             except Exception as e:
                 dprint(f"⚠️ Could not save debug screenshots: {e}")
-
-        return ScreenshotPreparation(
-            screenshot_bytes=screenshot,
-            gallery_images=gallery_images,
-            element_index_text=result.index_text,
-        )
 
     def _run_execution_loop(
         self,
@@ -2095,30 +2143,19 @@ class Agent:
                         narrative="Failed to capture state",
                     )
 
-                elements = getattr(detected_elements, "elements", []) or []
-                text_rich = sum(
-                    1 for elem in elements
-                    if int(getattr(elem, "text_presence_score", 0) or 0) >= 2
-                )
-                text_poor = sum(
-                    1 for elem in elements
-                    if int(getattr(elem, "text_presence_score", 0) or 0) <= 1
-                )
-                self.event_logger.element_capture(
-                    total=len(elements),
-                    text_rich=text_rich,
-                    text_poor=text_poor,
-                )
-
+                # --- Phase 1: Build element index + start gallery in background ---
                 screenshot_started = time.perf_counter()
-                prep = self._prepare_screenshot_for_mode(snapshot, detected_elements, page_info)
+                prep = self._build_element_index_and_start_gallery(snapshot, detected_elements)
                 annotated_screenshot_bytes = prep.screenshot_bytes
                 element_index_text = prep.element_index_text
-                gallery_images = prep.gallery_images
-                # Adaptive: use high detail only when many visual/crop elements present
-                adaptive_image_detail = "high" if len(gallery_images or []) > 5 else "low"
-                stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
 
+                self.event_logger.element_capture(
+                    total=len(getattr(detected_elements, "elements", []) or []),
+                    text_rich=prep.text_rich_count,
+                    text_poor=prep.text_poor_count,
+                )
+
+                # --- Phase 2: Build context while gallery generates in background ---
                 memory_recent = list(self.memory_store.entries)
                 recent_executed_ids = self.memory_store.get_recent_executed_action_ids(
                     n=max(1, len(self.memory_store.entries))
@@ -2204,6 +2241,13 @@ class Agent:
                         for cid in state.last_tool_call_ids
                     ]
                     effective_response_id = state.last_response_id
+
+                # --- Phase 3: Collect gallery result (blocks if still running) ---
+                self._collect_gallery(prep)
+                gallery_images = prep.gallery_images
+                # Adaptive: use high detail only when many visual/crop elements present
+                adaptive_image_detail = "high" if len(gallery_images or []) > 5 else "low"
+                stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
 
                 action_planner = ActionPlanner(
                     mission,

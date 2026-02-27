@@ -101,6 +101,8 @@ class ElementIndexResult:
     """Result of build_element_index()."""
     index_text: str
     text_poor_elements: List[DetectedElement] = field(default_factory=list)
+    text_rich_count: int = 0
+    text_poor_count: int = 0
 
 
 def build_element_index(
@@ -244,6 +246,8 @@ def build_element_index(
     return ElementIndexResult(
         index_text=index_text,
         text_poor_elements=text_poor,
+        text_rich_count=len(text_rich),
+        text_poor_count=len(text_poor),
     )
 
 

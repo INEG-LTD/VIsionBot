@@ -1092,6 +1092,9 @@ DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+_filtered_tools_cache: Dict[tuple, List[Dict[str, Any]]] = {}
+
+
 def get_filtered_tools(
     dialog_pending: bool = False,
     budget_constraints_enabled: bool = True,
@@ -1099,6 +1102,11 @@ def get_filtered_tools(
 ) -> List[Dict[str, Any]]:
     """
     Get the appropriate tool list based on current state.
+
+    Results are cached by (dialog_pending, budget_constraints_enabled,
+    allowed_tool_names) since tool schemas are static and the only mutations
+    (budget field stripping, allowlist filtering) are determined by
+    mission-constant config.
 
     Args:
         dialog_pending: If True, only dismiss_dialog + think are available
@@ -1108,6 +1116,15 @@ def get_filtered_tools(
     Returns:
         Filtered list of tools available to the agent
     """
+    cache_key = (
+        dialog_pending,
+        budget_constraints_enabled,
+        tuple(sorted(allowed_tool_names)) if allowed_tool_names is not None else None,
+    )
+    cached = _filtered_tools_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Dialog takes highest priority — only allow dismiss + think
     if dialog_pending:
         selected = DIALOG_CHECKPOINT_TOOLS
@@ -1123,21 +1140,24 @@ def get_filtered_tools(
         ]
 
     if budget_constraints_enabled:
-        return _strip_property_descriptions(filtered)
+        result = _strip_property_descriptions(filtered)
+    else:
+        stripped = deepcopy(filtered)
+        for tool in stripped:
+            params = tool.get("function", {}).get("parameters", {})
+            if not isinstance(params, dict):
+                continue
+            properties = params.get("properties")
+            if isinstance(properties, dict):
+                for field in _BUDGET_CONTRACT_FIELDS:
+                    properties.pop(field, None)
+            required = params.get("required")
+            if isinstance(required, list):
+                params["required"] = [item for item in required if item not in _BUDGET_CONTRACT_FIELDS]
+        result = _strip_property_descriptions(stripped)
 
-    stripped = deepcopy(filtered)
-    for tool in stripped:
-        params = tool.get("function", {}).get("parameters", {})
-        if not isinstance(params, dict):
-            continue
-        properties = params.get("properties")
-        if isinstance(properties, dict):
-            for field in _BUDGET_CONTRACT_FIELDS:
-                properties.pop(field, None)
-        required = params.get("required")
-        if isinstance(required, list):
-            params["required"] = [item for item in required if item not in _BUDGET_CONTRACT_FIELDS]
-    return _strip_property_descriptions(stripped)
+    _filtered_tools_cache[cache_key] = result
+    return result
 
 
 def _strip_property_descriptions(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

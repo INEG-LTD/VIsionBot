@@ -61,7 +61,7 @@ When stuck, switch to a meaningfully different strategy and state one concrete n
 
 def get_memory_developer_policy(budget_constraints_enabled: bool = True) -> str:
     output_policy = [
-        "1. Emit exactly ONE tool call per iteration.",
+        "1. If multiple tool calls can be made, emit all of them.",
         "2. If a RECOMMENDED NEXT STEP is present, either:",
         '   - follow it and state in reasoning: "Following recommendation: ..."',
         '   - or deviate and state in reasoning: "Deviating from recommendation because ..."',

@@ -221,15 +221,15 @@ class ExecutionConfig(BaseModel):
         ),
     )
     wait_for_load_before_iteration: bool = Field(
-        default=False,
+        default=True,
         description="If True, wait for the page to reach a load state before each agent iteration."
     )
     wait_for_load_state: str = Field(
-        default="networkidle",
+        default="domcontentloaded",
         description="Load state to wait for before each agent iteration: 'load', 'domcontentloaded', or 'networkidle'."
     )
     wait_for_load_timeout_ms: int = Field(
-        default=30000,
+        default=5000,
         ge=0,
         description="Max time to wait for page load before each agent iteration (milliseconds)."
     )

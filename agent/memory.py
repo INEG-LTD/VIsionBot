@@ -216,15 +216,19 @@ class NarrativeMemory:
             page_height = 0
 
         try:
-            scroll_x = int(page.evaluate("window.scrollX || 0") or 0)
-            scroll_y = int(page.evaluate("window.scrollY || 0") or 0)
+            _state = page.evaluate(
+                """() => ({
+                    sx: window.scrollX || 0,
+                    sy: window.scrollY || 0,
+                    txt: document.body ? document.body.innerText : ''
+                })"""
+            ) or {}
+            scroll_x = int(_state.get("sx", 0))
+            scroll_y = int(_state.get("sy", 0))
+            visible_text = _state.get("txt", "") or ""
         except Exception:
             scroll_x = 0
             scroll_y = 0
-
-        try:
-            visible_text = page.evaluate("document.body ? document.body.innerText : ''") or ""
-        except Exception:
             visible_text = ""
 
         screenshot = None
