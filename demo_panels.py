@@ -106,6 +106,7 @@ class AgentState:
     pending_yes_no: bool = False
     allow_custom: bool = True
     allow_skip: bool = True
+    debug_mode: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +492,19 @@ class TimelinePanel(AgentPanel):
 
     listens_to = list(EventType)
     max_entries = 600
+    normal_view_event_types = frozenset(
+        {
+            EventType.ITERATION_START,
+            EventType.ACTION_DETERMINED,
+            EventType.LOOP_STATE_CHANGED,
+            EventType.ASK_REQUESTED,
+            EventType.ASK_COMMAND_ANSWERED,
+            EventType.ASK_COMMAND_SKIPPED,
+            EventType.ASK_COMMAND_FAILURE,
+            EventType.SYSTEM_WARNING,
+            EventType.SYSTEM_ERROR,
+        }
+    )
 
     DEFAULT_CSS = """
     TimelinePanel {
@@ -603,8 +617,10 @@ class TimelinePanel(AgentPanel):
         self._scroll = self.query_one(".timeline-scroll", VerticalScroll)
         self._events = self.query_one(".timeline-events", Container)
         self._intro = self.query_one(".timeline-intro-text", Container)
+        self._debug_mode = False
 
     def on_state_update(self, state: AgentState) -> None:
+        self._debug_mode = bool(state.debug_mode)
         if state.thinking_active:
             frame = state.render_frame % 4
             dots = "." * frame + " " * (3 - frame)
@@ -614,6 +630,8 @@ class TimelinePanel(AgentPanel):
             self._thinking.update("")
 
     def on_agent_event(self, event: BotEvent) -> None:
+        if not self._debug_mode and event.event_type not in self.normal_view_event_types:
+            return
         entry = self._format_event(event)
         if entry is None:
             return

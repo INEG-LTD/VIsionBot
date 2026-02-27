@@ -697,6 +697,13 @@ class BrowserAgentApp(App):
                 return session
         return None
 
+    @staticmethod
+    def _is_session_debug_enabled(session: AgentSession) -> bool:
+        active_agent = session.agent
+        effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
+        logging_cfg = getattr(effective_config, "logging", None)
+        return bool(getattr(logging_cfg, "debug_mode", False))
+
     def _capture_debug_print(self, record: DebugPrintRecord) -> None:
         # EventLogger debug events already flow through structured callbacks.
         # Skip their console mirror lines to avoid duplicate timeline entries.
@@ -705,6 +712,8 @@ class BrowserAgentApp(App):
 
         session = self._session_for_worker_thread(record.thread_id)
         if session is None:
+            return
+        if not self._is_session_debug_enabled(session):
             return
 
         text = str(record.text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -898,6 +907,7 @@ class BrowserAgentApp(App):
             pending_yes_no=session.pending_yes_no,
             allow_custom=bool(getattr(interaction_cfg, "allow_custom", True)),
             allow_skip=bool(getattr(interaction_cfg, "allow_skip", True)),
+            debug_mode=bool(getattr(getattr(effective_config, "logging", None), "debug_mode", False)),
         )
 
     # ---- Event recording — called from worker thread via call_from_thread --
