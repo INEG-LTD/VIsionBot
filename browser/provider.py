@@ -81,6 +81,18 @@ class BrowserConfig(BaseModel):
         description="CDP endpoint URL for remote browser (e.g., Browserbase, Browserless)"
     )
     
+    # Screenshot capture settings
+    screenshot_format: str = Field(
+        default="jpeg",
+        description="Screenshot format sent to the agent: 'jpeg' (faster, smaller) or 'png' (lossless)."
+    )
+    screenshot_quality: int = Field(
+        default=80,
+        ge=1,
+        le=100,
+        description="JPEG compression quality (1-100). Only applies when screenshot_format='jpeg'. 80 is a good balance of size and clarity."
+    )
+
     # Stealth settings
     apply_stealth: bool = Field(
         default=True,

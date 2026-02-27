@@ -65,8 +65,9 @@ class ExecutionState:
     total_actions: int = 0
     actions_since_progress: int = 0
     user_facing_actions_since_progress: int = 0
-    checkpoint_pending: bool = False
     last_action_summary: Optional[str] = None
+    last_response_id: Optional[str] = None
+    last_tool_call_ids: List[str] = field(default_factory=list)
     failed_elements: List[FailedAction] = field(default_factory=list)
     validation_failures: int = 0
     # Loop state
@@ -593,7 +594,6 @@ class Agent:
             agent_id=self.agent_workspace.agent_id,
             run_id=resolved_run_id,
             current_iteration=self._current_iteration,
-            checkpoint_pending=bool(getattr(self.execution_state, "checkpoint_pending", False)),
         )
         return True, (
             f"Loaded {self.agent_workspace.agent_id} / {resolved_run_id} at "
@@ -671,11 +671,6 @@ class Agent:
             resumed_state = copy.deepcopy(self.execution_state) if self.execution_state else None
             mission_result = self._run_execution_loop(
                 mission,
-                start_in_checkpoint=bool(
-                    getattr(self.execution_state, "checkpoint_pending", True)
-                    if self.execution_state is not None
-                    else True
-                ),
                 existing_state=resumed_state,
             )
             if self.execution_timer.mission_start_time is not None:
@@ -1070,7 +1065,6 @@ class Agent:
         # Execute the mission directly
         self.mission_result = self._run_execution_loop(
             user_mission,
-            start_in_checkpoint=True,
         )
 
         if self.execution_timer.mission_start_time is not None:
@@ -1328,11 +1322,15 @@ class Agent:
         # caller explicitly requests full-page or when screenshot is missing.
         if full_page or snapshot.screenshot is None:
             try:
+                fmt = (self.config.browser.screenshot_format or "jpeg").lower()
+                shot_kwargs: dict = {"type": fmt}
+                if fmt == "jpeg":
+                    shot_kwargs["quality"] = int(self.config.browser.screenshot_quality or 80)
                 if full_page:
-                    snapshot.screenshot = self.browser.page.screenshot(full_page=True)
+                    snapshot.screenshot = self.browser.page.screenshot(full_page=True, **shot_kwargs)
                     dprint("📸 Using full-page screenshot for exploration mode")
                 else:
-                    snapshot.screenshot = self.browser.page.screenshot(full_page=False)
+                    snapshot.screenshot = self.browser.page.screenshot(full_page=False, **shot_kwargs)
             except Exception as e:
                 dprint(f"⚠️ Failed to capture screenshot: {e}")
                 snapshot.screenshot = None
@@ -1576,7 +1574,6 @@ class Agent:
         self,
         mission: str,
         *,
-        start_in_checkpoint: bool = False,
         existing_state: Optional[ExecutionState] = None,
     ) -> MissionResult:
         """
@@ -1587,7 +1584,6 @@ class Agent:
 
         Args:
             mission: The mission string to execute
-            start_in_checkpoint: Whether to begin in checkpoint mode
 
         Returns:
             MissionResult with success/failure and reasoning
@@ -1602,13 +1598,11 @@ class Agent:
 
         if existing_state is None:
             state = ExecutionState(
-                checkpoint_pending=bool(start_in_checkpoint),
                 budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
             )
         else:
             # Resume path: continue from the loaded state snapshot.
             state = copy.deepcopy(existing_state)
-            state.checkpoint_pending = bool(start_in_checkpoint)
             state.budget_constraints_enabled = bool(self.config.execution.budget_constraints_enabled)
         state.budget_total = max_actions
         state.planning_batch_limit = min(
@@ -1624,17 +1618,6 @@ class Agent:
             max_steps=profile_max_steps,
             timeout_s=profile_timeout_s,
         )
-
-        last_checkpoint_pending = state.checkpoint_pending
-        self.event_logger.checkpoint_changed(pending=state.checkpoint_pending)
-
-        def _set_checkpoint_pending(value: bool) -> None:
-            nonlocal last_checkpoint_pending
-            new_value = bool(value)
-            state.checkpoint_pending = new_value
-            if new_value != last_checkpoint_pending:
-                last_checkpoint_pending = new_value
-                self.event_logger.checkpoint_changed(pending=new_value)
 
         def _append_recent_action(summary: str) -> None:
             state.recent_actions.append(summary)
@@ -2084,6 +2067,8 @@ class Agent:
                 annotated_screenshot_bytes = prep.screenshot_bytes
                 element_index_text = prep.element_index_text
                 gallery_images = prep.gallery_images
+                # Adaptive: use high detail only when many visual/crop elements present
+                adaptive_image_detail = "high" if len(gallery_images or []) > 5 else "low"
                 stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
 
                 memory_recent = list(self.memory_store.entries)
@@ -2111,11 +2096,13 @@ class Agent:
                     low_budget_mode=state.low_budget_mode,
                 )
 
+                _narrative_n = max(1, int(
+                    len(self.memory_store.entries)
+                    * float(self.config.execution.memory_narrative_recent_percent or 1.0)
+                ))
                 environment_state = EnvironmentState(
                     browser_state=snapshot,
-                    memory_narrative=self.memory_store.get_narrative(
-                        n=max(1, len(self.memory_store.entries))
-                    ),
+                    memory_narrative=self.memory_store.get_narrative(n=_narrative_n),
                     memory_recent_ids=[entry.memory_id for entry in memory_recent],
                     user_prompt=mission,
                     mission_start_url=self.mission_start_url,
@@ -2157,15 +2144,30 @@ class Agent:
                         budget_remaining=state.budget_remaining,
                         planning_batch_limit=state.planning_batch_limit,
                     )
+                # Build tool outputs for any pending function calls from the last response.
+                # The Responses API requires outputs for all function calls before new input.
+                # Only chain (use previous_response_id) when we have the call IDs to satisfy it;
+                # if extraction ever failed, fall back to a fresh non-chained call.
+                pending_tool_outputs: Optional[list] = None
+                effective_response_id: Optional[str] = None
+                if state.last_response_id and state.last_tool_call_ids:
+                    pending_tool_outputs = [
+                        {"type": "function_call_output", "call_id": cid, "output": "ok"}
+                        for cid in state.last_tool_call_ids
+                    ]
+                    effective_response_id = state.last_response_id
+
                 action_planner = ActionPlanner(
                     mission,
                     self.memory_store,
                     base_knowledge=self.base_knowledge,
                     model_name=self.agent_model_name,
                     reasoning_level=self.agent_reasoning_level,
-                    image_detail=self.config.model.image_detail,
+                    image_detail=adaptive_image_detail,
                     max_actions_per_plan=state.planning_batch_limit,
-                    checkpoint_mode=state.checkpoint_pending,
+                    previous_response_id=effective_response_id,
+                    tool_call_outputs=pending_tool_outputs,
+                    memory_narrative_n=_narrative_n,
                     last_action_summary=state.last_action_summary,
                     tab_bar=tab_bar,
                     dialog_notice=dialog_notice,
@@ -2212,6 +2214,9 @@ class Agent:
                     iteration_tokens_out += int(planner_stats.get("tokens_out", 0) or 0)
                     iteration_image_count += int(planner_stats.get("image_count", 0) or 0)
                     iteration_retries += int(planner_stats.get("planner_retries", 0) or 0)
+                    if action_planner.last_response_id:
+                        state.last_response_id = action_planner.last_response_id
+                    state.last_tool_call_ids = list(action_planner.last_tool_call_ids)
                     _check_iteration_watchdog(stage="after_planner_call")
                 except _IterationHardTimeout:
                     raise
@@ -2247,7 +2252,6 @@ class Agent:
                     state.validation_failures += 1
                     if state.validation_failures <= self.config.execution.validation_failure_escalation_limit:
                         state.last_action_summary = f"Action validation issue: {error or 'No action generated'}. Retrying."
-                        _set_checkpoint_pending(False)
                         continue
                     self._record_failure(
                         state,
@@ -2306,7 +2310,6 @@ class Agent:
                             )
                             state.last_action_summary = tool_error
                             _append_recent_action(tool_error)
-                            _set_checkpoint_pending(False)
                             _record_action_result(
                                 action_step,
                                 success=False,
@@ -2380,7 +2383,6 @@ class Agent:
                             state.loop_count = loop_count
                             state.loop_round = 2
                             state.loop_description = loop_desc or think_reasoning
-                            _set_checkpoint_pending(False)
                             state.user_facing_actions_since_progress = 0
 
                             state.last_action_summary = f"Loop started: {loop_desc or think_reasoning} (round 2 of {loop_count})"
@@ -2404,14 +2406,11 @@ class Agent:
                         elif think_next_action == "advance":
                             if not state.in_loop:
                                 state.last_action_summary = "advance ignored — not in a loop"
-                                _set_checkpoint_pending(False)
                             elif state.user_facing_actions_since_progress == 0:
                                 state.last_action_summary = "advance BLOCKED: No user-facing actions since last advance. Do a user-facing action first."
-                                _set_checkpoint_pending(False)
                             else:
                                 state.loop_round += 1
                                 state.user_facing_actions_since_progress = 0
-                                _set_checkpoint_pending(False)
                                 if state.loop_count and state.loop_round > state.loop_count:
                                     state.last_action_summary = f"Loop complete — all {state.loop_count} rounds done"
                                     _append_recent_action(f"[LOOP COMPLETE] {state.loop_count} rounds done")
@@ -2448,7 +2447,6 @@ class Agent:
                                 _exit_loop()
                             else:
                                 state.last_action_summary = "end_loop ignored — not in a loop"
-                            _set_checkpoint_pending(False)
 
                         elif think_next_action == "done":
                             if state.in_loop:
@@ -2488,7 +2486,6 @@ class Agent:
 
                         elif think_next_action == "stuck":
                             replacement_strategy = think_reasoning or "Trying a different strategy."
-                            _set_checkpoint_pending(False)
                             state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
                             if recommended_next_step_arg:
                                 cleaned = strip_targeting_data(recommended_next_step_arg)
@@ -2508,10 +2505,6 @@ class Agent:
                             if recommended_next_step_arg:
                                 cleaned = strip_targeting_data(recommended_next_step_arg)
                                 state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            _set_checkpoint_pending(False)
-
-                        else:
-                            _set_checkpoint_pending(False)
 
                         result_str = "success" if result.success else "failed"
                         self.event_logger.action_complete(
@@ -2552,7 +2545,6 @@ class Agent:
                         state.last_action_summary = f"You called {action_type}: \"{action_content}\""
                         _append_recent_action(f"{action_type}: {action_content}")
                         state.actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         result_str = "success" if result.success else "failed"
                         self.event_logger.action_complete(
                             tool=function_name,
@@ -2590,7 +2582,6 @@ class Agent:
                                 policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
                                     source="switch_tab"
                                 )
-                                _set_checkpoint_pending(True)
                                 if not policy_allowed:
                                     action_error = f"{policy_warning} ({current_url})"
                                     state.last_action_summary = f"switch_tab FAILED: {action_error}"
@@ -2649,7 +2640,6 @@ class Agent:
                                 policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
                                     source="close_tab"
                                 )
-                                _set_checkpoint_pending(True)
                                 if not policy_allowed:
                                     action_error = f"{policy_warning} ({current_url})"
                                     state.last_action_summary = f"close_tab FAILED: {action_error}"
@@ -2721,7 +2711,6 @@ class Agent:
                                     state.last_action_summary += f" at {url}"
                                 if observe_warning:
                                     state.last_action_summary += f" | sandbox(observe): {observe_warning}"
-                                _set_checkpoint_pending(True)
                                 policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
                                     source="open_tab"
                                 )
@@ -2779,11 +2768,9 @@ class Agent:
                             self.tab_manager.dismiss_dialog(accept, input_text)
                             action_word = "accepted" if accept else "dismissed"
                             state.last_action_summary = f"Dialog {action_word}"
-                            _set_checkpoint_pending(True)
                             action_success = True
                         else:
                             state.last_action_summary = "dismiss_dialog: No dialog pending"
-                            _set_checkpoint_pending(True)
                             action_error = "No dialog pending"
                         self._record_controller_action(
                             action_type="dismiss_dialog",
@@ -2926,7 +2913,6 @@ class Agent:
                         state.actions_since_progress += 1
                         if action_success and duplicate_of is None:
                             state.user_facing_actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -3020,7 +3006,6 @@ class Agent:
                         state.actions_since_progress += 1
                         if action_success:
                             state.user_facing_actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -3130,7 +3115,6 @@ class Agent:
                         state.actions_since_progress += 1
                         if action_success:
                             state.user_facing_actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -3228,7 +3212,6 @@ class Agent:
                         state.actions_since_progress += 1
                         if action_success:
                             state.user_facing_actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -3351,7 +3334,6 @@ class Agent:
                         state.actions_since_progress += 1
                         if action_success:
                             state.user_facing_actions_since_progress += 1
-                        _set_checkpoint_pending(True)
                         self.event_logger.action_complete(
                             tool=function_name,
                             narrative=narrative,
@@ -3394,7 +3376,6 @@ class Agent:
                                 )
                                 _append_recent_action(state.last_action_summary)
                                 state.actions_since_progress += 1
-                                _set_checkpoint_pending(True)
                                 self.event_logger.action_complete(
                                     tool=function_name,
                                     narrative=narrative,
@@ -3460,7 +3441,6 @@ class Agent:
                     if result.error:
                         state.last_action_summary += f" | {result.error}"
                     _append_recent_action(state.last_action_summary)
-                    _set_checkpoint_pending(True)
 
                     if function_name == "ask_user" and result.success:
                         ask_question = str(action_args.get("question", "")).strip()
@@ -3599,7 +3579,6 @@ class Agent:
                 timeout_reason = str(timeout_exc).strip() or "Iteration hard timeout reached."
                 state.last_action_summary = timeout_reason
                 _append_recent_action(f"[ITERATION TIMEOUT] {timeout_reason}")
-                _set_checkpoint_pending(False)
                 self.event_logger.system_warning(
                     "Iteration hard timeout triggered; forcing replan on next iteration",
                     iteration=self._current_iteration,

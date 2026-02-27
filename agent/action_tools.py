@@ -1080,25 +1080,12 @@ if _THINK_TOOL:
         "description": "Required when next_action=stuck.",
     }
 
-# Tools available during checkpoint mode (after a browser action).
-# Only think is available — agent must decide next via think's next_action.
 _ACTION_TOOLS_BY_NAME: Dict[str, Dict[str, Any]] = {
     tool["function"]["name"]: tool for tool in ACTION_TOOLS
 }
-NON_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
-    tool for tool in ACTION_TOOLS
-    if tool["function"]["name"] != "think"
-]
-CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
-    _ACTION_TOOLS_BY_NAME["think"],
-]
 
 # Tools available when a dialog is blocking the active tab.
-# Only dismiss_dialog when not checkpointing; no browser actions are allowed.
-DIALOG_TOOLS: List[Dict[str, Any]] = [
-    tool for tool in NON_CHECKPOINT_TOOLS
-    if tool["function"]["name"] == "dismiss_dialog"
-]
+# Only dismiss_dialog + think allowed — no other browser actions.
 DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
     _ACTION_TOOLS_BY_NAME["dismiss_dialog"],
     _ACTION_TOOLS_BY_NAME["think"],
@@ -1106,7 +1093,6 @@ DIALOG_CHECKPOINT_TOOLS: List[Dict[str, Any]] = [
 
 
 def get_filtered_tools(
-    checkpoint_mode: bool = False,
     dialog_pending: bool = False,
     budget_constraints_enabled: bool = True,
     allowed_tool_names: Optional[List[str]] = None,
@@ -1115,19 +1101,18 @@ def get_filtered_tools(
     Get the appropriate tool list based on current state.
 
     Args:
-        checkpoint_mode: If True, return CHECKPOINT_TOOLS instead of the normal action tools
-        dialog_pending: If True, return DIALOG_TOOLS (dialog blocks everything)
+        dialog_pending: If True, only dismiss_dialog + think are available
         budget_constraints_enabled: If False, strip budget fields from tool schemas
         allowed_tool_names: Optional allowlist of tool names.
 
     Returns:
         Filtered list of tools available to the agent
     """
-    # Dialog takes highest priority — blocks all browser actions
+    # Dialog takes highest priority — only allow dismiss + think
     if dialog_pending:
-        selected = DIALOG_CHECKPOINT_TOOLS if checkpoint_mode else DIALOG_TOOLS
+        selected = DIALOG_CHECKPOINT_TOOLS
     else:
-        selected = CHECKPOINT_TOOLS if checkpoint_mode else NON_CHECKPOINT_TOOLS
+        selected = ACTION_TOOLS
 
     filtered = selected
     if allowed_tool_names is not None:
@@ -1138,7 +1123,7 @@ def get_filtered_tools(
         ]
 
     if budget_constraints_enabled:
-        return filtered
+        return _strip_property_descriptions(filtered)
 
     stripped = deepcopy(filtered)
     for tool in stripped:
@@ -1152,7 +1137,24 @@ def get_filtered_tools(
         required = params.get("required")
         if isinstance(required, list):
             params["required"] = [item for item in required if item not in _BUDGET_CONTRACT_FIELDS]
-    return stripped
+    return _strip_property_descriptions(stripped)
+
+
+def _strip_property_descriptions(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove description fields from tool parameter properties to reduce token count.
+
+    The top-level tool description is preserved so the model understands what each
+    tool does. Per-property descriptions are redundant with the property names and
+    the system prompt contract, so removing them saves ~15-20% of schema token cost.
+    """
+    result = deepcopy(tools)
+    for tool in result:
+        props = tool.get("function", {}).get("parameters", {}).get("properties")
+        if isinstance(props, dict):
+            for prop in props.values():
+                if isinstance(prop, dict):
+                    prop.pop("description", None)
+    return result
 
 
 # ============================================================================

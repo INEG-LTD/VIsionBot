@@ -233,6 +233,16 @@ class ExecutionConfig(BaseModel):
         ge=0,
         description="Max time to wait for page load before each agent iteration (milliseconds)."
     )
+    memory_narrative_recent_percent: float = Field(
+        default=1.0,
+        ge=0.05,
+        le=1.0,
+        description=(
+            "Fraction of memory entries to include in the narrative sent to the agent (0.05–1.0). "
+            "1.0 = full history (default). 0.5 = most recent 50%%. "
+            "Lower values reduce prompt size on long missions."
+        ),
+    )
     validation_failure_escalation_limit: int = Field(
         default=3,
         ge=0,

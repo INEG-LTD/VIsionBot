@@ -53,8 +53,10 @@ config = Config(
         # - "minimal", "research", "web_safe", "full", "locked_down"
         tool_preset=ToolPreset.WEB_SAFE,
         wait_for_load_before_iteration=True,
-        wait_for_load_state="networkidle",
+        wait_for_load_state="domcontentloaded",
         wait_for_load_timeout_ms=5000,
+        # Memory: send the most recent 50% of entries on long missions
+        memory_narrative_recent_percent=0.5,
     ),
     logging=DebugConfig(
         debug_mode=False,
@@ -66,6 +68,9 @@ config = Config(
         provider_type="local",
         headless=False,
         apply_stealth=True,
+        # JPEG at quality 80: ~60-80% smaller than PNG, saves ~0.5s LLM latency per step
+        screenshot_format="jpeg",
+        screenshot_quality=80,
     ),
 )
 

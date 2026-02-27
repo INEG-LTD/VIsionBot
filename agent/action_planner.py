@@ -68,7 +68,9 @@ class ActionPlanner:
         max_actions_per_plan: int = 6,
         current_iteration: int = 0,
         user_facing_actions_in_round: int = 0,
-        checkpoint_mode: bool = False,
+        previous_response_id: Optional[str] = None,
+        tool_call_outputs: Optional[List[dict]] = None,
+        memory_narrative_n: Optional[int] = None,
         last_action_summary: Optional[str] = None,
         tab_bar: Optional[str] = None,
         dialog_notice: Optional[str] = None,
@@ -110,7 +112,11 @@ class ActionPlanner:
         self.max_actions_per_plan = max_actions_per_plan
         self.current_iteration = current_iteration
         self.user_facing_actions_in_round = user_facing_actions_in_round
-        self.checkpoint_mode = checkpoint_mode
+        self.previous_response_id = previous_response_id
+        self.tool_call_outputs = tool_call_outputs
+        self.memory_narrative_n = memory_narrative_n
+        self.last_response_id: Optional[str] = None
+        self.last_tool_call_ids: List[str] = []
         self.last_action_summary = last_action_summary
         self.tab_bar = tab_bar
         self.dialog_notice = dialog_notice
@@ -204,12 +210,6 @@ class ActionPlanner:
                 f"RECOMMENDED NEXT STEP (ONE SHOT){source}:\n{cleaned_step}\n"
             )
 
-        if self.checkpoint_mode and self.user_facing_actions_in_round > 0:
-            parts.append(
-                "CHECKPOINT:\n"
-                "You just performed a user-facing action. Decide what to do next via think().\n"
-            )
-
         # Recent actions log
         if self.recent_actions:
             actions_str = "\n".join(
@@ -281,22 +281,7 @@ class ActionPlanner:
                 )
             )
 
-            if self.checkpoint_mode:
-                user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
-Decision context:
-{decision_context_block}
-
-CHECKPOINT — choose via think():
-• think(next_action=continue) — more work needed for the mission
-• think(next_action=start_loop, loop_count=N, loop_description="...") — need to repeat an action N times
-• think(next_action=advance) — (in loop) current iteration done, move to next round
-• think(next_action=done) — mission is fully complete
-• think(next_action=stuck) — strategy failed, provide new one
-
-{SHARED_CONTRADICTION_GATE}
-"""
-            else:
-                user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
+            user_prompt = f"""{dialog_prefix}{reflection}Mission: {self.user_prompt}
 
 Decision context:
 {decision_context_block}
@@ -308,7 +293,6 @@ Based on the screenshot, decision context, and the mission, what is the best nex
 
             # Get filtered tools based on current state
             tools = get_filtered_tools(
-                checkpoint_mode=self.checkpoint_mode,
                 dialog_pending=self.dialog_pending,
                 budget_constraints_enabled=self.budget_constraints_enabled,
                 allowed_tool_names=self.allowed_tool_names or None,
@@ -350,8 +334,16 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 reasoning_level=self.reasoning_level,
                 tool_choice="required",
                 parallel_tool_calls=self.max_actions_per_plan > 1,
+                previous_response_id=self.previous_response_id,
+                tool_call_outputs=self.tool_call_outputs,
             )
             llm_latency_ms = (time.perf_counter() - call_started_at) * 1000.0
+            # Capture response_id and call_ids for the next iteration's chain
+            if result:
+                self.last_response_id = result[0].get("response_id")
+                self.last_tool_call_ids = [
+                    r["call_id"] for r in result if r.get("call_id")
+                ]
 
             actions = []
             # Limit to max_actions_per_plan to prevent excessive batching
@@ -623,9 +615,8 @@ Choose the next action to take.
     def _get_memory_narrative_block(self, just_data: bool = False) -> str:
         if not self.memory_store:
             return ""
-        narrative = self.memory_store.get_narrative(
-            n=max(1, len(self.memory_store.entries))
-        )
+        n = self.memory_narrative_n if self.memory_narrative_n is not None else max(1, len(self.memory_store.entries))
+        narrative = self.memory_store.get_narrative(n=n)
         if just_data:
             return narrative
         return f"Recent memory narrative:\n{narrative}"

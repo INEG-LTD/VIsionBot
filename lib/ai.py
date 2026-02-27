@@ -1162,6 +1162,8 @@ def generate_action_with_tools(
     temperature: Optional[float] = None,
     tool_choice: str = "required",
     parallel_tool_calls: bool = True,
+    previous_response_id: Optional[str] = None,
+    tool_call_outputs: Optional[list[dict]] = None,
 ) -> list[dict]:
     """
     Generate action using OpenAI function calling.
@@ -1232,6 +1234,13 @@ def generate_action_with_tools(
         if temperature is not None:
             kwargs["temperature"] = temperature
 
+        if previous_response_id:
+            kwargs["previous_response_id"] = previous_response_id
+            # Inject tool outputs from the previous function calls before new user input.
+            # The Responses API requires outputs for all function calls in the previous response.
+            if tool_call_outputs:
+                openai_messages = list(tool_call_outputs) + openai_messages
+
         response = provider.client.responses.create(
             model=model,
             input=openai_messages,
@@ -1277,6 +1286,13 @@ def generate_action_with_tools(
             if raw_args is None and isinstance(item, dict):
                 raw_args = item.get("arguments")
 
+            # Extract call_id (call_xxx format) for submitting tool outputs in the next request.
+            # The Responses API has two ID fields: item.id (fc_xxx, item-level) and
+            # item.call_id (call_xxx, required for function_call_output). Prioritize call_id.
+            call_id = getattr(item, "call_id", None)
+            if call_id is None and isinstance(item, dict):
+                call_id = item.get("call_id") or item.get("id")
+
             parsed_args: Any = {}
             if isinstance(raw_args, str):
                 try:
@@ -1292,6 +1308,7 @@ def generate_action_with_tools(
                     "arguments": parsed_args,
                     "usage": usage,
                     "cost_usd": cost,
+                    "call_id": call_id,
                 }
             )
 
@@ -1304,7 +1321,13 @@ def generate_action_with_tools(
                 "reasoning": getattr(response, "output_text", "") or "",
                 "usage": usage,
                 "cost_usd": cost,
+                "response_id": getattr(response, "id", None),
             }]
+
+        # Tag first action with response_id so callers can chain requests
+        response_id = getattr(response, "id", None)
+        if response_id:
+            actions[0]["response_id"] = response_id
 
         return actions
 
