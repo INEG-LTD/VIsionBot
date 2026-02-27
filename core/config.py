@@ -191,6 +191,20 @@ class ModelConfig(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_hint_validator_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        removed_fields = ("hint_validator_model", "hint_validator_reasoning_level")
+        found = [name for name in removed_fields if name in data]
+        if not found:
+            return data
+        raise ValueError(
+            "ModelConfig no longer supports legacy speculative validator fields: "
+            f"{', '.join(found)}. Planner-embedded hints now use command model settings."
+        )
+
 
 class ExecutionConfig(BaseModel):
     """Runtime execution behavior configuration."""
@@ -273,20 +287,54 @@ class ExecutionConfig(BaseModel):
             "When reached, the current iteration is force-ended and the agent replans. 0 disables hard timeout."
         ),
     )
+    speculative_hints_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable speculative next-action hints generated in one iteration and consumed in the next."
+        ),
+    )
+    speculative_hints_min_confidence: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence required before accepting a speculative hint.",
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _reject_removed_tool_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
-        removed_fields = ("tool_profile_id", "tool_profiles", "allowed_tools", "disabled_tools")
+        removed_fields = (
+            "tool_profile_id",
+            "tool_profiles",
+            "allowed_tools",
+            "disabled_tools",
+            "speculative_hints_validator_enabled",
+            "speculative_hints_validator_min_confidence",
+            "speculative_hints_candidate_count",
+            "speculative_hints_planner_hedge_delay_ms",
+        )
         found = [name for name in removed_fields if name in data]
         if not found:
             return data
-        raise ValueError(
-            "ExecutionConfig no longer supports legacy tool fields: "
-            f"{', '.join(found)}. Use tool_preset only."
-        )
+        speculative_found = [
+            name for name in found if name.startswith("speculative_hints_")
+        ]
+        tool_found = [name for name in found if not name.startswith("speculative_hints_")]
+        messages = []
+        if tool_found:
+            messages.append(
+                "legacy tool fields: "
+                f"{', '.join(tool_found)}. Use tool_preset only."
+            )
+        if speculative_found:
+            messages.append(
+                "legacy speculative fields: "
+                f"{', '.join(speculative_found)}. "
+                "Use speculative_hints_enabled + speculative_hints_min_confidence."
+            )
+        raise ValueError("ExecutionConfig no longer supports " + " ".join(messages))
 
     class Config:
         arbitrary_types_allowed = True

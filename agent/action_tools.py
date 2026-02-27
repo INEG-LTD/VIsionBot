@@ -1023,6 +1023,20 @@ _NARRATIVE_PROPERTY: Dict[str, Any] = {
     }
 }
 
+_PLANNER_NEXT_HINT_PROPERTY: Dict[str, Any] = {
+    "next_hint_json": {
+        "type": "string",
+        "description": (
+            "Required JSON object string describing hint envelope for next planner cycle. "
+            "Use either candidate envelope: "
+            "{\"status\":\"candidate\",\"function_name\":\"...\",\"function_arguments\":{...},"
+            "\"overlay_index\":123,\"confidence\":0.0-1.0,\"reason\":\"...\"} "
+            "or none envelope: "
+            "{\"status\":\"none\",\"reason\":\"...\",\"confidence\":0.0}."
+        ),
+    }
+}
+
 _BUDGET_CONTRACT_PROPERTIES: Dict[str, Any] = {
     "budget_spent": {
         "type": "integer",
@@ -1049,10 +1063,13 @@ for _tool in ACTION_TOOLS:
         continue
     _properties = _params.setdefault("properties", {})
     _properties.update(_NARRATIVE_PROPERTY)
+    _properties.update(_PLANNER_NEXT_HINT_PROPERTY)
     _properties.update(_BUDGET_CONTRACT_PROPERTIES)
     _required = _params.setdefault("required", [])
     if "narrative" not in _required:
         _required.append("narrative")
+    if "next_hint_json" not in _required:
+        _required.append("next_hint_json")
     if "budget_spent" not in _required:
         _required.append("budget_spent")
     if "budget_remaining" not in _required:
@@ -1158,7 +1175,6 @@ def get_filtered_tools(
 
     _filtered_tools_cache[cache_key] = result
     return result
-
 
 def _strip_property_descriptions(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove description fields from tool parameter properties to reduce token count.

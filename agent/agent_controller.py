@@ -11,7 +11,7 @@ import os
 import json
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
 import hashlib
@@ -25,11 +25,19 @@ from core.agent_workspace import AgentWorkspace, AgentWorkspaceManager
 from core.sandbox_policy import SandboxPolicyEngine
 from agent.memory import InteractionType, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
-from models.models import FailedAction
+from models.models import ActionStep, FailedAction
 from agent.results import MissionResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
 from agent.action_planner import strip_targeting_data
+from agent.speculative_hints import (
+    HintBundle,
+    HintCandidate,
+    HintValidationResult,
+    filter_candidates_deterministic,
+    hydrate_candidate_to_action_step,
+    validate_hints,
+)
 from agent.prompts import (
     DecisionContext,
 )
@@ -120,6 +128,43 @@ class ScreenshotPreparation:
     element_index_text: Optional[str] = None
     text_rich_count: int = 0
     text_poor_count: int = 0
+
+
+@dataclass
+class PlannerCallResult:
+    """Result payload from one planner model invocation."""
+
+    actions: Optional[List[ActionStep]] = None
+    error: Optional[str] = None
+    response_id: Optional[str] = None
+    tool_call_ids: List[str] = field(default_factory=list)
+    planner_elapsed_ms: float = 0.0
+    llm_latency_ms: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    image_count: int = 0
+    retries: int = 0
+    failure_code: Optional[str] = None
+    failure_stage: Optional[str] = None
+    exception: Optional[Exception] = None
+    hint_bundle: Optional[HintBundle] = None
+    hint_status: Optional[str] = None
+    hint_reason: Optional[str] = None
+    hint_confidence: float = 0.0
+
+
+@dataclass
+class SpeculativeResolution:
+    """Result payload for planner/validator arbitration."""
+
+    actions: Optional[List[ActionStep]] = None
+    error: Optional[str] = None
+    planner: PlannerCallResult = field(default_factory=PlannerCallResult)
+    hint_path: str = "planner_only"
+    hint_candidate_id: Optional[str] = None
+    hint_validation_ms: float = 0.0
+    hint_confidence: float = 0.0
+    hint_reject_reason: Optional[str] = None
 
 
 """
@@ -218,6 +263,9 @@ class Agent:
         self._hints_lock = threading.Lock()
         self._pending_hints: List[str] = []
         self._gallery_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gallery")
+        self._speculative_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="speculative")
+        self._speculative_lock = threading.Lock()
+        self._planner_cached_hint_bundle: Optional[HintBundle] = None
 
         self.interceptor_stack: List[Dict[str, Any]] = []  # Stack of active interceptors
 
@@ -586,6 +634,7 @@ class Agent:
         self._cached_snapshot_fingerprint = None
         self._cached_page_info = None
         self._cached_detected_elements = None
+        self._reset_speculative_state()
 
         self._loaded_resume_run_id = resolved_run_id
         self._loaded_resume_mission = mission
@@ -673,6 +722,7 @@ class Agent:
             )
 
             resumed_state = copy.deepcopy(self.execution_state) if self.execution_state else None
+            self._reset_speculative_state()
             mission_result = self._run_execution_loop(
                 mission,
                 existing_state=resumed_state,
@@ -1077,6 +1127,7 @@ class Agent:
         self._cached_snapshot_fingerprint = None
         self._cached_page_info = None
         self._cached_detected_elements = None
+        self._reset_speculative_state()
         self._cancel_event.clear()
         with self._pause_lock:
             self._paused = False
@@ -1663,6 +1714,379 @@ class Agent:
             except Exception as e:
                 dprint(f"⚠️ Could not save debug screenshots: {e}")
 
+    def _reset_speculative_state(self) -> None:
+        """Cancel and clear speculative-runtime state."""
+        with self._speculative_lock:
+            self._planner_cached_hint_bundle = None
+
+    def _cache_planner_hint_bundle(self, hint_bundle: Optional[HintBundle]) -> None:
+        """Store planner-embedded hint bundle for the next iteration."""
+        if not bool(getattr(self.config.execution, "speculative_hints_enabled", False)):
+            with self._speculative_lock:
+                self._planner_cached_hint_bundle = None
+            return
+        if not isinstance(hint_bundle, HintBundle):
+            with self._speculative_lock:
+                self._planner_cached_hint_bundle = None
+            return
+
+        candidates = list(hint_bundle.candidates or [])
+        with self._speculative_lock:
+            self._planner_cached_hint_bundle = hint_bundle if candidates else None
+
+        if candidates:
+            self.event_logger.system_debug(
+                "Planner-embedded hint cached",
+                source_iteration=int(hint_bundle.source_iteration or 0),
+                candidate_count=len(candidates),
+            )
+
+    def _consume_or_discard_cached_planner_hint(
+        self,
+        *,
+        expected_source_iteration: int,
+    ) -> Optional[HintBundle]:
+        """Consume cached planner hint if fresh for this iteration."""
+        with self._speculative_lock:
+            hint_bundle = self._planner_cached_hint_bundle
+            self._planner_cached_hint_bundle = None
+
+        if hint_bundle is None:
+            return None
+        if int(hint_bundle.source_iteration or 0) != int(expected_source_iteration or 0):
+            self.event_logger.system_debug(
+                "Discarded stale planner-embedded hint",
+                expected_source_iteration=expected_source_iteration,
+                hint_source_iteration=int(hint_bundle.source_iteration or 0),
+            )
+            return None
+        self.event_logger.system_debug(
+            "Planner-embedded hint consumed",
+            source_iteration=int(hint_bundle.source_iteration or 0),
+            candidate_count=len(hint_bundle.candidates or []),
+        )
+        return hint_bundle
+
+    def _invoke_action_planner_once(
+        self,
+        *,
+        action_planner: Any,
+        environment_state: EnvironmentState,
+        screenshot: bytes,
+        notebook: Notebook,
+        detected_elements: PageElements,
+    ) -> PlannerCallResult:
+        """Invoke planner once and normalize telemetry/errors."""
+        outcome = PlannerCallResult()
+        started_at = time.perf_counter()
+        try:
+            actions, error = action_planner.get_next_actions_with_function_calling(
+                environment_state=environment_state,
+                screenshot=screenshot,
+                notebook=notebook,
+                element_data=detected_elements,
+            )
+            outcome.actions = actions
+            outcome.error = error
+            planner_stats = dict(getattr(action_planner, "last_call_telemetry", {}) or {})
+            outcome.llm_latency_ms = float(planner_stats.get("llm_latency_ms", 0.0) or 0.0)
+            outcome.tokens_in = int(planner_stats.get("tokens_in", 0) or 0)
+            outcome.tokens_out = int(planner_stats.get("tokens_out", 0) or 0)
+            outcome.image_count = int(planner_stats.get("image_count", 0) or 0)
+            outcome.retries = int(planner_stats.get("planner_retries", 0) or 0)
+            outcome.response_id = str(getattr(action_planner, "last_response_id", "") or "") or None
+            outcome.tool_call_ids = list(getattr(action_planner, "last_tool_call_ids", []) or [])
+            outcome.failure_code = str(getattr(action_planner, "last_failure_code", "") or "") or None
+            outcome.failure_stage = str(getattr(action_planner, "last_failure_stage", "") or "") or None
+            maybe_hint_bundle = getattr(action_planner, "last_hint_bundle", None)
+            outcome.hint_bundle = maybe_hint_bundle if isinstance(maybe_hint_bundle, HintBundle) else None
+            outcome.hint_status = str(getattr(action_planner, "last_hint_status", "") or "") or None
+            outcome.hint_reason = str(getattr(action_planner, "last_hint_reason", "") or "") or None
+            try:
+                outcome.hint_confidence = float(getattr(action_planner, "last_hint_confidence", 0.0) or 0.0)
+            except Exception:
+                outcome.hint_confidence = 0.0
+        except Exception as e:
+            outcome.exception = e
+        finally:
+            outcome.planner_elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        return outcome
+
+    def _resolve_actions_with_speculative_validation(
+        self,
+        *,
+        action_planner: Any,
+        environment_state: EnvironmentState,
+        screenshot: bytes,
+        notebook: Notebook,
+        detected_elements: PageElements,
+        snapshot: MemoryState,
+        element_index_text: str,
+        state: ExecutionState,
+        hint_bundle: Optional[HintBundle],
+        dialog_pending: bool,
+    ) -> SpeculativeResolution:
+        """Resolve actions via planner fallback and optional speculative validator fast-path."""
+        planner_result = PlannerCallResult()
+        result = SpeculativeResolution(
+            planner=planner_result,
+            hint_path="planner_only",
+        )
+
+        def _run_planner_once() -> PlannerCallResult:
+            return self._invoke_action_planner_once(
+                action_planner=action_planner,
+                environment_state=environment_state,
+                screenshot=screenshot,
+                notebook=notebook,
+                detected_elements=detected_elements,
+            )
+
+        speculative_enabled = bool(getattr(self.config.execution, "speculative_hints_enabled", False))
+        if not speculative_enabled or hint_bundle is None:
+            planner_result = _run_planner_once()
+            if planner_result.exception is not None:
+                raise planner_result.exception
+            result.planner = planner_result
+            result.actions = planner_result.actions
+            result.error = planner_result.error
+            result.hint_path = "planner_only" if not speculative_enabled else "planner_no_hint"
+            return result
+
+        min_confidence = float(
+            getattr(self.config.execution, "speculative_hints_min_confidence", 0.75) or 0.75
+        )
+        filtered_candidates = filter_candidates_deterministic(
+            hint_bundle=hint_bundle,
+            current_url=str(getattr(snapshot, "url", "") or ""),
+            current_title=str(getattr(snapshot, "title", "") or ""),
+            detected_elements=detected_elements,
+            allowed_tool_names=self.allowed_tool_names,
+            dialog_pending=dialog_pending,
+            in_loop=bool(state.in_loop),
+            min_confidence=min_confidence,
+        )
+        if not filtered_candidates:
+            planner_result = _run_planner_once()
+            if planner_result.exception is not None:
+                raise planner_result.exception
+            result.planner = planner_result
+            result.actions = planner_result.actions
+            result.error = planner_result.error
+            result.hint_path = "hint_prefilter_reject"
+            result.hint_reject_reason = "target_missing"
+            return result
+
+        planner_embedded_candidates = [
+            c for c in filtered_candidates
+            if str(c.candidate_id or "").strip().startswith("planner_hint_")
+        ]
+        if planner_embedded_candidates:
+            best_candidate = max(
+                planner_embedded_candidates,
+                key=lambda c: float(c.confidence or 0.0),
+            )
+            try:
+                hinted_step = hydrate_candidate_to_action_step(
+                    best_candidate,
+                    budget_spent=state.budget_spent,
+                    budget_remaining=state.budget_remaining,
+                    budget_total=state.budget_total,
+                )
+                accepted = SpeculativeResolution(
+                    actions=[hinted_step],
+                    error=None,
+                    planner=PlannerCallResult(),
+                    hint_path="hint_accept_planner_embedded",
+                    hint_candidate_id=str(best_candidate.candidate_id or "").strip() or None,
+                    hint_validation_ms=0.0,
+                    hint_confidence=float(best_candidate.confidence or 0.0),
+                    hint_reject_reason=None,
+                )
+                self.event_logger.system_info(
+                    "Speculative arbitration winner",
+                    winner="hint_accept_planner_embedded",
+                    hint_candidate_id=accepted.hint_candidate_id,
+                    hint_confidence=accepted.hint_confidence,
+                    hint_validation_ms=0.0,
+                )
+                return accepted
+            except Exception:
+                planner_result = _run_planner_once()
+                if planner_result.exception is not None:
+                    raise planner_result.exception
+                result.planner = planner_result
+                result.actions = planner_result.actions
+                result.error = planner_result.error
+                result.hint_path = "hint_reject_planner_used"
+                result.hint_reject_reason = "invalid_candidate_id"
+                return result
+
+        validator_model = str(self.config.model.command_model or "").strip()
+        validator_reasoning = self.config.model.command_reasoning_level
+        candidate_by_id: Dict[str, HintCandidate] = {
+            c.candidate_id: c for c in filtered_candidates if str(c.candidate_id).strip()
+        }
+
+        def _run_validator_once() -> Tuple[HintValidationResult, float]:
+            validator_started_at = time.perf_counter()
+            decision = validate_hints(
+                mission=environment_state.user_prompt,
+                current_url=str(getattr(snapshot, "url", "") or ""),
+                current_title=str(getattr(snapshot, "title", "") or ""),
+                hint_bundle=hint_bundle,
+                filtered_candidates=filtered_candidates,
+                screenshot=screenshot,
+                element_index_text=element_index_text,
+                model=validator_model,
+                reasoning_level=validator_reasoning,
+                image_detail="low",
+            )
+            return decision, (time.perf_counter() - validator_started_at) * 1000.0
+
+        validator_future = self._speculative_executor.submit(_run_validator_once)
+        planner_future: Optional[Future] = None
+        validator_decision: Optional[HintValidationResult] = None
+        validator_elapsed_ms = 0.0
+
+        planner_future = self._speculative_executor.submit(_run_planner_once)
+
+        def _maybe_accept_hint(decision: HintValidationResult, elapsed_ms: float) -> Optional[SpeculativeResolution]:
+            accept_conf = float(decision.confidence or 0.0)
+            decision_id = str(decision.candidate_id or "").strip()
+            if decision.decision != "accept":
+                return None
+            if accept_conf < min_confidence:
+                return None
+            candidate = candidate_by_id.get(decision_id)
+            if candidate is None:
+                return None
+            try:
+                hinted_step = hydrate_candidate_to_action_step(
+                    candidate,
+                    budget_spent=state.budget_spent,
+                    budget_remaining=state.budget_remaining,
+                    budget_total=state.budget_total,
+                )
+            except Exception:
+                return None
+            accepted = SpeculativeResolution(
+                actions=[hinted_step],
+                error=None,
+                planner=PlannerCallResult(),
+                hint_path="hint_accept",
+                hint_candidate_id=decision_id,
+                hint_validation_ms=float(elapsed_ms),
+                hint_confidence=accept_conf,
+                hint_reject_reason=None,
+            )
+            return accepted
+
+        if validator_decision is not None:
+            accepted = _maybe_accept_hint(validator_decision, validator_elapsed_ms)
+            if accepted is not None:
+                if planner_future is not None:
+                    try:
+                        planner_future.cancel()
+                    except Exception:
+                        pass
+                self.event_logger.system_info(
+                    "Speculative arbitration winner",
+                    winner="hint_accept",
+                    hint_candidate_id=accepted.hint_candidate_id,
+                    hint_confidence=accepted.hint_confidence,
+                    hint_validation_ms=round(accepted.hint_validation_ms, 3),
+                )
+                return accepted
+
+        planner_outcome: Optional[PlannerCallResult] = None
+        while True:
+            wait_futures: List[Future] = []
+            if planner_future is not None:
+                wait_futures.append(planner_future)
+            if validator_future is not None and validator_decision is None:
+                wait_futures.append(validator_future)
+            if not wait_futures:
+                break
+
+            done, _ = wait(wait_futures, return_when=FIRST_COMPLETED)
+
+            if validator_future is not None and validator_decision is None and validator_future in done:
+                try:
+                    validator_decision, validator_elapsed_ms = validator_future.result()
+                except Exception:
+                    validator_decision = HintValidationResult(
+                        decision="reject",
+                        confidence=0.0,
+                        reason="Validator future failed.",
+                        reject_reason="validator_error",
+                    )
+                accepted = _maybe_accept_hint(validator_decision, validator_elapsed_ms)
+                if accepted is not None:
+                    if planner_future is not None:
+                        try:
+                            planner_future.cancel()
+                        except Exception:
+                            pass
+                    self.event_logger.system_info(
+                        "Speculative arbitration winner",
+                        winner="hint_accept",
+                        hint_candidate_id=accepted.hint_candidate_id,
+                        hint_confidence=accepted.hint_confidence,
+                        hint_validation_ms=round(accepted.hint_validation_ms, 3),
+                    )
+                    return accepted
+
+            if planner_future is not None and planner_future in done:
+                planner_outcome = planner_future.result()
+                if planner_outcome.exception is not None:
+                    raise planner_outcome.exception
+                break
+
+        if planner_outcome is None:
+            planner_outcome = _run_planner_once()
+            if planner_outcome.exception is not None:
+                raise planner_outcome.exception
+
+        hint_path = "planner_won"
+        reject_reason = None
+        hint_confidence = 0.0
+        hint_validation_ms = 0.0
+        if validator_decision is not None:
+            hint_confidence = float(validator_decision.confidence or 0.0)
+            hint_validation_ms = float(validator_elapsed_ms or 0.0)
+            if validator_decision.decision == "reject":
+                hint_path = "hint_reject_planner_used"
+                reject_reason = str(validator_decision.reject_reason or "state_conflict")
+            elif validator_decision.decision == "abstain":
+                hint_path = "hint_reject_planner_used"
+                reject_reason = str(validator_decision.reject_reason or "abstain")
+            elif validator_decision.decision == "accept" and hint_confidence < min_confidence:
+                hint_path = "hint_reject_planner_used"
+                reject_reason = "low_confidence"
+            elif validator_decision.decision == "accept":
+                hint_path = "hint_reject_planner_used"
+                reject_reason = "invalid_candidate_id"
+
+        self.event_logger.system_info(
+            "Speculative arbitration winner",
+            winner=hint_path,
+            hint_confidence=round(hint_confidence, 3),
+            hint_reject_reason=reject_reason,
+            hint_validation_ms=round(hint_validation_ms, 3),
+        )
+
+        return SpeculativeResolution(
+            actions=planner_outcome.actions,
+            error=planner_outcome.error,
+            planner=planner_outcome,
+            hint_path=hint_path,
+            hint_candidate_id=None,
+            hint_validation_ms=hint_validation_ms,
+            hint_confidence=hint_confidence,
+            hint_reject_reason=reject_reason,
+        )
+
     def _run_execution_loop(
         self,
         mission: str,
@@ -1984,6 +2408,7 @@ class Agent:
 
         def _mission_result(*, success: bool, reasoning: str, narrative: str, state: ExecutionState) -> MissionResult:
             _stop_watchdog_thread()
+            self._reset_speculative_state()
             if not success and not state.failure_code:
                 self._record_failure(
                     state,
@@ -2064,6 +2489,15 @@ class Agent:
                 budget_phase=state.budget_phase,
                 low_budget_mode=state.low_budget_mode,
             )
+            iteration_hint_path = "disabled"
+            iteration_hint_candidate_id: Optional[str] = None
+            iteration_hint_validation_ms = 0.0
+            iteration_hint_confidence = 0.0
+            iteration_hint_reject_reason: Optional[str] = None
+            iteration_planner_hint_status: Optional[str] = None
+            iteration_planner_hint_reason: Optional[str] = None
+            iteration_planner_hint_confidence = 0.0
+            hint_bundle: Optional[HintBundle] = None
 
             try:
                 _check_iteration_watchdog(stage="iteration_start")
@@ -2290,25 +2724,62 @@ class Agent:
 
                 actions_list: Optional[list] = None
                 error: Optional[str] = None
+                # Consume planner-embedded hint for this iteration (if available).
+                hint_bundle = self._consume_or_discard_cached_planner_hint(
+                    expected_source_iteration=max(0, self._current_iteration - 1),
+                )
                 _check_iteration_watchdog(stage="before_planner_call")
                 try:
-                    planner_started_at = time.perf_counter()
-                    actions_list, error = action_planner.get_next_actions_with_function_calling(
+                    resolution = self._resolve_actions_with_speculative_validation(
+                        action_planner=action_planner,
                         environment_state=environment_state,
                         screenshot=annotated_screenshot_bytes,
                         notebook=self.notebook,
-                        element_data=detected_elements,
+                        detected_elements=detected_elements,
+                        snapshot=snapshot,
+                        element_index_text=element_index_text,
+                        state=state,
+                        hint_bundle=hint_bundle,
+                        dialog_pending=dialog_pending,
                     )
-                    stage_timings_ms["plan_ms"] += (time.perf_counter() - planner_started_at) * 1000.0
-                    planner_stats = dict(getattr(action_planner, "last_call_telemetry", {}) or {})
-                    iteration_llm_latency_ms += float(planner_stats.get("llm_latency_ms", 0.0) or 0.0)
-                    iteration_tokens_in += int(planner_stats.get("tokens_in", 0) or 0)
-                    iteration_tokens_out += int(planner_stats.get("tokens_out", 0) or 0)
-                    iteration_image_count += int(planner_stats.get("image_count", 0) or 0)
-                    iteration_retries += int(planner_stats.get("planner_retries", 0) or 0)
-                    if action_planner.last_response_id:
-                        state.last_response_id = action_planner.last_response_id
-                    state.last_tool_call_ids = list(action_planner.last_tool_call_ids)
+                    planner_outcome = resolution.planner
+                    actions_list = resolution.actions
+                    error = resolution.error
+
+                    stage_timings_ms["plan_ms"] += float(planner_outcome.planner_elapsed_ms or 0.0)
+                    iteration_llm_latency_ms += float(planner_outcome.llm_latency_ms or 0.0)
+                    iteration_tokens_in += int(planner_outcome.tokens_in or 0)
+                    iteration_tokens_out += int(planner_outcome.tokens_out or 0)
+                    iteration_image_count += int(planner_outcome.image_count or 0)
+                    iteration_retries += int(planner_outcome.retries or 0)
+
+                    iteration_hint_path = str(resolution.hint_path or "planner_only")
+                    iteration_hint_candidate_id = (
+                        str(resolution.hint_candidate_id or "").strip() or None
+                    )
+                    iteration_hint_validation_ms = float(resolution.hint_validation_ms or 0.0)
+                    iteration_hint_confidence = float(resolution.hint_confidence or 0.0)
+                    iteration_hint_reject_reason = (
+                        str(resolution.hint_reject_reason or "").strip() or None
+                    )
+                    iteration_planner_hint_status = (
+                        str(getattr(planner_outcome, "hint_status", "") or "").strip() or None
+                    )
+                    iteration_planner_hint_reason = (
+                        str(getattr(planner_outcome, "hint_reason", "") or "").strip() or None
+                    )
+                    iteration_planner_hint_confidence = float(
+                        getattr(planner_outcome, "hint_confidence", 0.0) or 0.0
+                    )
+
+                    if planner_outcome.response_id:
+                        state.last_response_id = planner_outcome.response_id
+                        state.last_tool_call_ids = list(planner_outcome.tool_call_ids or [])
+                    elif str(iteration_hint_path or "").startswith("hint_accept"):
+                        # Keep chain state coherent when planner output is bypassed.
+                        state.last_response_id = None
+                        state.last_tool_call_ids = []
+                    self._cache_planner_hint_bundle(planner_outcome.hint_bundle)
                     _check_iteration_watchdog(stage="after_planner_call")
                 except _IterationHardTimeout:
                     raise
@@ -2326,8 +2797,8 @@ class Agent:
                     )
 
                 if not actions_list:
-                    planner_failure_code = str(getattr(action_planner, "last_failure_code", "") or "").strip()
-                    planner_failure_stage = str(getattr(action_planner, "last_failure_stage", "") or "").strip()
+                    planner_failure_code = str(getattr(planner_outcome, "failure_code", "") or "").strip()
+                    planner_failure_stage = str(getattr(planner_outcome, "failure_stage", "") or "").strip()
                     if planner_failure_code:
                         self._record_failure(
                             state,
@@ -3766,6 +4237,14 @@ class Agent:
                     avg_tokens_out=round(avg_tokens_out, 3),
                     avg_images_per_call=round(avg_images, 3),
                     retries_per_mission=round(retries_per_mission, 3),
+                    hint_path=iteration_hint_path,
+                    hint_candidate_id=iteration_hint_candidate_id,
+                    hint_validation_ms=round(iteration_hint_validation_ms, 3),
+                    hint_confidence=round(iteration_hint_confidence, 3),
+                    hint_reject_reason=iteration_hint_reject_reason,
+                    planner_hint_status=iteration_planner_hint_status,
+                    planner_hint_reason=iteration_planner_hint_reason,
+                    planner_hint_confidence=round(iteration_planner_hint_confidence, 3),
                     stage_plan_ms=round(stage_timings_ms["plan_ms"], 3),
                     stage_dom_read_ms=round(stage_timings_ms["dom_read_ms"], 3),
                     stage_screenshot_ms=round(stage_timings_ms["screenshot_ms"], 3),

@@ -57,6 +57,8 @@ config = Config(
         wait_for_load_timeout_ms=5000,
         # Memory: send the most recent 50% of entries on long missions
         memory_narrative_recent_percent=0.5,
+        speculative_hints_enabled=True,
+        speculative_hints_min_confidence=0.75,
     ),
     logging=DebugConfig(
         debug_mode=False,

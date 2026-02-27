@@ -9,6 +9,7 @@ from typing import Optional, List, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 import time
+import json
 
 from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
@@ -26,6 +27,7 @@ from lib.ai import (
     get_default_agent_reasoning_level,
 )
 from models.models import ActionPlan, ActionStep, FailedAction, NotebookEntryType, PageElements
+from agent.speculative_hints import HintBundle, HintCandidate, HintTargetSignature
 from utils.event_logger import get_event_logger
 
 
@@ -149,6 +151,76 @@ class ActionPlanner:
         self.last_call_telemetry: dict[str, Any] = {}
         self.last_failure_code: Optional[str] = None
         self.last_failure_stage: Optional[str] = None
+        self.last_hint_bundle: Optional[HintBundle] = None
+        self.last_hint_status: str = "missing"
+        self.last_hint_reason: str = ""
+        self.last_hint_confidence: float = 0.0
+
+    @staticmethod
+    def _parse_next_hint_envelope(raw_hint_json: Any) -> tuple[Optional[HintCandidate], str, str, float]:
+        """Parse planner-embedded next hint envelope from a JSON string."""
+        if not isinstance(raw_hint_json, str):
+            return None, "missing", "field_missing", 0.0
+        text = raw_hint_json.strip()
+        if not text:
+            return None, "none", "empty_hint", 0.0
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return None, "invalid", "invalid_json", 0.0
+        if not isinstance(payload, dict):
+            return None, "invalid", "invalid_payload", 0.0
+
+        status = str(payload.get("status", "") or "").strip().lower()
+        if status not in {"candidate", "none"}:
+            if str(payload.get("function_name", "") or "").strip():
+                # Backward compatibility with pre-envelope hints.
+                status = "candidate"
+            else:
+                status = "none"
+
+        raw_confidence = payload.get("confidence", 0.0)
+        try:
+            confidence = float(raw_confidence)
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+
+        reason = str(payload.get("reason", "") or "").strip()
+        if status == "none":
+            return None, "none", reason or "unspecified", confidence
+
+        function_name = str(payload.get("function_name", "") or "").strip()
+        if not function_name:
+            return None, "invalid", "missing_function_name", confidence
+        function_arguments = payload.get("function_arguments")
+        if not isinstance(function_arguments, dict):
+            function_arguments = {}
+
+        overlay_index = payload.get("overlay_index")
+        target_signature: Optional[HintTargetSignature] = None
+        if isinstance(overlay_index, bool):
+            overlay_index = None
+        if overlay_index is not None:
+            try:
+                target_signature = HintTargetSignature(overlay_index=int(overlay_index))
+            except Exception:
+                target_signature = None
+
+        candidate_id = str(payload.get("candidate_id", "planner_hint_1") or "").strip() or "planner_hint_1"
+        return (
+            HintCandidate(
+                candidate_id=candidate_id,
+                function_name=function_name,
+                function_arguments=function_arguments,
+                target_signature=target_signature,
+                confidence=confidence,
+                reason=reason,
+            ),
+            "candidate",
+            reason,
+            confidence,
+        )
 
     def _build_reflection_block(self) -> str:
         """Build the reflection block for the user prompt.
@@ -257,6 +329,10 @@ class ActionPlanner:
         self.last_call_telemetry = {}
         self.last_failure_code = None
         self.last_failure_stage = None
+        self.last_hint_bundle = None
+        self.last_hint_status = "missing"
+        self.last_hint_reason = ""
+        self.last_hint_confidence = 0.0
 
         try:
             # Build reflection block (last action + tab events)
@@ -362,6 +438,7 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 ]
 
             actions = []
+            embedded_hint_candidate: Optional[HintCandidate] = None
             # Limit to max_actions_per_plan to prevent excessive batching
             get_event_logger().system_debug(f"LLM returned {len(result)} tool calls, limiting to {self.max_actions_per_plan}")
             limited_result = result[:self.max_actions_per_plan]
@@ -374,12 +451,36 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 get_event_logger().system_debug(f"Function name: {action['function_name']}")
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
 
+                action_arguments = action["arguments"] if isinstance(action.get("arguments"), dict) else {}
+                next_hint_raw = action_arguments.get("next_hint_json")
+                if self.last_hint_status == "missing":
+                    parsed_candidate, parsed_status, parsed_reason, parsed_conf = self._parse_next_hint_envelope(next_hint_raw)
+                    self.last_hint_status = parsed_status
+                    self.last_hint_reason = parsed_reason
+                    self.last_hint_confidence = float(parsed_conf or 0.0)
+                    embedded_hint_candidate = parsed_candidate
+
+                # Keep execution payload clean (hint metadata is planner-side only).
+                if isinstance(action_arguments, dict) and "next_hint_json" in action_arguments:
+                    action_arguments = dict(action_arguments)
+                    action_arguments.pop("next_hint_json", None)
+
                 # Create ActionStep from function call
                 action_step = ActionStep.from_function_call(
                     function_name=action["function_name"],
-                    arguments=action["arguments"],
+                    arguments=action_arguments,
                 )
                 actions.append(action_step)
+
+            if embedded_hint_candidate is not None:
+                self.last_hint_bundle = HintBundle(
+                    source_iteration=int(self.current_iteration or 0),
+                    source_url=str(environment_state.current_url or ""),
+                    source_title=str(environment_state.page_title or ""),
+                    candidates=[embedded_hint_candidate],
+                )
+            else:
+                self.last_hint_bundle = None
 
             usage = {}
             if result and isinstance(result[0], dict):
@@ -396,6 +497,9 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 "image_count": image_count,
                 "planner_retries": 0,
                 "model": planner_model,
+                "hint_status": self.last_hint_status,
+                "hint_reason": self.last_hint_reason,
+                "hint_confidence": self.last_hint_confidence,
             }
             return actions, None
 
@@ -497,6 +601,12 @@ GUIDELINES
 8. Stick exactly to the mission. Do not add extra steps, verification, confirmations, or sub-tasks that the mission did not ask for.
 9. If you call think(next_action=stuck), propose a meaningfully different approach and one concrete immediate action.
 10. Reference relevant memory entries (mem_XXXXXX) in your reasoning. If a RECOMMENDED NEXT STEP is present, follow it or explain why you're deviating.
+11. `next_hint_json` is REQUIRED on every tool call and must always be valid JSON.
+    Use exactly one envelope:
+    - Candidate envelope:
+      {{"status":"candidate","function_name":"...","function_arguments":{{...}},"overlay_index":123,"confidence":0.0-1.0,"reason":"..."}}
+    - None envelope (when uncertain):
+      {{"status":"none","reason":"why uncertain","confidence":0.0}}
 {budget_reasoning_contract}
 {base_knowledge_section}
 """

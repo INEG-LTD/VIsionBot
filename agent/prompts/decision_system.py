@@ -118,3 +118,4 @@ def render_decision_context(context: DecisionContext) -> str:
         f"Recent executed-action memory IDs: {executed}\n"
         f"Recent reflection memory IDs: {reflections}"
     )
+# go to bing then search for anthropic then look for its wikipedia page and go to it
