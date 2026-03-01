@@ -24,7 +24,7 @@ from core.config import (
     DebugConfig,
     ExecutionConfig,
     ModelConfig,
-    ToolPreset,
+    ToolPolicyConfig,
 )
 from lib.ai import ReasoningLevel
 
@@ -49,9 +49,12 @@ config = Config(
     execution=ExecutionConfig(
         max_actions_per_mission=600,
         max_actions_per_plan=3,
-        # Quick tool selection with predefined presets:
-        # - "minimal", "research", "web_safe", "full", "locked_down"
-        tool_preset=ToolPreset.WEB_SAFE,
+        # Effect-governed tool policy profile:
+        # - FULL, WEB_SAFE, LOCKED_DOWN
+        tool_policy=ToolPolicyConfig(
+            preset="WEB_SAFE",
+            mode="ENFORCE",
+        ),
         wait_for_load_before_iteration=True,
         wait_for_load_state="domcontentloaded",
         wait_for_load_timeout_ms=5000,

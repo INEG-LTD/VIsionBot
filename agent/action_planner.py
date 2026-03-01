@@ -119,7 +119,8 @@ class ActionPlanner:
         budget_phase: str = "normal",
         low_budget_mode: bool = False,
         budget_constraints_enabled: bool = True,
-        allowed_tool_names: Optional[List[str]] = None,
+        tool_registry: Optional[Any] = None,
+        effect_policy_engine: Optional[Any] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -166,11 +167,8 @@ class ActionPlanner:
         self.budget_phase = str(budget_phase or "normal").strip().lower() or "normal"
         self.low_budget_mode = bool(low_budget_mode)
         self.budget_constraints_enabled = bool(budget_constraints_enabled)
-        self.allowed_tool_names = [
-            str(name).strip()
-            for name in (allowed_tool_names or [])
-            if str(name).strip()
-        ]
+        self.tool_registry = tool_registry
+        self.effect_policy_engine = effect_policy_engine
         self.last_call_telemetry: dict[str, Any] = {}
         self.last_failure_code: Optional[str] = None
         self.last_failure_stage: Optional[str] = None
@@ -353,8 +351,6 @@ class ActionPlanner:
         Returns:
             Tuple of (list[ActionStep], error_message). list[ActionStep] is None if generation failed.
         """
-        from agent.action_tools import get_filtered_tools
-
         self.last_call_telemetry = {}
         self.last_failure_code = None
         self.last_failure_stage = None
@@ -415,16 +411,20 @@ Based on the screenshot, decision context, and the mission, what is the best nex
 {SHARED_CONTRADICTION_GATE}
 """
 
-            # Get filtered tools based on current state
-            tools = get_filtered_tools(
+            # Get filtered tools from registry based on policy + current state.
+            if self.tool_registry is None:
+                self.last_failure_code = "tool_registry_missing"
+                self.last_failure_stage = "planner_tool_selection"
+                return None, "Tool registry is not configured."
+            tools = self.tool_registry.get_planner_schemas(
                 dialog_pending=self.dialog_pending,
-                budget_constraints_enabled=self.budget_constraints_enabled,
-                allowed_tool_names=self.allowed_tool_names or None,
+                budget_enabled=self.budget_constraints_enabled,
+                policy_engine=self.effect_policy_engine,
             )
             if not tools:
-                self.last_failure_code = "tool_allowlist_empty"
+                self.last_failure_code = "tool_policy_filtered_empty"
                 self.last_failure_stage = "planner_tool_selection"
-                return None, "No tools available for the active tool profile in this mode."
+                return None, "No tools available for the active tool policy in this mode."
 
             # Static only — identical every iteration → cache fires from iteration 2 onward
             system_prompt = self._build_function_calling_static_prompt()

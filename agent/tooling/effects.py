@@ -1,0 +1,17 @@
+from __future__ import annotations
+
+from enum import Enum
+
+
+class Effect(str, Enum):
+    READ_PAGE = "READ_PAGE"
+    WRITE_PAGE = "WRITE_PAGE"
+    NAVIGATE_WEB = "NAVIGATE_WEB"
+    TAB_MANAGEMENT = "TAB_MANAGEMENT"
+    DIALOG_MANAGEMENT = "DIALOG_MANAGEMENT"
+    READ_HOST = "READ_HOST"
+    WRITE_HOST = "WRITE_HOST"
+    RUN_COMMAND = "RUN_COMMAND"
+    SEND_EXTERNAL = "SEND_EXTERNAL"
+    USER_IO = "USER_IO"
+    CONTROL_FLOW = "CONTROL_FLOW"

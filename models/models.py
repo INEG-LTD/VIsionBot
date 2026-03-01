@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -78,6 +78,15 @@ class PageElements(BaseModel):
     elements: List[DetectedElement] = Field(description="The list of detected elements")
 
 
+_ACTION_TEXT_RENDERER: Optional[Callable[[str, dict], Optional[str]]] = None
+
+
+def set_action_text_renderer(renderer: Optional[Callable[[str, dict], Optional[str]]]) -> None:
+    """Install an optional renderer override for function-call action text."""
+    global _ACTION_TEXT_RENDERER
+    _ACTION_TEXT_RENDERER = renderer
+
+
 class ActionStep(BaseModel):
     """One viewport-safe action"""
     action: str
@@ -117,6 +126,13 @@ class ActionStep(BaseModel):
     @staticmethod
     def _render_action_text(function_name: str, arguments: dict) -> str:
         """Render a concise readable command string for logs/history."""
+        if _ACTION_TEXT_RENDERER is not None:
+            try:
+                rendered = _ACTION_TEXT_RENDERER(function_name, dict(arguments or {}))
+                if isinstance(rendered, str) and rendered.strip():
+                    return rendered.strip()
+            except Exception:
+                pass
         if function_name == "click":
             element_id = arguments.get('element_id')
             eid_suffix = f" [id={element_id}]" if element_id is not None else ""
@@ -166,13 +182,6 @@ class ActionStep(BaseModel):
             ).strip()
         if function_name == "assert_condition":
             return f"assert: {arguments.get('condition', '')}".strip()
-        if function_name == "mark_progress":
-            return (
-                f"mark_progress: {arguments.get('description', '')} | "
-                f"count={arguments.get('count', 1)} | done={arguments.get('done', False)}"
-            ).strip()
-        if function_name == "revise_target":
-            return f"revise_target: {arguments.get('new_target', '')} | {arguments.get('reason', '')}".strip()
         if function_name == "flag":
             return f"flag: {arguments.get('message', '')}".strip()
         if function_name == "wait_for":

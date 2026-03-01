@@ -14,7 +14,7 @@ import threading
 import re
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type
 import hashlib
 import copy
 
@@ -26,21 +26,32 @@ from core.agent_workspace import AgentWorkspace, AgentWorkspaceManager
 from core.sandbox_policy import SandboxPolicyEngine
 from agent.memory import InteractionType, MemoryEntryKind, MemoryState, NarrativeMemory
 from models import PageElements, PageInfo
-from models.models import ActionStep, FailedAction
+from models.models import ActionStep, FailedAction, set_action_text_renderer
 from agent.results import MissionResult
 from agent.agent_context import EnvironmentState
 from agent.notebook import Notebook
-from agent.action_planner import strip_targeting_data
 from agent.speculative_hints import (
     HintBundle,
     HintCandidate,
     HintValidationResult,
     filter_candidates_deterministic,
     hydrate_candidate_to_action_step,
+    set_tools_requiring_element,
     validate_hints,
 )
 from agent.prompts import (
     DecisionContext,
+)
+from agent.tools import create_default_registry
+from agent.tooling import (
+    Effect,
+    EffectPolicyEngine,
+    ThinkControl,
+    ThinkNextAction,
+    ToolContext,
+    ToolEngine,
+    ToolOutcome,
+    ToolOutput,
 )
 from utils.debug_print import dprint
 from lib.ai import (
@@ -169,13 +180,99 @@ class SpeculativeResolution:
     hint_reject_reason: Optional[str] = None
 
 
+@dataclass
+class ToolRuntimeAdapter:
+    """Adapter exposed to ToolContext for delegated built-in execution."""
+
+    agent: "Agent"
+    detected_elements: PageElements
+    page_info: PageInfo
+    environment_state: EnvironmentState
+    current_iteration: int
+
+    def execute_builtin_tool(self, tool_name: str, args_model: Any) -> ToolOutcome:
+        args = (
+            args_model.model_dump(mode="python")
+            if hasattr(args_model, "model_dump")
+            else dict(args_model or {})
+        )
+        args_dict = args if isinstance(args, dict) else {}
+        action_step = ActionStep.from_function_call(tool_name, args_dict)
+
+        if tool_name in self.agent._controller_tool_names():
+            return self.agent._execute_controller_tool(
+                tool_name=tool_name,
+                action_step=action_step,
+                action_args=args_dict,
+            )
+
+        observe_warning: Optional[str] = None
+        if tool_name == "open_url":
+            url = str(args_dict.get("url", "")).strip()
+            url_decision = self.agent.sandbox_policy.check_url(url)
+            if not url_decision.allowed:
+                warning = f"open_url blocked by sandbox: {url_decision.reason}"
+                self.agent.event_logger.system_warning(warning)
+                if self.agent.sandbox_policy.enforce:
+                    before_state = self.agent.memory_store._capture_current_state()
+                    self.agent._record_controller_action(
+                        action_type=InteractionType.NAVIGATION.value,
+                        action_step=action_step,
+                        success=False,
+                        error_message=warning,
+                        action_params={
+                            "operation": "open_url",
+                            "url": url,
+                            "sandbox_blocked": True,
+                        },
+                        before_state=before_state,
+                        after_state=self.agent.memory_store._capture_current_state(),
+                    )
+                    return ToolOutcome(
+                        output=ToolOutput(
+                            success=False,
+                            summary=f"open_url FAILED: {url_decision.reason}",
+                            error=warning,
+                        )
+                    )
+                observe_warning = warning
+
+        result = self.agent.action_executor.execute_via_adapter(
+            function_name=tool_name,
+            function_arguments=args_dict,
+            detected_elements=self.detected_elements,
+            page_info=self.page_info,
+            environment_state=self.environment_state,
+            base_knowledge=self.agent.base_knowledge,
+            current_iteration=self.current_iteration,
+        )
+        success = bool(getattr(result, "success", False))
+        summary = (
+            self.agent._build_action_summary(action_step, "success" if success else "failed")
+            if action_step is not None
+            else (getattr(result, "message", "") or "")
+        )
+        if observe_warning:
+            summary = f"{summary} | sandbox(observe): {observe_warning}" if summary else observe_warning
+        error = str(getattr(result, "error", "") or "").strip() or None
+        data = getattr(result, "data", None)
+        return ToolOutcome(
+            output=ToolOutput(
+                success=success,
+                summary=summary,
+                error=error,
+                data=data if isinstance(data, dict) else None,
+            )
+        )
+
+
 """
 Agent Controller - Mission Execution
 
 Runs missions through the execution loop with inline loops for repetition.
 """
 
-DEFAULT_RESEND_FROM_EMAIL = "Acme <onboarding@resend.dev>"
+DEFAULT_RESEND_FROM_EMAIL = "Agent <agent@updates.thebrowseragentcompany.com>"
 DECISION_CONTEXT_EXECUTED_ID_WINDOW = 8
 DECISION_CONTEXT_REFLECTION_ID_WINDOW = 6
 
@@ -194,7 +291,7 @@ def _load_dotenv_if_available() -> None:
 
 def _resolve_resend_from_email() -> str:
     configured = str(os.environ.get("RESEND_FROM_EMAIL", "")).strip()
-    return configured or DEFAULT_RESEND_FROM_EMAIL
+    return DEFAULT_RESEND_FROM_EMAIL
 
 
 def _parse_email_recipients(raw_to: Any) -> List[str]:
@@ -303,12 +400,24 @@ class Agent:
         self.image_detail: str = config.model.image_detail
         self.wait_for_load_state: str = str(self.config.execution.wait_for_load_state or "networkidle")
         self.wait_for_load_timeout_ms: int = int(self.config.execution.wait_for_load_timeout_ms or 0)
-        self.active_tool_preset_id: str = f"preset:{str(self.config.execution.tool_preset.value)}"
-        self.allowed_tool_names: List[str] = []
+        self.tool_registry = create_default_registry()
+        set_action_text_renderer(self.tool_registry.render_action_text)
+        self.effect_policy = EffectPolicyEngine(
+            preset=self.config.execution.tool_policy.preset,
+            mode=self.config.execution.tool_policy.mode,
+            event_logger=self.event_logger,
+        )
+        self.tool_engine = ToolEngine(
+            registry=self.tool_registry,
+            policy_engine=self.effect_policy,
+            event_logger=self.event_logger,
+        )
+        self.policy_visible_tool_names: List[str] = []
         self._cached_snapshot: Optional[MemoryState] = None
         self._cached_snapshot_fingerprint: Optional[str] = None
         self._cached_page_info: Optional[PageInfo] = None
         self._cached_detected_elements: Optional[PageElements] = None
+        set_tools_requiring_element(self.tool_registry.tools_requiring_element())
         set_default_model(self.command_model_name)
         set_default_reasoning_level(self.command_reasoning_level)
         set_default_agent_model(self.agent_model_name)
@@ -401,6 +510,833 @@ class Agent:
             except Exception:
                 pass
         self.event_logger.system_info("Agent stopped")
+
+    def register_tool(self, fn: Callable[..., Any]) -> None:
+        """Register a custom tool into this agent instance registry."""
+        self.tool_registry.register(fn)
+        set_tools_requiring_element(self.tool_registry.tools_requiring_element())
+        self._refresh_policy_visible_tool_names()
+
+    def _apply_think_control(
+        self,
+        *,
+        control: ThinkControl,
+        state: ExecutionState,
+        append_recent_action: Callable[[str], None],
+        exit_loop: Callable[[], None],
+    ) -> tuple[Optional[str], bool]:
+        """Apply think-only control semantics. Returns (mission_done_reasoning, should_replan)."""
+        next_action = control.next_action
+
+        if next_action == ThinkNextAction.START_LOOP:
+            requested_count = int(control.loop_count or 1)
+            count, clamped = self._clamp_loop_count_to_budget(
+                requested_loop_count=requested_count,
+                budget_remaining=(state.budget_remaining if state.budget_constraints_enabled else 0),
+            )
+            description = str(control.loop_description or "").strip() or "loop"
+            state.in_loop = True
+            state.loop_count = count
+            state.loop_round = 2
+            state.loop_description = description
+            state.user_facing_actions_since_progress = 0
+            summary = f"Loop started: {description} (round 2 of {count})"
+            if clamped:
+                summary += f" [clamped to budget remaining={state.budget_remaining}]"
+            state.last_action_summary = summary
+            append_recent_action(f"[LOOP START] {description} — {count} total rounds")
+            self.event_logger.loop_state_changed(
+                change="start",
+                loop_round=state.loop_round,
+                loop_count=state.loop_count,
+                loop_description=state.loop_description,
+            )
+            return None, True
+
+        if next_action == ThinkNextAction.ADVANCE:
+            if not state.in_loop:
+                state.last_action_summary = "advance ignored — not in a loop"
+                return None, True
+            if state.user_facing_actions_since_progress == 0:
+                state.last_action_summary = (
+                    "advance BLOCKED: No user-facing actions since last advance. Do a user-facing action first."
+                )
+                return None, True
+            state.loop_round += 1
+            state.user_facing_actions_since_progress = 0
+            if state.loop_count and state.loop_round > state.loop_count:
+                state.last_action_summary = f"Loop complete — all {state.loop_count} rounds done"
+                append_recent_action(f"[LOOP COMPLETE] {state.loop_count} rounds done")
+                self.event_logger.loop_state_changed(
+                    change="end",
+                    loop_round=state.loop_count,
+                    loop_count=state.loop_count,
+                    loop_description=state.loop_description,
+                )
+                exit_loop()
+                return None, True
+            remaining = state.loop_count - state.loop_round + 1 if state.loop_count else "?"
+            state.last_action_summary = (
+                f"Advanced to loop round {state.loop_round} of {state.loop_count} ({remaining} remaining)"
+            )
+            append_recent_action(f"[ADVANCE] Round {state.loop_round} of {state.loop_count}")
+            self.event_logger.loop_state_changed(
+                change="advance",
+                loop_round=state.loop_round,
+                loop_count=state.loop_count,
+                loop_description=state.loop_description,
+            )
+            return None, True
+
+        if next_action == ThinkNextAction.END_LOOP:
+            if not state.in_loop:
+                state.last_action_summary = "end_loop ignored — not in a loop"
+                return None, True
+            state.last_action_summary = f"Loop ended early at round {state.loop_round} of {state.loop_count}"
+            append_recent_action("[LOOP END] early exit")
+            self.event_logger.loop_state_changed(
+                change="end_early",
+                loop_round=state.loop_round,
+                loop_count=state.loop_count,
+                loop_description=state.loop_description,
+            )
+            exit_loop()
+            return None, True
+
+        if next_action == ThinkNextAction.STUCK:
+            replacement_strategy = str(control.hint_message or "").strip() or "Trying a different strategy."
+            state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
+            append_recent_action("[STUCK] Strategy switch")
+            with self._hints_lock:
+                self._pending_hints.append(replacement_strategy)
+            if self.on_stuck_callback:
+                try:
+                    hint = self.on_stuck_callback(replacement_strategy, self._current_iteration)
+                    if hint:
+                        with self._hints_lock:
+                            self._pending_hints.append(hint.strip())
+                except Exception as e:
+                    self.event_logger.system_warning(f"on_stuck_callback failed: {e}")
+            return None, True
+
+        if next_action == ThinkNextAction.DONE:
+            reasoning = str(control.done_reasoning or "").strip() or "Mission complete"
+            state.last_action_summary = f"Mission complete: {reasoning}"
+            return reasoning, False
+
+        # CONTINUE (or any future non-terminal action): no controller-side mutation needed.
+        return None, False
+
+    @staticmethod
+    def _controller_tool_names() -> set[str]:
+        return {
+            "switch_tab",
+            "close_tab",
+            "open_tab",
+            "dismiss_dialog",
+            "send_email",
+            "bash",
+            "read_file",
+            "find_files",
+            "read_clipboard",
+        }
+
+    def _execute_controller_tool(
+        self,
+        *,
+        tool_name: str,
+        action_step: ActionStep,
+        action_args: Dict[str, Any],
+    ) -> ToolOutcome:
+        if tool_name == "switch_tab":
+            return self._tool_switch_tab(action_step=action_step, action_args=action_args)
+        if tool_name == "close_tab":
+            return self._tool_close_tab(action_step=action_step, action_args=action_args)
+        if tool_name == "open_tab":
+            return self._tool_open_tab(action_step=action_step, action_args=action_args)
+        if tool_name == "dismiss_dialog":
+            return self._tool_dismiss_dialog(action_step=action_step, action_args=action_args)
+        if tool_name == "send_email":
+            return self._tool_send_email(action_step=action_step, action_args=action_args)
+        if tool_name == "bash":
+            return self._tool_bash(action_step=action_step, action_args=action_args)
+        if tool_name == "read_file":
+            return self._tool_read_file(action_step=action_step, action_args=action_args)
+        if tool_name == "find_files":
+            return self._tool_find_files(action_step=action_step, action_args=action_args)
+        if tool_name == "read_clipboard":
+            return self._tool_read_clipboard(action_step=action_step)
+        return ToolOutcome(
+            output=ToolOutput(
+                success=False,
+                summary=f"Unsupported controller tool: {tool_name}",
+                error=f"Unsupported controller tool: {tool_name}",
+            )
+        )
+
+    def _tool_switch_tab(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        tab_id = str(action_args.get("tab_id", "")).strip()
+        summary = "switch_tab FAILED: Tab management not available"
+        if self.tab_manager:
+            try:
+                new_page = self.tab_manager.switch_to(tab_id)
+                self.action_executor.set_page(new_page)
+                title = ""
+                try:
+                    title = new_page.title()
+                except Exception:
+                    pass
+                summary = f"Switched to tab [{tab_id}]: \"{title}\""
+                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                    source="switch_tab"
+                )
+                if not policy_allowed:
+                    action_error = f"{policy_warning} ({current_url})"
+                    summary = f"switch_tab FAILED: {action_error}"
+                else:
+                    if policy_warning:
+                        summary += f" | sandbox(observe): {policy_warning}"
+                    action_success = True
+            except ValueError as e:
+                summary = f"switch_tab FAILED: {e}"
+                action_error = str(e)
+        else:
+            action_error = "Tab management not available"
+
+        self._record_controller_action(
+            action_type=InteractionType.NAVIGATION.value,
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"operation": "switch_tab", "tab_id": tab_id},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(success=action_success, summary=summary, error=action_error),
+        )
+
+    def _tool_close_tab(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        tab_id = str(action_args.get("tab_id", "")).strip()
+        summary = "close_tab FAILED: Tab management not available"
+        if self.tab_manager:
+            try:
+                new_page = self.tab_manager.close_tab(tab_id)
+                self.action_executor.set_page(new_page)
+                active = self.tab_manager.get_active()
+                active_id = active.id if active else "?"
+                summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
+                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                    source="close_tab"
+                )
+                if not policy_allowed:
+                    action_error = f"{policy_warning} ({current_url})"
+                    summary = f"close_tab FAILED: {action_error}"
+                else:
+                    if policy_warning:
+                        summary += f" | sandbox(observe): {policy_warning}"
+                    action_success = True
+            except ValueError as e:
+                summary = f"close_tab FAILED: {e}"
+                action_error = str(e)
+        else:
+            action_error = "Tab management not available"
+
+        self._record_controller_action(
+            action_type=InteractionType.NAVIGATION.value,
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"operation": "close_tab", "tab_id": tab_id},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(success=action_success, summary=summary, error=action_error),
+        )
+
+    def _tool_open_tab(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        url = str(action_args.get("url", "")).strip() or None
+        observe_warning: Optional[str] = None
+        summary = "open_tab FAILED: Tab management not available"
+        if url:
+            url_decision = self.sandbox_policy.check_url(url)
+            if not url_decision.allowed:
+                warning = f"open_tab blocked by sandbox: {url_decision.reason}"
+                self.event_logger.system_warning(warning)
+                if self.sandbox_policy.enforce:
+                    action_error = warning
+                    summary = f"open_tab FAILED: {url_decision.reason}"
+                else:
+                    observe_warning = warning
+
+        if action_error is None and self.tab_manager:
+            try:
+                new_page = self.tab_manager.open_tab(url)
+                self.action_executor.set_page(new_page)
+                active = self.tab_manager.get_active()
+                active_id = active.id if active else "?"
+                summary = f"Opened new tab [{active_id}]"
+                if url:
+                    summary += f" at {url}"
+                if observe_warning:
+                    summary += f" | sandbox(observe): {observe_warning}"
+                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
+                    source="open_tab"
+                )
+                if not policy_allowed:
+                    action_error = f"{policy_warning} ({current_url})"
+                    summary = f"open_tab FAILED: {action_error}"
+                else:
+                    if policy_warning:
+                        summary += f" | sandbox(observe): {policy_warning}"
+                    action_success = True
+            except Exception as e:
+                summary = f"open_tab FAILED: {e}"
+                action_error = str(e)
+        elif action_error is None:
+            action_error = "Tab management not available"
+
+        self._record_controller_action(
+            action_type=InteractionType.NAVIGATION.value,
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"operation": "open_tab", "url": url},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(success=action_success, summary=summary, error=action_error),
+        )
+
+    def _tool_dismiss_dialog(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        accept = bool(action_args.get("accept", False))
+        input_text_raw = action_args.get("input_text")
+        input_text = str(input_text_raw).strip() if input_text_raw not in (None, "") else None
+        if self.tab_manager and self.tab_manager.pending_dialog:
+            self.tab_manager.dismiss_dialog(accept, input_text)
+            action_word = "accepted" if accept else "dismissed"
+            summary = f"Dialog {action_word}"
+            action_success = True
+        else:
+            summary = "dismiss_dialog: No dialog pending"
+            action_error = "No dialog pending"
+
+        self._record_controller_action(
+            action_type="dismiss_dialog",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"accept": accept, "input_text": input_text},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(success=action_success, summary=summary, error=action_error),
+        )
+
+    def _tool_send_email(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        duplicate_of: Optional[str] = None
+        message_id: Optional[str] = None
+        summary = "send_email FAILED"
+
+        raw_to = action_args.get("to")
+        to_list = _parse_email_recipients(raw_to)
+        subject = str(action_args.get("subject", "")).strip()
+        body = str(action_args.get("body", "")).strip()
+        body_preview = body if len(body) <= 200 else f"{body[:197]}..."
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body else ""
+        effective_from_email = _resolve_resend_from_email()
+
+        canonical_to = sorted({email.lower() for email in to_list})
+        signature_source = f"{'|'.join(canonical_to)}\n{subject.lower()}\n{body}"
+        email_signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
+
+        for entry in reversed(self.memory_store.entries):
+            if entry.action_type != "send_email":
+                continue
+            if entry.outcome not in {"success", "no_change"}:
+                continue
+            if str(entry.action_params.get("email_signature", "")).strip() == email_signature:
+                duplicate_of = entry.memory_id
+                action_success = True
+                summary = (
+                    f"send_email skipped: identical email already sent ({duplicate_of}). "
+                    "If the mission was only this email, call think(next_action=done)."
+                )
+                break
+
+        try:
+            if duplicate_of is None:
+                api_key = str(os.environ.get("RESEND_API_KEY", "")).strip()
+                if not api_key:
+                    action_error = "RESEND_API_KEY is not set"
+                    summary = f"send_email FAILED: {action_error}"
+                elif "@" not in effective_from_email:
+                    action_error = (
+                        "RESEND_FROM_EMAIL is invalid; expected an email address "
+                        "or display-name format like 'Team <team@example.com>'"
+                    )
+                    summary = f"send_email FAILED: {action_error}"
+                elif not to_list:
+                    action_error = "No recipients (to) provided"
+                    summary = f"send_email FAILED: {action_error}"
+                elif not subject:
+                    action_error = "Subject is required"
+                    summary = f"send_email FAILED: {action_error}"
+                elif not body:
+                    action_error = "Body is required"
+                    summary = f"send_email FAILED: {action_error}"
+                else:
+                    try:
+                        import resend
+                    except ImportError:
+                        action_error = (
+                            "resend package is not installed in the active Python environment"
+                        )
+                        summary = f"send_email FAILED: {action_error}"
+                    else:
+                        resend.api_key = api_key
+                        params = {
+                            "from": effective_from_email,
+                            "to": to_list,
+                            "subject": subject,
+                            "html": body,
+                        }
+                        send_result = resend.Emails.send(params)
+                        raw_message_id = (
+                            send_result.get("id")
+                            if isinstance(send_result, dict)
+                            else getattr(send_result, "id", None)
+                        )
+                        if raw_message_id:
+                            message_id = str(raw_message_id).strip()
+                        summary = (
+                            f"Email sent to {', '.join(to_list)}: \"{subject}\" "
+                            f"| body=\"{body_preview}\""
+                        )
+                        if message_id:
+                            summary += f" | message_id={message_id}"
+                        action_success = True
+        except Exception as e:
+            action_error = _format_resend_error(e)
+            summary = f"send_email FAILED: {action_error}"
+
+        self._record_controller_action(
+            action_type="send_email",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={
+                "operation": "send_email",
+                "to": to_list,
+                "subject": subject,
+                "body_preview": body_preview,
+                "body_hash": body_hash,
+                "from_email": effective_from_email,
+                "email_signature": email_signature,
+                "duplicate_of": duplicate_of,
+                "message_id": message_id,
+            },
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        if action_success:
+            with self._hints_lock:
+                self._pending_hints.append(
+                    "You already sent the requested email. Do not send it again. "
+                    "If the mission is complete, call think(next_action=done)."
+                )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={
+                    "to": to_list,
+                    "subject": subject,
+                    "message_id": message_id,
+                    "duplicate_of": duplicate_of,
+                },
+            ),
+        )
+
+    def _tool_bash(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        import subprocess
+
+        before_state = self.memory_store._capture_current_state()
+        command = str(action_args.get("command", "")).strip()
+        command_timeout = self.sandbox_policy.command_timeout_seconds()
+        action_success = False
+        action_error: Optional[str] = None
+        observe_warning: Optional[str] = None
+        summary = "bash FAILED: No command provided"
+
+        if not command:
+            action_error = "No command provided"
+        else:
+            command_decision = self.sandbox_policy.check_command(command)
+            if not command_decision.allowed:
+                warning = f"bash blocked by sandbox: {command_decision.reason}"
+                self.event_logger.system_warning(warning)
+                if self.sandbox_policy.enforce:
+                    action_error = warning
+                    summary = f"bash FAILED: {command_decision.reason}"
+                else:
+                    observe_warning = warning
+
+            if action_error is None:
+                try:
+                    proc = subprocess.run(
+                        ["bash", "-lc", command],
+                        capture_output=True,
+                        text=True,
+                        timeout=command_timeout,
+                    )
+                    stdout = (proc.stdout or "").rstrip()
+                    stderr = (proc.stderr or "").rstrip()
+                    exit_code = proc.returncode
+
+                    parts = [f"bash: `{command}`", f"exit_code={exit_code}"]
+                    if stdout:
+                        preview = stdout if len(stdout) <= 2000 else f"{stdout[:2000]}\n... (truncated)"
+                        parts.append(f"stdout:\n{preview}")
+                    else:
+                        parts.append("stdout: (no output)")
+                    if stderr:
+                        parts.append(f"stderr: {stderr[:500]}")
+                    summary = "\n".join(parts)
+                    if observe_warning:
+                        summary += f"\nsandbox(observe): {observe_warning}"
+                    action_success = True
+                except subprocess.TimeoutExpired:
+                    action_error = f"Command timed out after {command_timeout}s"
+                    summary = f"bash FAILED: {action_error}"
+                except Exception as e:
+                    action_error = str(e)
+                    summary = f"bash FAILED: {action_error}"
+
+        self._record_controller_action(
+            action_type="bash",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"command": command},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={"operation": "bash", "command": command},
+            ),
+        )
+
+    def _tool_read_file(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        from pathlib import Path
+
+        before_state = self.memory_store._capture_current_state()
+        path_arg = str(action_args.get("path", "")).strip()
+        start_line_raw = action_args.get("start_line")
+        end_line_raw = action_args.get("end_line")
+        start_line: Optional[int] = None
+        end_line: Optional[int] = None
+        action_success = False
+        action_error: Optional[str] = None
+        observe_warning: Optional[str] = None
+        summary = "read_file FAILED: No path provided"
+
+        if start_line_raw is not None:
+            try:
+                start_line = max(1, int(start_line_raw))
+            except (TypeError, ValueError):
+                start_line = None
+        if end_line_raw is not None:
+            try:
+                end_line = max(1, int(end_line_raw))
+            except (TypeError, ValueError):
+                end_line = None
+
+        if not path_arg:
+            action_error = "No path provided"
+        else:
+            try:
+                resolved = Path(path_arg).expanduser().resolve()
+                path_decision = self.sandbox_policy.check_path(resolved, operation="read")
+                if not path_decision.allowed:
+                    warning = f"read_file blocked by sandbox: {path_decision.reason}"
+                    self.event_logger.system_warning(warning)
+                    if self.sandbox_policy.enforce:
+                        action_error = warning
+                        summary = f"read_file FAILED: {path_decision.reason}"
+                    else:
+                        observe_warning = warning
+                if action_error is not None:
+                    raise RuntimeError(action_error)
+
+                lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
+                total_lines = len(lines)
+
+                if start_line and end_line and start_line > end_line:
+                    action_error = f"Invalid line range: start_line={start_line} > end_line={end_line}"
+                    summary = f"read_file FAILED: {action_error}"
+                else:
+                    start_idx = (start_line - 1) if start_line else 0
+                    end_idx = end_line if end_line else total_lines
+                    start_idx = min(max(start_idx, 0), total_lines)
+                    end_idx = min(max(end_idx, start_idx), total_lines)
+                    content = "\n".join(lines[start_idx:end_idx])
+                    if len(content) > 4000:
+                        content = f"{content[:4000]}\n... (truncated)"
+
+                    if start_line or end_line:
+                        range_note = f" (lines {start_idx + 1}-{end_idx} of {total_lines})"
+                    else:
+                        range_note = f" ({total_lines} lines)"
+
+                    summary = f"read_file: {resolved}{range_note}\n{content}"
+                    if observe_warning:
+                        summary += f"\nsandbox(observe): {observe_warning}"
+                    action_success = True
+            except FileNotFoundError:
+                action_error = f"File not found: {path_arg}"
+                summary = f"read_file FAILED: {action_error}"
+            except Exception as e:
+                action_error = str(e)
+                summary = f"read_file FAILED: {action_error}"
+
+        self._record_controller_action(
+            action_type="read_file",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={
+                "path": path_arg,
+                "start_line": start_line,
+                "end_line": end_line,
+            },
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={
+                    "operation": "read_file",
+                    "path": path_arg,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                },
+            ),
+        )
+
+    def _tool_find_files(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        from pathlib import Path
+
+        before_state = self.memory_store._capture_current_state()
+        pattern = str(action_args.get("pattern", "")).strip()
+        directory = str(action_args.get("directory", "~")).strip() or "~"
+        recursive = bool(action_args.get("recursive", True))
+        action_success = False
+        action_error: Optional[str] = None
+        observe_warning: Optional[str] = None
+        summary = "find_files FAILED: No pattern provided"
+
+        if not pattern:
+            action_error = "No pattern provided"
+        else:
+            try:
+                root = Path(directory).expanduser().resolve()
+                path_decision = self.sandbox_policy.check_path(root, operation="find")
+                if not path_decision.allowed:
+                    warning = f"find_files blocked by sandbox: {path_decision.reason}"
+                    self.event_logger.system_warning(warning)
+                    if self.sandbox_policy.enforce:
+                        action_error = warning
+                        summary = f"find_files FAILED: {path_decision.reason}"
+                    else:
+                        observe_warning = warning
+                if action_error is not None:
+                    raise RuntimeError(action_error)
+
+                glob_fn = root.rglob if recursive else root.glob
+                max_results = 50
+                found_matches: List[str] = []
+                for path in glob_fn(pattern):
+                    found_matches.append(str(path))
+                    if len(found_matches) > max_results:
+                        break
+
+                has_more = len(found_matches) > max_results
+                matches = sorted(found_matches[:max_results])
+                if matches:
+                    listing = "\n".join(matches)
+                    note = (
+                        f" (showing first {len(matches)}; more matches exist)"
+                        if has_more
+                        else f" ({len(matches)} found)"
+                    )
+                    summary = f"find_files: `{pattern}` in {root}{note}\n{listing}"
+                else:
+                    summary = f"find_files: `{pattern}` in {root} - no matches found"
+                if observe_warning:
+                    summary += f"\nsandbox(observe): {observe_warning}"
+                action_success = True
+            except Exception as e:
+                action_error = str(e)
+                summary = f"find_files FAILED: {action_error}"
+
+        self._record_controller_action(
+            action_type="find_files",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={
+                "pattern": pattern,
+                "directory": directory,
+                "recursive": recursive,
+            },
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={
+                    "operation": "find_files",
+                    "pattern": pattern,
+                    "directory": directory,
+                },
+            ),
+        )
+
+    def _tool_read_clipboard(self, *, action_step: ActionStep) -> ToolOutcome:
+        import subprocess
+        import sys
+
+        before_state = self.memory_store._capture_current_state()
+        action_success = False
+        action_error: Optional[str] = None
+        content = ""
+        observe_warning: Optional[str] = None
+        summary = "read_clipboard FAILED"
+
+        clipboard_decision = self.sandbox_policy.check_clipboard_read()
+        if not clipboard_decision.allowed:
+            warning = f"read_clipboard blocked by sandbox: {clipboard_decision.reason}"
+            self.event_logger.system_warning(warning)
+            if self.sandbox_policy.enforce:
+                action_error = warning
+                summary = f"read_clipboard FAILED: {clipboard_decision.reason}"
+            else:
+                observe_warning = warning
+
+        try:
+            if action_error is not None:
+                raise RuntimeError(action_error)
+            if sys.platform == "darwin":
+                proc = subprocess.run(
+                    ["pbpaste"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if proc.returncode != 0:
+                    stderr = (proc.stderr or "").strip() or "unknown error"
+                    raise RuntimeError(f"pbpaste failed: {stderr}")
+                content = proc.stdout
+            elif sys.platform.startswith("linux"):
+                any_tool_found = False
+                for cmd in (
+                    ["xclip", "-selection", "clipboard", "-o"],
+                    ["xsel", "--clipboard", "--output"],
+                ):
+                    try:
+                        proc = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        any_tool_found = True
+                        if proc.returncode == 0:
+                            content = proc.stdout
+                            break
+                    except FileNotFoundError:
+                        continue
+                else:
+                    msg = (
+                        "Clipboard read failed (xclip/xsel returned non-zero)"
+                        if any_tool_found
+                        else "No clipboard tool found (install xclip or xsel)"
+                    )
+                    raise RuntimeError(msg)
+            elif sys.platform == "win32":
+                proc = subprocess.run(
+                    ["powershell", "-command", "Get-Clipboard"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if proc.returncode != 0:
+                    stderr = (proc.stderr or "").strip() or "unknown error"
+                    raise RuntimeError(f"Get-Clipboard failed: {stderr}")
+                content = proc.stdout
+            else:
+                raise RuntimeError(f"Unsupported platform: {sys.platform}")
+
+            content = content.rstrip()
+            if content:
+                preview = content if len(content) <= 1000 else f"{content[:1000]}\n... (truncated)"
+                summary = f"read_clipboard: {len(content)} chars\n{preview}"
+            else:
+                summary = "read_clipboard: clipboard is empty"
+            if observe_warning:
+                summary += f"\nsandbox(observe): {observe_warning}"
+            action_success = True
+        except Exception as e:
+            action_error = str(e)
+            summary = f"read_clipboard FAILED: {action_error}"
+
+        self._record_controller_action(
+            action_type="read_clipboard",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={"content_length": len(content)},
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={"operation": "read_clipboard"},
+            ),
+        )
 
     def pause(self, message: str = "Paused") -> None:
         with self._pause_lock:
@@ -764,8 +1700,10 @@ class Agent:
             self._attach_run_event_log_sink()
             if self.config.sandbox.audit.enabled:
                 self.sandbox_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
+                self.effect_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
             else:
                 self.sandbox_policy.set_audit_log_path(None)
+                self.effect_policy.set_audit_log_path(None)
 
             self._cancel_event.clear()
             with self._pause_lock:
@@ -795,6 +1733,7 @@ class Agent:
             # Best-effort guard so per-run sink never leaks across missions.
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
+            self.effect_policy.set_audit_log_path(None)
 
         self.event_logger.agent_complete(self.mission_result.success, self.mission_result.reasoning)
         self._resume_checkpoint_loaded = False
@@ -999,6 +1938,7 @@ class Agent:
             # Best-effort guard so per-run sink never leaks across missions.
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
+            self.effect_policy.set_audit_log_path(None)
 
         self.event_logger.agent_complete(mission_result.success, mission_result.reasoning)
         
@@ -1063,12 +2003,19 @@ class Agent:
 
         # Build policy block (mission-constant) so the static prompt matches.
         policy_block = None
+        policy_parts: List[str] = []
         if getattr(self.config, "sandbox", None) and getattr(self.config.sandbox, "prompt", None):
             if self.config.sandbox.prompt.include_policy_block:
                 try:
-                    policy_block = self.sandbox_policy.render_prompt_policy_block()
+                    policy_parts.append(self.sandbox_policy.render_prompt_policy_block())
                 except Exception:
                     pass
+        try:
+            policy_parts.append(self.effect_policy.render_prompt_policy_block())
+        except Exception:
+            pass
+        if policy_parts:
+            policy_block = "\n\n".join(part for part in policy_parts if str(part or "").strip())
 
         try:
             planner = ActionPlanner(
@@ -1204,13 +2151,16 @@ class Agent:
             self._attach_run_event_log_sink()
             if self.config.sandbox.audit.enabled:
                 self.sandbox_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
+                self.effect_policy.set_audit_log_path(self.agent_workspace.sandbox_audit_path)
             else:
                 self.sandbox_policy.set_audit_log_path(None)
+                self.effect_policy.set_audit_log_path(None)
         except Exception as e:
             self._active_run_id = None
             self._active_run_open = False
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
+            self.effect_policy.set_audit_log_path(None)
             self.event_logger.system_warning(f"Failed to initialize run workspace: {e}")
         self.event_logger.agent_start(user_mission)
 
@@ -1376,9 +2326,11 @@ class Agent:
                 self._active_run_open = False
                 self._detach_run_event_log_sink()
                 self.sandbox_policy.set_audit_log_path(None)
+                self.effect_policy.set_audit_log_path(None)
         else:
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
+            self.effect_policy.set_audit_log_path(None)
 
         return result
 
@@ -1424,27 +2376,27 @@ class Agent:
         idx = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * 0.95))))
         return float(ordered[idx])
 
-    def _resolve_active_tool_preset(self) -> tuple[str, list[str]]:
-        """Resolve active tool preset into runtime allowlist."""
-        from core.config import resolve_tool_preset
+    def _resolve_policy_visible_tool_names(self) -> tuple[str, list[str]]:
+        """Resolve active effect policy into runtime-allowed tool names."""
+        policy_id = (
+            f"effect:{self.config.execution.tool_policy.preset.value}:"
+            f"{self.config.execution.tool_policy.mode.value}"
+        )
+        allowed: list[str] = []
+        for spec in self.tool_registry.iter_specs():
+            decision = self.effect_policy.evaluate(spec.manifest, phase="planner", record=False)
+            if decision.allowed or not self.effect_policy.enforce:
+                allowed.append(spec.manifest.name)
+        return policy_id, allowed
 
-        return resolve_tool_preset(self.config.execution.tool_preset)
-
-    def _refresh_tool_allowlist_from_preset(self) -> None:
-        """Load active tool preset into controller runtime state."""
-        preset_id, allowed = self._resolve_active_tool_preset()
-        self.active_tool_preset_id = preset_id
-        self.allowed_tool_names = [
+    def _refresh_policy_visible_tool_names(self) -> None:
+        """Load active effect policy into controller runtime state."""
+        _, allowed = self._resolve_policy_visible_tool_names()
+        self.policy_visible_tool_names = [
             str(name).strip()
             for name in (allowed or [])
             if str(name).strip()
         ]
-
-    def _is_tool_allowed(self, function_name: str) -> bool:
-        allowed = {name for name in (self.allowed_tool_names or []) if name}
-        if not allowed:
-            return False
-        return str(function_name or "").strip() in allowed
 
     @staticmethod
     def _record_failure(state: ExecutionState, *, code: str, stage: str) -> None:
@@ -1922,7 +2874,7 @@ class Agent:
             current_url=str(getattr(snapshot, "url", "") or ""),
             current_title=str(getattr(snapshot, "title", "") or ""),
             detected_elements=detected_elements,
-            allowed_tool_names=self.allowed_tool_names,
+            policy_visible_tool_names=self.policy_visible_tool_names,
             dialog_pending=dialog_pending,
             in_loop=bool(state.in_loop),
             min_confidence=min_confidence,
@@ -2169,8 +3121,8 @@ class Agent:
         from agent.action_planner import ActionPlanner
 
         max_actions = self.config.execution.max_actions_per_mission
-        self._refresh_tool_allowlist_from_preset()
-        active_preset_id, _ = self._resolve_active_tool_preset()
+        self._refresh_policy_visible_tool_names()
+        active_policy_id, _ = self._resolve_policy_visible_tool_names()
         profile_max_steps = max(1, int(self.config.execution.max_actions_per_plan or 1))
         profile_timeout_s = 45.0
 
@@ -2190,9 +3142,11 @@ class Agent:
         self.execution_state = state
         self.memory_store.start_mission(mission)
         self.event_logger.system_info(
-            "Tool preset active",
-            tool_preset_id=active_preset_id,
-            allowed_tools_count=len(self.allowed_tool_names or []),
+            "Tool effect policy active",
+            tool_policy_id=active_policy_id,
+            tool_policy_preset=self.effect_policy.preset.value,
+            tool_policy_mode=self.effect_policy.mode.value,
+            visible_tools_count=len(self.policy_visible_tool_names or []),
             max_steps=profile_max_steps,
             timeout_s=profile_timeout_s,
         )
@@ -2717,8 +3671,12 @@ class Agent:
                     self._pending_hints.clear()
 
                 policy_constraints_block = None
+                policy_parts: List[str] = []
                 if self.config.sandbox.prompt.include_policy_block:
-                    policy_constraints_block = self.sandbox_policy.render_prompt_policy_block()
+                    policy_parts.append(self.sandbox_policy.render_prompt_policy_block())
+                policy_parts.append(self.effect_policy.render_prompt_policy_block())
+                if policy_parts:
+                    policy_constraints_block = "\n\n".join(part for part in policy_parts if str(part or "").strip())
                 if (
                     self.config.logging.debug_mode
                     and state.budget_constraints_enabled
@@ -2789,7 +3747,8 @@ class Agent:
                     budget_phase=state.budget_phase,
                     low_budget_mode=state.low_budget_mode,
                     budget_constraints_enabled=state.budget_constraints_enabled,
-                    allowed_tool_names=self.allowed_tool_names,
+                    tool_registry=self.tool_registry,
+                    effect_policy_engine=self.effect_policy,
                 )
 
                 actions_list: Optional[list] = None
@@ -2876,12 +3835,12 @@ class Agent:
                             code=planner_failure_code,
                             stage=planner_failure_stage or "planner_generation",
                         )
-                    if planner_failure_code == "tool_allowlist_empty":
+                    if planner_failure_code == "tool_policy_filtered_empty":
                         return _mission_result(
                             success=False,
-                            reasoning=error or "No tools are enabled for the active profile.",
+                            reasoning=error or "No tools are enabled for the active effect policy.",
                             state=state,
-                            narrative="Active tool profile produced an empty allowlist for this mode.",
+                            narrative="Active effect policy produced an empty planner tool set for this mode.",
                         )
                     state.validation_failures += 1
                     if state.validation_failures <= self.config.execution.validation_failure_escalation_limit:
@@ -2923,44 +3882,6 @@ class Agent:
                     narrative = action_args.get("narrative", "")
                     iteration_tool_calls += 1
                     _check_iteration_watchdog(stage=f"before_action:{function_name or 'unknown'}")
-                    policy_observe_warning: Optional[str] = None
-                    if function_name:
-                        if not self._is_tool_allowed(function_name):
-                            tool_error = (
-                                f"Tool '{function_name}' is not allowed by preset "
-                                f"'{self.active_tool_preset_id}'."
-                            )
-                            self.event_logger.system_warning(
-                                "Runtime preset allowlist blocked action",
-                                tool=function_name,
-                                tool_preset_id=self.active_tool_preset_id,
-                                allowed_tools=self.allowed_tool_names,
-                                iteration=self._current_iteration,
-                            )
-                            self._record_failure(
-                                state,
-                                code="tool_disallowed_by_profile",
-                                stage="runtime_tool_enforcement",
-                            )
-                            state.last_action_summary = tool_error
-                            _append_recent_action(tool_error)
-                            _record_action_result(
-                                action_step,
-                                success=False,
-                                result_str="failed",
-                                summary=tool_error,
-                                error=tool_error,
-                                extra={
-                                    "failure_code": "tool_disallowed_by_profile",
-                                    "failure_stage": "runtime_tool_enforcement",
-                                },
-                            )
-                            return _mission_result(
-                                success=False,
-                                reasoning=tool_error,
-                                narrative="Runtime tool allowlist blocked planner action.",
-                                state=state,
-                            )
                     if self.config.logging.debug_mode:
                         self.event_logger.system_debug(
                             "Budget telemetry",
@@ -2985,1071 +3906,74 @@ class Agent:
                         loop_count=state.loop_count if state.in_loop else None,
                     )
 
-                    if function_name == "think":
-                        result = self.action_executor.act(
-                            action_step=action_step,
-                            detected_elements=detected_elements,
-                            page_info=page_info,
-                            environment_state=environment_state,
-                            current_iteration=self._current_iteration,
+                    if not function_name:
+                        tool_error = "Missing function_name on action step."
+                        self._record_failure(
+                            state,
+                            code="invalid_action_step",
+                            stage="runtime_action_validation",
                         )
-                        duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
-                        iteration_tool_latency_ms += max(0.0, duration_ms)
-                        state.actions_since_progress += 1
-
-                        think_reasoning = str(action_args.get("reasoning", "")).strip()
-                        think_next_action = str(action_args.get("next_action", "continue")).strip().lower()
-                        recommended_next_step_arg = str(action_args.get("recommended_next_step", "")).strip()
-
-                        if think_next_action == "start_loop":
-                            loop_count_raw = action_args.get("loop_count")
-                            loop_desc = str(action_args.get("loop_description", "")).strip()
-                            loop_count, clamped_loop = self._clamp_loop_count_to_budget(
-                                requested_loop_count=loop_count_raw,
-                                budget_remaining=(
-                                    state.budget_remaining
-                                    if state.budget_constraints_enabled
-                                    else 0
-                                ),
-                            )
-
-                            state.in_loop = True
-                            state.loop_count = loop_count
-                            state.loop_round = 2
-                            state.loop_description = loop_desc or think_reasoning
-                            state.user_facing_actions_since_progress = 0
-
-                            state.last_action_summary = f"Loop started: {loop_desc or think_reasoning} (round 2 of {loop_count})"
-                            if clamped_loop:
-                                state.last_action_summary += f" [clamped to budget remaining={state.budget_remaining}]"
-                            _append_recent_action(f"[LOOP START] {loop_desc} — {loop_count} total rounds")
-                            if clamped_loop and self.config.logging.debug_mode:
-                                self.event_logger.system_debug(
-                                    "Loop count clamped to budget",
-                                    requested_loop_count=loop_count_raw,
-                                    effective_loop_count=loop_count,
-                                    budget_remaining=state.budget_remaining,
-                                )
-                            self.event_logger.loop_state_changed(
-                                change="start",
-                                loop_round=state.loop_round,
-                                loop_count=state.loop_count,
-                                loop_description=state.loop_description,
-                            )
-
-                        elif think_next_action == "advance":
-                            if not state.in_loop:
-                                state.last_action_summary = "advance ignored — not in a loop"
-                            elif state.user_facing_actions_since_progress == 0:
-                                state.last_action_summary = "advance BLOCKED: No user-facing actions since last advance. Do a user-facing action first."
-                            else:
-                                state.loop_round += 1
-                                state.user_facing_actions_since_progress = 0
-                                if state.loop_count and state.loop_round > state.loop_count:
-                                    state.last_action_summary = f"Loop complete — all {state.loop_count} rounds done"
-                                    _append_recent_action(f"[LOOP COMPLETE] {state.loop_count} rounds done")
-                                    self.event_logger.loop_state_changed(
-                                        change="end",
-                                        loop_round=state.loop_count,
-                                        loop_count=state.loop_count,
-                                        loop_description=state.loop_description,
-                                    )
-                                    _exit_loop()
-                                else:
-                                    remaining = state.loop_count - state.loop_round + 1 if state.loop_count else "?"
-                                    state.last_action_summary = (
-                                        f"Advanced to loop round {state.loop_round} of {state.loop_count} ({remaining} remaining)"
-                                    )
-                                    _append_recent_action(f"[ADVANCE] Round {state.loop_round} of {state.loop_count}")
-                                    self.event_logger.loop_state_changed(
-                                        change="advance",
-                                        loop_round=state.loop_round,
-                                        loop_count=state.loop_count,
-                                        loop_description=state.loop_description,
-                                    )
-
-                        elif think_next_action == "end_loop":
-                            if state.in_loop:
-                                state.last_action_summary = f"Loop ended early at round {state.loop_round} of {state.loop_count}"
-                                _append_recent_action("[LOOP END] early exit")
-                                self.event_logger.loop_state_changed(
-                                    change="end_early",
-                                    loop_round=state.loop_round,
-                                    loop_count=state.loop_count,
-                                    loop_description=state.loop_description,
-                                )
-                                _exit_loop()
-                            else:
-                                state.last_action_summary = "end_loop ignored — not in a loop"
-
-                        elif think_next_action == "done":
-                            if state.in_loop:
-                                self.event_logger.loop_state_changed(
-                                    change="end",
-                                    loop_round=state.loop_round,
-                                    loop_count=state.loop_count,
-                                    loop_description=state.loop_description,
-                                )
-                                _exit_loop()
-                            result_str = "success" if result.success else "failed"
-                            self.event_logger.action_complete(
-                                tool=function_name,
-                                narrative=narrative,
-                                success=bool(result.success),
-                                result_str=result_str,
-                                duration_ms=duration_ms,
-                                iteration=self._current_iteration,
-                            )
-                            _record_action_result(
-                                action_step,
-                                success=bool(result.success),
-                                result_str=result_str,
-                                summary=state.last_action_summary,
-                                error=result.error,
-                                extra={
-                                    "next_action": think_next_action,
-                                    "reasoning": think_reasoning,
-                                },
-                            )
-                            return _mission_result(
-                                success=True,
-                                reasoning=think_reasoning or "Mission complete",
-                                narrative=narrative,
-                                state=state,
-                            )
-
-                        elif think_next_action == "stuck":
-                            replacement_strategy = think_reasoning or "Trying a different strategy."
-                            state.last_action_summary = f"Strategy switch (stuck): \"{replacement_strategy}\""
-                            if recommended_next_step_arg:
-                                cleaned = strip_targeting_data(recommended_next_step_arg)
-                                state.last_action_summary += f" | recommended_next_step={cleaned}"
-                            _append_recent_action("[STUCK] Strategy switch")
-                            if self.on_stuck_callback:
-                                try:
-                                    hint = self.on_stuck_callback(replacement_strategy, self._current_iteration)
-                                    if hint:
-                                        with self._hints_lock:
-                                            self._pending_hints.append(hint.strip())
-                                except Exception as e:
-                                    self.event_logger.system_warning(f"on_stuck_callback failed: {e}")
-
-                        elif think_next_action == "continue":
-                            state.last_action_summary = f"You thought: \"{think_reasoning}\""
-                            if recommended_next_step_arg:
-                                cleaned = strip_targeting_data(recommended_next_step_arg)
-                                state.last_action_summary += f" | recommended_next_step={cleaned}"
-
-                        result_str = "success" if result.success else "failed"
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=bool(result.success),
-                            result_str=result_str,
-                            duration_ms=duration_ms,
-                            iteration=self._current_iteration,
+                        state.last_action_summary = tool_error
+                        _append_recent_action(tool_error)
+                        return _mission_result(
+                            success=False,
+                            reasoning=tool_error,
+                            narrative="Planner produced an invalid action step.",
+                            state=state,
                         )
-                        _record_action_result(
-                            action_step,
-                            success=bool(result.success),
-                            result_str=result_str,
-                            summary=state.last_action_summary,
-                            error=result.error,
-                            extra={
-                                "next_action": think_next_action,
-                                "reasoning": think_reasoning,
-                            },
+
+                    tool_spec = self.tool_registry.get(function_name)
+                    if tool_spec is None:
+                        tool_error = f"Tool '{function_name}' is not registered."
+                        self._record_failure(
+                            state,
+                            code="unknown_tool",
+                            stage="runtime_tool_lookup",
                         )
-                        if think_next_action == "continue":
-                            continue
-                        break
-
-                    if function_name in {"assert_condition", "flag"}:
-                        result = self.action_executor.act(
-                            action_step=action_step,
-                            detected_elements=detected_elements,
-                            page_info=page_info,
-                            environment_state=environment_state,
-                            current_iteration=self._current_iteration,
+                        state.last_action_summary = tool_error
+                        _append_recent_action(tool_error)
+                        return _mission_result(
+                            success=False,
+                            reasoning=tool_error,
+                            narrative="Planner called an unregistered tool.",
+                            state=state,
                         )
-                        duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
-                        iteration_tool_latency_ms += max(0.0, duration_ms)
-                        action_type = "assert" if function_name == "assert_condition" else "flag"
-                        action_content = str(
-                            action_args.get("condition") if function_name == "assert_condition" else action_args.get("message", "")
-                        ).strip()
-                        state.last_action_summary = f"You called {action_type}: \"{action_content}\""
-                        _append_recent_action(f"{action_type}: {action_content}")
-                        state.actions_since_progress += 1
-                        result_str = "success" if result.success else "failed"
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=bool(result.success),
-                            result_str=result_str,
-                            duration_ms=duration_ms,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=bool(result.success),
-                            result_str=result_str,
-                            summary=state.last_action_summary,
-                            error=result.error,
-                            extra={"action_type": action_type},
-                        )
-                        continue
 
-                    if function_name == "switch_tab":
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        tab_id = str(action_args.get("tab_id", "")).strip()
-                        if self.tab_manager:
-                            try:
-                                new_page = self.tab_manager.switch_to(tab_id)
-                                self.action_executor.set_page(new_page)
-                                title = ""
-                                try:
-                                    title = new_page.title()
-                                except Exception:
-                                    pass
-                                state.last_action_summary = f"Switched to tab [{tab_id}]: \"{title}\""
-                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
-                                    source="switch_tab"
-                                )
-                                if not policy_allowed:
-                                    action_error = f"{policy_warning} ({current_url})"
-                                    state.last_action_summary = f"switch_tab FAILED: {action_error}"
-                                else:
-                                    if policy_warning:
-                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
-                                    state.user_facing_actions_since_progress += 1
-                                    action_success = True
-                            except ValueError as e:
-                                state.last_action_summary = f"switch_tab FAILED: {e}"
-                                action_error = str(e)
-                        else:
-                            state.last_action_summary = "switch_tab FAILED: Tab management not available"
-                            action_error = "Tab management not available"
-                        self._record_controller_action(
-                            action_type=InteractionType.NAVIGATION.value,
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"operation": "switch_tab", "tab_id": tab_id},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(state.last_action_summary)
-                        state.actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "switch_tab", "tab_id": tab_id},
-                        )
-                        continue
-
-                    if function_name == "close_tab":
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        tab_id = str(action_args.get("tab_id", "")).strip()
-                        if self.tab_manager:
-                            try:
-                                new_page = self.tab_manager.close_tab(tab_id)
-                                self.action_executor.set_page(new_page)
-                                active = self.tab_manager.get_active()
-                                active_id = active.id if active else "?"
-                                state.last_action_summary = f"Closed tab [{tab_id}]. Now on tab [{active_id}]"
-                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
-                                    source="close_tab"
-                                )
-                                if not policy_allowed:
-                                    action_error = f"{policy_warning} ({current_url})"
-                                    state.last_action_summary = f"close_tab FAILED: {action_error}"
-                                else:
-                                    if policy_warning:
-                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
-                                    state.user_facing_actions_since_progress += 1
-                                    action_success = True
-                            except ValueError as e:
-                                state.last_action_summary = f"close_tab FAILED: {e}"
-                                action_error = str(e)
-                        else:
-                            state.last_action_summary = "close_tab FAILED: Tab management not available"
-                            action_error = "Tab management not available"
-                        self._record_controller_action(
-                            action_type=InteractionType.NAVIGATION.value,
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"operation": "close_tab", "tab_id": tab_id},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(state.last_action_summary)
-                        state.actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "close_tab", "tab_id": tab_id},
-                        )
-                        continue
-
-                    if function_name == "open_tab":
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        url = str(action_args.get("url", "")).strip() or None
-                        observe_warning: Optional[str] = None
-                        if url:
-                            url_decision = self.sandbox_policy.check_url(url)
-                            if not url_decision.allowed:
-                                warning = f"open_tab blocked by sandbox: {url_decision.reason}"
-                                self.event_logger.system_warning(warning)
-                                if self.sandbox_policy.enforce:
-                                    action_error = warning
-                                    state.last_action_summary = f"open_tab FAILED: {url_decision.reason}"
-                                else:
-                                    observe_warning = warning
-
-                        if action_error is None and self.tab_manager:
-                            try:
-                                new_page = self.tab_manager.open_tab(url)
-                                self.action_executor.set_page(new_page)
-                                active = self.tab_manager.get_active()
-                                active_id = active.id if active else "?"
-                                state.last_action_summary = f"Opened new tab [{active_id}]"
-                                if url:
-                                    state.last_action_summary += f" at {url}"
-                                if observe_warning:
-                                    state.last_action_summary += f" | sandbox(observe): {observe_warning}"
-                                policy_allowed, policy_warning, current_url = self._enforce_current_page_policy(
-                                    source="open_tab"
-                                )
-                                if not policy_allowed:
-                                    action_error = f"{policy_warning} ({current_url})"
-                                    state.last_action_summary = f"open_tab FAILED: {action_error}"
-                                else:
-                                    if policy_warning:
-                                        state.last_action_summary += f" | sandbox(observe): {policy_warning}"
-                                    state.user_facing_actions_since_progress += 1
-                                    action_success = True
-                            except Exception as e:
-                                state.last_action_summary = f"open_tab FAILED: {e}"
-                                action_error = str(e)
-                        elif action_error is None:
-                            state.last_action_summary = "open_tab FAILED: Tab management not available"
-                            action_error = "Tab management not available"
-                        self._record_controller_action(
-                            action_type=InteractionType.NAVIGATION.value,
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"operation": "open_tab", "url": url},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(state.last_action_summary)
-                        state.actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "open_tab", "url": url},
-                        )
-                        continue
-
-                    if function_name == "dismiss_dialog":
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        accept = bool(action_args.get("accept", False))
-                        input_text_raw = action_args.get("input_text")
-                        input_text = str(input_text_raw).strip() if input_text_raw not in (None, "") else None
-                        if self.tab_manager and self.tab_manager.pending_dialog:
-                            self.tab_manager.dismiss_dialog(accept, input_text)
-                            action_word = "accepted" if accept else "dismissed"
-                            state.last_action_summary = f"Dialog {action_word}"
-                            action_success = True
-                        else:
-                            state.last_action_summary = "dismiss_dialog: No dialog pending"
-                            action_error = "No dialog pending"
-                        self._record_controller_action(
-                            action_type="dismiss_dialog",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"accept": accept, "input_text": input_text},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(state.last_action_summary)
-                        state.actions_since_progress += 1
-                        if action_success:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "dismiss_dialog", "accept": accept},
-                        )
-                        continue
-
-                    # Send email via Resend API (controller-only; no browser action).
-                    if function_name == "send_email":
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        duplicate_of: Optional[str] = None
-                        message_id: Optional[str] = None
-
-                        raw_to = action_args.get("to")
-                        to_list = _parse_email_recipients(raw_to)
-
-                        subject = str(action_args.get("subject", "")).strip()
-                        body = str(action_args.get("body", "")).strip()
-                        body_preview = body if len(body) <= 200 else f"{body[:197]}..."
-                        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body else ""
-                        effective_from_email = _resolve_resend_from_email()
-
-                        canonical_to = sorted({email.lower() for email in to_list})
-                        signature_source = f"{'|'.join(canonical_to)}\n{subject.lower()}\n{body}"
-                        email_signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
-
-                        for entry in reversed(self.memory_store.entries):
-                            if entry.action_type != "send_email":
-                                continue
-                            if entry.outcome not in {"success", "no_change"}:
-                                continue
-                            if str(entry.action_params.get("email_signature", "")).strip() == email_signature:
-                                duplicate_of = entry.memory_id
-                                action_success = True
-                                state.last_action_summary = (
-                                    f"send_email skipped: identical email already sent ({duplicate_of}). "
-                                    "If the mission was only this email, call think(next_action=done)."
-                                )
-                                break
-
-                        try:
-                            if duplicate_of is None:
-                                api_key = str(os.environ.get("RESEND_API_KEY", "")).strip()
-                                if not api_key:
-                                    action_error = "RESEND_API_KEY is not set"
-                                    state.last_action_summary = f"send_email FAILED: {action_error}"
-                                elif "@" not in effective_from_email:
-                                    action_error = (
-                                        "RESEND_FROM_EMAIL is invalid; expected an email address "
-                                        "or display-name format like 'Team <team@example.com>'"
-                                    )
-                                    state.last_action_summary = f"send_email FAILED: {action_error}"
-                                elif not to_list:
-                                    action_error = "No recipients (to) provided"
-                                    state.last_action_summary = f"send_email FAILED: {action_error}"
-                                elif not subject:
-                                    action_error = "Subject is required"
-                                    state.last_action_summary = f"send_email FAILED: {action_error}"
-                                elif not body:
-                                    action_error = "Body is required"
-                                    state.last_action_summary = f"send_email FAILED: {action_error}"
-                                else:
-                                    try:
-                                        import resend
-                                    except ImportError:
-                                        action_error = (
-                                            "resend package is not installed in the active Python environment"
-                                        )
-                                        state.last_action_summary = f"send_email FAILED: {action_error}"
-                                    else:
-                                        resend.api_key = api_key
-                                        params = {
-                                            "from": effective_from_email,
-                                            "to": to_list,
-                                            "subject": subject,
-                                            "html": body,
-                                        }
-                                        send_result = resend.Emails.send(params)
-                                        raw_message_id = (
-                                            send_result.get("id")
-                                            if isinstance(send_result, dict)
-                                            else getattr(send_result, "id", None)
-                                        )
-                                        if raw_message_id:
-                                            message_id = str(raw_message_id).strip()
-
-                                        state.last_action_summary = (
-                                            f"Email sent to {', '.join(to_list)}: \"{subject}\" "
-                                            f"| body=\"{body_preview}\""
-                                        )
-                                        if message_id:
-                                            state.last_action_summary += f" | message_id={message_id}"
-                                        action_success = True
-                        except Exception as e:
-                            action_error = _format_resend_error(e)
-                            state.last_action_summary = f"send_email FAILED: {action_error}"
-                        self._record_controller_action(
-                            action_type="send_email",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={
-                                "operation": "send_email",
-                                "to": to_list,
-                                "subject": subject,
-                                "body_preview": body_preview,
-                                "body_hash": body_hash,
-                                "from_email": effective_from_email,
-                                "email_signature": email_signature,
-                                "duplicate_of": duplicate_of,
-                                "message_id": message_id,
-                            },
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        if action_success:
-                            with self._hints_lock:
-                                self._pending_hints.append(
-                                    "You already sent the requested email. Do not send it again. "
-                                    "If the mission is complete, call think(next_action=done)."
-                                )
-                        _append_recent_action(state.last_action_summary)
-                        state.actions_since_progress += 1
-                        if action_success and duplicate_of is None:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={
-                                "operation": "send_email",
-                                "to": to_list,
-                                "subject": subject,
-                                "message_id": message_id,
-                                "duplicate_of": duplicate_of,
-                            },
-                        )
-                        continue
-
-                    if function_name == "bash":
-                        import subprocess
-
-                        before_state = self.memory_store._capture_current_state()
-                        command = str(action_args.get("command", "")).strip()
-                        command_timeout = self.sandbox_policy.command_timeout_seconds()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        observe_warning: Optional[str] = None
-
-                        if not command:
-                            action_error = "No command provided"
-                            state.last_action_summary = "bash FAILED: No command provided"
-                        else:
-                            command_decision = self.sandbox_policy.check_command(command)
-                            if not command_decision.allowed:
-                                warning = f"bash blocked by sandbox: {command_decision.reason}"
-                                self.event_logger.system_warning(warning)
-                                if self.sandbox_policy.enforce:
-                                    action_error = warning
-                                    state.last_action_summary = f"bash FAILED: {command_decision.reason}"
-                                else:
-                                    observe_warning = warning
-
-                            if action_error is None:
-                                try:
-                                    proc = subprocess.run(
-                                        ["bash", "-lc", command],
-                                        capture_output=True,
-                                        text=True,
-                                        timeout=command_timeout,
-                                    )
-                                    stdout = (proc.stdout or "").rstrip()
-                                    stderr = (proc.stderr or "").rstrip()
-                                    exit_code = proc.returncode
-
-                                    parts = [f"bash: `{command}`", f"exit_code={exit_code}"]
-                                    if stdout:
-                                        preview = stdout if len(stdout) <= 2000 else f"{stdout[:2000]}\n... (truncated)"
-                                        parts.append(f"stdout:\n{preview}")
-                                    else:
-                                        parts.append("stdout: (no output)")
-                                    if stderr:
-                                        parts.append(f"stderr: {stderr[:500]}")
-
-                                    state.last_action_summary = "\n".join(parts)
-                                    if observe_warning:
-                                        state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
-                                    action_success = True  # command ran; agent sees exit_code in summary
-                                except subprocess.TimeoutExpired:
-                                    action_error = f"Command timed out after {command_timeout}s"
-                                    state.last_action_summary = f"bash FAILED: {action_error}"
-                                except Exception as e:
-                                    action_error = str(e)
-                                    state.last_action_summary = f"bash FAILED: {action_error}"
-
-                        self._record_controller_action(
-                            action_type="bash",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"command": command},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(f"bash: {command}" if command else "bash: (empty)")
-                        state.actions_since_progress += 1
-                        if action_success:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "bash", "command": command},
-                        )
-                        continue
-
-                    if function_name == "read_file":
-                        from pathlib import Path
-
-                        before_state = self.memory_store._capture_current_state()
-                        path_arg = str(action_args.get("path", "")).strip()
-                        start_line_raw = action_args.get("start_line")
-                        end_line_raw = action_args.get("end_line")
-                        start_line: Optional[int] = None
-                        end_line: Optional[int] = None
-                        action_success = False
-                        action_error: Optional[str] = None
-                        observe_warning: Optional[str] = None
-
-                        if start_line_raw is not None:
-                            try:
-                                start_line = max(1, int(start_line_raw))
-                            except (TypeError, ValueError):
-                                start_line = None
-                        if end_line_raw is not None:
-                            try:
-                                end_line = max(1, int(end_line_raw))
-                            except (TypeError, ValueError):
-                                end_line = None
-
-                        if not path_arg:
-                            action_error = "No path provided"
-                            state.last_action_summary = "read_file FAILED: No path provided"
-                        else:
-                            try:
-                                resolved = Path(path_arg).expanduser().resolve()
-                                path_decision = self.sandbox_policy.check_path(resolved, operation="read")
-                                if not path_decision.allowed:
-                                    warning = f"read_file blocked by sandbox: {path_decision.reason}"
-                                    self.event_logger.system_warning(warning)
-                                    if self.sandbox_policy.enforce:
-                                        action_error = warning
-                                        state.last_action_summary = f"read_file FAILED: {path_decision.reason}"
-                                    else:
-                                        observe_warning = warning
-
-                                if action_error is not None:
-                                    raise RuntimeError(action_error)
-                                lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
-                                total_lines = len(lines)
-
-                                if start_line and end_line and start_line > end_line:
-                                    action_error = f"Invalid line range: start_line={start_line} > end_line={end_line}"
-                                    state.last_action_summary = f"read_file FAILED: {action_error}"
-                                else:
-                                    start_idx = (start_line - 1) if start_line else 0
-                                    end_idx = end_line if end_line else total_lines
-                                    start_idx = min(max(start_idx, 0), total_lines)
-                                    end_idx = min(max(end_idx, start_idx), total_lines)
-
-                                    content = "\n".join(lines[start_idx:end_idx])
-                                    if len(content) > 4000:
-                                        content = f"{content[:4000]}\n... (truncated)"
-
-                                    if start_line or end_line:
-                                        range_note = f" (lines {start_idx + 1}-{end_idx} of {total_lines})"
-                                    else:
-                                        range_note = f" ({total_lines} lines)"
-
-                                    state.last_action_summary = f"read_file: {resolved}{range_note}\n{content}"
-                                    if observe_warning:
-                                        state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
-                                    action_success = True
-                            except FileNotFoundError:
-                                action_error = f"File not found: {path_arg}"
-                                state.last_action_summary = f"read_file FAILED: {action_error}"
-                            except Exception as e:
-                                action_error = str(e)
-                                state.last_action_summary = f"read_file FAILED: {action_error}"
-
-                        self._record_controller_action(
-                            action_type="read_file",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={
-                                "path": path_arg,
-                                "start_line": start_line,
-                                "end_line": end_line,
-                            },
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(f"read_file: {path_arg}")
-                        state.actions_since_progress += 1
-                        if action_success:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={
-                                "operation": "read_file",
-                                "path": path_arg,
-                                "start_line": start_line,
-                                "end_line": end_line,
-                            },
-                        )
-                        continue
-
-                    if function_name == "find_files":
-                        from pathlib import Path
-
-                        before_state = self.memory_store._capture_current_state()
-                        pattern = str(action_args.get("pattern", "")).strip()
-                        directory = str(action_args.get("directory", "~")).strip() or "~"
-                        recursive = bool(action_args.get("recursive", True))
-                        action_success = False
-                        action_error: Optional[str] = None
-                        observe_warning: Optional[str] = None
-
-                        if not pattern:
-                            action_error = "No pattern provided"
-                            state.last_action_summary = "find_files FAILED: No pattern provided"
-                        else:
-                            try:
-                                root = Path(directory).expanduser().resolve()
-                                path_decision = self.sandbox_policy.check_path(root, operation="find")
-                                if not path_decision.allowed:
-                                    warning = f"find_files blocked by sandbox: {path_decision.reason}"
-                                    self.event_logger.system_warning(warning)
-                                    if self.sandbox_policy.enforce:
-                                        action_error = warning
-                                        state.last_action_summary = f"find_files FAILED: {path_decision.reason}"
-                                    else:
-                                        observe_warning = warning
-
-                                if action_error is not None:
-                                    raise RuntimeError(action_error)
-                                glob_fn = root.rglob if recursive else root.glob
-                                max_results = 50
-                                found_matches: List[str] = []
-                                for path in glob_fn(pattern):
-                                    found_matches.append(str(path))
-                                    if len(found_matches) > max_results:
-                                        break
-
-                                has_more = len(found_matches) > max_results
-                                matches = sorted(found_matches[:max_results])
-
-                                if matches:
-                                    listing = "\n".join(matches)
-                                    note = (
-                                        f" (showing first {len(matches)}; more matches exist)"
-                                        if has_more
-                                        else f" ({len(matches)} found)"
-                                    )
-                                    state.last_action_summary = f"find_files: `{pattern}` in {root}{note}\n{listing}"
-                                else:
-                                    state.last_action_summary = f"find_files: `{pattern}` in {root} - no matches found"
-                                if observe_warning:
-                                    state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
-                                action_success = True
-                            except Exception as e:
-                                action_error = str(e)
-                                state.last_action_summary = f"find_files FAILED: {action_error}"
-
-                        self._record_controller_action(
-                            action_type="find_files",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={
-                                "pattern": pattern,
-                                "directory": directory,
-                                "recursive": recursive,
-                            },
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action(f"find_files: {pattern} in {directory}")
-                        state.actions_since_progress += 1
-                        if action_success:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={
-                                "operation": "find_files",
-                                "pattern": pattern,
-                                "directory": directory,
-                            },
-                        )
-                        continue
-
-                    if function_name == "read_clipboard":
-                        import subprocess
-                        import sys
-
-                        before_state = self.memory_store._capture_current_state()
-                        action_success = False
-                        action_error: Optional[str] = None
-                        content = ""
-                        observe_warning: Optional[str] = None
-
-                        clipboard_decision = self.sandbox_policy.check_clipboard_read()
-                        if not clipboard_decision.allowed:
-                            warning = f"read_clipboard blocked by sandbox: {clipboard_decision.reason}"
-                            self.event_logger.system_warning(warning)
-                            if self.sandbox_policy.enforce:
-                                action_error = warning
-                                state.last_action_summary = f"read_clipboard FAILED: {clipboard_decision.reason}"
-                            else:
-                                observe_warning = warning
-
-                        try:
-                            if action_error is not None:
-                                raise RuntimeError(action_error)
-                            if sys.platform == "darwin":
-                                proc = subprocess.run(
-                                    ["pbpaste"],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=5,
-                                )
-                                if proc.returncode != 0:
-                                    stderr = (proc.stderr or "").strip() or "unknown error"
-                                    raise RuntimeError(f"pbpaste failed: {stderr}")
-                                content = proc.stdout
-                            elif sys.platform.startswith("linux"):
-                                _any_tool_found = False
-                                for cmd in (
-                                    ["xclip", "-selection", "clipboard", "-o"],
-                                    ["xsel", "--clipboard", "--output"],
-                                ):
-                                    try:
-                                        proc = subprocess.run(
-                                            cmd,
-                                            capture_output=True,
-                                            text=True,
-                                            timeout=5,
-                                        )
-                                        _any_tool_found = True
-                                        if proc.returncode == 0:
-                                            content = proc.stdout
-                                            break
-                                    except FileNotFoundError:
-                                        continue
-                                else:
-                                    _msg = (
-                                        "Clipboard read failed (xclip/xsel returned non-zero)"
-                                        if _any_tool_found
-                                        else "No clipboard tool found (install xclip or xsel)"
-                                    )
-                                    raise RuntimeError(_msg)
-                            elif sys.platform == "win32":
-                                proc = subprocess.run(
-                                    ["powershell", "-command", "Get-Clipboard"],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=5,
-                                )
-                                if proc.returncode != 0:
-                                    stderr = (proc.stderr or "").strip() or "unknown error"
-                                    raise RuntimeError(f"Get-Clipboard failed: {stderr}")
-                                content = proc.stdout
-                            else:
-                                raise RuntimeError(f"Unsupported platform: {sys.platform}")
-
-                            content = content.rstrip()
-                            if content:
-                                preview = content if len(content) <= 1000 else f"{content[:1000]}\n... (truncated)"
-                                state.last_action_summary = f"read_clipboard: {len(content)} chars\n{preview}"
-                            else:
-                                state.last_action_summary = "read_clipboard: clipboard is empty"
-                            if observe_warning:
-                                state.last_action_summary += f"\nsandbox(observe): {observe_warning}"
-                            action_success = True
-                        except Exception as e:
-                            action_error = str(e)
-                            state.last_action_summary = f"read_clipboard FAILED: {action_error}"
-
-                        self._record_controller_action(
-                            action_type="read_clipboard",
-                            action_step=action_step,
-                            success=action_success,
-                            error_message=action_error,
-                            action_params={"content_length": len(content)},
-                            before_state=before_state,
-                            after_state=self.memory_store._capture_current_state(),
-                        )
-                        _append_recent_action("read_clipboard")
-                        state.actions_since_progress += 1
-                        if action_success:
-                            state.user_facing_actions_since_progress += 1
-                        self.event_logger.action_complete(
-                            tool=function_name,
-                            narrative=narrative,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            duration_ms=0.0,
-                            iteration=self._current_iteration,
-                        )
-                        _record_action_result(
-                            action_step,
-                            success=action_success,
-                            result_str="success" if action_success else "failed",
-                            summary=state.last_action_summary,
-                            error=action_error,
-                            extra={"operation": "read_clipboard"},
-                        )
-                        continue
-
-                    if function_name == "open_url":
-                        url = str(action_args.get("url", "")).strip()
-                        url_decision = self.sandbox_policy.check_url(url)
-                        if not url_decision.allowed:
-                            warning = f"open_url blocked by sandbox: {url_decision.reason}"
-                            self.event_logger.system_warning(warning)
-                            if self.sandbox_policy.enforce:
-                                before_state = self.memory_store._capture_current_state()
-                                state.last_action_summary = f"open_url FAILED: {url_decision.reason}"
-                                self._record_controller_action(
-                                    action_type=InteractionType.NAVIGATION.value,
-                                    action_step=action_step,
-                                    success=False,
-                                    error_message=warning,
-                                    action_params={
-                                        "operation": "open_url",
-                                        "url": url,
-                                        "sandbox_blocked": True,
-                                    },
-                                    before_state=before_state,
-                                    after_state=self.memory_store._capture_current_state(),
-                                )
-                                _append_recent_action(state.last_action_summary)
-                                state.actions_since_progress += 1
-                                self.event_logger.action_complete(
-                                    tool=function_name,
-                                    narrative=narrative,
-                                    success=False,
-                                    result_str="failed",
-                                    duration_ms=0.0,
-                                    iteration=self._current_iteration,
-                                )
-                                _record_action_result(
-                                    action_step,
-                                    success=False,
-                                    result_str="failed",
-                                    summary=state.last_action_summary,
-                                    error=warning,
-                                    extra={"operation": "open_url", "url": url},
-                                )
-                                continue
-                            policy_observe_warning = warning
-
-                    result = self.action_executor.act(
-                        action_step=action_step,
+                    runtime_adapter = ToolRuntimeAdapter(
+                        agent=self,
                         detected_elements=detected_elements,
                         page_info=page_info,
                         environment_state=environment_state,
-                        base_knowledge=self.base_knowledge,
                         current_iteration=self._current_iteration,
                     )
+                    tool_ctx = ToolContext(
+                        page=self.browser.page if self.browser else None,
+                        elements=detected_elements,
+                        page_info=page_info,
+                        environment_state=environment_state,
+                        memory_store=self.memory_store,
+                        event_logger=self.event_logger,
+                        sandbox_policy=self.sandbox_policy,
+                        action_step=action_step,
+                        runtime_state=runtime_adapter,
+                    )
+                    tool_started_at = time.perf_counter()
+                    outcome = self.tool_engine.execute(function_name, action_args, tool_ctx)
+                    duration_ms = (time.perf_counter() - tool_started_at) * 1000.0
+                    iteration_tool_latency_ms += max(0.0, duration_ms)
+                    if Effect.NAVIGATE_WEB in tool_spec.manifest.effects:
+                        iteration_navigation_latency_ms += max(0.0, duration_ms)
 
+                    state.actions_since_progress += 1
+                    result_success = bool(getattr(outcome.output, "success", False))
+                    result_error = str(getattr(outcome.output, "error", "") or "").strip() or None
+                    result_data = (
+                        outcome.output.data
+                        if isinstance(getattr(outcome.output, "data", None), dict)
+                        else {}
+                    )
+
+                    policy_observe_warning = ""
                     post_nav_sensitive_functions = {
                         "click",
                         "press_key",
@@ -4057,8 +3981,8 @@ class Agent:
                         "go_back",
                         "go_forward",
                     }
-                    _nav_break = False
-                    if result.success and function_name in post_nav_sensitive_functions:
+                    nav_break = False
+                    if result_success and function_name in post_nav_sensitive_functions:
                         try:
                             current_url = self.browser.page.url if self.browser and self.browser.page else ""
                         except Exception:
@@ -4068,43 +3992,92 @@ class Agent:
                             warning = f"Post-navigation URL blocked by sandbox: {post_nav_decision.reason}"
                             self.event_logger.system_warning(warning)
                             if self.sandbox_policy.enforce:
-                                result.success = False
-                                result.error = warning
+                                result_success = False
+                                result_error = warning
                             else:
-                                if policy_observe_warning:
-                                    policy_observe_warning = f"{policy_observe_warning} | {warning}"
-                                else:
-                                    policy_observe_warning = warning
-                        # URL changed mid-batch — signal break after logging completes
+                                policy_observe_warning = warning
                         if current_url and current_url != snapshot_url:
-                            _nav_break = True
+                            nav_break = True
 
-                    state.actions_since_progress += 1
-                    result_str = "success" if result.success else "failed"
-                    state.last_action_summary = (
-                        f"{narrative} ({result_str})"
-                        if narrative
-                        else self._build_action_summary(action_step, result_str)
-                    )
+                    mission_done_reasoning: Optional[str] = None
+                    should_replan_after_control = False
+                    if function_name == "think" and result_success and outcome.control is None:
+                        control_error = "think must return a control payload."
+                        self._record_failure(
+                            state,
+                            code="missing_think_control",
+                            stage="runtime_tool_control",
+                        )
+                        state.last_action_summary = control_error
+                        _append_recent_action(state.last_action_summary)
+                        return _mission_result(
+                            success=False,
+                            reasoning=control_error,
+                            narrative="Think tool did not provide control instructions.",
+                            state=state,
+                        )
+                    if outcome.control is not None:
+                        if function_name != "think":
+                            control_error = (
+                                f"Tool '{function_name}' returned control payload, but only think may control mission flow."
+                            )
+                            self._record_failure(
+                                state,
+                                code="invalid_control_payload",
+                                stage="runtime_tool_control",
+                            )
+                            state.last_action_summary = control_error
+                            _append_recent_action(state.last_action_summary)
+                            return _mission_result(
+                                success=False,
+                                reasoning=control_error,
+                                narrative="Non-think tool attempted to control mission flow.",
+                                state=state,
+                            )
+                        if result_success:
+                            mission_done_reasoning, should_replan_after_control = self._apply_think_control(
+                                control=outcome.control,
+                                state=state,
+                                append_recent_action=_append_recent_action,
+                                exit_loop=_exit_loop,
+                            )
+
+                    result_str = "success" if result_success else "failed"
+                    summary = str(getattr(outcome.output, "summary", "") or "").strip()
+                    if not summary:
+                        summary = (
+                            f"{narrative} ({result_str})"
+                            if narrative
+                            else self._build_action_summary(action_step, result_str)
+                        )
+                    if (
+                        function_name == "think"
+                        and outcome.control is not None
+                        and outcome.control.next_action != ThinkNextAction.CONTINUE
+                    ):
+                        control_summary = str(state.last_action_summary or "").strip()
+                        if control_summary:
+                            summary = control_summary
                     if policy_observe_warning:
-                        state.last_action_summary += f" | sandbox(observe): {policy_observe_warning}"
-                    if result.error:
-                        state.last_action_summary += f" | {result.error}"
-                    _append_recent_action(state.last_action_summary)
+                        summary = f"{summary} | sandbox(observe): {policy_observe_warning}" if summary else policy_observe_warning
+                    if result_error:
+                        summary = f"{summary} | {result_error}" if summary else result_error
+                    state.last_action_summary = summary
+                    _append_recent_action(summary)
 
-                    if function_name == "ask_user" and result.success:
+                    if function_name == "ask_user" and result_success:
                         ask_question = str(action_args.get("question", "")).strip()
                         ask_answer = ""
                         ask_status = ""
-                        if isinstance(result.data, dict):
-                            ask_answer = str(result.data.get("answer", "") or "").strip()
-                            ask_status = str(result.data.get("status", "") or "").strip().lower()
+                        if isinstance(result_data, dict):
+                            ask_answer = str(result_data.get("answer", "") or "").strip()
+                            ask_status = str(result_data.get("status", "") or "").strip().lower()
                             if not ask_question:
-                                ask_question = str(result.data.get("question", "") or "").strip()
+                                ask_question = str(result_data.get("question", "") or "").strip()
                         if ask_status == "skipped":
                             ask_answer = "(user skipped)"
-                            if isinstance(result.data, dict):
-                                result.data["answer"] = ask_answer
+                            if isinstance(result_data, dict):
+                                result_data["answer"] = ask_answer
                         elif not ask_answer:
                             recent_pairs = self.memory_store.get_recent_question_answers(n=1)
                             if recent_pairs:
@@ -4135,81 +4108,84 @@ class Agent:
                             with self._hints_lock:
                                 self._pending_hints.append(hint)
 
-                    duration_ms = float((result.metadata or {}).get("duration_ms", 0.0))
-                    iteration_tool_latency_ms += max(0.0, duration_ms)
-                    if function_name in {"open_url", "go_back", "go_forward"}:
-                        iteration_navigation_latency_ms += max(0.0, duration_ms)
                     self.event_logger.action_complete(
                         tool=function_name,
                         narrative=narrative,
-                        success=bool(result.success),
+                        success=result_success,
                         result_str=result_str,
                         duration_ms=duration_ms,
                         iteration=self._current_iteration,
                     )
                     _record_action_result(
                         action_step,
-                        success=bool(result.success),
+                        success=result_success,
                         result_str=result_str,
                         summary=state.last_action_summary,
-                        error=result.error,
-                        extra={
-                            "message": result.message,
-                            "data": result.data,
-                        },
+                        error=result_error,
+                        extra={"data": result_data},
                     )
 
-                    user_facing_functions = {
-                        "click",
-                        "type_text",
-                        "clear_text",
-                        "select_option",
-                        "upload_file",
-                        "set_datetime",
-                        "press_key",
-                        "open_url",
-                        "go_back",
-                        "go_forward",
-                        "scroll_down",
-                        "scroll_up",
-                        "scroll_container",
-                        "scroll_to_element",
-                        "extract_data",
-                        "report_data",
-                        "write_data",
-                        "ask_user",
-                    }
-                    if result.success and function_name in user_facing_functions:
+                    if result_success and str(getattr(tool_spec.manifest.progress_policy, "value", "")) == "USER_FACING":
                         if function_name == "report_data":
-                            reported = (
-                                bool((result.data or {}).get("reported", result.success))
-                                if isinstance(result.data, dict)
-                                else bool(result.success)
-                            )
+                            reported = bool((result_data or {}).get("reported", True))
                             if reported:
+                                state.user_facing_actions_since_progress += 1
+                        elif function_name == "send_email":
+                            duplicate_of = (result_data or {}).get("duplicate_of")
+                            if not duplicate_of:
                                 state.user_facing_actions_since_progress += 1
                         else:
                             state.user_facing_actions_since_progress += 1
+
                         if state.in_loop:
-                            overlay_index = None
-                            if result.metadata:
-                                overlay_index = result.metadata.get("overlay_index")
-                            if overlay_index is None:
-                                overlay_index = action_args.get("element_id")
+                            overlay_index = action_args.get("element_id")
                             if overlay_index is not None:
                                 try:
                                     self.action_executor.mark_element_done(int(overlay_index))
                                 except (TypeError, ValueError):
                                     pass
 
-                    if result.success and self.tab_manager:
+                    if result_success and self.tab_manager:
                         active_tab = self.tab_manager.get_active()
                         if active_tab and self.browser.page is not active_tab.page:
                             self.action_executor.set_page(active_tab.page)
 
-                    if not result.success:
+                    if result_success and mission_done_reasoning:
+                        if state.in_loop:
+                            self.event_logger.loop_state_changed(
+                                change="end",
+                                loop_round=state.loop_round,
+                                loop_count=state.loop_count,
+                                loop_description=state.loop_description,
+                            )
+                            _exit_loop()
+                        return _mission_result(
+                            success=True,
+                            reasoning=mission_done_reasoning or "Mission complete",
+                            narrative=narrative or state.last_action_summary or "Mission complete",
+                            state=state,
+                        )
+
+                    if not result_success:
+                        # If policy engine blocks at runtime, fail mission immediately.
+                        if result_error and (
+                            "Effects denied by preset" in result_error
+                            or "Effects not allowed in preset" in result_error
+                            or "blocked by effect policy" in (state.last_action_summary or "")
+                        ):
+                            self._record_failure(
+                                state,
+                                code="tool_disallowed_by_policy",
+                                stage="runtime_tool_enforcement",
+                            )
+                            return _mission_result(
+                                success=False,
+                                reasoning=state.last_action_summary or result_error,
+                                narrative="Runtime effect policy blocked planner action.",
+                                state=state,
+                            )
                         try:
-                            overlay_index = result.metadata.get("overlay_index") if result.metadata else None
+                            overlay_index = action_args.get("element_id")
                             if overlay_index is None:
                                 overlay_index = action_args.get("overlay_index")
                             failed_action = FailedAction(
@@ -4223,8 +4199,12 @@ class Agent:
                         except Exception:
                             pass
                         break
-                    if _nav_break:
+
+                    if should_replan_after_control:
                         break
+                    if nav_break:
+                        break
+                    continue
 
                 state.validation_failures = 0
 

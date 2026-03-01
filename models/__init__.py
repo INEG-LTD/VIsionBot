@@ -11,6 +11,7 @@ from .models import (
     Goal,
     PageInfo,
     ActionIntent,
+    set_action_text_renderer,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "Goal",
     "PageInfo",
     "ActionIntent",
+    "set_action_text_renderer",
 ]

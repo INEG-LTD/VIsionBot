@@ -81,7 +81,7 @@ class HintValidationResult(_StrictModel):
     reject_reason: Optional[RejectReason] = None
 
 
-_TOOLS_REQUIRING_ELEMENT = {
+_DEFAULT_TOOLS_REQUIRING_ELEMENT = {
     "click",
     "type_text",
     "clear_text",
@@ -89,6 +89,21 @@ _TOOLS_REQUIRING_ELEMENT = {
     "scroll_container",
     "scroll_to_element",
 }
+_TOOLS_REQUIRING_ELEMENT = set(_DEFAULT_TOOLS_REQUIRING_ELEMENT)
+
+
+def set_tools_requiring_element(tool_names: Sequence[str]) -> None:
+    """Override the element-targeting requirement set from tool registry metadata."""
+    global _TOOLS_REQUIRING_ELEMENT
+    normalized = {
+        _safe_lower(name)
+        for name in (tool_names or [])
+        if str(name or "").strip()
+    }
+    if not normalized:
+        _TOOLS_REQUIRING_ELEMENT = set(_DEFAULT_TOOLS_REQUIRING_ELEMENT)
+        return
+    _TOOLS_REQUIRING_ELEMENT = normalized
 
 
 def _safe_lower(value: Any) -> str:
@@ -357,7 +372,7 @@ def filter_candidates_deterministic(
     current_url: str,
     current_title: str,
     detected_elements: PageElements,
-    allowed_tool_names: Optional[Sequence[str]] = None,
+    policy_visible_tool_names: Optional[Sequence[str]] = None,
     dialog_pending: bool = False,
     in_loop: bool = False,
     min_confidence: float = 0.0,
@@ -365,10 +380,10 @@ def filter_candidates_deterministic(
     """Apply deterministic guardrails before any validator/model decision."""
     allowed = {
         _safe_lower(name)
-        for name in (allowed_tool_names or [])
+        for name in (policy_visible_tool_names or [])
         if str(name or "").strip()
     }
-    use_allowlist = bool(allowed)
+    use_policy_filter = bool(allowed)
 
     overlay_map: Dict[int, Any] = {}
     for element in (getattr(detected_elements, "elements", None) or []):
@@ -385,7 +400,7 @@ def filter_candidates_deterministic(
         tool_name = _safe_lower(candidate.function_name)
         if not tool_name:
             continue
-        if use_allowlist and tool_name not in allowed:
+        if use_policy_filter and tool_name not in allowed:
             continue
         if float(candidate.confidence or 0.0) < float(min_confidence or 0.0):
             continue

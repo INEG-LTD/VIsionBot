@@ -2611,6 +2611,28 @@ class Executor:
 
         return True
 
+    def execute_via_adapter(
+        self,
+        *,
+        function_name: str,
+        function_arguments: Dict[str, Any],
+        detected_elements: PageElements,
+        page_info: PageInfo,
+        environment_state: Optional[EnvironmentState] = None,
+        base_knowledge: Optional[List[str]] = None,
+        current_iteration: Optional[int] = None,
+    ) -> ActionResult:
+        """Adapter entrypoint used by the declarative tool runtime for executor-backed tools."""
+        step = ActionStep.from_function_call(function_name, dict(function_arguments or {}))
+        return self.act(
+            action_step=step,
+            detected_elements=detected_elements,
+            page_info=page_info,
+            environment_state=environment_state,
+            base_knowledge=base_knowledge,
+            current_iteration=current_iteration,
+        )
+
     def act(
         self,
         action_step: ActionStep,

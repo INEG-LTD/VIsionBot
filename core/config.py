@@ -8,161 +8,11 @@ object with grouped settings.
 """
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any, Optional, Literal
 from pydantic import BaseModel, Field, model_validator
 from lib.ai import ReasoningLevel
 from browser.provider import BrowserConfig as BrowserProviderConfig
-
-
-DEFAULT_TOOL_ALLOWLIST: list[str] = [
-    "click",
-    "type_text",
-    "clear_text",
-    "select_option",
-    "upload_file",
-    "set_datetime",
-    "press_key",
-    "open_url",
-    "go_back",
-    "go_forward",
-    "scroll_down",
-    "scroll_up",
-    "scroll_container",
-    "scroll_to_element",
-    "extract_data",
-    "ask_user",
-    "report_data",
-    "write_data",
-    "wait_for",
-    "send_email",
-    "bash",
-    "read_file",
-    "find_files",
-    "read_clipboard",
-    "switch_tab",
-    "close_tab",
-    "open_tab",
-    "dismiss_dialog",
-    "think",
-    "assert_condition",
-    "flag",
-]
-
-class ToolPreset(str, Enum):
-    MINIMAL = "minimal"
-    RESEARCH = "research"
-    WEB_SAFE = "web_safe"
-    FULL = "full"
-    LOCKED_DOWN = "locked_down"
-
-
-TOOL_PRESETS: dict[ToolPreset, list[str]] = {
-    # Smallest useful interactive browsing set.
-    ToolPreset.MINIMAL: [
-        "click",
-        "type_text",
-        "press_key",
-        "open_url",
-        "go_back",
-        "go_forward",
-        "scroll_down",
-        "scroll_up",
-        "scroll_container",
-        "scroll_to_element",
-        "wait_for",
-        "think",
-        "flag",
-    ],
-    # Practical web research + extraction/reporting, no local shell/fs tools.
-    ToolPreset.RESEARCH: [
-        "click",
-        "type_text",
-        "clear_text",
-        "select_option",
-        "press_key",
-        "open_url",
-        "go_back",
-        "go_forward",
-        "scroll_down",
-        "scroll_up",
-        "scroll_container",
-        "scroll_to_element",
-        "extract_data",
-        "ask_user",
-        "report_data",
-        "write_data",
-        "wait_for",
-        "switch_tab",
-        "close_tab",
-        "open_tab",
-        "dismiss_dialog",
-        "think",
-        "assert_condition",
-        "flag",
-    ],
-    # Browser-only actions; excludes local/host access tools.
-    ToolPreset.WEB_SAFE: [
-        "click",
-        "type_text",
-        "clear_text",
-        "select_option",
-        "upload_file",
-        "set_datetime",
-        "press_key",
-        "open_url",
-        "go_back",
-        "go_forward",
-        "scroll_down",
-        "scroll_up",
-        "scroll_container",
-        "scroll_to_element",
-        "extract_data",
-        "ask_user",
-        "report_data",
-        "write_data",
-        "wait_for",
-        "send_email",
-        "switch_tab",
-        "close_tab",
-        "open_tab",
-        "dismiss_dialog",
-        "think",
-        "assert_condition",
-        "flag",
-    ],
-    # Full legacy default set.
-    ToolPreset.FULL: list(DEFAULT_TOOL_ALLOWLIST),
-    # Intentional no-op planner sandbox for diagnostics/guardrail checks.
-    ToolPreset.LOCKED_DOWN: [
-        "ask_user",
-        "report_data",
-        "write_data",
-        "think",
-        "flag",
-    ],
-}
-
-
-def tool_preset(name: ToolPreset | str) -> list[str]:
-    """Resolve a named tool preset to a concrete tool allowlist."""
-    preset = (
-        name
-        if isinstance(name, ToolPreset)
-        else ToolPreset(str(name or "").strip().lower())
-    )
-    # Return a copy to avoid accidental mutation of the shared preset tables.
-    return list(TOOL_PRESETS[preset])
-
-
-def resolve_tool_preset(name: ToolPreset | str) -> tuple[str, list[str]]:
-    """Resolve preset id + allowlist for runtime/planner enforcement."""
-    preset = (
-        name
-        if isinstance(name, ToolPreset)
-        else ToolPreset(str(name or "").strip().lower())
-    )
-    return f"preset:{preset.value}", tool_preset(preset)
+from agent.tooling.policy import PolicyMode, PolicyPreset
 
 class ModelConfig(BaseModel):
     """AI model configuration for planning and execution."""
@@ -206,6 +56,28 @@ class ModelConfig(BaseModel):
         )
 
 
+class ToolPolicyConfig(BaseModel):
+    """Effect-policy configuration for planner/runtime governance."""
+
+    preset: PolicyPreset = Field(
+        default=PolicyPreset.FULL,
+        description=(
+            "Effect-policy preset used for planner/runtime governance. "
+            "Allowed values: FULL, WEB_SAFE, LOCKED_DOWN."
+        ),
+    )
+    mode: PolicyMode = Field(
+        default=PolicyMode.ENFORCE,
+        description=(
+            "Effect-policy mode: ENFORCE blocks disallowed tool effects; "
+            "OBSERVE logs violations but allows execution."
+        ),
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class ExecutionConfig(BaseModel):
     """Runtime execution behavior configuration."""
 
@@ -220,11 +92,10 @@ class ExecutionConfig(BaseModel):
         le=20,
         description="Maximum number of actions to generate in a single action plan. Default is 6. Valid range: 1-20."
     )
-    tool_preset: ToolPreset = Field(
-        default=ToolPreset.FULL,
+    tool_policy: ToolPolicyConfig = Field(
+        default_factory=ToolPolicyConfig,
         description=(
-            "Tool preset used for planner/runtime allowlist enforcement. "
-            "Allowed values: minimal, research, web_safe, full, locked_down."
+            "Effect-policy configuration applied at planner and runtime phases."
         ),
     )
     budget_constraints_enabled: bool = Field(
@@ -310,6 +181,9 @@ class ExecutionConfig(BaseModel):
             "tool_profiles",
             "allowed_tools",
             "disabled_tools",
+            "tool_preset",
+            "tool_policy_preset",
+            "tool_policy_mode",
             "speculative_hints_validator_enabled",
             "speculative_hints_validator_min_confidence",
             "speculative_hints_candidate_count",
@@ -326,7 +200,7 @@ class ExecutionConfig(BaseModel):
         if tool_found:
             messages.append(
                 "legacy tool fields: "
-                f"{', '.join(tool_found)}. Use tool_preset only."
+                f"{', '.join(tool_found)}. Use tool_policy.preset/tool_policy.mode only."
             )
         if speculative_found:
             messages.append(
