@@ -29,7 +29,6 @@ class InteractionType(str, Enum):
     ASK = "ask"
     REPORT = "report"
     WRITE_DATA = "write_data"
-    MARK_PROGRESS = "mark_progress"
 
 
 class MemoryOutcome(str, Enum):
@@ -42,7 +41,6 @@ class MemoryOutcome(str, Enum):
 class MemoryEntryKind(str, Enum):
     EXECUTED_ACTION = "executed_action"
     REFLECTION = "reflection"
-    PROGRESS = "progress"
     AUXILIARY = "auxiliary"
     PLANNING = "planning"
 
@@ -407,8 +405,6 @@ class NarrativeMemory:
             return f"I reported data to the user: {description or 'text payload'}"
         if action_type == "write_data":
             return f"I wrote data to {description or 'a file'}"
-        if action_type == "mark_progress":
-            return f"I marked progress: {description or 'completed one unit'}"
         return f"I executed {action_type}"
 
     def _classify_entry_kind(
@@ -419,8 +415,6 @@ class NarrativeMemory:
 
         if action_type == InteractionType.THINK.value:
             return MemoryEntryKind.REFLECTION
-        if action_type == InteractionType.MARK_PROGRESS.value:
-            return MemoryEntryKind.PROGRESS
         if action_type in {
             InteractionType.ASSERT.value,
             InteractionType.FLAG.value,
