@@ -68,16 +68,6 @@ class SandboxPolicyEngine:
             )
         )
 
-    @property
-    def suppress_policy_debug_logs(self) -> bool:
-        return bool(
-            getattr(
-                getattr(self.config, "debug", None),
-                "suppress_policy_debug_logs",
-                False,
-            )
-        )
-
     def set_audit_log_path(self, path: Optional[Path]) -> None:
         """Attach or clear run-scoped audit logging."""
         if not path:
@@ -493,15 +483,14 @@ class SandboxPolicyEngine:
 
         if self.event_logger:
             try:
-                if not (payload["allowed"] and self.suppress_policy_debug_logs):
-                    self.event_logger.sandbox_decision(
-                        check_type=check_type,
-                        target=payload["target"],
-                        allowed=payload["allowed"],
-                        reason=payload["reason"],
-                        preset=payload["preset"],
-                        mode=payload["mode"],
-                    )
+                self.event_logger.sandbox_decision(
+                    check_type=check_type,
+                    target=payload["target"],
+                    allowed=payload["allowed"],
+                    reason=payload["reason"],
+                    preset=payload["preset"],
+                    mode=payload["mode"],
+                )
                 if not decision.allowed:
                     self.event_logger.sandbox_blocked_action(
                         check_type=check_type,

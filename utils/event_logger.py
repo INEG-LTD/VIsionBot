@@ -60,6 +60,7 @@ class EventType(str, Enum):
     CLEANUP_START = "cleanup_start"
     CLEANUP_DELETION = "cleanup_deletion"
     CLEANUP_COMPLETE = "cleanup_complete"
+    LIVE_TELEMETRY = "live_telemetry"
 
     # Extraction
     EXTRACTION_START = "extraction_start"
@@ -123,11 +124,20 @@ class EventLogger:
     In normal mode: only calls callbacks (no prints).
     """
 
-    def __init__(self, debug_mode: bool = True, show_overlay_candidates: bool = False, show_llm_costs: bool = True):
+    def __init__(
+        self,
+        debug_mode: bool = True,
+        show_overlay_candidates: bool = False,
+        show_llm_costs: bool = True,
+        suppress_policy_debug_logs: bool = False,
+        suppress_live_telemetry_terminal_logs: bool = False,
+    ):
         try:
             self.debug_mode = debug_mode
             self.show_overlay_candidates = show_overlay_candidates
             self.show_llm_costs = show_llm_costs
+            self.suppress_policy_debug_logs = bool(suppress_policy_debug_logs)
+            self.suppress_live_telemetry_terminal_logs = bool(suppress_live_telemetry_terminal_logs)
             self._callbacks: List[Callable[[BotEvent], None]] = []
             self._typed_callbacks: Dict[EventType, List[Callable[[BotEvent], None]]] = {}
             self._event_history: List[BotEvent] = []
@@ -138,6 +148,8 @@ class EventLogger:
             self.debug_mode = True
             self.show_overlay_candidates = False
             self.show_llm_costs = True
+            self.suppress_policy_debug_logs = False
+            self.suppress_live_telemetry_terminal_logs = False
             self._callbacks = []
             self._typed_callbacks = {}
             self._event_history = []
@@ -195,7 +207,8 @@ class EventLogger:
 
         if self.debug_mode:
             try:
-                self._print_event(event)
+                if self._should_print_event(event):
+                    self._print_event(event)
             except Exception:
                 pass
 
@@ -210,6 +223,25 @@ class EventLogger:
                 callback(event)
             except Exception:
                 pass
+
+    def _should_print_event(self, event: BotEvent) -> bool:
+        if (
+            self.suppress_live_telemetry_terminal_logs
+            and event.event_type == EventType.LIVE_TELEMETRY
+        ):
+            return False
+        if self.suppress_policy_debug_logs:
+            if (
+                event.event_type == EventType.SANDBOX_DECISION
+                and bool(event.details.get("allowed", False))
+            ):
+                return False
+            if (
+                event.event_type == EventType.SYSTEM_DEBUG
+                and str(event.message or "") == "Effect policy allowed tool"
+            ):
+                return False
+        return True
 
     def _print_event(self, event: BotEvent) -> None:
         level_emoji = {
@@ -637,6 +669,17 @@ class EventLogger:
                 f"Storage cleanup complete: {root}",
                 LogLevel.INFO,
                 root=root,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def live_telemetry(self, **details) -> None:
+        try:
+            self.emit(
+                EventType.LIVE_TELEMETRY,
+                "Live telemetry",
+                LogLevel.INFO,
                 **details,
             )
         except Exception:

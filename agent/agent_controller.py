@@ -367,6 +367,10 @@ class Agent:
             debug_mode=config.debug.debug_mode,
             show_overlay_candidates=config.debug.show_overlay_candidates,
             show_llm_costs=config.debug.show_llm_costs,
+            suppress_policy_debug_logs=bool(getattr(config.debug, "suppress_policy_debug_logs", False)),
+            suppress_live_telemetry_terminal_logs=bool(
+                getattr(config.debug, "suppress_live_telemetry_terminal_logs", False)
+            ),
         )
         set_event_logger(self.event_logger)  # Set as global
         
@@ -406,7 +410,6 @@ class Agent:
             preset=self.config.execution.tool_policy.preset,
             mode=self.config.execution.tool_policy.mode,
             event_logger=self.event_logger,
-            suppress_debug_logs=bool(getattr(self.config.debug, "suppress_policy_debug_logs", False)),
         )
         self.tool_engine = ToolEngine(
             registry=self.tool_registry,
@@ -2431,8 +2434,7 @@ class Agent:
         retries_per_mission = (
             float(state.retry_count) / max(1.0, float(self._current_iteration or 1))
         )
-        self.event_logger.system_info(
-            "Live telemetry",
+        self.event_logger.live_telemetry(
             avg_iteration_ms=round(avg_iteration, 3),
             p95_iteration_ms=round(self._p95(state.iteration_ms_samples), 3),
             avg_llm_ms=round(avg_llm, 3),

@@ -67,12 +67,10 @@ class EffectPolicyEngine:
         preset: PolicyPreset = PolicyPreset.FULL,
         mode: PolicyMode = PolicyMode.ENFORCE,
         event_logger: Any = None,
-        suppress_debug_logs: bool = False,
     ) -> None:
         self.preset = PolicyPreset(str(preset).upper()) if not isinstance(preset, PolicyPreset) else preset
         self.mode = PolicyMode(str(mode).upper()) if not isinstance(mode, PolicyMode) else mode
         self.event_logger = event_logger
-        self.suppress_debug_logs = bool(suppress_debug_logs)
         self._audit_path: Optional[Path] = None
 
     @property
@@ -147,8 +145,7 @@ class EffectPolicyEngine:
         if self.event_logger is not None:
             try:
                 if decision.allowed:
-                    if not self.suppress_debug_logs:
-                        self.event_logger.system_debug("Effect policy allowed tool", **payload)
+                    self.event_logger.system_debug("Effect policy allowed tool", **payload)
                 else:
                     self.event_logger.system_warning("Effect policy blocked tool", **payload)
             except Exception:

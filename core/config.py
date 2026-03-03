@@ -259,7 +259,13 @@ class DebugConfig(BaseModel):
     suppress_policy_debug_logs: bool = Field(
         default=False,
         description=(
-            "Suppress policy debug logs for allowed decisions while keeping policy warnings/errors."
+            "Suppress policy debug logs from terminal output while still emitting policy events."
+        ),
+    )
+    suppress_live_telemetry_terminal_logs: bool = Field(
+        default=False,
+        description=(
+            "Suppress live telemetry events from terminal output while still emitting telemetry events."
         ),
     )
     telemetry_live_enabled: bool = Field(
