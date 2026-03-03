@@ -256,6 +256,12 @@ class DebugConfig(BaseModel):
         default=True,
         description="Show LLM cost information in debug mode"
     )
+    suppress_policy_debug_logs: bool = Field(
+        default=False,
+        description=(
+            "Suppress policy debug logs for allowed decisions while keeping policy warnings/errors."
+        ),
+    )
     telemetry_live_enabled: bool = Field(
         default=True,
         description="Emit per-iteration factual telemetry summaries.",
@@ -490,7 +496,7 @@ class Config(BaseModel):
         default_factory=ElementConfig,
         description="Element detection configuration"
     )
-    logging: DebugConfig = Field(
+    debug: DebugConfig = Field(
         default_factory=DebugConfig,
         description="Debug and logging configuration"
     )
@@ -526,7 +532,7 @@ class Config(BaseModel):
             execution=ExecutionConfig(
                 max_actions_per_mission=1500
             ),
-            logging=DebugConfig(debug_mode=False)
+            debug=DebugConfig(debug_mode=False)
         )
     
     @classmethod

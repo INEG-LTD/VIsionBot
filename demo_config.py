@@ -63,7 +63,7 @@ config = Config(
         speculative_hints_enabled=True,
         speculative_hints_min_confidence=0.75,
     ),
-    logging=DebugConfig(
+    debug=DebugConfig(
         debug_mode=False,
         show_overlay_candidates=True,
         show_llm_costs=False,

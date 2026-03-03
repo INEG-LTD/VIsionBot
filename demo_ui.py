@@ -191,7 +191,7 @@ class ThinkingBorderManager:
 
     def __init__(self, agent: Agent):
         self.agent = agent
-        self._enabled = not agent.config.logging.debug_mode
+        self._enabled = not agent.config.debug.debug_mode
         self._last_page_id = None
 
     def _ensure_init(self):
@@ -701,8 +701,8 @@ class BrowserAgentApp(App):
     def _is_session_debug_enabled(session: AgentSession) -> bool:
         active_agent = session.agent
         effective_config = getattr(active_agent, "config", session.config) if active_agent else session.config
-        logging_cfg = getattr(effective_config, "logging", None)
-        return bool(getattr(logging_cfg, "debug_mode", False))
+        debug_cfg = getattr(effective_config, "debug", None)
+        return bool(getattr(debug_cfg, "debug_mode", False))
 
     def _capture_debug_print(self, record: DebugPrintRecord) -> None:
         # EventLogger debug events already flow through structured callbacks.
@@ -907,7 +907,7 @@ class BrowserAgentApp(App):
             pending_yes_no=session.pending_yes_no,
             allow_custom=bool(getattr(interaction_cfg, "allow_custom", True)),
             allow_skip=bool(getattr(interaction_cfg, "allow_skip", True)),
-            debug_mode=bool(getattr(getattr(effective_config, "logging", None), "debug_mode", False)),
+            debug_mode=bool(getattr(getattr(effective_config, "debug", None), "debug_mode", False)),
         )
 
     # ---- Event recording — called from worker thread via call_from_thread --

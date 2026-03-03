@@ -359,14 +359,14 @@ class Agent:
 
         # Set global print mode based on config (affects all dprint calls and API debug logging)
         from utils.debug_print import set_print_mode, PrintMode
-        set_print_mode(PrintMode.DEBUG if config.logging.debug_mode else PrintMode.NORMAL)
+        set_print_mode(PrintMode.DEBUG if config.debug.debug_mode else PrintMode.NORMAL)
 
         # Access event logger from agent
         from utils.event_logger import EventLogger
         self.event_logger = EventLogger(
-            debug_mode=config.logging.debug_mode,
-            show_overlay_candidates=config.logging.show_overlay_candidates,
-            show_llm_costs=config.logging.show_llm_costs,
+            debug_mode=config.debug.debug_mode,
+            show_overlay_candidates=config.debug.show_overlay_candidates,
+            show_llm_costs=config.debug.show_llm_costs,
         )
         set_event_logger(self.event_logger)  # Set as global
         
@@ -406,6 +406,7 @@ class Agent:
             preset=self.config.execution.tool_policy.preset,
             mode=self.config.execution.tool_policy.mode,
             event_logger=self.event_logger,
+            suppress_debug_logs=bool(getattr(self.config.debug, "suppress_policy_debug_logs", False)),
         )
         self.tool_engine = ToolEngine(
             registry=self.tool_registry,
@@ -465,10 +466,10 @@ class Agent:
         # Route storage defaults into this agent workspace.
         self._apply_workspace_paths()
 
-        self.show_llm_costs = config.logging.show_llm_costs
-        _show_overlay_candidates = config.logging.show_overlay_candidates
-        self.save_screenshots = config.logging.save_screenshots
-        self.screenshot_dir = config.logging.screenshot_dir
+        self.show_llm_costs = config.debug.show_llm_costs
+        _show_overlay_candidates = config.debug.show_overlay_candidates
+        self.save_screenshots = config.debug.save_screenshots
+        self.screenshot_dir = config.debug.screenshot_dir
 
         self._current_iteration = 0
         self.execution_state: Optional[ExecutionState] = None
@@ -476,11 +477,11 @@ class Agent:
         # Initialize execution system
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
         self.screenshot_store = ScreenshotStore(
-            max_in_memory_items=self.config.logging.screenshot_stream_in_memory_items,
-            max_in_memory_mb=self.config.logging.screenshot_stream_in_memory_mb,
-            persist_to_disk=self.config.logging.screenshot_stream_persist_to_disk,
-            disk_dir=self.config.logging.screenshot_stream_dir,
-            max_disk_files=self.config.logging.screenshot_stream_max_disk_files,
+            max_in_memory_items=self.config.debug.screenshot_stream_in_memory_items,
+            max_in_memory_mb=self.config.debug.screenshot_stream_in_memory_mb,
+            persist_to_disk=self.config.debug.screenshot_stream_persist_to_disk,
+            disk_dir=self.config.debug.screenshot_stream_dir,
+            max_disk_files=self.config.debug.screenshot_stream_max_disk_files,
         )
         self.sandbox_policy = SandboxPolicyEngine(
             config=self.config,
@@ -494,7 +495,7 @@ class Agent:
         
         Example:
             >>> with Agent(browser, config) as agent:
-            ...     agent.run_mission("Click the button")
+            ...     agent.execute_mission("Click the button")
             # Automatically calls end() on exit
         """
         self._start()
@@ -1744,8 +1745,8 @@ class Agent:
         ws = self.agent_workspace
         self.config.browser.user_data_dir = str(ws.browser_profile_dir)
         self.config.browser.downloads_path = str(ws.browser_downloads_dir)
-        self.config.logging.screenshot_dir = str(ws.screenshots_dir)
-        self.config.logging.screenshot_stream_dir = str(ws.stream_screenshots_dir)
+        self.config.debug.screenshot_dir = str(ws.screenshots_dir)
+        self.config.debug.screenshot_stream_dir = str(ws.stream_screenshots_dir)
 
         for path in (
             ws.workspace_root,
@@ -1921,8 +1922,10 @@ class Agent:
     def execute_mission(
         self,
         user_prompt: str,
+        starting_url: str = ""
     ) -> MissionResult:
-        
+        if starting_url != "" and starting_url != "about:blank":
+            self.browser.page.goto(starting_url)
         # Register all pre-registered interceptors with the new controller
         for interceptor_data in self.interceptor_stack:
             self.register_interceptor(
@@ -2289,7 +2292,7 @@ class Agent:
             state=state,
             status="success" if bool(success) else "failed",
         )
-        if bool(getattr(self.config.logging, "telemetry_final_summary_enabled", True)):
+        if bool(getattr(self.config.debug, "telemetry_final_summary_enabled", True)):
             self.event_logger.system_info(
                 "Final telemetry summary",
                 mission_ms=round(result.mission_ms, 3),
@@ -2405,7 +2408,7 @@ class Agent:
 
     def _emit_live_telemetry(self, state: ExecutionState) -> None:
         """Emit factual rolling telemetry per iteration."""
-        if not bool(getattr(self.config.logging, "telemetry_live_enabled", True)):
+        if not bool(getattr(self.config.debug, "telemetry_live_enabled", True)):
             return
         avg_iteration = self._mean(state.iteration_ms_samples)
         avg_llm = self._mean(state.llm_latency_ms_samples)
@@ -2494,7 +2497,7 @@ class Agent:
             except Exception as e:
                 dprint(f"⚠️ Failed to save screenshot: {e}")
 
-        if snapshot.screenshot and self.config.logging.stream_screenshots:
+        if snapshot.screenshot and self.config.debug.stream_screenshots:
             try:
                 screenshot_meta = self.screenshot_store.put(
                     snapshot.screenshot,
@@ -3678,7 +3681,7 @@ class Agent:
                 if policy_parts:
                     policy_constraints_block = "\n\n".join(part for part in policy_parts if str(part or "").strip())
                 if (
-                    self.config.logging.debug_mode
+                    self.config.debug.debug_mode
                     and state.budget_constraints_enabled
                     and state.low_budget_mode
                 ):
@@ -3882,7 +3885,7 @@ class Agent:
                     narrative = action_args.get("narrative", "")
                     iteration_tool_calls += 1
                     _check_iteration_watchdog(stage=f"before_action:{function_name or 'unknown'}")
-                    if self.config.logging.debug_mode:
+                    if self.config.debug.debug_mode:
                         self.event_logger.system_debug(
                             "Budget telemetry",
                             tool=function_name,

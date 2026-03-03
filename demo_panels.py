@@ -993,8 +993,8 @@ class AgentConfigEditor(Widget):
     """
 
     READ_ONLY_PATHS = {
-        "logging.screenshot_dir",
-        "logging.screenshot_stream_dir",
+        "debug.screenshot_dir",
+        "debug.screenshot_stream_dir",
         "browser.user_data_dir",
     }
 

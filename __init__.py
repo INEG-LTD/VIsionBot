@@ -22,6 +22,7 @@ from browser.provider import (
 from execution.result import ActionResult
 from agent.results import AgentResult
 
+
 # Error handling
 from lib.errors import (
     BotError,
