@@ -12,6 +12,7 @@ import json
 import time
 import threading
 import re
+import uuid
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type
@@ -29,6 +30,14 @@ from models import PageElements, PageInfo
 from models.models import ActionStep, FailedAction, set_action_text_renderer
 from agent.results import MissionResult
 from agent.agent_context import EnvironmentState
+from agent.events import (
+    AgentEvent,
+    EventDefinition,
+    EventResult,
+    coerce_emit_events,
+    normalize_event_definitions,
+    validate_event_payload,
+)
 from agent.notebook import Notebook
 from agent.speculative_hints import (
     HintBundle,
@@ -78,6 +87,7 @@ UserQuestionCallback = Callable[[str, dict, List[str], bool, bool], str]
 # Type alias for reported text callback (report_data: command handler)
 # Callback receives: payload (str), context (dict)
 DataReportCallback = Callable[[str, dict], None]
+EventCallback = Callable[[AgentEvent], Any]
 
 
 @dataclass
@@ -348,6 +358,10 @@ class Agent:
         completion_callback: Optional[Callable[[str], None]] = None,
         # Data report callback for report_data: command
         data_report_callback: Optional[DataReportCallback] = None,
+        # Agent event callback for cross-tool milestone events.
+        event_callback: Optional[EventCallback] = None,
+        # Allowed event definitions exposed to planner/runtime.
+        event_definitions: Optional[List[EventDefinition]] = None,
         # Callback to request a hint when the agent declares itself stuck
         on_stuck_callback: Optional[Callable[[str, int], Optional[str]]] = None,
         # Optional existing agent id to reuse/load its workspace.
@@ -394,6 +408,18 @@ class Agent:
         # Store completion callback for complete: command
         self.completion_callback = completion_callback
         self.data_report_callback = data_report_callback
+        self.event_callback = event_callback
+        normalized_event_definitions, event_lookup = normalize_event_definitions(event_definitions)
+        self.event_definitions: List[EventDefinition] = normalized_event_definitions
+        self.event_definition_map: Dict[str, EventDefinition] = event_lookup
+        self._accepted_agent_event_counts: Dict[str, int] = {}
+        self._reset_agent_event_tracking()
+        self.event_callback_timeout_seconds: float = float(
+            max(0.0, float(getattr(self.config.execution, "agent_events_callback_timeout_seconds", 0.0) or 0.0))
+        )
+        self.event_callback_response_max_chars: int = int(
+            max(0, int(getattr(self.config.execution, "agent_events_callback_response_max_chars", 0) or 0))
+        )
         self.on_stuck_callback = on_stuck_callback
         self._screenshot_counter = 0  # Counter for naming screenshots
 
@@ -624,6 +650,22 @@ class Agent:
             return None, True
 
         if next_action == ThinkNextAction.DONE:
+            missing_required = self._missing_required_agent_events()
+            if missing_required:
+                missing_text = ", ".join(sorted(missing_required))
+                state.last_action_summary = (
+                    f"done BLOCKED: missing required Agent Events: {missing_text}"
+                )
+                with self._hints_lock:
+                    self._pending_hints.append(
+                        "Mission completion blocked by required Agent Events. "
+                        f"Emit required events first: {missing_text}."
+                    )
+                self.event_logger.system_warning(
+                    "Mission done blocked by required Agent Events",
+                    missing_required=missing_required,
+                )
+                return None, True
             reasoning = str(control.done_reasoning or "").strip() or "Mission complete"
             state.last_action_summary = f"Mission complete: {reasoning}"
             return reasoning, False
@@ -1635,6 +1677,7 @@ class Agent:
         self._cached_snapshot_fingerprint = None
         self._cached_page_info = None
         self._cached_detected_elements = None
+        self._reset_agent_event_tracking()
         self._reset_speculative_state()
 
         self._loaded_resume_run_id = resolved_run_id
@@ -2579,6 +2622,379 @@ class Agent:
             )
         except Exception:
             pass
+
+    def _reset_agent_event_tracking(self) -> None:
+        self._accepted_agent_event_counts = {
+            name: 0
+            for name in self.event_definition_map.keys()
+        }
+
+    def _mark_agent_event_accepted(self, event_name: str) -> None:
+        current = int(self._accepted_agent_event_counts.get(event_name, 0) or 0)
+        self._accepted_agent_event_counts[event_name] = current + 1
+
+    def _missing_required_agent_events(self) -> List[str]:
+        missing: List[str] = []
+        for definition in self.event_definitions:
+            if not definition.required:
+                continue
+            if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) <= 0:
+                missing.append(definition.name)
+        return missing
+
+    def _event_once_per_mission_already_accepted(self, event_name: str) -> bool:
+        return int(self._accepted_agent_event_counts.get(event_name, 0) or 0) > 0
+
+    def _build_agent_events_status(self) -> dict[str, Any]:
+        if not self.event_definitions:
+            return {
+                "enabled": False,
+                "can_complete_mission": True,
+                "completion_blockers": [],
+                "required_events": {},
+                "accepted_counts": {},
+                "ack_required_events": [],
+            }
+        missing_required = self._missing_required_agent_events()
+        completion_blockers: List[str] = []
+        if missing_required:
+            completion_blockers.append(
+                "missing_required_events: " + ", ".join(sorted(missing_required))
+            )
+        can_complete = not completion_blockers
+        required_states: Dict[str, str] = {}
+        for definition in self.event_definitions:
+            if not definition.required:
+                continue
+            required_states[definition.name] = (
+                "accepted"
+                if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) > 0
+                else "missing"
+            )
+        ack_required = [
+            definition.name
+            for definition in self.event_definitions
+            if definition.require_callback_ack
+        ]
+        return {
+            "enabled": True,
+            "can_complete_mission": can_complete,
+            "completion_blockers": completion_blockers,
+            "required_events": required_states,
+            "accepted_counts": dict(self._accepted_agent_event_counts),
+            "ack_required_events": ack_required,
+        }
+
+    @staticmethod
+    def _extract_callback_ack(response: Any) -> tuple[Optional[bool], str]:
+        if not isinstance(response, dict):
+            return None, ""
+        ack_value = response.get("ack")
+        reason = str(response.get("reason", "") or "").strip()
+        if isinstance(ack_value, bool):
+            return ack_value, reason
+        return None, reason
+
+    def _collect_pending_agent_events(
+        self,
+        *,
+        action_step: ActionStep,
+        action_args: Dict[str, Any],
+    ) -> List[dict[str, Any]]:
+        merged: List[dict[str, Any]] = []
+        existing = getattr(action_step, "pending_events", []) or []
+        if isinstance(existing, list):
+            merged.extend(coerce_emit_events(existing))
+        raw_emit = action_args.pop("emit_events", None) if isinstance(action_args, dict) else None
+        merged.extend(coerce_emit_events(raw_emit))
+        action_step.function_arguments = dict(action_args or {})
+        action_step.pending_events = list(merged)
+        return merged
+
+    def _dispatch_agent_events(
+        self,
+        *,
+        pending_events: List[dict[str, Any]],
+        function_name: str,
+        action_id: str,
+        action_success: bool,
+    ) -> List[EventResult]:
+        results: List[EventResult] = []
+        if not pending_events:
+            return results
+
+        if not action_success:
+            for item in pending_events:
+                name = str(item.get("name", "") or "").strip() or "unknown_event"
+                event_id = f"{action_id}:{name}:{uuid.uuid4().hex[:8]}"
+                error = "tool action failed before event dispatch"
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name=name,
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
+            return results
+
+        if self.browser and self.browser.page:
+            try:
+                current_url = str(self.browser.page.url or "")
+            except Exception:
+                current_url = ""
+            try:
+                page_title = str(self.browser.page.title() or "")
+            except Exception:
+                page_title = ""
+        else:
+            current_url = ""
+            page_title = ""
+
+        for idx, item in enumerate(pending_events):
+            name = str(item.get("name", "") or "").strip()
+            function_name_norm = str(function_name or "").strip().lower()
+            payload = item.get("data")
+            data = payload if isinstance(payload, dict) else {}
+            event_id = f"{action_id}:{idx}:{uuid.uuid4().hex[:8]}"
+            if not name:
+                error = "event name is empty"
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name="",
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name="", delivered=False, error=error))
+                continue
+
+            definition = self.event_definition_map.get(name)
+            if definition is None:
+                error = f"event '{name}' is not defined"
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name=name,
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
+                continue
+
+            allowed_tools = list(definition.allowed_tools or [])
+            if allowed_tools and function_name_norm not in allowed_tools:
+                error = (
+                    f"event '{name}' is not allowed for tool '{function_name}'. "
+                    f"Allowed tools: {', '.join(allowed_tools)}"
+                )
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name=name,
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
+                continue
+
+            if definition.once_per_mission and self._event_once_per_mission_already_accepted(name):
+                error = f"event '{name}' is once_per_mission and was already accepted"
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name=name,
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
+                continue
+
+            valid_payload, reason = validate_event_payload(definition, data)
+            if not valid_payload:
+                error = reason or "event payload validation failed"
+                self.event_logger.agent_event_callback_error(
+                    event_id=event_id,
+                    action_id=action_id,
+                    name=name,
+                    error=error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
+                continue
+
+            event = AgentEvent(
+                event_id=event_id,
+                action_id=action_id,
+                name=name,
+                data=data,
+                context={
+                    "url": current_url,
+                    "page_title": page_title,
+                    "iteration": int(self._current_iteration or 0),
+                    "tool": function_name,
+                },
+            )
+            self.event_logger.agent_event_emitted(
+                event_id=event.event_id,
+                action_id=event.action_id,
+                name=event.name,
+                tool=function_name,
+                iteration=self._current_iteration,
+            )
+            callback_ok, callback_response, callback_error = self._invoke_event_callback(event)
+            accepted = True
+            failure_error = ""
+
+            if definition.require_callback_ack:
+                if not callback_ok:
+                    accepted = False
+                    failure_error = callback_error or "callback ack required but callback failed"
+                else:
+                    ack_value, ack_reason = self._extract_callback_ack(callback_response)
+                    if ack_value is not True:
+                        accepted = False
+                        if ack_value is False:
+                            failure_error = ack_reason or "callback rejected event (ack=false)"
+                        else:
+                            failure_error = (
+                                ack_reason
+                                or "callback ack required but response missing {'ack': true}"
+                            )
+
+            if callback_ok:
+                self.event_logger.agent_event_callback_success(
+                    event_id=event.event_id,
+                    action_id=event.action_id,
+                    name=event.name,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                    has_response=callback_response is not None,
+                )
+            elif callback_error != "event callback not configured":
+                self.event_logger.agent_event_callback_error(
+                    event_id=event.event_id,
+                    action_id=event.action_id,
+                    name=event.name,
+                    error=callback_error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+
+            if not accepted:
+                self.event_logger.agent_event_callback_error(
+                    event_id=event.event_id,
+                    action_id=event.action_id,
+                    name=event.name,
+                    error=failure_error,
+                    tool=function_name,
+                    iteration=self._current_iteration,
+                )
+                results.append(
+                    EventResult(
+                        event_id=event.event_id,
+                        name=event.name,
+                        delivered=False,
+                        error=failure_error,
+                    )
+                )
+                continue
+
+            self._mark_agent_event_accepted(event.name)
+            results.append(
+                EventResult(
+                    event_id=event.event_id,
+                    name=event.name,
+                    delivered=True,
+                    response=callback_response if callback_ok else None,
+                    error=None,
+                )
+            )
+        return results
+
+    def _invoke_event_callback(self, event: AgentEvent) -> tuple[bool, Any, str]:
+        if self.event_callback is None:
+            return False, None, "event callback not configured"
+
+        timeout_s = float(self.event_callback_timeout_seconds or 0.0)
+        if timeout_s <= 0.0:
+            try:
+                return True, self.event_callback(event), ""
+            except Exception as exc:
+                return False, None, str(exc) or exc.__class__.__name__
+
+        done = threading.Event()
+        holder: Dict[str, Any] = {}
+
+        def _runner() -> None:
+            try:
+                holder["response"] = self.event_callback(event)
+            except Exception as exc:
+                holder["error"] = str(exc) or exc.__class__.__name__
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_runner, daemon=True, name="agent-event-callback")
+        thread.start()
+        completed = done.wait(timeout_s)
+        if not completed:
+            return False, None, f"event callback timeout after {timeout_s:.2f}s"
+        if "error" in holder:
+            return False, None, str(holder.get("error", "event callback failed"))
+        return True, holder.get("response"), ""
+
+    def _summarize_event_results(
+        self,
+        event_results: List[EventResult],
+    ) -> tuple[str, List[str]]:
+        if not event_results:
+            return "", []
+        fragments: List[str] = []
+        hints: List[str] = []
+        for result in event_results:
+            if result.delivered:
+                if result.response is None:
+                    fragments.append(f"{result.name}=emitted")
+                    continue
+                response_text = self._format_event_callback_response(result.response)
+                if response_text:
+                    fragments.append(f"{result.name}={response_text}")
+                    hints.append(
+                        f'Event callback for "{result.name}" returned: {response_text}. '
+                        "Use this signal in your next actions."
+                    )
+            else:
+                err = str(result.error or "callback_failed")
+                fragments.append(f"{result.name}=error({err})")
+        return "; ".join(fragments[:4]), hints
+
+    def _format_event_callback_response(self, response: Any) -> str:
+        if response is None:
+            return ""
+        if isinstance(response, (dict, list, str, int, float, bool)):
+            try:
+                text = (
+                    json.dumps(response, ensure_ascii=True, sort_keys=True)
+                    if not isinstance(response, str)
+                    else response
+                )
+            except Exception:
+                text = str(response)
+        else:
+            text = str(response)
+        text = text.strip()
+        if not text:
+            return ""
+        max_chars = int(self.event_callback_response_max_chars or 0)
+        if max_chars > 0 and len(text) > max_chars:
+            return text[: max(0, max_chars - 3)] + "..."
+        return text
 
     @staticmethod
     def _build_action_summary(action_step, result_str: str) -> str:
@@ -3754,6 +4170,8 @@ class Agent:
                     budget_constraints_enabled=state.budget_constraints_enabled,
                     tool_registry=self.tool_registry,
                     effect_policy_engine=self.effect_policy,
+                    event_definitions=self.event_definitions,
+                    agent_events_status=self._build_agent_events_status(),
                 )
 
                 actions_list: Optional[list] = None
@@ -3881,11 +4299,16 @@ class Agent:
                         )
 
                     function_name = (getattr(action_step, "function_name", None) or "").strip()
-                    action_args = getattr(action_step, "function_arguments", {}) or {}
+                    action_args = dict(getattr(action_step, "function_arguments", {}) or {})
                     current_action = getattr(action_step, "action", "") or function_name
                     reasoning = action_args.get("reasoning", "")
                     narrative = action_args.get("narrative", "")
+                    pending_events = self._collect_pending_agent_events(
+                        action_step=action_step,
+                        action_args=action_args,
+                    )
                     iteration_tool_calls += 1
+                    action_id = f"it{self._current_iteration}_a{iteration_tool_calls}"
                     _check_iteration_watchdog(stage=f"before_action:{function_name or 'unknown'}")
                     if self.config.debug.debug_mode:
                         self.event_logger.system_debug(
@@ -4006,6 +4429,8 @@ class Agent:
 
                     mission_done_reasoning: Optional[str] = None
                     should_replan_after_control = False
+                    event_summary_text = ""
+                    event_hint_lines: List[str] = []
                     if function_name == "think" and result_success and outcome.control is None:
                         control_error = "think must return a control payload."
                         self._record_failure(
@@ -4047,6 +4472,18 @@ class Agent:
                                 exit_loop=_exit_loop,
                             )
 
+                    if pending_events:
+                        event_results = self._dispatch_agent_events(
+                            pending_events=pending_events,
+                            function_name=function_name,
+                            action_id=action_id,
+                            action_success=result_success,
+                        )
+                        event_summary_text, event_hint_lines = self._summarize_event_results(event_results)
+                        if event_hint_lines:
+                            with self._hints_lock:
+                                self._pending_hints.extend(event_hint_lines)
+
                     result_str = "success" if result_success else "failed"
                     summary = str(getattr(outcome.output, "summary", "") or "").strip()
                     if not summary:
@@ -4067,6 +4504,8 @@ class Agent:
                         summary = f"{summary} | sandbox(observe): {policy_observe_warning}" if summary else policy_observe_warning
                     if result_error:
                         summary = f"{summary} | {result_error}" if summary else result_error
+                    if event_summary_text:
+                        summary = f"{summary} | events: {event_summary_text}" if summary else f"events: {event_summary_text}"
                     state.last_action_summary = summary
                     _append_recent_action(summary)
 

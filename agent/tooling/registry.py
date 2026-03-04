@@ -3,14 +3,16 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import inspect
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel
 
+from agent.events import EventDefinition, build_emit_events_field
 from .policy import EffectPolicyEngine
 from .types import (
     BUDGET_FIELDS,
     DialogPolicy,
+    EVENTS_FIELD,
     NARRATIVE_FIELD,
     NEXT_HINT_FIELD,
     ToolManifest,
@@ -80,6 +82,7 @@ class ToolRegistry:
             "narrative",
             "memory_evidence_ids",
             "next_hint_json",
+            "emit_events",
             "budget_spent",
             "budget_remaining",
             "budget_total",
@@ -112,6 +115,7 @@ class ToolRegistry:
         budget_enabled: bool,
         policy_engine: Optional[EffectPolicyEngine],
         allowed_names: Optional[List[str]] = None,
+        event_definitions: Optional[Sequence[EventDefinition]] = None,
         strip_property_descriptions: bool = True,
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
@@ -135,6 +139,7 @@ class ToolRegistry:
             params_schema = self._build_parameters_schema(
                 spec.args_model,
                 budget_enabled=budget_enabled,
+                event_definitions=event_definitions,
                 strip_property_descriptions=strip_property_descriptions,
             )
             result.append(
@@ -154,6 +159,7 @@ class ToolRegistry:
         args_model: type[BaseModel],
         *,
         budget_enabled: bool,
+        event_definitions: Optional[Sequence[EventDefinition]],
         strip_property_descriptions: bool,
     ) -> Dict[str, Any]:
         raw = args_model.model_json_schema()
@@ -191,12 +197,20 @@ class ToolRegistry:
                 properties.pop(field, None)
             schema["required"] = [item for item in required if item not in BUDGET_FIELDS]
 
+        if event_definitions:
+            try:
+                properties.update(build_emit_events_field(event_definitions))
+            except Exception:
+                properties.update(deepcopy(EVENTS_FIELD))
+
         schema["additionalProperties"] = False
 
         if strip_property_descriptions:
             props = schema.get("properties")
             if isinstance(props, dict):
-                for prop in props.values():
+                for key, prop in props.items():
+                    if key == "emit_events":
+                        continue
                     if isinstance(prop, dict):
                         prop.pop("description", None)
                         prop.pop("title", None)

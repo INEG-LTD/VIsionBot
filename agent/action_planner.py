@@ -14,6 +14,7 @@ import json
 from agent.memory import NarrativeMemory
 from agent.notebook import Notebook
 from agent.agent_context import EnvironmentState
+from agent.events import EventDefinition, coerce_emit_events, normalize_event_definitions
 from agent.prompts import (
     DecisionContext,
     SHARED_CONTRADICTION_GATE,
@@ -121,6 +122,8 @@ class ActionPlanner:
         budget_constraints_enabled: bool = True,
         tool_registry: Optional[Any] = None,
         effect_policy_engine: Optional[Any] = None,
+        event_definitions: Optional[List[EventDefinition]] = None,
+        agent_events_status: Optional[Dict[str, Any]] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -169,6 +172,11 @@ class ActionPlanner:
         self.budget_constraints_enabled = bool(budget_constraints_enabled)
         self.tool_registry = tool_registry
         self.effect_policy_engine = effect_policy_engine
+        normalized_events, _ = normalize_event_definitions(event_definitions)
+        self.event_definitions: List[EventDefinition] = normalized_events
+        self.agent_events_status: Dict[str, Any] = (
+            dict(agent_events_status) if isinstance(agent_events_status, dict) else {}
+        )
         self.last_call_telemetry: dict[str, Any] = {}
         self.last_failure_code: Optional[str] = None
         self.last_failure_stage: Optional[str] = None
@@ -298,6 +306,10 @@ class ActionPlanner:
             hints_str = "\n".join(f"- {h}" for h in self.user_hints)
             parts.append(f"HINTS FROM USER:\n{hints_str}\n")
 
+        events_status_block = self._build_agent_events_status_block()
+        if events_status_block:
+            parts.append(events_status_block)
+
         if self.recommended_next_step:
             source = (
                 f" (source: {self.recommended_next_step_source_id})"
@@ -324,6 +336,52 @@ class ActionPlanner:
             return ""
 
         return "\n".join(parts) + "\n"
+
+    def _build_agent_events_status_block(self) -> str:
+        if not self.event_definitions:
+            return ""
+        status = self.agent_events_status if isinstance(self.agent_events_status, dict) else {}
+        can_complete = bool(status.get("can_complete_mission", False))
+        blockers = status.get("completion_blockers") or []
+        required_events = status.get("required_events") or {}
+        accepted_counts = status.get("accepted_counts") or {}
+        ack_required = status.get("ack_required_events") or []
+
+        lines: List[str] = [
+            "═══════════════════════════════════════════════════════════════",
+            "AGENT EVENTS STATUS",
+            "═══════════════════════════════════════════════════════════════",
+            f"can_complete_mission: {'true' if can_complete else 'false'}",
+        ]
+        if blockers:
+            lines.append("completion_blockers:")
+            for blocker in blockers:
+                lines.append(f"- {blocker}")
+        else:
+            lines.append("completion_blockers: none")
+
+        if any(event.required for event in self.event_definitions):
+            lines.append("required_events:")
+            for event in self.event_definitions:
+                if not event.required:
+                    continue
+                state = str(required_events.get(event.name, "missing"))
+                lines.append(f"- {event.name}: {state}")
+
+        lines.append("accepted_event_counts:")
+        for event in self.event_definitions:
+            count = int(accepted_counts.get(event.name, 0) or 0)
+            lines.append(f"- {event.name}: {count}")
+
+        if ack_required:
+            lines.append("ack_required_events:")
+            for name in ack_required:
+                lines.append(f"- {name}")
+
+        lines.append(
+            "RULE: If can_complete_mission=false, do not call think(next_action=done)."
+        )
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _strip_targeting_data(step: str) -> str:
@@ -420,6 +478,7 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 dialog_pending=self.dialog_pending,
                 budget_enabled=self.budget_constraints_enabled,
                 policy_engine=self.effect_policy_engine,
+                event_definitions=self.event_definitions,
             )
             if not tools:
                 self.last_failure_code = "tool_policy_filtered_empty"
@@ -481,6 +540,7 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 get_event_logger().system_debug(f"Arguments: {action['arguments']}")
 
                 action_arguments = action["arguments"] if isinstance(action.get("arguments"), dict) else {}
+                pending_events = coerce_emit_events(action_arguments.get("emit_events"))
                 next_hint_raw = action_arguments.get("next_hint_json")
                 if self.last_hint_status == "missing":
                     parsed_candidate, parsed_status, parsed_reason, parsed_conf = self._parse_next_hint_envelope(next_hint_raw)
@@ -493,11 +553,15 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 if isinstance(action_arguments, dict) and "next_hint_json" in action_arguments:
                     action_arguments = dict(action_arguments)
                     action_arguments.pop("next_hint_json", None)
+                if isinstance(action_arguments, dict) and "emit_events" in action_arguments:
+                    action_arguments = dict(action_arguments)
+                    action_arguments.pop("emit_events", None)
 
                 # Create ActionStep from function call
                 action_step = ActionStep.from_function_call(
                     function_name=action["function_name"],
                     arguments=action_arguments,
+                    pending_events=pending_events,
                 )
                 actions.append(action_step)
 
@@ -573,6 +637,36 @@ POLICY CONSTRAINTS
             f"{compact_key}={full_name}"
             for compact_key, full_name in _NEXT_HINT_COMPACT_KEYS.items()
         )
+        events_section = ""
+        if self.event_definitions:
+            event_lines = []
+            for event in self.event_definitions:
+                details: List[str] = []
+                if event.when:
+                    details.append(f"when={event.when}")
+                if event.required:
+                    details.append("required")
+                if event.once_per_mission:
+                    details.append("once_per_mission")
+                if event.require_callback_ack:
+                    details.append("require_callback_ack")
+                if event.allowed_tools:
+                    details.append(f"allowed_tools={','.join(event.allowed_tools)}")
+                line = f"- {event.name}"
+                if event.description:
+                    line += f": {event.description}"
+                if details:
+                    line += f" ({'; '.join(details)})"
+                event_lines.append(line)
+            events_text = "\n".join(event_lines)
+            events_section = f"""
+12. `emit_events` is available on every tool call when a business milestone is reached.
+    Allowed event names:
+{events_text}
+    Emit only factual, already-completed milestones for the current action.
+    Example:
+    "emit_events": [{{"name": "application_submitted", "data": {{"company": "...", "role": "..."}}}}]
+"""
 
         return f"""
 You are controlling a web browser.
@@ -642,6 +736,7 @@ GUIDELINES
       {{"s":"c","f":"...","a":{{...}},"oi":123,"c":0.0-1.0,"r":"...","id":"optional_id"}}
     - None envelope (when uncertain):
       {{"s":"n","r":"why uncertain","c":0.0}}
+{events_section}
 {budget_reasoning_contract}
 {base_knowledge_section}
 """
@@ -659,6 +754,7 @@ GUIDELINES
             user_hints_section = "\n\nHINTS FROM USER:\n"
             for hint in self.user_hints:
                 user_hints_section += f"- {hint}\n"
+        events_status_section = self._build_agent_events_status_block()
 
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
@@ -756,6 +852,7 @@ Navigation history:
 {self._format_notebook(notebook)}
 
 {user_hints_section}
+{events_status_section}
 
 Choose the next action to take.
 """
@@ -799,6 +896,7 @@ OPEN TABS
         if self.user_hints:
             hints_str = "\n".join(f"- {h}" for h in self.user_hints)
             user_hints_section = f"\nHINTS FROM USER:\n{hints_str}\n"
+        events_status_section = self._build_agent_events_status_block()
 
         # Element index — always fresh (page may have changed)
         element_section = f"""═══════════════════════════════════════════════════════════════
@@ -828,7 +926,7 @@ URL: {state.current_url}
 Title: {state.page_title}
 {gallery_note}
 (Prior context — mission history, action ledger, navigation history, memory entries — is available from your previous conversation turns.)
-{tab_section}{user_hints_section}
+{tab_section}{user_hints_section}{events_status_section}
 {element_section}
 
 {notebook_section}

@@ -106,3 +106,25 @@ BUDGET_FIELDS = {
         "description": "Total actions budget for mission.",
     },
 }
+
+EVENTS_FIELD = {
+    "emit_events": {
+        "type": "array",
+        "maxItems": 4,
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                },
+                "data": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        "description": "Emit domain events for this tool action.",
+    }
+}

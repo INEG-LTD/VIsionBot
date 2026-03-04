@@ -170,6 +170,22 @@ class ExecutionConfig(BaseModel):
         le=1.0,
         description="Minimum confidence required before accepting a speculative hint.",
     )
+    agent_events_callback_timeout_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "Timeout for Agent Events callback execution in seconds. "
+            "0 disables timeout and runs callback inline."
+        ),
+    )
+    agent_events_callback_response_max_chars: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum callback response characters fed back into planner context. "
+            "0 disables truncation."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

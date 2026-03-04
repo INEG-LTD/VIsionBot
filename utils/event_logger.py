@@ -61,6 +61,9 @@ class EventType(str, Enum):
     CLEANUP_DELETION = "cleanup_deletion"
     CLEANUP_COMPLETE = "cleanup_complete"
     LIVE_TELEMETRY = "live_telemetry"
+    AGENT_EVENT_EMITTED = "agent_event_emitted"
+    AGENT_EVENT_CALLBACK_SUCCESS = "agent_event_callback_success"
+    AGENT_EVENT_CALLBACK_ERROR = "agent_event_callback_error"
 
     # Extraction
     EXTRACTION_START = "extraction_start"
@@ -680,6 +683,49 @@ class EventLogger:
                 EventType.LIVE_TELEMETRY,
                 "Live telemetry",
                 LogLevel.INFO,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def agent_event_emitted(self, *, event_id: str, action_id: str, name: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.AGENT_EVENT_EMITTED,
+                f"Agent event emitted: {name}",
+                LogLevel.INFO,
+                event_id=event_id,
+                action_id=action_id,
+                name=name,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def agent_event_callback_success(self, *, event_id: str, action_id: str, name: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.AGENT_EVENT_CALLBACK_SUCCESS,
+                f"Agent event callback success: {name}",
+                LogLevel.INFO,
+                event_id=event_id,
+                action_id=action_id,
+                name=name,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def agent_event_callback_error(self, *, event_id: str, action_id: str, name: str, error: str, **details) -> None:
+        try:
+            self.emit(
+                EventType.AGENT_EVENT_CALLBACK_ERROR,
+                f"Agent event callback error: {name}",
+                LogLevel.WARNING,
+                event_id=event_id,
+                action_id=action_id,
+                name=name,
+                error=error,
                 **details,
             )
         except Exception:

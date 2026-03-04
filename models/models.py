@@ -94,6 +94,7 @@ class ActionStep(BaseModel):
     keys_to_press: List[str] | None = None
     function_name: str | None = None
     function_arguments: dict | None = None
+    pending_events: List[dict[str, Any]] = Field(default_factory=list)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -103,6 +104,7 @@ class ActionStep(BaseModel):
         cls,
         function_name: str,
         arguments: dict,
+        pending_events: Optional[List[dict[str, Any]]] = None,
     ) -> "ActionStep":
         """
         Create ActionStep from function call.
@@ -121,6 +123,7 @@ class ActionStep(BaseModel):
             reasoning=arguments.get("reasoning"),
             function_name=function_name,
             function_arguments=arguments,
+            pending_events=list(pending_events or []),
         )
 
     @staticmethod
