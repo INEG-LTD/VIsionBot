@@ -1968,8 +1968,18 @@ class Agent:
     def execute_mission(
         self,
         user_prompt: str,
-        starting_url: str = ""
+        starting_url: str = "",
+        base_knowledge: Optional[List[str]] = None,
     ) -> MissionResult:
+        previous_base_knowledge = list(self.base_knowledge)
+        if base_knowledge is not None:
+            self.base_knowledge = [
+                str(item).strip()
+                for item in base_knowledge
+                if str(item).strip()
+            ]
+            self.memory_store.set_base_knowledge(self.base_knowledge)
+
         if starting_url != "" and starting_url != "about:blank":
             self.browser.page.goto(starting_url)
         # Register all pre-registered interceptors with the new controller
@@ -1988,6 +1998,9 @@ class Agent:
             self._detach_run_event_log_sink()
             self.sandbox_policy.set_audit_log_path(None)
             self.effect_policy.set_audit_log_path(None)
+            if base_knowledge is not None:
+                self.base_knowledge = previous_base_knowledge
+                self.memory_store.set_base_knowledge(self.base_knowledge)
 
         self.event_logger.agent_complete(mission_result.success, mission_result.reasoning)
         
