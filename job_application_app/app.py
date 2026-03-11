@@ -24,26 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_SKILLS_ROOT = PROJECT_ROOT / "skills" / "job-finder-skills"
 WORKSPACE_SKILLS_DIRNAME = "agent_skills"
 
-config = Config(
-    sandbox=SandboxConfig(
-        enabled=False
-    ),
-    debug=DebugConfig(
-        debug_mode=True,
-        suppress_policy_debug_logs=True,
-        suppress_live_telemetry_terminal_logs=True
-    ),
-    model=ModelConfig(
-        image_detail="low"
-    ),
-    execution=ExecutionConfig(
-        use_previous_response_id=False,
-    ),
-    storage=StorageConfig(
-        base_dir="job-application-data/agents",
-        default_persistence_mode="persistent",
-    )
-)
 
 events = [
     EventDefinition(
@@ -317,6 +297,7 @@ def build_base_knowledge(
     *,
     job_title: str,
     job_location: str,
+    target_job_count: int,
     years_of_experience: str,
     is_remote: str,
     desired_salary: str,
@@ -361,6 +342,7 @@ def build_base_knowledge(
         base_knowledge.append(f"Target job title: {job_title}")
     if job_location:
         base_knowledge.append(f"Target job location: {job_location}")
+    base_knowledge.append(f"Target job count: {target_job_count}")
     base_knowledge.append(f"Remote preference: {remote_preference}")
     if desired_salary:
         base_knowledge.append(f"Desired salary: {desired_salary}")
@@ -380,40 +362,98 @@ def on_user_question(question: str, context: dict, options: list[str], multi_sel
     print(f"Yes/No: {yes_no}")
     return input("Enter your answer: ").strip()
 
-with Agent(
-    config=config,
-    agent_id=STABLE_AGENT_ID,
-    event_definitions=events,
-    event_callback=on_event,
-    user_question_callback=on_user_question
-) as agent:
-    agent.register_tool(process_focused_job)
-    sync_skills_to_agent_workspace(agent)
-    user_details = build_user_data(agent)
-    cv_professional_summary = build_cv_professional_summary(agent, user_details)
-
-    # Request job preferences
-    job_title = input("Enter the job title you are applying for: ").strip()
-    job_location = input("Enter the job location you are applying to: ").strip()
-    is_remote = input("Are you looking for a remote job? (y/n): ").strip()
-    years_of_experience = input("Enter your years of experience: ").strip()
-    desired_salary = input("Enter your desired salary: ").strip()
-
-    base_knowledge = build_base_knowledge(
-        user_details,
-        job_title=job_title,
-        job_location=job_location,
-        years_of_experience=years_of_experience,
-        is_remote=is_remote,
-        desired_salary=desired_salary,
-        cv_professional_summary=cv_professional_summary,
+def find_jobs(debug: bool = False) -> list[dict]:
+    config = Config(
+        sandbox=SandboxConfig(
+            enabled=False
+        ),
+        debug=DebugConfig(
+            debug_mode=debug,
+            suppress_policy_debug_logs=True,
+            suppress_live_telemetry_terminal_logs=True
+        ),
+        model=ModelConfig(
+            image_detail="low"
+        ),
+        execution=ExecutionConfig(
+            use_previous_response_id=False,
+        ),
+        storage=StorageConfig(
+            base_dir="job-application-data/agents",
+            default_persistence_mode="persistent",
+        )
     )
+    
+    with Agent(
+        config=config,
+        agent_id=STABLE_AGENT_ID,
+        event_definitions=events,
+        event_callback=on_event,
+        user_question_callback=on_user_question
+    ) as agent:
+        agent.register_tool(process_focused_job)
+        sync_skills_to_agent_workspace(agent)
+        user_details = build_user_data(agent)
+        cv_professional_summary = build_cv_professional_summary(agent, user_details)
 
-    agent.execute_mission(
-        f"""First action: call activate_skill with skill_name="google-job-finder".
-            Then follow that skill to find Google Jobs for "{job_title} {'in' if job_location else ''} {job_location}{' and is remote' if is_remote.lower() in {'y', 'yes', 'true'} else ''}",
-            save results, and report completion.
-            """,
-        starting_url="https://google.com",
-        base_knowledge=base_knowledge,
-    )
+        # Request job preferences
+        job_title = input("Enter the job title you are applying for: ").strip()
+        job_location = input("Enter the job location you are applying to: ").strip()
+        is_remote = input("Are you looking for a remote job? (y/n): ").strip()
+        years_of_experience = input("Enter your years of experience: ").strip()
+        desired_salary = input("Enter your desired salary: ").strip()
+        target_job_count_raw = input("How many matching jobs should be saved? [10]: ").strip()
+        try:
+            target_job_count = int(target_job_count_raw) if target_job_count_raw else 10
+        except ValueError:
+            target_job_count = 10
+        target_job_count = max(1, min(target_job_count, 50))
+
+        base_knowledge = build_base_knowledge(
+            user_details,
+            job_title=job_title,
+            job_location=job_location,
+            target_job_count=target_job_count,
+            years_of_experience=years_of_experience,
+            is_remote=is_remote,
+            desired_salary=desired_salary,
+            cv_professional_summary=cv_professional_summary,
+        )
+
+        agent_job_finder_result = agent.execute_mission(
+            f"""First action: call activate_skill with skill_name="google-job-finder".
+                Then follow that skill to find Google Jobs for "{job_title} {'in' if job_location else ''} {job_location}{' and is remote' if is_remote.lower() in {'y', 'yes', 'true'} else ''}",
+                save exactly {target_job_count} new matching jobs unless results run out, and report completion.
+                """,
+            starting_url="https://google.com",
+            base_knowledge=base_knowledge,
+        )
+        
+        if agent_job_finder_result.success:
+            # read from the agent's data/written folder the google-jobs-list.jsonl file
+            google_jobs_list_path = agent.agent_workspace.written_data_dir / "google-jobs-list.jsonl"
+            if google_jobs_list_path.exists():
+                with open(google_jobs_list_path, "r") as f:
+                    return [json.loads(line) for line in f.readlines()]
+        return []
+
+def generate_cv_for_job():
+    pass
+
+jobs = find_jobs()
+
+print("Extracted jobs:")
+for i, job in enumerate(jobs):
+    print(f"{i+1}. {job['job_title']} at {job['company_name']} in {job['location']}")
+
+while True:
+    selected_job_index = int(input("Enter the number of the job you want to generate a CV for: ")) - 1
+    selected_job = jobs[selected_job_index]
+
+    print(f"Generating CV for {selected_job['job_title']} at {selected_job['company_name']} in {selected_job['location']}")
+
+    generate_cv_for_job(selected_job)
+    print("CV generated successfully")
+    print("Do you want to generate a CV for another job? (y/n)")
+    if input() == "n":
+        break

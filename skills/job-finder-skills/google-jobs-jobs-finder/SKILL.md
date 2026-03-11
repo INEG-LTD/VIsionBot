@@ -1,9 +1,10 @@
 ---
 name: google-job-finder
-description: Collect matching jobs from Google Jobs search results, save exactly 10 new matching jobs unless results run out, and report completion. Use when the user wants to find and save job listings from Google.
+description: Collect matching jobs from Google Jobs search results, save exactly target_job_count new matching jobs unless results run out, and report completion. Use when the user wants to find and save job listings from Google.
 ---
 
 Use this skill when collecting Google Jobs results for a search query and job profile.
+Use `target_job_count` from the mission or base knowledge when it is provided. If `target_job_count` is missing, default to `10`.
 
 See [Google Jobs layout](references/google-jobs-layout.md) for how the page is structured.
 See [troubleshooting](references/troubleshooting.md) if you encounter captchas, redirects, or empty results.
@@ -20,7 +21,7 @@ See [troubleshooting](references/troubleshooting.md) if you encounter captchas, 
 4. If the Google Jobs page is open but no job listings are visible in the left panel, call `report_data` saying there were no job listings for the requested search query and job profile, then call `think(next_action="done")`.
 
 ## Collection Loop
-1. Call `think(next_action="start_loop", loop_count=10, loop_description="Save 10 new matching Google jobs")`.
+1. Call `think(next_action="start_loop", loop_count=target_job_count, loop_description="Save target_job_count new matching Google jobs")`.
 2. Click the next unseen job card in the left panel.
    - If no unseen card is visible, scroll the left panel with `scroll_container`.
    - Only use `scroll_down` if `scroll_container` is not possible.
@@ -35,7 +36,7 @@ See [troubleshooting](references/troubleshooting.md) if you encounter captchas, 
 4. React to the result:
    - `saved=true` -> call `think(next_action="advance")`
    - `duplicate=true`, `matches_profile=false`, or `processable=false` -> do not advance, go to next unseen card
-5. Repeat from step 2 until 10 jobs are saved or results are exhausted.
+5. Repeat from step 2 until `target_job_count` jobs are saved or results are exhausted.
 
 ## Recovery
 If at any point you leave the Google Jobs page:
@@ -48,7 +49,7 @@ Do not call `think(next_action="stuck")` for duplicates, skipped jobs, or lack o
 Instead: scroll the left panel for more cards, or recover navigation if off-page.
 
 ## Completion
-1. If results run out before 10 jobs, report partial completion with the count saved.
+1. If results run out before `target_job_count` jobs, report partial completion with the count saved.
 2. Call `report_data` with: search query, number of new jobs saved, file name `google-jobs-list.jsonl`.
 3. If a recipient email is available, call `send_email` with the same summary.
 4. Call `think(next_action="done")`.
