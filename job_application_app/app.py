@@ -1,25 +1,18 @@
 import json
 import shutil
-import tkinter as tk
-from hashlib import sha256
 from pathlib import Path
-import re
 import time
-from tkinter import filedialog
 
+import chime
 from agent import AgentEvent
 from agent.agent_controller import Agent
 from agent.events import EventDefinition
 from core.config import Config, DebugConfig, ExecutionConfig, ModelConfig, SandboxConfig, StorageConfig
-from job_application_app.modify_cv_tool import _file_to_markdown
+from job_application_app.document_generation import generate_cover_letter, generate_cv
 from job_application_app.process_focused_job_tool import process_focused_job
-from lib.ai import generate_text
+from job_application_app.profile_store import build_cv_professional_summary, build_user_data
 
 STABLE_AGENT_ID = "job_application_profile"
-USER_DETAILS_FILENAME = "user_details.json"
-CV_MARKDOWN_FILENAME = "cv_markdown.md"
-CV_SUMMARY_CACHE_FILENAME = "cv_summary_cache.json"
-CV_SUMMARY_WORD_COUNT = 100
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_SKILLS_ROOT = PROJECT_ROOT / "skills" / "job-finder-skills"
 WORKSPACE_SKILLS_DIRNAME = "agent_skills"
@@ -27,14 +20,79 @@ WORKSPACE_SKILLS_DIRNAME = "agent_skills"
 
 events = [
     EventDefinition(
-        name="google_visited",
-        description="Google was visited",
-        schema={}
-    )
+        name="jobs_page_ready",
+        description="Google Jobs is open and the Jobs tab is highlighted.",
+        when="the Google Jobs page is visible and the Jobs tab is already selected/highlighted",
+        schema={"jobs_tab_highlighted": bool},
+    ),
+    EventDefinition(
+        name="job_saved",
+        description="A focused job was saved to the jobs JSONL file.",
+        when="after reading a successful process_focused_job result and taking the next successful action",
+        schema={
+            "job_title": str,
+            "file_name": str,
+        },
+    ),
+    EventDefinition(
+        name="job_rejected",
+        description="A focused job was examined and not saved.",
+        when="after reading a non-saved process_focused_job result and taking the next successful action",
+        schema={
+            "reason_code": str,
+            "reason": str,
+        },
+    ),
+    EventDefinition(
+        name="job_collection_done",
+        description="The job collection mission finished with a non-failure outcome.",
+        when="reporting terminal complete, partial, or empty results",
+        schema={
+            "outcome": str,
+            "saved_count": int,
+            "target_count": int,
+        },
+        once_per_mission=True,
+        allowed_tools=["report_data", "think"],
+    ),
+    EventDefinition(
+        name="job_collection_failed",
+        description="The job collection mission ended because it could not continue.",
+        when="ending the mission due to an unrecoverable blocker",
+        schema={
+            "failure_code": str,
+            "reason": str,
+        },
+        once_per_mission=True,
+        allowed_tools=["flag", "think"],
+    ),
+    EventDefinition(
+        name="job_collection_error",
+        description="A recoverable workflow error or anomaly occurred.",
+        when="a recoverable problem happened but the workflow may continue",
+        schema={
+            "error_code": str,
+            "message": str,
+            "recoverable": bool,
+        },
+    ),
 ]
 
+
 def on_event(event: AgentEvent):
-    print(event)
+    payload = {
+        "event_id": event.event_id,
+        "action_id": event.action_id,
+        "name": event.name,
+        "data": event.data,
+        "context": event.context,
+    }
+    print("Agent milestone event:")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    
+    if event.name == "job_collection_done":
+        chime.success()
+    return {"ack": True}
 
 
 def sync_skills_to_agent_workspace(
@@ -81,215 +139,6 @@ def sync_skills_to_agent_workspace(
         duration_ms=(time.perf_counter() - started) * 1000.0,
     )
     return synced
-
-
-def _pick_file() -> str:
-    root = tk.Tk()
-    root.withdraw()  # hide the main window
-    try:
-        file_path = filedialog.askopenfilename()
-    finally:
-        root.destroy()
-    return str(file_path or "").strip()
-
-
-def _request_user_profile(workspace_root: Path) -> dict:
-    print("No saved user profile found. Please enter your details.")
-    first_name = input("Enter your first name: ").strip()
-    last_name = input("Enter your last name: ").strip()
-    email = input("Enter your email: ").strip()
-    phone = input("Enter your phone number: ").strip()
-    address = input("Enter your address: ").strip()
-    city = input("Enter your city: ").strip()
-    state = input("Enter your state: ").strip()
-    post_code = input("Enter your post code: ").strip()
-    country = input("Enter your country: ").strip()
-    linkedin_url = input("Enter your LinkedIn URL: ").strip()
-    github_url = input("Enter your GitHub URL: ").strip()
-
-    target_cv = _copy_cv_to_workspace(
-        workspace_root,
-        prompt_message="Please select your CV file.",
-    )
-
-    return {
-        "first_name": first_name,
-        "last_name": last_name,
-        "email": email,
-        "phone": phone,
-        "address": address,
-        "city": city,
-        "state": state,
-        "post_code": post_code,
-        "country": country,
-        "linkedin_url": linkedin_url,
-        "github_url": github_url,
-        "cv_path": str(target_cv),
-    }
-
-
-def _copy_cv_to_workspace(workspace_root: Path, prompt_message: str) -> Path:
-    print(prompt_message)
-    selected_cv = _pick_file()
-    if not selected_cv:
-        raise RuntimeError("No CV file selected.")
-    source_cv = Path(selected_cv).expanduser().resolve()
-    if not source_cv.exists():
-        raise FileNotFoundError(f"Selected CV file does not exist: {source_cv}")
-
-    target_cv = workspace_root / f"user_cv{source_cv.suffix.lower()}"
-    shutil.copy2(source_cv, target_cv)
-    return target_cv
-
-
-def build_user_data(agent: Agent) -> dict:
-    workspace_root = agent.agent_workspace.workspace_root
-    user_details_path = workspace_root / USER_DETAILS_FILENAME
-    user_details: dict = {}
-
-    if user_details_path.exists():
-        try:
-            loaded = json.loads(user_details_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                user_details = loaded
-            else:
-                print(f"Saved profile at {user_details_path} is invalid. Recreating it.")
-        except Exception:
-            print(f"Failed to read saved profile at {user_details_path}. Recreating it.")
-
-    if not user_details:
-        user_details = _request_user_profile(workspace_root)
-        user_details_path.write_text(
-            json.dumps(user_details, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        print(f"Saved user profile to {user_details_path}")
-        return user_details
-
-    cv_path_raw = str(user_details.get("cv_path", "")).strip()
-    cv_path = Path(cv_path_raw).expanduser().resolve() if cv_path_raw else None
-    if cv_path is None or not cv_path.exists():
-        target_cv = _copy_cv_to_workspace(
-            workspace_root,
-            prompt_message="Saved profile CV is missing or unavailable. Please select your CV file again.",
-        )
-        user_details["cv_path"] = str(target_cv)
-        user_details_path.write_text(
-            json.dumps(user_details, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-    print(f"Loaded user profile from {user_details_path}")
-    return user_details
-
-
-def _count_words(text: str) -> int:
-    return len([word for word in str(text or "").split() if word.strip()])
-
-
-def _truncate_to_words(text: str, max_words: int) -> str:
-    words = [word for word in str(text or "").split() if word.strip()]
-    if len(words) <= max_words:
-        return " ".join(words)
-    return " ".join(words[:max_words])
-
-
-def _summarize_cv_markdown(cv_markdown: str) -> str:
-    system_prompt = (
-        "You are an expert resume writer. Generate a professional candidate summary "
-        "strictly from the provided CV markdown."
-    )
-    prompt = (
-        f"Write a professional summary of exactly {CV_SUMMARY_WORD_COUNT} words.\n"
-        "Use only details present in the CV.\n"
-        "No bullet points. No title. No extra commentary.\n\n"
-        "CV markdown:\n"
-        "```markdown\n"
-        f"{cv_markdown}\n"
-        "```"
-    )
-
-    first_attempt = generate_text(
-        prompt=prompt,
-        system_prompt=system_prompt,
-    ).strip()
-    first_attempt = re.sub(r"\s+", " ", first_attempt).strip()
-    if _count_words(first_attempt) == CV_SUMMARY_WORD_COUNT:
-        return first_attempt
-
-    second_prompt = (
-        f"Rewrite this text to exactly {CV_SUMMARY_WORD_COUNT} words while preserving meaning:\n\n"
-        f"{first_attempt}"
-    )
-    second_attempt = generate_text(
-        prompt=second_prompt,
-        system_prompt=system_prompt,
-    ).strip()
-    second_attempt = re.sub(r"\s+", " ", second_attempt).strip()
-    if _count_words(second_attempt) >= CV_SUMMARY_WORD_COUNT:
-        return _truncate_to_words(second_attempt, CV_SUMMARY_WORD_COUNT)
-    if second_attempt:
-        return second_attempt
-    return _truncate_to_words(first_attempt, CV_SUMMARY_WORD_COUNT)
-
-
-def build_cv_professional_summary(agent: Agent, user_details: dict) -> str:
-    workspace_root = agent.agent_workspace.workspace_root
-    cv_path_raw = str(user_details.get("cv_path", "")).strip()
-    if not cv_path_raw:
-        return ""
-
-    cv_path = Path(cv_path_raw).expanduser().resolve()
-    if not cv_path.exists():
-        return ""
-
-    try:
-        cv_markdown = _file_to_markdown(cv_path)
-    except Exception as exc:
-        print(f"Failed to convert CV to markdown for summary: {exc}")
-        return ""
-
-    if not cv_markdown.strip():
-        return ""
-
-    markdown_path = workspace_root / CV_MARKDOWN_FILENAME
-    markdown_path.write_text(cv_markdown.strip() + "\n", encoding="utf-8")
-
-    markdown_hash = sha256(cv_markdown.encode("utf-8")).hexdigest()
-    cache_path = workspace_root / CV_SUMMARY_CACHE_FILENAME
-    if cache_path.exists():
-        try:
-            cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
-            if (
-                isinstance(cache_payload, dict)
-                and str(cache_payload.get("cv_markdown_sha256", "")).strip() == markdown_hash
-            ):
-                cached_summary = str(cache_payload.get("summary", "")).strip()
-                if cached_summary:
-                    return cached_summary
-        except Exception:
-            pass
-
-    try:
-        summary = _summarize_cv_markdown(cv_markdown)
-    except Exception as exc:
-        print(f"Failed to generate CV summary with LLM: {exc}")
-        return ""
-
-    summary = re.sub(r"\s+", " ", str(summary or "")).strip()
-    if not summary:
-        return ""
-
-    cache_payload = {
-        "cv_path": str(cv_path),
-        "cv_markdown_sha256": markdown_hash,
-        "word_count": _count_words(summary),
-        "summary": summary,
-    }
-    cache_path.write_text(
-        json.dumps(cache_payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return summary
 
 
 def build_base_knowledge(
@@ -354,6 +203,7 @@ def build_base_knowledge(
 
     return base_knowledge
 
+
 def on_user_question(question: str, context: dict, options: list[str], multi_select: bool, yes_no: bool) -> str:
     print(f"User question: {question}")
     print(f"Context: {context}")
@@ -362,41 +212,35 @@ def on_user_question(question: str, context: dict, options: list[str], multi_sel
     print(f"Yes/No: {yes_no}")
     return input("Enter your answer: ").strip()
 
+
 def find_jobs(debug: bool = False) -> list[dict]:
     config = Config(
-        sandbox=SandboxConfig(
-            enabled=False
-        ),
+        sandbox=SandboxConfig(enabled=False),
         debug=DebugConfig(
             debug_mode=debug,
             suppress_policy_debug_logs=True,
-            suppress_live_telemetry_terminal_logs=True
+            suppress_live_telemetry_terminal_logs=True,
         ),
-        model=ModelConfig(
-            image_detail="low"
-        ),
-        execution=ExecutionConfig(
-            use_previous_response_id=False,
-        ),
+        model=ModelConfig(image_detail="low"),
+        execution=ExecutionConfig(use_previous_response_id=False),
         storage=StorageConfig(
             base_dir="job-application-data/agents",
             default_persistence_mode="persistent",
-        )
+        ),
     )
-    
+
     with Agent(
         config=config,
         agent_id=STABLE_AGENT_ID,
         event_definitions=events,
         event_callback=on_event,
-        user_question_callback=on_user_question
+        user_question_callback=on_user_question,
     ) as agent:
         agent.register_tool(process_focused_job)
         sync_skills_to_agent_workspace(agent)
         user_details = build_user_data(agent)
         cv_professional_summary = build_cv_professional_summary(agent, user_details)
 
-        # Request job preferences
         job_title = input("Enter the job title you are applying for: ").strip()
         job_location = input("Enter the job location you are applying to: ").strip()
         is_remote = input("Are you looking for a remote job? (y/n): ").strip()
@@ -428,32 +272,84 @@ def find_jobs(debug: bool = False) -> list[dict]:
             starting_url="https://google.com",
             base_knowledge=base_knowledge,
         )
-        
+
         if agent_job_finder_result.success:
-            # read from the agent's data/written folder the google-jobs-list.jsonl file
             google_jobs_list_path = agent.agent_workspace.written_data_dir / "google-jobs-list.jsonl"
             if google_jobs_list_path.exists():
-                with open(google_jobs_list_path, "r") as f:
+                with open(google_jobs_list_path, "r", encoding="utf-8") as f:
                     return [json.loads(line) for line in f.readlines()]
         return []
 
-def generate_cv_for_job():
-    pass
 
-jobs = find_jobs()
+def _print_cv_changes(changes: list[str], *, label: str) -> None:
+    if not changes:
+        return
+    print(label)
+    for change in changes:
+        print(f"- {change}")
 
-print("Extracted jobs:")
-for i, job in enumerate(jobs):
-    print(f"{i+1}. {job['job_title']} at {job['company_name']} in {job['location']}")
 
-while True:
-    selected_job_index = int(input("Enter the number of the job you want to generate a CV for: ")) - 1
-    selected_job = jobs[selected_job_index]
+def main() -> None:
+    jobs = find_jobs()
 
-    print(f"Generating CV for {selected_job['job_title']} at {selected_job['company_name']} in {selected_job['location']}")
+    print("Extracted jobs:")
+    for i, job in enumerate(jobs):
+        print(f"{i+1}. {job['job_title']} at {job['company_name']} in {job['location']}")
 
-    generate_cv_for_job(selected_job)
-    print("CV generated successfully")
-    print("Do you want to generate a CV for another job? (y/n)")
-    if input() == "n":
-        break
+    while True:
+        selected_job_index = int(input("Enter the number of the job you want to generate a CV for: ")) - 1
+        selected_job = jobs[selected_job_index]
+
+        print(
+            f"Generating CV for {selected_job['job_title']} "
+            f"at {selected_job['company_name']} in {selected_job['location']}"
+        )
+
+        cv_result = generate_cv(
+            job=selected_job,
+            project_root=PROJECT_ROOT,
+            agent_id=STABLE_AGENT_ID,
+        )
+        print(f"CV generated successfully: {cv_result['output_pdf']}")
+        _print_cv_changes(cv_result["changes"], label="CV changes:")
+
+        while input("Do you want to revise the generated CV? (y/n): ").strip().lower() in {"y", "yes"}:
+            revision_request = input("Describe the CV changes you want: ").strip()
+            cv_result = generate_cv(
+                job=selected_job,
+                project_root=PROJECT_ROOT,
+                agent_id=STABLE_AGENT_ID,
+                revision_request=revision_request,
+                existing_markdown_path=cv_result["output_markdown"],
+            )
+            print(f"Updated CV saved to: {cv_result['output_pdf']}")
+            _print_cv_changes(cv_result["changes"], label="Updated CV changes:")
+
+        if input("Do you want to generate a cover letter for this job? (y/n): ").strip().lower() in {"y", "yes"}:
+            cover_letter_result = generate_cover_letter(
+                job=selected_job,
+                project_root=PROJECT_ROOT,
+                agent_id=STABLE_AGENT_ID,
+            )
+            print(f"Cover letter generated successfully: {cover_letter_result['output_pdf']}")
+            while (
+                input("Do you want to revise the generated cover letter? (y/n): ").strip().lower()
+                in {"y", "yes"}
+            ):
+                revision_request = input("Describe the cover letter changes you want: ").strip()
+                cover_letter_result = generate_cover_letter(
+                    job=selected_job,
+                    project_root=PROJECT_ROOT,
+                    agent_id=STABLE_AGENT_ID,
+                    revision_request=revision_request,
+                    existing_markdown_path=cover_letter_result["output_markdown"],
+                )
+                print(f"Updated cover letter saved to: {cover_letter_result['output_pdf']}")
+
+        print("Do you want to generate documents for another job? (y/n)")
+        if input().strip().lower() == "n":
+            break
+
+
+if __name__ == "__main__":
+    main()
