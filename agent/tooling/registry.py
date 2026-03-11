@@ -82,6 +82,7 @@ class ToolRegistry:
             "narrative",
             "memory_evidence_ids",
             "next_hint_json",
+            "remember_for_later",
             "emit_events",
             "budget_spent",
             "budget_remaining",

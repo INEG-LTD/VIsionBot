@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.tooling.registry import ToolRegistry
 
-from . import browser, communication, cognitive, data, navigation, tabs
+from . import browser, communication, cognitive, data, navigation, skills, tabs
 
 
 def _all_tool_functions():
@@ -35,6 +35,8 @@ def _all_tool_functions():
         cognitive.assert_condition,
         cognitive.flag,
         cognitive.wait_for,
+        # Skills
+        skills.activate_skill,
         # Tabs
         tabs.switch_tab,
         tabs.close_tab,

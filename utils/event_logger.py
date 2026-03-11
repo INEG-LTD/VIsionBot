@@ -64,6 +64,16 @@ class EventType(str, Enum):
     AGENT_EVENT_EMITTED = "agent_event_emitted"
     AGENT_EVENT_CALLBACK_SUCCESS = "agent_event_callback_success"
     AGENT_EVENT_CALLBACK_ERROR = "agent_event_callback_error"
+    SKILLS_DISCOVERY_COMPLETED = "skills_discovery_completed"
+    SKILLS_DISCOVERY_FAILED = "skills_discovery_failed"
+    SKILL_ACTIVATION_REQUESTED = "skill_activation_requested"
+    SKILL_ACTIVATION_SUCCEEDED = "skill_activation_succeeded"
+    SKILL_ACTIVATION_FAILED = "skill_activation_failed"
+    SKILL_SWITCHED = "skill_switched"
+    SKILL_CONTEXT_INJECTED = "skill_context_injected"
+    SKILL_CONTEXT_TRUNCATED = "skill_context_truncated"
+    SKILL_RESOURCE_ACCESSED = "skill_resource_accessed"
+    SKILLS_SYNC_COMPLETED = "skills_sync_completed"
 
     # Extraction
     EXTRACTION_START = "extraction_start"
@@ -726,6 +736,242 @@ class EventLogger:
                 action_id=action_id,
                 name=name,
                 error=error,
+                **details,
+            )
+        except Exception:
+            pass
+
+    # ── Skills ───────────────────────────────────────────────────────────
+
+    def skills_discovery_completed(
+        self,
+        *,
+        directories: list[str],
+        discovered_count: int,
+        catalog_chars: int,
+        duration_ms: float,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILLS_DISCOVERY_COMPLETED,
+                f"Skills discovery completed: {discovered_count} discovered",
+                LogLevel.INFO,
+                directories=directories,
+                discovered_count=discovered_count,
+                catalog_chars=catalog_chars,
+                duration_ms=duration_ms,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skills_discovery_failed(
+        self,
+        *,
+        directories: list[str],
+        error: str,
+        failure_code: str = "discovery_error",
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILLS_DISCOVERY_FAILED,
+                f"Skills discovery failed: {error}",
+                LogLevel.WARNING,
+                directories=directories,
+                error=error,
+                failure_code=failure_code,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_activation_requested(
+        self,
+        *,
+        requested_skill_name: str,
+        iteration: int,
+        action_id: Optional[str] = None,
+        reasoning_present: bool = False,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILL_ACTIVATION_REQUESTED,
+                f"Skill activation requested: {requested_skill_name}",
+                LogLevel.INFO,
+                requested_skill_name=requested_skill_name,
+                iteration=iteration,
+                action_id=action_id,
+                reasoning_present=reasoning_present,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_activation_succeeded(
+        self,
+        *,
+        skill_name: str,
+        skill_path: str,
+        body_chars_loaded: int,
+        max_body_chars: int,
+        truncated: bool,
+        load_ms: float,
+        **details,
+    ) -> None:
+        try:
+            trunc_note = " (truncated)" if truncated else ""
+            self.emit(
+                EventType.SKILL_ACTIVATION_SUCCEEDED,
+                f"Skill activation succeeded: {skill_name}{trunc_note}",
+                LogLevel.SUCCESS,
+                skill_name=skill_name,
+                skill_path=skill_path,
+                body_chars_loaded=body_chars_loaded,
+                max_body_chars=max_body_chars,
+                truncated=truncated,
+                load_ms=load_ms,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_activation_failed(
+        self,
+        *,
+        requested_skill_name: str,
+        failure_code: str,
+        error: str,
+        available_skills_count: int,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILL_ACTIVATION_FAILED,
+                f"Skill activation failed ({failure_code}): {requested_skill_name}",
+                LogLevel.WARNING,
+                requested_skill_name=requested_skill_name,
+                failure_code=failure_code,
+                error=error,
+                available_skills_count=available_skills_count,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_switched(
+        self,
+        *,
+        from_skill: str,
+        to_skill: str,
+        iteration: int,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILL_SWITCHED,
+                f"Skill switched: {from_skill} -> {to_skill}",
+                LogLevel.INFO,
+                from_skill=from_skill,
+                to_skill=to_skill,
+                iteration=iteration,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_context_injected(
+        self,
+        *,
+        skill_name: str,
+        phase: str,
+        context_chars: int,
+        iteration: int,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILL_CONTEXT_INJECTED,
+                f"Skill context injected ({phase}): {skill_name}",
+                LogLevel.DEBUG,
+                skill_name=skill_name,
+                phase=phase,
+                context_chars=context_chars,
+                iteration=iteration,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_context_truncated(
+        self,
+        *,
+        skill_name: str,
+        original_chars: int,
+        cap_chars: int,
+        retained_chars: int,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILL_CONTEXT_TRUNCATED,
+                f"Skill context truncated: {skill_name}",
+                LogLevel.INFO,
+                skill_name=skill_name,
+                original_chars=original_chars,
+                cap_chars=cap_chars,
+                retained_chars=retained_chars,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skill_resource_accessed(
+        self,
+        *,
+        skill_name: str,
+        relative_path: str,
+        absolute_path: str,
+        allowed: bool,
+        sandbox_reason: str = "",
+        **details,
+    ) -> None:
+        try:
+            level = LogLevel.DEBUG if allowed else LogLevel.WARNING
+            self.emit(
+                EventType.SKILL_RESOURCE_ACCESSED,
+                f"Skill resource {'allowed' if allowed else 'blocked'}: {skill_name}/{relative_path}",
+                level,
+                skill_name=skill_name,
+                relative_path=relative_path,
+                absolute_path=absolute_path,
+                allowed=allowed,
+                sandbox_reason=sandbox_reason,
+                **details,
+            )
+        except Exception:
+            pass
+
+    def skills_sync_completed(
+        self,
+        *,
+        source_root: str,
+        target_root: str,
+        synced_count: int,
+        duration_ms: float,
+        **details,
+    ) -> None:
+        try:
+            self.emit(
+                EventType.SKILLS_SYNC_COMPLETED,
+                f"Skills sync completed: {synced_count} synced",
+                LogLevel.INFO,
+                source_root=source_root,
+                target_root=target_root,
+                synced_count=synced_count,
+                duration_ms=duration_ms,
                 **details,
             )
         except Exception:

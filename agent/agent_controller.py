@@ -13,6 +13,7 @@ import time
 import threading
 import re
 import uuid
+from pathlib import Path
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union, Type
@@ -50,6 +51,13 @@ from agent.speculative_hints import (
 )
 from agent.prompts import (
     DecisionContext,
+)
+from agent.skills import (
+    SkillMeta,
+    discover_skills,
+    format_active_skill,
+    format_skills_catalog,
+    load_skill_body,
 )
 from agent.tools import create_default_registry
 from agent.tooling import (
@@ -109,6 +117,12 @@ class ExecutionState:
     loop_description: str = ""
     # Recent action log (compact summaries)
     recent_actions: List[str] = field(default_factory=list)
+    # Mission-scoped planner scratchpad notes: (note_id, note_text)
+    agent_notes: List[Tuple[int, str]] = field(default_factory=list)
+    agent_note_counter: int = 0
+    # Skill context
+    active_skill_name: Optional[str] = None
+    active_skill_body: Optional[str] = None
     # Budget telemetry
     budget_total: int = 0
     budget_spent: int = 0
@@ -141,6 +155,35 @@ class ExecutionState:
     # Failure tagging
     failure_code: Optional[str] = None
     failure_stage: Optional[str] = None
+
+
+def merge_agent_notes(state: ExecutionState, raw_notes: List[str]) -> None:
+    """Append planner scratchpad notes to state with stable incremental IDs."""
+    for raw_note in raw_notes:
+        note_text = str(raw_note or "").strip()
+        if not note_text:
+            continue
+        state.agent_note_counter += 1
+        state.agent_notes.append((state.agent_note_counter, note_text))
+
+
+def clear_planner_response_chain(state: ExecutionState) -> None:
+    """Drop cached Responses API chain state so the next planner call is fresh."""
+    state.last_response_id = None
+    state.last_tool_call_ids = []
+    state.notebook_entries_sent = 0
+
+
+def is_context_length_exceeded_error(error_text: Optional[str]) -> bool:
+    text = str(error_text or "").strip().casefold()
+    if not text:
+        return False
+    return (
+        "context_length_exceeded" in text
+        or "exceeds the context window" in text
+        or "input exceeds the context window" in text
+        or "maximum context length" in text
+    )
 
 
 @dataclass
@@ -502,6 +545,9 @@ class Agent:
 
         self._current_iteration = 0
         self.execution_state: Optional[ExecutionState] = None
+        self.available_skills: List[SkillMeta] = []
+        self.available_skills_catalog: str = ""
+        self._available_skills_by_key: Dict[str, SkillMeta] = {}
 
         # Initialize execution system
         self._extraction_model_cache: Dict[tuple[str, ...], Type[BaseModel]] = {}
@@ -546,6 +592,99 @@ class Agent:
         self.tool_registry.register(fn)
         set_tools_requiring_element(self.tool_registry.tools_requiring_element())
         self._refresh_policy_visible_tool_names()
+
+    @staticmethod
+    def _normalize_skill_key(value: str) -> str:
+        return re.sub(r"[\s_-]+", "-", str(value or "").strip().casefold())
+
+    def _resolve_skill_directories(self) -> list[str]:
+        """Resolve configured skill directories relative to workspace root."""
+        configured = list(getattr(getattr(self.config, "skills", None), "skills_dirs", []) or [])
+        if not configured:
+            configured = ["agent_skills"]
+        workspace_root = self.agent_workspace.workspace_root
+        resolved: list[str] = []
+        for raw in configured:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            candidate = Path(text).expanduser()
+            if not candidate.is_absolute():
+                candidate = (workspace_root / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+            resolved.append(str(candidate))
+        return resolved
+
+    def _discover_available_skills(self) -> None:
+        self.available_skills = []
+        self.available_skills_catalog = ""
+        self._available_skills_by_key = {}
+
+        if not bool(getattr(getattr(self.config, "skills", None), "enabled", True)):
+            return
+
+        skill_dirs = self._resolve_skill_directories()
+        started = time.perf_counter()
+        try:
+            discovered = discover_skills(skill_dirs)
+            self.available_skills = discovered
+            self.available_skills_catalog = format_skills_catalog(discovered) if discovered else ""
+
+            for skill in discovered:
+                key_name = self._normalize_skill_key(skill.name)
+                if key_name and key_name not in self._available_skills_by_key:
+                    self._available_skills_by_key[key_name] = skill
+                key_dir = self._normalize_skill_key(skill.path.name)
+                if key_dir and key_dir not in self._available_skills_by_key:
+                    self._available_skills_by_key[key_dir] = skill
+
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self.event_logger.skills_discovery_completed(
+                directories=skill_dirs,
+                discovered_count=len(discovered),
+                catalog_chars=len(self.available_skills_catalog),
+                duration_ms=elapsed_ms,
+            )
+            self.event_logger.system_info(
+                "Skills discovery complete",
+                skills_enabled=True,
+                discovered_count=len(discovered),
+                directories=skill_dirs,
+            )
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self.available_skills = []
+            self.available_skills_catalog = ""
+            self._available_skills_by_key = {}
+            self.event_logger.skills_discovery_failed(
+                directories=skill_dirs,
+                error=str(e),
+                failure_code="discovery_error",
+                duration_ms=elapsed_ms,
+            )
+            raise
+
+    def _find_skill_by_name(self, raw_name: str) -> Optional[SkillMeta]:
+        key = self._normalize_skill_key(raw_name)
+        if not key:
+            return None
+        return self._available_skills_by_key.get(key)
+
+    def _build_active_skill_context(self, state: ExecutionState) -> Optional[str]:
+        skill_name = str(getattr(state, "active_skill_name", "") or "").strip()
+        skill_body = str(getattr(state, "active_skill_body", "") or "").strip()
+        if not skill_name or not skill_body:
+            return None
+        skill = self._find_skill_by_name(skill_name)
+        if skill is None:
+            synthetic_skill = SkillMeta(
+                name=skill_name,
+                description="Restored active skill",
+                path=self.agent_workspace.workspace_root,
+            )
+            return format_active_skill(synthetic_skill, skill_body)
+        return format_active_skill(skill, skill_body)
 
     def _apply_think_control(
         self,
@@ -685,6 +824,7 @@ class Agent:
             "read_file",
             "find_files",
             "read_clipboard",
+            "activate_skill",
         }
 
     def _execute_controller_tool(
@@ -712,6 +852,8 @@ class Agent:
             return self._tool_find_files(action_step=action_step, action_args=action_args)
         if tool_name == "read_clipboard":
             return self._tool_read_clipboard(action_step=action_step)
+        if tool_name == "activate_skill":
+            return self._tool_activate_skill(action_step=action_step, action_args=action_args)
         return ToolOutcome(
             output=ToolOutput(
                 success=False,
@@ -1384,6 +1526,163 @@ class Agent:
             ),
         )
 
+    def _tool_activate_skill(self, *, action_step: ActionStep, action_args: Dict[str, Any]) -> ToolOutcome:
+        before_state = self.memory_store._capture_current_state()
+        requested_name = str(action_args.get("skill_name", "")).strip()
+        reasoning_text = str(action_args.get("reasoning", "") or "").strip()
+        action_success = False
+        action_error: Optional[str] = None
+        observe_warning: Optional[str] = None
+        summary = "activate_skill FAILED: No skill name provided"
+        failure_code = "missing_name"
+
+        activated_skill_name: Optional[str] = None
+        activated_skill_path: Optional[str] = None
+        body_char_count = 0
+        load_ms = 0.0
+        active_before = (
+            str(getattr(self.execution_state, "active_skill_name", "") or "").strip()
+            if self.execution_state is not None
+            else ""
+        )
+        max_body_chars = max(
+            0,
+            int(getattr(getattr(self.config, "skills", None), "max_body_chars", 12000) or 0),
+        )
+        self.event_logger.skill_activation_requested(
+            requested_skill_name=requested_name or "(missing)",
+            iteration=int(self._current_iteration or 0),
+            action_id=None,
+            reasoning_present=bool(reasoning_text),
+        )
+
+        if not requested_name:
+            action_error = "No skill name provided"
+        else:
+            skill = self._find_skill_by_name(requested_name)
+            if skill is None:
+                failure_code = "not_found"
+                available = [item.name for item in self.available_skills]
+                if available:
+                    preview = ", ".join(available[:10])
+                    extra = "..." if len(available) > 10 else ""
+                    action_error = f"Unknown skill '{requested_name}'. Available: {preview}{extra}"
+                else:
+                    action_error = f"Unknown skill '{requested_name}'. No skills discovered."
+                summary = f"activate_skill FAILED: {action_error}"
+            else:
+                skill_file = skill.path / "SKILL.md"
+                path_decision = self.sandbox_policy.check_path(skill_file, operation="read")
+                self.event_logger.skill_resource_accessed(
+                    skill_name=skill.name,
+                    relative_path="SKILL.md",
+                    absolute_path=str(skill_file),
+                    allowed=bool(path_decision.allowed),
+                    sandbox_reason=str(path_decision.reason or ""),
+                    operation="activate_skill",
+                )
+                if not path_decision.allowed:
+                    failure_code = "sandbox_blocked"
+                    warning = f"activate_skill blocked by sandbox: {path_decision.reason}"
+                    self.event_logger.system_warning(warning)
+                    if self.sandbox_policy.enforce:
+                        action_error = warning
+                        summary = f"activate_skill FAILED: {path_decision.reason}"
+                    else:
+                        observe_warning = warning
+                if action_error is None:
+                    try:
+                        load_started = time.perf_counter()
+                        body, body_stats = load_skill_body(
+                            skill,
+                            max_chars=(max_body_chars or None),
+                            return_stats=True,
+                        )
+                        load_ms = (time.perf_counter() - load_started) * 1000.0
+                        body_char_count = len(body)
+                        original_chars = int(body_stats.get("original_chars", body_char_count) or body_char_count)
+                        retained_chars = int(body_stats.get("retained_chars", body_char_count) or body_char_count)
+                        was_truncated = bool(body_stats.get("truncated", False))
+                        if self.execution_state is not None:
+                            self.execution_state.active_skill_name = skill.name
+                            self.execution_state.active_skill_body = body
+                        activated_skill_name = skill.name
+                        activated_skill_path = str(skill.path)
+                        summary = f"Activated skill '{skill.name}' from {skill.path}"
+                        if was_truncated:
+                            summary += f" (body capped at {max_body_chars} chars)"
+                        if observe_warning:
+                            summary += f" | sandbox(observe): {observe_warning}"
+                        self.event_logger.skill_activation_succeeded(
+                            skill_name=skill.name,
+                            skill_path=str(skill.path),
+                            body_chars_loaded=body_char_count,
+                            max_body_chars=max_body_chars,
+                            truncated=was_truncated,
+                            load_ms=load_ms,
+                            iteration=int(self._current_iteration or 0),
+                        )
+                        if was_truncated:
+                            self.event_logger.skill_context_truncated(
+                                skill_name=skill.name,
+                                original_chars=original_chars,
+                                cap_chars=max_body_chars,
+                                retained_chars=retained_chars,
+                                iteration=int(self._current_iteration or 0),
+                            )
+                        if active_before and active_before != skill.name:
+                            self.event_logger.skill_switched(
+                                from_skill=active_before,
+                                to_skill=skill.name,
+                                iteration=int(self._current_iteration or 0),
+                            )
+                        action_success = True
+                    except Exception as e:
+                        failure_code = "read_error"
+                        action_error = str(e)
+                        summary = f"activate_skill FAILED: {action_error}"
+
+        if not action_success:
+            self.event_logger.skill_activation_failed(
+                requested_skill_name=requested_name or "(missing)",
+                failure_code=failure_code,
+                error=str(action_error or "unknown error"),
+                available_skills_count=len(self.available_skills),
+                iteration=int(self._current_iteration or 0),
+            )
+
+        self._record_controller_action(
+            action_type="activate_skill",
+            action_step=action_step,
+            success=action_success,
+            error_message=action_error,
+            action_params={
+                "requested_skill_name": requested_name,
+                "activated_skill_name": activated_skill_name,
+                "skill_path": activated_skill_path,
+                "max_body_chars": max_body_chars,
+                "load_ms": round(load_ms, 3),
+            },
+            before_state=before_state,
+            after_state=self.memory_store._capture_current_state(),
+        )
+        return ToolOutcome(
+            output=ToolOutput(
+                success=action_success,
+                summary=summary,
+                error=action_error,
+                data={
+                    "operation": "activate_skill",
+                    "requested_skill_name": requested_name,
+                    "activated_skill_name": activated_skill_name,
+                    "skill_path": activated_skill_path,
+                    "body_chars": body_char_count,
+                    "max_body_chars": max_body_chars,
+                    "load_ms": load_ms,
+                },
+            ),
+        )
+
     def pause(self, message: str = "Paused") -> None:
         with self._pause_lock:
             self._paused = True
@@ -1766,6 +2065,13 @@ class Agent:
                 run_id=run_id,
                 current_iteration=self._current_iteration,
             )
+            try:
+                self._discover_available_skills()
+            except Exception as e:
+                self.available_skills = []
+                self.available_skills_catalog = ""
+                self._available_skills_by_key = {}
+                self.event_logger.system_warning(f"Skill discovery failed: {e}")
 
             resumed_state = copy.deepcopy(self.execution_state) if self.execution_state else None
             self._reset_speculative_state()
@@ -1931,6 +2237,9 @@ class Agent:
             workspace_paths={
                 "written_data_dir": str(self.agent_workspace.written_data_dir),
             },
+            force_workspace_write_data=bool(
+                getattr(self.config.execution, "force_workspace_write_data", False)
+            ),
             sandbox_policy=self.sandbox_policy,
         )
         
@@ -2225,6 +2534,13 @@ class Agent:
             self.effect_policy.set_audit_log_path(None)
             self.event_logger.system_warning(f"Failed to initialize run workspace: {e}")
         self.event_logger.agent_start(user_mission)
+        try:
+            self._discover_available_skills()
+        except Exception as e:
+            self.available_skills = []
+            self.available_skills_catalog = ""
+            self._available_skills_by_key = {}
+            self.event_logger.system_warning(f"Skill discovery failed: {e}")
 
         # Initialize tracking
         try:
@@ -3652,6 +3968,14 @@ class Agent:
         watchdog_stop_event = threading.Event()
         watchdog_thread: Optional[threading.Thread] = None
         watchdog_poll_interval_s = 0.25
+        watchdog_suppressed_tools = {"ask_user", "extract_data"}
+
+        def _is_watchdog_suppressed_stage(stage: str) -> bool:
+            stage_value = str(stage or "").strip().lower()
+            if not stage_value.startswith("before_action:"):
+                return False
+            tool_name = stage_value.split(":", 1)[1].strip()
+            return tool_name in watchdog_suppressed_tools
 
         class _IterationHardTimeout(Exception):
             """Raised when an iteration exceeds hard watchdog timeout before first result."""
@@ -3711,6 +4035,8 @@ class Agent:
                     continue
 
                 elapsed_s = max(0.0, time.monotonic() - started_at_monotonic)
+                if _is_watchdog_suppressed_stage(stage):
+                    continue
 
                 if stall_soft_timeout_s > 0.0 and (not soft_triggered) and elapsed_s >= stall_soft_timeout_s:
                     should_emit_soft = False
@@ -3815,6 +4141,8 @@ class Agent:
                 return
 
             elapsed_s = max(0.0, time.monotonic() - started_at_monotonic)
+            if _is_watchdog_suppressed_stage(stage):
+                return
 
             if (
                 stall_soft_timeout_s > 0.0
@@ -4128,7 +4456,14 @@ class Agent:
                 # if extraction ever failed, fall back to a fresh non-chained call.
                 pending_tool_outputs: Optional[list] = None
                 effective_response_id: Optional[str] = None
-                if state.last_response_id and state.last_tool_call_ids:
+                planner_response_chaining_enabled = bool(
+                    getattr(self.config.execution, "use_previous_response_id", True)
+                )
+                if (
+                    planner_response_chaining_enabled
+                    and state.last_response_id
+                    and state.last_tool_call_ids
+                ):
                     pending_tool_outputs = [
                         {"type": "function_call_output", "call_id": cid, "output": "ok"}
                         for cid in state.last_tool_call_ids
@@ -4141,6 +4476,7 @@ class Agent:
                 # Adaptive: use high detail only when many visual/crop elements present
                 adaptive_image_detail = "high" if len(gallery_images or []) > 5 else "low"
                 stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
+                active_skill_context = self._build_active_skill_context(state)
 
                 action_planner = ActionPlanner(
                     mission,
@@ -4175,6 +4511,7 @@ class Agent:
                     loop_count=state.loop_count,
                     loop_description=state.loop_description,
                     recent_actions=state.recent_actions,
+                    agent_notes=state.agent_notes,
                     iterations_remaining=state.budget_remaining,
                     max_iterations=state.budget_total,
                     budget_spent=state.budget_spent,
@@ -4185,6 +4522,9 @@ class Agent:
                     effect_policy_engine=self.effect_policy,
                     event_definitions=self.event_definitions,
                     agent_events_status=self._build_agent_events_status(),
+                    available_skills_metadata=self.available_skills_catalog,
+                    active_skill_context=active_skill_context,
+                    active_skill_name=state.active_skill_name,
                 )
 
                 actions_list: Optional[list] = None
@@ -4237,14 +4577,16 @@ class Agent:
                         getattr(planner_outcome, "hint_confidence", 0.0) or 0.0
                     )
 
-                    if planner_outcome.response_id:
+                    if planner_response_chaining_enabled and planner_outcome.response_id:
                         state.last_response_id = planner_outcome.response_id
                         state.last_tool_call_ids = list(planner_outcome.tool_call_ids or [])
                         state.notebook_entries_sent = len(self.notebook)
-                    elif str(iteration_hint_path or "").startswith("hint_accept"):
+                    elif (
+                        str(iteration_hint_path or "").startswith("hint_accept")
+                        or not planner_response_chaining_enabled
+                    ):
                         # Keep chain state coherent when planner output is bypassed.
-                        state.last_response_id = None
-                        state.last_tool_call_ids = []
+                        clear_planner_response_chain(state)
                     self._cache_planner_hint_bundle(planner_outcome.hint_bundle)
                     _check_iteration_watchdog(stage="after_planner_call")
                 except _IterationHardTimeout:
@@ -4278,6 +4620,21 @@ class Agent:
                             state=state,
                             narrative="Active effect policy produced an empty planner tool set for this mode.",
                         )
+                    if (
+                        planner_failure_code == "planner_generation_failed"
+                        and is_context_length_exceeded_error(error)
+                    ):
+                        had_chain_state = bool(state.last_response_id or state.last_tool_call_ids)
+                        clear_planner_response_chain(state)
+                        if had_chain_state:
+                            self.event_logger.system_warning(
+                                "Planner context overflow detected; cleared response chain and retrying fresh",
+                                iteration=self._current_iteration,
+                            )
+                            state.last_action_summary = (
+                                "Planner context overflow detected. Cleared response chain and retrying with a fresh prompt."
+                            )
+                            continue
                     state.validation_failures += 1
                     if state.validation_failures <= self.config.execution.validation_failure_escalation_limit:
                         state.last_action_summary = f"Action validation issue: {error or 'No action generated'}. Retrying."
@@ -4293,6 +4650,9 @@ class Agent:
                         state=state,
                         narrative="Repeated action validation failures",
                     )
+
+                if not str(iteration_hint_path or "").startswith("hint_accept"):
+                    merge_agent_notes(state, action_planner.new_notes)
 
                 for action_step in actions_list:
                     if self._cancel_event.is_set():

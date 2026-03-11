@@ -37,6 +37,13 @@ class ThinkArgs(BaseModel):
     loop_description: Optional[str] = None
     stuck_pattern: Optional[StuckPattern] = None
     memory_evidence_ids: Optional[list[str]] = None
+    remember_for_later: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional. A brief observation or fact to remember for later iterations. "
+            "Stored in your AGENT NOTES scratchpad."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_contract(self) -> "ThinkArgs":

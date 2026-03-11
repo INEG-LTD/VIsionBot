@@ -51,6 +51,7 @@ _NEXT_HINT_COMPACT_KEYS: Dict[str, str] = {
 
 _NOTEBOOK_ENTRY_DESCRIPTION_MAX_CHARS = 100
 _NOTEBOOK_ENTRY_DATA_MAX_CHARS = 240
+_AGENT_NOTES_RENDER_MAX_CHARS = 2000
 
 
 def strip_targeting_data(step: str) -> str:
@@ -66,6 +67,19 @@ def strip_targeting_data(step: str) -> str:
     # Clean up trailing whitespace / colons
     step = re.sub(r'\s*:\s*$', '', step).strip()
     return step or "continue with the recommended action"
+
+
+def _trim_notes_to_budget(notes: list[tuple[int, str]], max_chars: int) -> list[tuple[int, str]]:
+    """Keep the most recent notes that fit within the render character budget."""
+    result: list[tuple[int, str]] = []
+    total = 0
+    for note_id, text in reversed(notes):
+        entry_len = len(f"[note_{note_id}] ") + len(text) + 2
+        if total + entry_len > max_chars and result:
+            break
+        result.append((note_id, text))
+        total += entry_len
+    return list(reversed(result))
 
 
 class ActionPlanner:
@@ -114,6 +128,7 @@ class ActionPlanner:
         loop_count: Optional[int] = None,
         loop_description: str = "",
         recent_actions: Optional[List[str]] = None,
+        agent_notes: Optional[List[tuple[int, str]]] = None,
         iterations_remaining: int = 0,
         max_iterations: int = 0,
         budget_spent: int = 0,
@@ -124,6 +139,9 @@ class ActionPlanner:
         effect_policy_engine: Optional[Any] = None,
         event_definitions: Optional[List[EventDefinition]] = None,
         agent_events_status: Optional[Dict[str, Any]] = None,
+        available_skills_metadata: Optional[str] = None,
+        active_skill_context: Optional[str] = None,
+        active_skill_name: Optional[str] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -164,6 +182,8 @@ class ActionPlanner:
         self.loop_count = loop_count
         self.loop_description = loop_description
         self.recent_actions = recent_actions or []
+        self.agent_notes: List[tuple[int, str]] = list(agent_notes or [])
+        self._new_notes: List[str] = []
         self.iterations_remaining = iterations_remaining
         self.max_iterations = max_iterations
         self.budget_spent = max(0, int(budget_spent or 0))
@@ -177,6 +197,9 @@ class ActionPlanner:
         self.agent_events_status: Dict[str, Any] = (
             dict(agent_events_status) if isinstance(agent_events_status, dict) else {}
         )
+        self.available_skills_metadata = str(available_skills_metadata or "").strip()
+        self.active_skill_context = str(active_skill_context or "").strip()
+        self.active_skill_name = str(active_skill_name or "").strip()
         self.last_call_telemetry: dict[str, Any] = {}
         self.last_failure_code: Optional[str] = None
         self.last_failure_stage: Optional[str] = None
@@ -184,6 +207,10 @@ class ActionPlanner:
         self.last_hint_status: str = "missing"
         self.last_hint_reason: str = ""
         self.last_hint_confidence: float = 0.0
+
+    @property
+    def new_notes(self) -> List[str]:
+        return list(self._new_notes)
 
     @staticmethod
     def _parse_next_hint_envelope(raw_hint_json: Any) -> tuple[Optional[HintCandidate], str, str, float]:
@@ -302,6 +329,17 @@ class ActionPlanner:
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
 
+        if self.agent_notes:
+            notes_to_show = _trim_notes_to_budget(
+                self.agent_notes,
+                _AGENT_NOTES_RENDER_MAX_CHARS,
+            )
+            notes_str = "\n".join(f"  [note_{nid}] {text}" for nid, text in notes_to_show)
+            parts.append(
+                "AGENT NOTES (your scratchpad - cite [note_N] in reasoning):\n"
+                f"{notes_str}\n"
+            )
+
         if self.user_hints:
             hints_str = "\n".join(f"- {h}" for h in self.user_hints)
             parts.append(f"HINTS FROM USER:\n{hints_str}\n")
@@ -416,6 +454,7 @@ class ActionPlanner:
         self.last_hint_status = "missing"
         self.last_hint_reason = ""
         self.last_hint_confidence = 0.0
+        self._new_notes = []
 
         try:
             # Build reflection block (last action + tab events)
@@ -485,8 +524,13 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                 self.last_failure_stage = "planner_tool_selection"
                 return None, "No tools available for the active tool policy in this mode."
 
-            # Static only — identical every iteration → cache fires from iteration 2 onward
-            system_prompt = self._build_function_calling_static_prompt()
+            # On chained iterations, rely on previous_response_id context and avoid
+            # resending the static system prompt payload.
+            if self.previous_response_id:
+                system_prompt = ""
+            else:
+                # Static only — identical every iteration → cache fires from iteration 2 onward
+                system_prompt = self._build_function_calling_static_prompt()
 
             # Build image arguments
             # Element index mode: clean screenshot + gallery pages
@@ -549,7 +593,14 @@ Based on the screenshot, decision context, and the mission, what is the best nex
                     self.last_hint_confidence = float(parsed_conf or 0.0)
                     embedded_hint_candidate = parsed_candidate
 
+                raw_note = action_arguments.get("remember_for_later")
+                if isinstance(raw_note, str) and raw_note.strip():
+                    self._new_notes.append(raw_note.strip())
+
                 # Keep execution payload clean (hint metadata is planner-side only).
+                if isinstance(action_arguments, dict) and "remember_for_later" in action_arguments:
+                    action_arguments = dict(action_arguments)
+                    action_arguments.pop("remember_for_later", None)
                 if isinstance(action_arguments, dict) and "next_hint_json" in action_arguments:
                     action_arguments = dict(action_arguments)
                     action_arguments.pop("next_hint_json", None)
@@ -616,14 +667,14 @@ Based on the screenshot, decision context, and the mission, what is the best nex
         budget_constraints_status = "enabled" if self.budget_constraints_enabled else "disabled"
         if self.budget_constraints_enabled:
             budget_reasoning_contract = """
-11. Every tool call arguments object must include:
+14. Every tool call arguments object must include:
     - budget_spent
     - budget_remaining
     - budget_total
     and these values must exactly match the Budget status shown above."""
         else:
             budget_reasoning_contract = """
-11. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
+14. Budget fields (budget_spent, budget_remaining, budget_total) are optional when budget constraints are disabled."""
 
         policy_section = ""
         if self.policy_constraints_block:
@@ -660,12 +711,24 @@ POLICY CONSTRAINTS
                 event_lines.append(line)
             events_text = "\n".join(event_lines)
             events_section = f"""
-12. `emit_events` is available on every tool call when a business milestone is reached.
+13. `emit_events` is available on every tool call when a business milestone is reached.
     Allowed event names:
 {events_text}
     Emit only factual, already-completed milestones for the current action.
     Example:
     "emit_events": [{{"name": "application_submitted", "data": {{"company": "...", "role": "..."}}}}]
+"""
+
+        skills_section = ""
+        if self.available_skills_metadata:
+            skills_section = f"""
+═══════════════════════════════════════════════════════════════
+AVAILABLE SKILLS
+═══════════════════════════════════════════════════════════════
+{self.available_skills_metadata}
+
+When a task clearly matches one of these skills and the relevant skill is not already active,
+call activate_skill with the exact skill name before continuing.
 """
 
         return f"""
@@ -677,6 +740,7 @@ Tool schemas are provided as function definitions. Categories:
 • Data/Comm: extract_data, ask_user, report_data, write_data, send_email, bash, read_file, find_files, read_clipboard, flag
 • Tabs: switch_tab, close_tab, open_tab, dismiss_dialog
 • Cognitive: think (next_action: continue|start_loop|advance|end_loop|done|stuck), assert_condition, wait_for
+• Skills: activate_skill
 
 Scroll rules:
 • scroll_down / scroll_up: only for the main page (no element_id).
@@ -684,6 +748,7 @@ Scroll rules:
 • scroll_to_element: bring a specific [id] into view.
 
 {policy_section}
+{skills_section}
 
 ═══════════════════════════════════════════════════════════════
 LOOPS
@@ -736,9 +801,29 @@ GUIDELINES
       {{"s":"c","f":"...","a":{{...}},"oi":123,"c":0.0-1.0,"r":"...","id":"optional_id"}}
     - None envelope (when uncertain):
       {{"s":"n","r":"why uncertain","c":0.0}}
+12. The `think` tool has an optional `remember_for_later` field. Use it for one-sentence observations you need later.
+    Examples: key findings while scrolling, form values from prior pages, URLs to compare.
+    Notes persist in AGENT NOTES as [note_N]. Cite the note ID in reasoning when used.
 {events_section}
 {budget_reasoning_contract}
 {base_knowledge_section}
+"""
+
+    def _build_active_skill_context_block(self, *, phase: str) -> str:
+        if not self.active_skill_context:
+            return ""
+        skill_name = self.active_skill_name or "unknown"
+        get_event_logger().skill_context_injected(
+            skill_name=skill_name,
+            phase=str(phase or "dynamic"),
+            context_chars=len(self.active_skill_context),
+            iteration=int(self.current_iteration or 0),
+        )
+        return f"""
+═══════════════════════════════════════════════════════════════
+ACTIVE SKILL
+═══════════════════════════════════════════════════════════════
+{self.active_skill_context}
 """
 
     def _build_function_calling_dynamic_context(
@@ -755,6 +840,7 @@ GUIDELINES
             for hint in self.user_hints:
                 user_hints_section += f"- {hint}\n"
         events_status_section = self._build_agent_events_status_block()
+        active_skill_section = self._build_active_skill_context_block(phase="dynamic")
 
         # Get history and navigation info
         memory_narrative_block = self._get_memory_narrative_block()
@@ -853,6 +939,7 @@ Navigation history:
 
 {user_hints_section}
 {events_status_section}
+{active_skill_section}
 
 Choose the next action to take.
 """
@@ -897,6 +984,7 @@ OPEN TABS
             hints_str = "\n".join(f"- {h}" for h in self.user_hints)
             user_hints_section = f"\nHINTS FROM USER:\n{hints_str}\n"
         events_status_section = self._build_agent_events_status_block()
+        active_skill_section = self._build_active_skill_context_block(phase="delta")
 
         # Element index — always fresh (page may have changed)
         element_section = f"""═══════════════════════════════════════════════════════════════
@@ -927,6 +1015,7 @@ Title: {state.page_title}
 {gallery_note}
 (Prior context — mission history, action ledger, navigation history, memory entries — is available from your previous conversation turns.)
 {tab_section}{user_hints_section}{events_status_section}
+{active_skill_section}
 {element_section}
 
 {notebook_section}
