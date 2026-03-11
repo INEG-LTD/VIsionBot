@@ -4,13 +4,15 @@ import tkinter as tk
 from hashlib import sha256
 from pathlib import Path
 import re
+import time
 from tkinter import filedialog
 
 from agent import AgentEvent
 from agent.agent_controller import Agent
 from agent.events import EventDefinition
-from core.config import Config, DebugConfig, ModelConfig, SandboxConfig, StorageConfig
+from core.config import Config, DebugConfig, ExecutionConfig, ModelConfig, SandboxConfig, StorageConfig
 from job_application_app.modify_cv_tool import _file_to_markdown
+from job_application_app.process_focused_job_tool import process_focused_job
 from lib.ai import generate_text
 
 STABLE_AGENT_ID = "job_application_profile"
@@ -18,6 +20,9 @@ USER_DETAILS_FILENAME = "user_details.json"
 CV_MARKDOWN_FILENAME = "cv_markdown.md"
 CV_SUMMARY_CACHE_FILENAME = "cv_summary_cache.json"
 CV_SUMMARY_WORD_COUNT = 100
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_SKILLS_ROOT = PROJECT_ROOT / "skills" / "job-finder-skills"
+WORKSPACE_SKILLS_DIRNAME = "agent_skills"
 
 config = Config(
     sandbox=SandboxConfig(
@@ -30,6 +35,9 @@ config = Config(
     ),
     model=ModelConfig(
         image_detail="low"
+    ),
+    execution=ExecutionConfig(
+        use_previous_response_id=False,
     ),
     storage=StorageConfig(
         base_dir="job-application-data/agents",
@@ -49,6 +57,52 @@ def on_event(event: AgentEvent):
     print(event)
 
 
+def sync_skills_to_agent_workspace(
+    agent: Agent,
+    *,
+    source_root: Path = CANONICAL_SKILLS_ROOT,
+    workspace_dir_name: str = WORKSPACE_SKILLS_DIRNAME,
+) -> list[Path]:
+    started = time.perf_counter()
+    workspace_root = agent.agent_workspace.workspace_root
+    target_root = (workspace_root / workspace_dir_name).resolve()
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    resolved_source = source_root.expanduser().resolve()
+    if not resolved_source.is_dir():
+        print(f"Skills source not found: {resolved_source}")
+        agent.event_logger.skills_sync_completed(
+            source_root=str(resolved_source),
+            target_root=str(target_root),
+            synced_count=0,
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            error="source_not_found",
+        )
+        return []
+
+    synced: list[Path] = []
+    for skill_dir in sorted(resolved_source.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        if not (skill_dir / "SKILL.md").is_file():
+            continue
+        destination = target_root / skill_dir.name
+        shutil.copytree(skill_dir, destination, dirs_exist_ok=True)
+        synced.append(destination)
+
+    if synced:
+        print(f"Synced {len(synced)} skills into {target_root}")
+    else:
+        print(f"No skills found under {resolved_source}")
+    agent.event_logger.skills_sync_completed(
+        source_root=str(resolved_source),
+        target_root=str(target_root),
+        synced_count=len(synced),
+        duration_ms=(time.perf_counter() - started) * 1000.0,
+    )
+    return synced
+
+
 def _pick_file() -> str:
     root = tk.Tk()
     root.withdraw()  # hide the main window
@@ -61,7 +115,7 @@ def _pick_file() -> str:
 
 def _request_user_profile(workspace_root: Path) -> dict:
     print("No saved user profile found. Please enter your details.")
-    first_name = input("Enter your name: ").strip()
+    first_name = input("Enter your first name: ").strip()
     last_name = input("Enter your last name: ").strip()
     email = input("Enter your email: ").strip()
     phone = input("Enter your phone number: ").strip()
@@ -318,18 +372,29 @@ def build_base_knowledge(
 
     return base_knowledge
 
+def on_user_question(question: str, context: dict, options: list[str], multi_select: bool, yes_no: bool) -> str:
+    print(f"User question: {question}")
+    print(f"Context: {context}")
+    print(f"Options: {options}")
+    print(f"Multi-select: {multi_select}")
+    print(f"Yes/No: {yes_no}")
+    return input("Enter your answer: ").strip()
+
 with Agent(
     config=config,
     agent_id=STABLE_AGENT_ID,
     event_definitions=events,
-    event_callback=on_event
+    event_callback=on_event,
+    user_question_callback=on_user_question
 ) as agent:
+    agent.register_tool(process_focused_job)
+    sync_skills_to_agent_workspace(agent)
     user_details = build_user_data(agent)
     cv_professional_summary = build_cv_professional_summary(agent, user_details)
 
     # Request job preferences
     job_title = input("Enter the job title you are applying for: ").strip()
-    job_location = input("Enter the job location you are applying for: ").strip()
+    job_location = input("Enter the job location you are applying to: ").strip()
     is_remote = input("Are you looking for a remote job? (y/n): ").strip()
     years_of_experience = input("Enter your years of experience: ").strip()
     desired_salary = input("Enter your desired salary: ").strip()
@@ -345,7 +410,10 @@ with Agent(
     )
 
     agent.execute_mission(
-        "go to google. emit google_visited when you reach there",
+        f"""First action: call activate_skill with skill_name="google-job-finder".
+            Then follow that skill to find Google Jobs for "{job_title} {'in' if job_location else ''} {job_location}{' and is remote' if is_remote.lower() in {'y', 'yes', 'true'} else ''}",
+            save results, and report completion.
+            """,
         starting_url="https://google.com",
         base_knowledge=base_knowledge,
     )
