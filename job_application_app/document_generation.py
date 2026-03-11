@@ -39,6 +39,8 @@ Rules:
 - Keep the letter concise and human: aim for 150-250 words.
 - Use the underlying shape of hook, proof, alignment, close, but do not make the structure feel templated or visibly formulaic.
 - Make the opening immediately relevant to the role.
+- Start with a brief introduction to who the candidate is.
+- Make it clear that the candidate genuinely wants this role and would strongly value the opportunity.
 - Show evidence instead of vague claims.
 - Explicitly connect the candidate's experience to the employer's needs.
 - Explain why this role is appealing in a specific way.
@@ -49,6 +51,7 @@ Rules:
 - Do not mechanically restate the CV or mirror the job description line-by-line.
 - Avoid formulaic sentences such as 'Your focus on X aligns with my experience in Y' unless rewritten into natural prose.
 - Use confident, plain English. Avoid robotic or generic phrasing.
+- The enthusiasm should feel intentional and sincere, not needy or exaggerated.
 - Avoid ellipses and filler.
 - Return the final letter body ready to save, using `<br>` for line breaks.
 """.strip()
@@ -142,6 +145,8 @@ def _build_cover_letter_prompt(
         f"Target job details:\n```json\n{_job_context(job)}\n```\n\n"
         "Use the CV markdown below as the factual source of truth for achievements, projects, products, and technologies.\n"
         "The cover letter should feel like an A* cover letter with a strong opening, evidence, alignment, and a confident close, but it should read like a flowing human letter rather than a visible template.\n"
+        "Open with a brief introduction to who the candidate is, then make clear why they genuinely want this role.\n"
+        "Show enthusiasm in a specific, credible way tied to the work, role, or technical direction of the job.\n"
         f"Keep it between {_MIN_COVER_LETTER_WORDS} and {_MAX_COVER_LETTER_WORDS} words.\n"
         "If the job does not specify a hiring manager, start with 'Dear Hiring Manager,'.\n"
         "Write with natural transitions and persuasive flow.\n"
