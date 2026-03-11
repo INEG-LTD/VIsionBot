@@ -31,6 +31,7 @@ See [troubleshooting](references/troubleshooting.md) if you encounter captchas, 
    - `job_profile`
    - `file_name="google-jobs-list.jsonl"`
    - `search_query`
+   - `process_focused_job` saves `job_summary` as a concise summary of the most important visible parts of the role, not the full raw job description.
 4. React to the result:
    - `saved=true` -> call `think(next_action="advance")`
    - `duplicate=true`, `matches_profile=false`, or `processable=false` -> do not advance, go to next unseen card

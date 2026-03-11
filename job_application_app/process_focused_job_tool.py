@@ -30,6 +30,10 @@ Rules:
 - Required fields are: job_title, location, posted_date.
 - If a required field is not clearly visible, return an empty string for that field.
 - Optional fields may be omitted or returned as empty values when unavailable.
+- job_summary should be a concise, complete summary of the most important visible parts of the role.
+- job_summary should prioritize role purpose, key responsibilities, important skills/technologies, work arrangement, and compensation details if visible.
+- Do not quote the full job description.
+- Do not end job_summary with an ellipsis.
 - matches_profile should be true only when the focused job clearly fits the provided job profile.
 - For profile fit, prioritize job title and location. Use posted date as supporting context when relevant.
 - apply_labels should contain visible application labels if available.
@@ -55,7 +59,7 @@ class FocusedJobExtraction(BaseModel):
     company_name: Optional[str] = None
     salary: Optional[str] = None
     employment_type: Optional[str] = None
-    job_description: Optional[str] = None
+    job_summary: Optional[str] = None
     apply_labels: list[str] = Field(default_factory=list)
     matches_profile: bool = False
     match_reason: str = ""
@@ -144,6 +148,15 @@ def _missing_required_fields(extracted: FocusedJobExtraction) -> list[str]:
     return missing
 
 
+def _clean_job_summary(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"(?:\.\.\.|…)\s*$", "", text).strip()
+    return text or None
+
+
 def _trim_visible_text(text: str) -> str:
     cleaned = str(text or "").strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -193,12 +206,14 @@ def _extract_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> Focus
         "- company_name\n"
         "- salary\n"
         "- employment_type\n"
-        "- job_description\n"
+        "- job_summary\n"
         "- apply_labels\n"
         "- matches_profile\n"
         "- match_reason\n\n"
         "Required fields for processability are job_title, location, and posted_date.\n"
         "If any required field is not visible, return an empty string for it.\n"
+        "job_summary must be a concise complete summary of the most important visible parts of the role.\n"
+        "Do not return a raw copied block of description text, and do not end job_summary with an ellipsis.\n"
         "Focus on the currently open job details, not the general search page.\n\n"
         f"Current page URL: {page_url}\n"
         f"Current page title: {page_title}\n\n"
@@ -503,6 +518,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
             extracted = _extract_focused_job(ctx, args)
         except Exception as exc:
             return _fail(ctx, args, f"focused job extraction failed: {exc}")
+        extracted.job_summary = _clean_job_summary(extracted.job_summary)
         missing_fields = _missing_required_fields(extracted)
         if not missing_fields:
             break
@@ -579,7 +595,9 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
                 "location": extracted.location,
                 "posted_date": extracted.posted_date,
                 "company_name": extracted.company_name,
+                "job_summary": extracted.job_summary,
                 "apply_links": apply_links,
+                "apply_labels": apply_labels,
             },
             "match_reason": extracted.match_reason,
         }
@@ -613,7 +631,9 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
                 "location": extracted.location,
                 "posted_date": extracted.posted_date,
                 "company_name": extracted.company_name,
+                "job_summary": extracted.job_summary,
                 "apply_links": apply_links,
+                "apply_labels": apply_labels,
             },
             "match_reason": extracted.match_reason,
         }
@@ -639,8 +659,9 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
         "company_name": extracted.company_name,
         "salary": extracted.salary,
         "employment_type": extracted.employment_type,
-        "job_description": extracted.job_description,
+        "job_summary": extracted.job_summary,
         "apply_links": apply_links,
+        "apply_labels": apply_labels,
         "search_query": str(args.search_query or "").strip() or None,
         "source": "Google Jobs",
         "dedupe_key": dedupe_key,
