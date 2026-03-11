@@ -193,6 +193,15 @@ class ExecutionConfig(BaseModel):
             "ignoring explicit path arguments."
         ),
     )
+    upload_mode: Literal["auto", "workspace_only", "user_only"] = Field(
+        default="auto",
+        description=(
+            "Controls file upload behavior. "
+            "'workspace_only': agent can only upload files from its workspace directory. "
+            "'user_only': agent clicks the upload input for the user to select a file. "
+            "'auto': tries workspace file first, falls back to clicking for user."
+        ),
+    )
     use_previous_response_id: bool = Field(
         default=True,
         description=(

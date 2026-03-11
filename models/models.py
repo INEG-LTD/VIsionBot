@@ -421,3 +421,13 @@ class ActionIntent(BaseModel):
 def _tokenize(text: str) -> List[str]:
     import re
     return [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t]
+
+
+# ============================================================================
+# DROPDOWN SELECTION MODELS
+# ============================================================================
+
+class SelectedOption(BaseModel):
+    """LLM structured output for fuzzy-matching a dropdown option."""
+    exact_text: str = Field(description="The exact text of the best-matching option from the provided list")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this option matches the desired value")

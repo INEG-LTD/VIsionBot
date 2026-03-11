@@ -79,7 +79,12 @@ class SelectOptionArgs(BaseModel):
 
 
 class UploadFileArgs(BaseModel):
-    file_path: str
+    file_path: str = Field(
+        description=(
+            "Path to the file to upload. Use a filename from the WORKSPACE FILES list, "
+            "or a relative path within the workspace."
+        ),
+    )
     target_description: str
     reasoning: str
 

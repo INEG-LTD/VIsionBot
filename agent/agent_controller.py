@@ -2111,6 +2111,19 @@ class Agent:
         ):
             path.mkdir(parents=True, exist_ok=True)
 
+    def _list_workspace_files(self, max_files: int = 50) -> list:
+        """List files in the workspace root (non-recursive). Returns filenames only."""
+        try:
+            root = self.agent_workspace.workspace_root
+            if not root.is_dir():
+                return []
+            files = sorted(
+                (p.name for p in root.iterdir() if p.is_file()),
+            )
+            return files[:max_files]
+        except Exception:
+            return []
+
     def _attach_run_event_log_sink(self) -> None:
         """Stream event logger output into run-scoped JSONL."""
         self._detach_run_event_log_sink()
@@ -2236,7 +2249,9 @@ class Agent:
             data_report_callback=self.data_report_callback,
             workspace_paths={
                 "written_data_dir": str(self.agent_workspace.written_data_dir),
+                "workspace_root": str(self.agent_workspace.workspace_root),
             },
+            upload_mode=getattr(self.config.execution, "upload_mode", "auto"),
             force_workspace_write_data=bool(
                 getattr(self.config.execution, "force_workspace_write_data", False)
             ),
@@ -2396,6 +2411,7 @@ class Agent:
                 budget_constraints_enabled=budget_enabled,
                 base_knowledge=self.base_knowledge,
                 policy_constraints_block=policy_block,
+                workspace_files=self._list_workspace_files(),
             )
             static_prompt = planner._build_function_calling_static_prompt()
         except Exception:
@@ -3373,10 +3389,6 @@ class Agent:
         elif fn == "upload_file":
             file_path = args.get("file_path", "")
             return f"You uploaded file \"{file_path}\". Result: {result_str}."
-        elif fn == "set_datetime":
-            value = args.get("value", "")
-            picker = args.get("picker_description", "date picker")
-            return f"You set {picker} to \"{value}\". Result: {result_str}."
         elif fn == "extract_data":
             desc = args.get("data_description", "data")
             return f"You extracted: \"{desc}\". Result: {result_str}."
@@ -4525,6 +4537,7 @@ class Agent:
                     available_skills_metadata=self.available_skills_catalog,
                     active_skill_context=active_skill_context,
                     active_skill_name=state.active_skill_name,
+                    workspace_files=self._list_workspace_files(),
                 )
 
                 actions_list: Optional[list] = None

@@ -22,7 +22,7 @@ from core.browser import Browser
 from core.config import Config
 from core.executor.ui_feedback import highlight_click_location
 from models import ActionStep, ActionType, PageElements, PageInfo
-from models.models import FailedAction
+from models.models import FailedAction, SelectedOption
 from utils import SelectorUtils
 from utils.page_utils import PageUtils
 from agent.memory import NarrativeMemory, InteractionType
@@ -233,6 +233,7 @@ class Executor:
                  data_report_callback: Optional[Callable[[str, dict], None]] = None,
                  workspace_paths: Optional[Dict[str, str]] = None,
                  force_workspace_write_data: bool = False,
+                 upload_mode: str = "auto",
                  sandbox_policy: Optional[Any] = None):
         self.browser = browser
         self.memory_store = memory_store
@@ -244,6 +245,7 @@ class Executor:
         self.notebook = notebook  # Optional notebook for storing extraction results
         self.workspace_paths = workspace_paths or {}
         self.force_workspace_write_data = bool(force_workspace_write_data)
+        self.upload_mode = upload_mode if upload_mode in ("auto", "workspace_only", "user_only") else "auto"
         self.sandbox_policy = sandbox_policy
         # Click method configuration
         if preferred_click_method not in ["programmatic", "mouse"]:
@@ -2027,6 +2029,162 @@ class Executor:
             pass
         return success
 
+    # ------------------------------------------------------------------
+    # Dropdown helpers
+    # ------------------------------------------------------------------
+
+    def _extract_dropdown_options(self) -> List[str]:
+        """Extract visible option texts from any open dropdown in the DOM."""
+        js = """
+        () => {
+            const texts = new Set();
+
+            // Native <select> options (from the focused or last select)
+            const sel = document.querySelector('select:focus') || document.querySelector('select');
+            if (sel) {
+                for (const opt of sel.options) {
+                    const t = opt.textContent.trim();
+                    if (t) texts.add(t);
+                }
+            }
+
+            // ARIA role-based options
+            for (const el of document.querySelectorAll('[role="option"], [role="listbox"] > *')) {
+                const t = el.textContent.trim();
+                if (t && el.offsetParent !== null) texts.add(t);
+            }
+
+            // Common custom dropdown patterns
+            const selectors = [
+                '.dropdown-menu li', '.dropdown-menu a',
+                '[class*="option"]', '[class*="menu-item"]',
+                '[class*="listbox"] > *', '[class*="select"] [class*="option"]',
+                'ul[class*="dropdown"] li', 'div[class*="dropdown"] div[class*="item"]',
+                '[data-value]',
+            ];
+            for (const s of selectors) {
+                try {
+                    for (const el of document.querySelectorAll(s)) {
+                        if (el.offsetParent === null) continue;
+                        const t = el.textContent.trim();
+                        if (t && t.length < 200) texts.add(t);
+                    }
+                } catch {}
+            }
+
+            return [...texts].slice(0, 200);
+        }
+        """
+        try:
+            return self.browser.page.evaluate(js) or []
+        except Exception:
+            return []
+
+    def _poll_for_dropdown_options(self, max_wait_ms: int = 2000, poll_interval_ms: int = 300) -> List[str]:
+        """Poll _extract_dropdown_options until results stabilize (2 consecutive same-count polls)."""
+        elapsed = 0
+        prev_count = -1
+        options: List[str] = []
+        while elapsed < max_wait_ms:
+            time.sleep(poll_interval_ms / 1000)
+            elapsed += poll_interval_ms
+            options = self._extract_dropdown_options()
+            if len(options) > 0 and len(options) == prev_count:
+                return options
+            prev_count = len(options)
+        return options
+
+    def _is_dropdown_still_open(self) -> bool:
+        """Check if a dropdown/listbox is still visibly open."""
+        js = """
+        () => {
+            // ARIA listbox / options
+            for (const el of document.querySelectorAll('[role="listbox"], [role="option"]')) {
+                if (el.offsetParent !== null) return true;
+            }
+            // Common dropdown classes
+            const selectors = ['.dropdown-menu', '[class*="menu"][class*="open"]',
+                               '[class*="listbox"]', '[class*="select"][class*="open"]',
+                               '[class*="dropdown"][class*="show"]'];
+            for (const s of selectors) {
+                try {
+                    for (const el of document.querySelectorAll(s)) {
+                        if (el.offsetParent !== null) return true;
+                    }
+                } catch {}
+            }
+            // Native <select> with :focus
+            const sel = document.querySelector('select:focus');
+            if (sel) return true;
+            return false;
+        }
+        """
+        try:
+            return bool(self.browser.page.evaluate(js))
+        except Exception:
+            return False
+
+    def _click_option_in_open_dropdown(self, text: str) -> bool:
+        """Find an option element by text in an open dropdown and click it."""
+        js = """
+        (targetText) => {
+            const candidates = [
+                ...document.querySelectorAll('[role="option"]'),
+                ...document.querySelectorAll('[role="listbox"] > *'),
+                ...document.querySelectorAll('.dropdown-menu li, .dropdown-menu a'),
+                ...document.querySelectorAll('[class*="option"]'),
+                ...document.querySelectorAll('[class*="menu-item"]'),
+                ...document.querySelectorAll('[data-value]'),
+            ];
+            const lower = targetText.toLowerCase();
+            let exact = null;
+            let partial = null;
+            for (const el of candidates) {
+                if (el.offsetParent === null) continue;
+                const t = el.textContent.trim();
+                if (t.toLowerCase() === lower) { exact = el; break; }
+                if (!partial && t.toLowerCase().includes(lower)) { partial = el; }
+            }
+            const match = exact || partial;
+            if (!match) return false;
+            match.scrollIntoView({ block: 'nearest' });
+            match.click();
+            return true;
+        }
+        """
+        try:
+            return bool(self.browser.page.evaluate(js, text))
+        except Exception:
+            return False
+
+    def _llm_match_option(self, desired: str, available_options: List[str]) -> Optional[str]:
+        """Use LLM to fuzzy-match the desired option against available options."""
+        truncated = available_options[:100]
+        numbered = "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(truncated))
+        prompt = (
+            f"The user wants to select: \"{desired}\"\n\n"
+            f"Available options:\n{numbered}\n\n"
+            f"Return the exact text of the best matching option. "
+            f"If none match at all, return the closest reasonable match."
+        )
+        try:
+            result = generate_model(
+                prompt=prompt,
+                model_object_type=SelectedOption,
+                system_prompt="You are a dropdown option matcher. Return the exact_text of the best match from the list.",
+                model="gpt-4o-mini",
+                temperature=0.0,
+            )
+            if isinstance(result, SelectedOption) and result.exact_text:
+                return result.exact_text
+        except Exception as exc:
+            dprint(f"[select] LLM match failed: {exc}")
+        return None
+
+    # ------------------------------------------------------------------
+    # Main select handler
+    # ------------------------------------------------------------------
+
     def execute_select_option(
         self,
         step: ActionStep,
@@ -2034,14 +2192,14 @@ class Executor:
         failed_elements: List[FailedAction],
         page_info: PageInfo,
     ) -> bool:
-        """Select an option in a dropdown/input."""
+        """Select an option in a dropdown using unified open→extract→match→select algorithm."""
         args = self._get_action_args(step)
         option = str(args.get("option", "")).strip()
         dropdown_description = str(args.get("dropdown_description", "")).strip()
         before_state = self.memory_store._capture_current_state()
         current_screenshot = before_state.screenshot
 
-        # Resolve target: element_id → LLM fallback
+        # Resolve target element
         overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
             intent = f"select option {option} in {dropdown_description}".strip()
@@ -2056,7 +2214,7 @@ class Executor:
         x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
         success = False
         error_msg: Optional[str] = None
-        selector: Optional[str] = None
+        matched_text: Optional[str] = None
 
         if not option:
             error_msg = "No option provided for select_option"
@@ -2064,30 +2222,45 @@ class Executor:
             error_msg = "Could not determine coordinates for select_option"
         else:
             try:
-                selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
-            except Exception:
-                selector = None
+                # Step 1-2: Click to open dropdown
+                self.browser.page.mouse.click(x, y)
+                time.sleep(0.3)
 
-            try:
-                if selector:
-                    locator = self.browser.page.locator(selector).first
-                    try:
-                        locator.select_option(label=option)
-                    except Exception:
-                        try:
-                            locator.select_option(value=option)
-                        except Exception:
-                            if option.isdigit():
-                                locator.select_option(index=int(option))
-                            else:
-                                raise
-                    success = True
-                else:
-                    self.browser.page.mouse.click(x, y)
-                    time.sleep(0.1)
+                # Step 3-4: Extract available options
+                options = self._extract_dropdown_options()
+
+                # Step 5: If no options found, type to trigger population (search/async dropdown)
+                typed_to_search = False
+                if not options:
                     self.browser.page.keyboard.type(option, delay=30)
-                    self.browser.page.keyboard.press("Enter")
-                    success = True
+                    typed_to_search = True
+                    options = self._poll_for_dropdown_options(max_wait_ms=2000, poll_interval_ms=300)
+
+                # Step 6: LLM fuzzy-match against available options
+                if options:
+                    matched_text = self._llm_match_option(option, options)
+
+                text_to_type = matched_text or option
+
+                # Step 7-8: Type the matched text and press Enter
+                if typed_to_search:
+                    # Clear what we typed in step 5a
+                    self.browser.page.keyboard.press("Control+a")
+                    time.sleep(0.05)
+
+                self.browser.page.keyboard.type(text_to_type, delay=30)
+                time.sleep(0.15)
+                self.browser.page.keyboard.press("Enter")
+                time.sleep(0.3)
+
+                # Step 10: If dropdown still open, try clicking option directly
+                if self._is_dropdown_still_open():
+                    clicked = self._click_option_in_open_dropdown(text_to_type)
+                    if not clicked and matched_text and matched_text != option:
+                        # Try original text as fallback
+                        self._click_option_in_open_dropdown(option)
+
+                success = True
             except Exception as exc:
                 success = False
                 error_msg = str(exc)
@@ -2102,7 +2275,7 @@ class Executor:
                 "description": dropdown_description or "dropdown",
                 "overlay_index": overlay_index,
                 "option": option,
-                "selector": selector,
+                "matched_text": matched_text,
                 "action": step.action,
             },
             success=success,
@@ -2110,6 +2283,34 @@ class Executor:
         )
         return success
 
+
+    def _resolve_workspace_file(self, file_path: str) -> Optional[Path]:
+        """Resolve a file path relative to the workspace root.
+
+        Returns the resolved Path if the file exists under workspace_root,
+        None otherwise.
+        """
+        workspace_root_str = str(self.workspace_paths.get("workspace_root", "")).strip()
+        if not workspace_root_str:
+            return None
+        workspace_root = Path(workspace_root_str).resolve()
+        if not workspace_root.is_dir():
+            return None
+
+        candidate = Path(file_path)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        candidate = candidate.resolve()
+
+        # Must be under workspace_root
+        try:
+            candidate.relative_to(workspace_root)
+        except ValueError:
+            return None
+
+        if candidate.is_file():
+            return candidate
+        return None
 
     def execute_upload(
         self,
@@ -2120,7 +2321,7 @@ class Executor:
         *,
         confirm_before_interaction: bool = False,
     ) -> bool:
-        """Execute a file upload action."""
+        """Execute a file upload action respecting upload_mode config."""
         args = self._get_action_args(step)
         failed_elements = failed_elements or []
         before_state = self.memory_store._capture_current_state()
@@ -2144,26 +2345,61 @@ class Executor:
         success = False
         error_msg: Optional[str] = None
         selector: Optional[str] = None
-        if not file_path:
-            error_msg = "No file path provided for upload"
-        elif x is None or y is None:
-            error_msg = "Could not determine upload target coordinates"
-        else:
-            try:
-                selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
-            except Exception:
-                selector = None
+        resolved_path: Optional[Path] = None
+        effective_mode = self.upload_mode
 
-            try:
-                if selector:
-                    self.browser.page.locator(selector).first.set_input_files(file_path)
-                else:
+        if effective_mode == "workspace_only":
+            resolved_path = self._resolve_workspace_file(file_path) if file_path else None
+            if resolved_path:
+                success, error_msg, selector = self._upload_set_input_files(
+                    str(resolved_path), x, y
+                )
+            else:
+                error_msg = (
+                    f"File not found in workspace: {file_path}"
+                    if file_path
+                    else "No file path provided for upload"
+                )
+
+        elif effective_mode == "user_only":
+            if x is None or y is None:
+                error_msg = "Could not determine upload target coordinates"
+            else:
+                try:
                     self.browser.page.mouse.click(x, y)
-                    self.browser.page.set_input_files("input[type='file']", file_path)
-                success = True
-            except Exception as exc:
-                success = False
-                error_msg = str(exc)
+                    success = True
+                except Exception as exc:
+                    error_msg = str(exc)
+                if success and self.agent_talk_callback:
+                    msg = f"Please select a file to upload for: {target_description}" if target_description else "Please select a file to upload."
+                    try:
+                        self.agent_talk_callback(msg)
+                    except Exception:
+                        pass
+
+        else:  # auto
+            if file_path:
+                resolved_path = self._resolve_workspace_file(file_path)
+            if resolved_path:
+                success, error_msg, selector = self._upload_set_input_files(
+                    str(resolved_path), x, y
+                )
+            else:
+                # Fall back to user_only behavior
+                if x is None or y is None:
+                    error_msg = "Could not determine upload target coordinates"
+                else:
+                    try:
+                        self.browser.page.mouse.click(x, y)
+                        success = True
+                    except Exception as exc:
+                        error_msg = str(exc)
+                    if success and self.agent_talk_callback:
+                        msg = f"Please select a file to upload for: {target_description}" if target_description else "Please select a file to upload."
+                        try:
+                            self.agent_talk_callback(msg)
+                        except Exception:
+                            pass
 
         after_state = self.memory_store._capture_current_state()
         self.memory_store.record_interaction(
@@ -2175,12 +2411,35 @@ class Executor:
                 "overlay_index": overlay_index,
                 "description": target_description,
                 "selector": selector,
+                "upload_mode": effective_mode,
+                "resolved_path": str(resolved_path) if resolved_path else None,
             },
             notes=file_path,
             success=success,
             error_message=error_msg,
         )
         return success
+
+    def _upload_set_input_files(
+        self, file_path: str, x: Optional[float], y: Optional[float]
+    ) -> tuple:
+        """Programmatically set input files. Returns (success, error_msg, selector)."""
+        if x is None or y is None:
+            return False, "Could not determine upload target coordinates", None
+        selector: Optional[str] = None
+        try:
+            selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
+        except Exception:
+            selector = None
+        try:
+            if selector:
+                self.browser.page.locator(selector).first.set_input_files(file_path)
+            else:
+                self.browser.page.mouse.click(x, y)
+                self.browser.page.set_input_files("input[type='file']", file_path)
+            return True, None, selector
+        except Exception as exc:
+            return False, str(exc), selector
 
 
     def execute_datetime(
@@ -2774,7 +3033,6 @@ class Executor:
                     "go_back",
                     "go_forward",
                     "upload_file",
-                    "set_datetime",
                     "extract_data",
                 }
                 if function_name in browser_functions:
@@ -2853,14 +3111,6 @@ class Executor:
                 )
             elif function_name == "upload_file":
                 executed = self.execute_upload(
-                    step=action_step,
-                    elements=detected_elements,
-                    page_info=page_info,
-                    failed_elements=failed_elements,
-                    confirm_before_interaction=confirm_before_interaction,
-                )
-            elif function_name == "set_datetime":
-                executed = self.execute_datetime(
                     step=action_step,
                     elements=detected_elements,
                     page_info=page_info,

@@ -142,6 +142,7 @@ class ActionPlanner:
         available_skills_metadata: Optional[str] = None,
         active_skill_context: Optional[str] = None,
         active_skill_name: Optional[str] = None,
+        workspace_files: Optional[List[str]] = None,
     ):
         self.user_prompt = user_prompt
         self.base_knowledge = base_knowledge or []
@@ -200,6 +201,7 @@ class ActionPlanner:
         self.available_skills_metadata = str(available_skills_metadata or "").strip()
         self.active_skill_context = str(active_skill_context or "").strip()
         self.active_skill_name = str(active_skill_name or "").strip()
+        self.workspace_files: List[str] = list(workspace_files or [])
         self.last_call_telemetry: dict[str, Any] = {}
         self.last_failure_code: Optional[str] = None
         self.last_failure_stage: Optional[str] = None
@@ -655,6 +657,24 @@ Based on the screenshot, decision context, and the mission, what is the best nex
             traceback.print_exc()
             return None, f"Error generating action: {e}"
 
+    def _build_upload_rules_section(self) -> str:
+        """Build upload rules block for the static prompt."""
+        if self.workspace_files:
+            file_list = "\n".join(f"- {f}" for f in self.workspace_files)
+            return (
+                "Upload rules:\n"
+                "• ALWAYS use upload_file for file upload fields.\n"
+                "• Pick a file from the WORKSPACE FILES list below. Use the exact filename.\n"
+                "• If the workspace has no suitable file, call upload_file anyway — the system will prompt the user to select one.\n"
+                "\n"
+                "WORKSPACE FILES:\n"
+                f"{file_list}"
+            )
+        return (
+            "Upload rules:\n"
+            "• Use upload_file for file upload fields. The system will prompt the user to select a file."
+        )
+
     def _build_function_calling_static_prompt(self) -> str:
         """Build static planner instructions for function-calling planning."""
         # Build base knowledge section if provided
@@ -736,7 +756,7 @@ You are controlling a web browser.
 Use the dynamic context to understand current state and choose the best next action.
 
 Tool schemas are provided as function definitions. Categories:
-• Browser: click, type_text, clear_text, select_option, upload_file, set_datetime, press_key, scroll_down, scroll_up, scroll_container, scroll_to_element, open_url, go_back, go_forward
+• Browser: click, type_text, clear_text, select_option, upload_file, press_key, scroll_down, scroll_up, scroll_container, scroll_to_element, open_url, go_back, go_forward
 • Data/Comm: extract_data, ask_user, report_data, write_data, send_email, bash, read_file, find_files, read_clipboard, flag
 • Tabs: switch_tab, close_tab, open_tab, dismiss_dialog
 • Cognitive: think (next_action: continue|start_loop|advance|end_loop|done|stuck), assert_condition, wait_for
@@ -746,6 +766,13 @@ Scroll rules:
 • scroll_down / scroll_up: only for the main page (no element_id).
 • scroll_container: for modals/sidebars/lists; pass element_id inside that container.
 • scroll_to_element: bring a specific [id] into view.
+
+Select rules:
+• ALWAYS use select_option for dropdowns and select fields — never click+type manually.
+• select_option handles native <select>, custom dropdowns, and searchable selects automatically.
+• It will fuzzy-match your option text against available choices (e.g. "UK" → "United Kingdom").
+
+{self._build_upload_rules_section()}
 
 {policy_section}
 {skills_section}

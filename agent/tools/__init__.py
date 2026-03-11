@@ -13,7 +13,6 @@ def _all_tool_functions():
         browser.clear_text,
         browser.select_option,
         browser.upload_file,
-        browser.set_datetime,
         browser.press_key,
         # Navigation
         navigation.open_url,

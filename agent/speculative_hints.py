@@ -204,17 +204,6 @@ def _build_fallback_narrative(function_name: str, args: Dict[str, Any]) -> str:
             return f"I'm uploading a file to the {target}."
         return "I'm uploading a file."
 
-    if tool == "set_datetime":
-        value = _compact_text(args.get("value"), 70)
-        picker = _compact_text(args.get("picker_description"), 90)
-        if value and picker:
-            return f"I'm setting the {picker} to {value}."
-        if value:
-            return f"I'm setting a date/time value to {value}."
-        if picker:
-            return f"I'm setting the {picker}."
-        return "I'm setting the date/time value."
-
     if tool == "press_key":
         key = _compact_text(args.get("key"), 40)
         if key:
