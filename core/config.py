@@ -186,6 +186,20 @@ class ExecutionConfig(BaseModel):
             "0 disables truncation."
         ),
     )
+    force_workspace_write_data: bool = Field(
+        default=False,
+        description=(
+            "If true, write_data always writes into the agent workspace written-data directory, "
+            "ignoring explicit path arguments."
+        ),
+    )
+    use_previous_response_id: bool = Field(
+        default=True,
+        description=(
+            "If true, planner calls chain through the Responses API using previous_response_id. "
+            "Disable to send a fresh full prompt every iteration instead of accumulating server-side context."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -334,6 +348,38 @@ class UserInteractionConfig(BaseModel):
     allow_skip: bool = Field(
         default=True,
         description="Allow user to skip a question (agent is told 'user skipped')",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SkillsConfig(BaseModel):
+    """Skill discovery and activation configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable discovery and activation of agent skills.",
+    )
+    skills_dirs: list[str] = Field(
+        default_factory=lambda: ["agent_skills"],
+        description=(
+            "Directories to scan for skills. Relative paths resolve from agent workspace root."
+        ),
+    )
+    auto_activate: bool = Field(
+        default=False,
+        description=(
+            "Reserved for future use. When enabled, agent can auto-activate matching skills at mission start."
+        ),
+    )
+    max_body_chars: int = Field(
+        default=12000,
+        ge=0,
+        description=(
+            "Maximum characters loaded from SKILL.md body during activation. "
+            "0 disables truncation."
+        ),
     )
 
     class Config:
@@ -529,6 +575,10 @@ class Config(BaseModel):
     user_interaction: UserInteractionConfig = Field(
         default_factory=UserInteractionConfig,
         description="User interaction policy (custom answers, skipping)",
+    )
+    skills: SkillsConfig = Field(
+        default_factory=SkillsConfig,
+        description="Agent skills discovery/activation configuration.",
     )
     sandbox: SandboxConfig = Field(
         default_factory=SandboxConfig,

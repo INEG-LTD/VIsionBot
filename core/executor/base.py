@@ -232,6 +232,7 @@ class Executor:
                  agent_talk_callback: Optional[Callable[[str], None]] = None, 
                  data_report_callback: Optional[Callable[[str, dict], None]] = None,
                  workspace_paths: Optional[Dict[str, str]] = None,
+                 force_workspace_write_data: bool = False,
                  sandbox_policy: Optional[Any] = None):
         self.browser = browser
         self.memory_store = memory_store
@@ -242,6 +243,7 @@ class Executor:
         self.data_report_callback = data_report_callback
         self.notebook = notebook  # Optional notebook for storing extraction results
         self.workspace_paths = workspace_paths or {}
+        self.force_workspace_write_data = bool(force_workspace_write_data)
         self.sandbox_policy = sandbox_policy
         # Click method configuration
         if preferred_click_method not in ["programmatic", "mouse"]:
@@ -906,8 +908,22 @@ class Executor:
             self.event_logger.system_warning("No data provided for write_data action")
             return False, {"error": "No data provided"}
 
-        path_arg = str(args.get("path", "")).strip()
-        file_name = str(args.get("file_name", "")).strip()
+        raw_path = args.get("path", "")
+        if raw_path is None:
+            path_arg = ""
+        else:
+            path_arg = str(raw_path).strip()
+        if path_arg.casefold() in {"none", "null"}:
+            path_arg = ""
+
+        raw_file_name = args.get("file_name", "")
+        if raw_file_name is None:
+            file_name = ""
+        else:
+            file_name = str(raw_file_name).strip()
+        if file_name.casefold() in {"none", "null"}:
+            file_name = ""
+
         mode = str(args.get("mode", "overwrite")).strip().lower() or "overwrite"
         if mode not in {"overwrite", "append"}:
             mode = "overwrite"
@@ -939,7 +955,22 @@ class Executor:
         used_default_location = False
         explicit_dir_hint = False
 
-        if path_arg:
+        if self.force_workspace_write_data:
+            used_default_location = True
+            workspace_default = str(self.workspace_paths.get("written_data_dir", "")).strip()
+            if workspace_default:
+                target = Path(workspace_default).expanduser().resolve()
+            else:
+                error_message = "write_data default workspace path is not configured"
+                self.event_logger.system_warning(error_message)
+                return False, {"error": error_message}
+            if path_arg:
+                self.event_logger.system_info(
+                    "write_data ignored explicit path because force_workspace_write_data is enabled",
+                    requested_path=path_arg,
+                    workspace_root=str(target),
+                )
+        elif path_arg:
             explicit_dir_hint = path_arg.endswith("/") or path_arg.endswith("\\")
             target = Path(path_arg).expanduser()
             if not target.is_absolute():
@@ -1017,6 +1048,7 @@ class Executor:
                     "provider_type": provider_type,
                     "session_segment": session_segment,
                     "used_default_location": used_default_location,
+                    "force_workspace_write_data": self.force_workspace_write_data,
                 },
                 text_input=data_preview,
                 success=True,
@@ -1030,6 +1062,7 @@ class Executor:
             "mode": mode,
             "format_hint": format_hint,
             "used_default_location": used_default_location,
+            "force_workspace_write_data": self.force_workspace_write_data,
             "provider_type": provider_type,
             "session_segment": session_segment,
             "sandbox_warning": observe_warning,
