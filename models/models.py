@@ -151,7 +151,7 @@ class ActionStep(BaseModel):
         if function_name == "select_option":
             eid = arguments.get('element_id')
             suffix = f" [id={eid}]" if eid is not None else ""
-            return f"select_option: {arguments.get('option', '')} in {arguments.get('dropdown_description', '')}{suffix}".strip()
+            return f"select_option: {arguments.get('intent', '')} in {arguments.get('dropdown_description', '')}{suffix}".strip()
         if function_name == "upload_file":
             return f"upload_file: {arguments.get('file_path', '')} in {arguments.get('target_description', '')}".strip()
         if function_name == "set_datetime":
@@ -427,7 +427,9 @@ def _tokenize(text: str) -> List[str]:
 # DROPDOWN SELECTION MODELS
 # ============================================================================
 
-class SelectedOption(BaseModel):
-    """LLM structured output for fuzzy-matching a dropdown option."""
-    exact_text: str = Field(description="The exact text of the best-matching option from the provided list")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence that this option matches the desired value")
+class ChosenOption(BaseModel):
+    """LLM structured output for context-aware dropdown option selection."""
+    reasoning: str = Field(description="Why this option was chosen")
+    exact_text: Optional[str] = Field(default=None, description="Exact text of chosen option from list")
+    search_term: Optional[str] = Field(default=None, description="Search term for type-to-search dropdowns")
+    confidence: float = Field(ge=0.0, le=1.0)

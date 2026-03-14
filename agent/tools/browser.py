@@ -72,10 +72,10 @@ class ClearTextArgs(BaseModel):
 
 
 class SelectOptionArgs(BaseModel):
-    option: str
-    dropdown_description: str
+    intent: str = Field(description="Semantic description of what to select, e.g. 'the user's country of residence'")
+    dropdown_description: str = Field(description="What the field is, e.g. 'Country'")
     reasoning: str
-    element_id: Optional[int] = Field(default=None, ge=1)
+    element_id: int = Field(ge=1)
 
 
 class UploadFileArgs(BaseModel):
@@ -118,7 +118,7 @@ def click(ctx: ToolContext, args: ClickArgs) -> ToolOutcome:
 @tool(
     manifest=ToolManifest(
         name="type_text",
-        description="Type text into an input field.",
+        description="Type text into an input field at the current cursor position. If you need to replace existing content, use clear_text first.",
         effects=frozenset({Effect.WRITE_PAGE}),
         dialog_policy=DialogPolicy.BLOCK_WHEN_DIALOG,
         progress_policy=ProgressPolicy.USER_FACING,
@@ -133,7 +133,7 @@ def type_text(ctx: ToolContext, args: TypeTextArgs) -> ToolOutcome:
 @tool(
     manifest=ToolManifest(
         name="clear_text",
-        description="Clear text from an input field.",
+        description="Clear existing text from an input field before retyping.",
         effects=frozenset({Effect.WRITE_PAGE}),
         dialog_policy=DialogPolicy.BLOCK_WHEN_DIALOG,
         progress_policy=ProgressPolicy.USER_FACING,
@@ -148,7 +148,7 @@ def clear_text(ctx: ToolContext, args: ClearTextArgs) -> ToolOutcome:
 @tool(
     manifest=ToolManifest(
         name="select_option",
-        description="Select an option from a dropdown.",
+        description="Autonomously select the best option from a dropdown. Reads available options and uses mission context to choose.",
         effects=frozenset({Effect.WRITE_PAGE}),
         dialog_policy=DialogPolicy.BLOCK_WHEN_DIALOG,
         progress_policy=ProgressPolicy.USER_FACING,

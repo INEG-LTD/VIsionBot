@@ -22,7 +22,7 @@ from core.browser import Browser
 from core.config import Config
 from core.executor.ui_feedback import highlight_click_location
 from models import ActionStep, ActionType, PageElements, PageInfo
-from models.models import FailedAction, SelectedOption
+from models.models import FailedAction, ChosenOption
 from utils import SelectorUtils
 from utils.page_utils import PageUtils
 from agent.memory import NarrativeMemory, InteractionType
@@ -1181,62 +1181,6 @@ class Executor:
         
         current_screenshot = before_state.screenshot
 
-        def clear_input_field(x: Optional[int], y: Optional[int]) -> str:
-            """
-            Clear an input field before typing to ensure previous text is removed.
-            Tries multiple methods: JavaScript first, then keyboard select-all+delete.
-
-            Returns:
-                Status string: "js" if JS cleared, "keyboard" if keyboard fallback, "failed" if both failed
-            """
-            if x is None or y is None:
-                return "failed"
-
-            # try:
-            #     # Try to clear using JavaScript first (most reliable)
-            #     element_js = f"""
-            #     (function() {{
-            #         const element = document.elementFromPoint({x}, {y});
-            #         if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {{
-            #             element.focus();
-            #             element.value = '';
-            #             element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            #             element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            #             return true;
-            #         }}
-            #         return false;
-            #     }})();
-            #     """
-            #     cleared = self.browser.page.evaluate(element_js)
-            #     if cleared:
-            #         # Only show in debug mode
-            #         if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            #             dprint(f"  ✅ Cleared field using JavaScript")
-            #         time.sleep(0.1)
-            #         return "js"
-            # except Exception as e:
-            #     # Only show in debug mode
-            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            #         dprint(f"  ⚠️ JavaScript clear failed, using keyboard: {e}")
-
-            # Fallback: click, select all, delete
-            # try:
-            #     self.browser.page.mouse.click(x, y)
-            #     time.sleep(0.2)
-            #     self.browser.page.keyboard.press('Control+a')
-            #     time.sleep(0.1)
-            #     self.browser.page.keyboard.press('Delete')
-            #     time.sleep(0.1)
-            #     # Only show in debug mode
-            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            #         dprint(f"  ✅ Cleared field using keyboard (Ctrl+A, Delete)")
-            #     return "keyboard"
-            # except Exception as e:
-            #     # Only show in debug mode
-            #     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-            #         dprint(f"  ⚠️ Keyboard clear failed: {e}")
-            #     return "failed"
-
         args = self._get_action_args(step)
         text_to_type = str(args.get("text", "")).strip()
         field_description = str(args.get("field_description", "")).strip()
@@ -1274,29 +1218,23 @@ class Executor:
         except Exception:
             pass
 
-        clear_status = "skipped"
         try:
-            # Always clear the field before typing to ensure previous text is removed
-            clear_status = clear_input_field(x, y)
-
-            # Try to get element selector and use fill() or press_sequentially
+            # Type without clearing so append and in-place edits remain possible.
             element_selector = None
             if x is not None and y is not None:
                 try:
                     element_selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
                     if element_selector:
                         try:
-                            self.event_logger.system_debug(f"Using fill() method with selector: {element_selector}")
+                            self.event_logger.system_debug(
+                                f"Using locator typing with selector: {element_selector}"
+                            )
                         except Exception:
                             pass
-                        # Use locator for more reliable filling
                         locator = self.browser.page.locator(element_selector).first
-                        # Type with random delay between keystrokes if text is short, otherwise fill
-                        # Note: fill() automatically clears, but we already cleared above for consistency
-                        if len(text_to_type) < 50:
-                            locator.press_sequentially(text_to_type, delay=random.randint(50, 150))
-                        else:
-                            locator.fill(text_to_type)
+                        locator.focus()
+                        delay = random.randint(20, 60) if len(text_to_type) < 100 else random.randint(5, 20)
+                        locator.press_sequentially(text_to_type, delay=delay)
                         success = True
                         error_msg = None
                     else:
@@ -1304,10 +1242,12 @@ class Executor:
                 except Exception as e:
                     # Only show in debug mode
                     if hasattr(self.event_logger, 'debug_mode') and self.event_logger.debug_mode:
-                        self.event_logger.system_debug(f"fill() method failed, falling back to keyboard: {e}")
+                        self.event_logger.system_debug(
+                            f"Locator typing failed, falling back to keyboard: {e}"
+                        )
                     element_selector = None
 
-            # Fallback to keyboard method if fill() didn't work
+            # Fallback to keyboard typing if selector-based typing didn't work
             if not element_selector:
                 used_keyboard_fallback = True
                 # Ensure element is focused before keyboard typing
@@ -1317,7 +1257,6 @@ class Executor:
                         time.sleep(0.1)
                     except Exception:
                         pass
-                # Field was already cleared above, so just type the new text
                 self.browser.page.keyboard.type(text_to_type, delay=50)
                 success = True
                 error_msg = None
@@ -1331,10 +1270,8 @@ class Executor:
 
         # Build executor feedback notes
         type_notes_parts = []
-        if clear_status == "failed":
-            type_notes_parts.append("clear failed — field may still have old text")
         if used_keyboard_fallback:
-            type_notes_parts.append("fill() failed, used keyboard fallback")
+            type_notes_parts.append("selector typing failed, used keyboard fallback")
         if not success:
             type_notes_parts.append(f"typing failed: {error_msg}" if error_msg else "typing failed")
         type_notes = "; ".join(type_notes_parts) if type_notes_parts else None
@@ -2157,33 +2094,227 @@ class Executor:
         except Exception:
             return False
 
-    def _llm_match_option(self, desired: str, available_options: List[str]) -> Optional[str]:
-        """Use LLM to fuzzy-match the desired option against available options."""
-        truncated = available_options[:100]
-        numbered = "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(truncated))
-        prompt = (
-            f"The user wants to select: \"{desired}\"\n\n"
-            f"Available options:\n{numbered}\n\n"
-            f"Return the exact text of the best matching option. "
-            f"If none match at all, return the closest reasonable match."
+    def _normalize_dropdown_value(self, value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
+
+    def _dropdown_values_match(self, expected_value: str, observed_value: Optional[str]) -> bool:
+        expected_normalized = self._normalize_dropdown_value(expected_value)
+        observed_normalized = self._normalize_dropdown_value(observed_value)
+        if not expected_normalized or not observed_normalized:
+            return False
+        return (
+            expected_normalized == observed_normalized
+            or expected_normalized in observed_normalized
+            or observed_normalized in expected_normalized
         )
+
+    def _read_selected_dropdown_value(self, overlay_index: Optional[int]) -> Optional[str]:
+        js = """
+        (overlayIndex) => {
+            const findByShadow = (idx, root) => {
+                if (!idx) return null;
+                const found = root.querySelector(`[data-dom-index="${idx}"]`);
+                if (found) return found;
+                for (const host of root.querySelectorAll('*')) {
+                    if (host.shadowRoot) {
+                        const deep = findByShadow(idx, host.shadowRoot);
+                        if (deep) return deep;
+                    }
+                }
+                return null;
+            };
+
+            const isVisible = (node) => {
+                if (!node || !(node instanceof Element)) return false;
+                const style = window.getComputedStyle(node);
+                if (!style) return false;
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect = node.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            const textOf = (node) => {
+                if (!node) return '';
+                const raw = (
+                    node.innerText ||
+                    node.textContent ||
+                    node.getAttribute?.('aria-label') ||
+                    ''
+                );
+                return String(raw || '').trim();
+            };
+
+            const selectedDescendantText = (root) => {
+                if (!root || !root.querySelectorAll) return '';
+                const selectors = [
+                    '[role="option"][aria-selected="true"]',
+                    '[role="treeitem"][aria-selected="true"]',
+                    '[role="option"][data-selected="true"]',
+                    '[aria-checked="true"]',
+                    'option:checked',
+                    '[selected]',
+                ];
+                for (const selector of selectors) {
+                    const candidates = Array.from(root.querySelectorAll(selector));
+                    for (const candidate of candidates) {
+                        if (!isVisible(candidate)) continue;
+                        const text = textOf(candidate);
+                        if (text) return text;
+                    }
+                }
+                return '';
+            };
+
+            const valuesFor = (node) => {
+                if (!node) return [];
+                const values = [];
+                if (node.tagName === 'SELECT') {
+                    const selectedOption = node.selectedOptions && node.selectedOptions[0];
+                    if (selectedOption) {
+                        values.push(textOf(selectedOption));
+                        values.push(String(selectedOption.value || '').trim());
+                    }
+                    values.push(String(node.value || '').trim());
+                }
+                if (typeof node.value === 'string') {
+                    values.push(String(node.value || '').trim());
+                }
+                const activeDescendantId = node.getAttribute?.('aria-activedescendant');
+                if (activeDescendantId) {
+                    const activeDescendant = document.getElementById(activeDescendantId);
+                    if (activeDescendant) {
+                        values.push(textOf(activeDescendant));
+                    }
+                }
+                values.push(selectedDescendantText(node));
+                values.push(textOf(node));
+                return values.map((value) => String(value || '').trim()).filter(Boolean);
+            };
+
+            const target = findByShadow(overlayIndex, document);
+            const seen = new Set();
+            const orderedNodes = [target, document.activeElement];
+            for (const node of orderedNodes) {
+                if (!node || seen.has(node)) continue;
+                seen.add(node);
+                const values = valuesFor(node);
+                for (const value of values) {
+                    if (value) return value;
+                }
+            }
+            const globalSelected = selectedDescendantText(document.body);
+            if (globalSelected) return globalSelected;
+            return '';
+        }
+        """
+        try:
+            observed_value = self.browser.page.evaluate(js, overlay_index)
+        except Exception:
+            return None
+        observed_text = str(observed_value or "").strip()
+        return observed_text or None
+
+    def _llm_choose_option(
+        self,
+        intent: str,
+        dropdown_description: str,
+        available_options: Optional[List[str]],
+    ) -> Optional[ChosenOption]:
+        """Use LLM to choose the best dropdown option using mission context.
+
+        When *available_options* is provided, the LLM picks the best match and
+        returns ``exact_text``.  When it is ``None`` (type-to-search dropdown
+        with no initial options), the LLM generates a ``search_term`` instead.
+        """
+        # -- Build context from memory_store --
+        mission = getattr(self.memory_store, "current_mission", "") or ""
+        base_knowledge = getattr(self.memory_store, "base_knowledge", []) or []
+        qa_pairs = getattr(self.memory_store, "question_answer_pairs", []) or []
+
+        context_parts: List[str] = []
+        if mission:
+            context_parts.append(f"Current mission: {mission}")
+        if base_knowledge:
+            context_parts.append("Known facts about the user:\n" + "\n".join(f"- {k}" for k in base_knowledge))
+        if qa_pairs:
+            qa_lines = [f"Q: {p.get('question','')} → A: {p.get('answer','')}" for p in qa_pairs[-5:]]
+            context_parts.append("Recent Q&A:\n" + "\n".join(qa_lines))
+
+        context_block = "\n\n".join(context_parts) if context_parts else "No additional context."
+
+        if available_options is not None:
+            truncated = available_options[:100]
+            numbered = "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(truncated))
+            prompt = (
+                f"Dropdown field: \"{dropdown_description}\"\n"
+                f"Intent: \"{intent}\"\n\n"
+                f"Context:\n{context_block}\n\n"
+                f"Available options:\n{numbered}\n\n"
+                f"Pick the best option. Return its EXACT text in exact_text. "
+                f"Leave search_term null."
+            )
+        else:
+            prompt = (
+                f"Dropdown field: \"{dropdown_description}\"\n"
+                f"Intent: \"{intent}\"\n\n"
+                f"Context:\n{context_block}\n\n"
+                f"This is a type-to-search dropdown with no visible options yet. "
+                f"Generate a short search_term to type that will surface the right option. "
+                f"Leave exact_text null."
+            )
+
         try:
             result = generate_model(
                 prompt=prompt,
-                model_object_type=SelectedOption,
-                system_prompt="You are a dropdown option matcher. Return the exact_text of the best match from the list.",
+                model_object_type=ChosenOption,
+                system_prompt=(
+                    "You choose dropdown options using context about the user and their mission. "
+                    "Return the best choice with your reasoning."
+                ),
                 model="gpt-4o-mini",
                 temperature=0.0,
             )
-            if isinstance(result, SelectedOption) and result.exact_text:
-                return result.exact_text
+            if isinstance(result, ChosenOption):
+                return result
         except Exception as exc:
-            dprint(f"[select] LLM match failed: {exc}")
+            dprint(f"[select] LLM choose failed: {exc}")
         return None
 
     # ------------------------------------------------------------------
     # Main select handler
     # ------------------------------------------------------------------
+
+    def _is_native_select(self, overlay_index: Optional[int], elements: PageElements) -> bool:
+        """Check if the resolved overlay element is a native <select>."""
+        if overlay_index is None:
+            return False
+        for elem in elements.elements:
+            if getattr(elem, "overlay_number", None) == overlay_index:
+                etype = getattr(elem, "element_type", "")
+                fsubtype = getattr(elem, "field_subtype", "") or ""
+                return etype == "select" or fsubtype == "select"
+        return False
+
+    def _try_playwright_select(self, chosen_text: str) -> bool:
+        """Attempt Playwright's native select_option on the focused <select>."""
+        js = """
+        () => {
+            const sel = document.querySelector('select:focus');
+            if (!sel) return null;
+            // Build a unique CSS selector for Playwright
+            if (sel.id) return '#' + CSS.escape(sel.id);
+            if (sel.name) return 'select[name=' + JSON.stringify(sel.name) + ']';
+            return null;
+        }
+        """
+        try:
+            selector = self.browser.page.evaluate(js)
+            if selector:
+                self.browser.page.select_option(selector, label=chosen_text)
+                return True
+        except Exception as exc:
+            dprint(f"[select] Playwright select_option failed: {exc}")
+        return False
 
     def execute_select_option(
         self,
@@ -2192,75 +2323,137 @@ class Executor:
         failed_elements: List[FailedAction],
         page_info: PageInfo,
     ) -> bool:
-        """Select an option in a dropdown using unified open→extract→match→select algorithm."""
+        """Context-aware autonomous dropdown selection.
+
+        Flow:
+        1. Resolve element_id (required, fail fast)
+        2. Click to open dropdown
+        3. Extract options
+        4. Branch A (options found): LLM picks best match → exact_text
+           - Native <select>: use Playwright select_option API
+           - Custom dropdown: click the option directly, fall back to type+Enter
+        5. Branch B (no options / type-to-search): LLM generates search_term →
+           type it → poll for options → LLM picks from results
+        6. If no chosen_text resolved, fail (never type raw intent)
+        """
         args = self._get_action_args(step)
-        option = str(args.get("option", "")).strip()
+        intent = str(args.get("intent", "")).strip()
         dropdown_description = str(args.get("dropdown_description", "")).strip()
         before_state = self.memory_store._capture_current_state()
-        current_screenshot = before_state.screenshot
 
-        # Resolve target element
+        # 1. Resolve element_id — required, fail fast
         overlay_index = self._resolve_element_id_to_overlay(step, elements)
         if overlay_index is None:
-            intent = f"select option {option} in {dropdown_description}".strip()
-            overlay_index = self.select_best_overlay(
-                intent,
-                elements,
-                failed_elements,
-                screenshot=current_screenshot,
-                base_knowledge=self.memory_store.base_knowledge,
+            after_state = self.memory_store._capture_current_state()
+            self.memory_store.record_interaction(
+                InteractionType.SELECT,
+                before_state=before_state,
+                after_state=after_state,
+                coordinates=None,
+                target_element_info={
+                    "description": dropdown_description or "dropdown",
+                    "overlay_index": None,
+                    "intent": intent,
+                    "action": step.action,
+                },
+                success=False,
+                error_message="element_id could not be resolved — required for select_option",
             )
+            return False
 
+        native_select = self._is_native_select(overlay_index, elements)
         x, y, _ = self.get_click_coordinates(overlay_index, elements, page_info)
         success = False
         error_msg: Optional[str] = None
-        matched_text: Optional[str] = None
+        chosen_text: Optional[str] = None
+        observed_value: Optional[str] = None
+        llm_reasoning: Optional[str] = None
 
-        if not option:
-            error_msg = "No option provided for select_option"
+        if not intent:
+            error_msg = "No intent provided for select_option"
         elif x is None or y is None:
             error_msg = "Could not determine coordinates for select_option"
         else:
             try:
-                # Step 1-2: Click to open dropdown
+                # 2. Click to open dropdown
                 self.browser.page.mouse.click(x, y)
                 time.sleep(0.3)
 
-                # Step 3-4: Extract available options
+                # 3. Extract available options
                 options = self._extract_dropdown_options()
 
-                # Step 5: If no options found, type to trigger population (search/async dropdown)
                 typed_to_search = False
-                if not options:
-                    self.browser.page.keyboard.type(option, delay=30)
-                    typed_to_search = True
-                    options = self._poll_for_dropdown_options(max_wait_ms=2000, poll_interval_ms=300)
 
-                # Step 6: LLM fuzzy-match against available options
                 if options:
-                    matched_text = self._llm_match_option(option, options)
+                    # --- Flow A: options visible ---
+                    choice = self._llm_choose_option(intent, dropdown_description, options)
+                    if choice and choice.exact_text:
+                        chosen_text = choice.exact_text
+                        llm_reasoning = choice.reasoning
+                else:
+                    # --- Flow B: type-to-search ---
+                    choice = self._llm_choose_option(intent, dropdown_description, None)
+                    if choice and choice.search_term:
+                        self.browser.page.keyboard.type(choice.search_term, delay=30)
+                        typed_to_search = True
+                        llm_reasoning = choice.reasoning
 
-                text_to_type = matched_text or option
+                        # Poll for async options
+                        polled = self._poll_for_dropdown_options(max_wait_ms=2000, poll_interval_ms=300)
+                        if polled:
+                            # Re-run LLM with actual options
+                            choice2 = self._llm_choose_option(intent, dropdown_description, polled)
+                            if choice2 and choice2.exact_text:
+                                chosen_text = choice2.exact_text
+                                llm_reasoning = choice2.reasoning
 
-                # Step 7-8: Type the matched text and press Enter
-                if typed_to_search:
-                    # Clear what we typed in step 5a
-                    self.browser.page.keyboard.press("Control+a")
-                    time.sleep(0.05)
+                # --- Guard: never type raw intent into a dropdown ---
+                if not chosen_text:
+                    base_knowledge = getattr(self.memory_store, "base_knowledge", []) or []
+                    if not base_knowledge:
+                        error_msg = (
+                            f"Could not determine a value for \"{dropdown_description}\" "
+                            f"(intent: \"{intent}\"). No user profile data available — "
+                            f"consider using ask_user to get the value first."
+                        )
+                    else:
+                        error_msg = (
+                            f"Could not determine a value for \"{dropdown_description}\" "
+                            f"(intent: \"{intent}\"). LLM did not return a match."
+                        )
+                    # Close the dropdown so the page isn't left in a broken state
+                    self.browser.page.keyboard.press("Escape")
+                    time.sleep(0.1)
+                else:
+                    # --- Apply chosen_text ---
 
-                self.browser.page.keyboard.type(text_to_type, delay=30)
-                time.sleep(0.15)
-                self.browser.page.keyboard.press("Enter")
-                time.sleep(0.3)
+                    # Native <select>: prefer Playwright API
+                    selection_applied = native_select and self._try_playwright_select(chosen_text)
+                    if not selection_applied:
+                        selection_applied = self._click_option_in_open_dropdown(chosen_text)
+                    if selection_applied:
+                        time.sleep(0.3)
+                    else:
+                        # Clear search text if we typed to search
+                        if typed_to_search:
+                            self.browser.page.keyboard.press("Control+a")
+                            time.sleep(0.05)
 
-                # Step 10: If dropdown still open, try clicking option directly
-                if self._is_dropdown_still_open():
-                    clicked = self._click_option_in_open_dropdown(text_to_type)
-                    if not clicked and matched_text and matched_text != option:
-                        # Try original text as fallback
-                        self._click_option_in_open_dropdown(option)
+                        # Type chosen text + Enter
+                        self.browser.page.keyboard.type(chosen_text, delay=30)
+                        time.sleep(0.15)
+                        self.browser.page.keyboard.press("Enter")
+                        time.sleep(0.3)
 
-                success = True
+                    observed_value = self._read_selected_dropdown_value(overlay_index)
+                    if self._dropdown_values_match(chosen_text, observed_value):
+                        success = True
+                    else:
+                        error_msg = (
+                            f"select_option did not set the intended value "
+                            f"'{chosen_text}' (observed: '{observed_value or 'none'}')"
+                        )
+                        success = False
             except Exception as exc:
                 success = False
                 error_msg = str(exc)
@@ -2274,8 +2467,10 @@ class Executor:
             target_element_info={
                 "description": dropdown_description or "dropdown",
                 "overlay_index": overlay_index,
-                "option": option,
-                "matched_text": matched_text,
+                "intent": intent,
+                "chosen_text": chosen_text,
+                "observed_value": observed_value,
+                "llm_reasoning": llm_reasoning,
                 "action": step.action,
             },
             success=success,
@@ -2311,6 +2506,149 @@ class Executor:
         if candidate.is_file():
             return candidate
         return None
+
+    def _resolve_upload_target_selector(
+        self,
+        *,
+        selector: Optional[str],
+        x: Optional[float],
+        y: Optional[float],
+    ) -> Optional[str]:
+        """Resolve the actual file input associated with the clicked upload control."""
+        token = f"codex-upload-target-{int(time.time() * 1000)}"
+        try:
+            resolved = self.browser.page.evaluate(
+                """
+                ({ selector, x, y, token }) => {
+                    const markerAttr = "data-codex-upload-target";
+
+                    const removeMarkers = () => {
+                        for (const node of document.querySelectorAll(`[${markerAttr}]`)) {
+                            node.removeAttribute(markerAttr);
+                        }
+                    };
+
+                    const isVisible = (element) => {
+                        if (!element) return false;
+                        const style = window.getComputedStyle(element);
+                        if (style.display === "none" || style.visibility === "hidden") return false;
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+
+                    const resolveFromElement = (element) => {
+                        if (!element) return null;
+                        if (element.matches?.('input[type="file"]')) return element;
+
+                        const closestFileInput = element.closest?.('input[type="file"]');
+                        if (closestFileInput) return closestFileInput;
+
+                        const closestLabel = element.closest?.("label");
+                        if (closestLabel) {
+                            const htmlFor = closestLabel.getAttribute("for");
+                            if (htmlFor) {
+                                const linked = document.getElementById(htmlFor);
+                                if (linked?.matches?.('input[type="file"]')) return linked;
+                            }
+                            const nestedInput = closestLabel.querySelector?.('input[type="file"]');
+                            if (nestedInput) return nestedInput;
+                        }
+
+                        let current = element;
+                        while (current) {
+                            const nestedInput = current.querySelector?.('input[type="file"]');
+                            if (nestedInput) return nestedInput;
+                            current = current.parentElement;
+                        }
+                        return null;
+                    };
+
+                    const findNearestVisibleFileInput = (cx, cy) => {
+                        let best = null;
+                        let bestDistance = Number.POSITIVE_INFINITY;
+                        for (const input of document.querySelectorAll('input[type="file"]')) {
+                            if (!isVisible(input)) continue;
+                            const rect = input.getBoundingClientRect();
+                            const centerX = rect.left + rect.width / 2;
+                            const centerY = rect.top + rect.height / 2;
+                            const distance = Math.hypot(centerX - cx, centerY - cy);
+                            if (distance < bestDistance) {
+                                bestDistance = distance;
+                                best = input;
+                            }
+                        }
+                        if (bestDistance <= 240) return best;
+                        return null;
+                    };
+
+                    removeMarkers();
+
+                    let target = null;
+                    if (selector) {
+                        try {
+                            target = document.querySelector(selector);
+                        } catch (error) {
+                            target = null;
+                        }
+                    }
+
+                    let cx = Number.isFinite(x) ? x : null;
+                    let cy = Number.isFinite(y) ? y : null;
+                    if (cx !== null && cy !== null) {
+                        if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) {
+                            cx = cx - window.scrollX;
+                            cy = cy - window.scrollY;
+                        }
+                    }
+
+                    if (!target && cx !== null && cy !== null) {
+                        target = document.elementFromPoint(cx, cy);
+                    }
+
+                    let input = resolveFromElement(target);
+                    if (!input && cx !== null && cy !== null) {
+                        input = findNearestVisibleFileInput(cx, cy);
+                    }
+
+                    if (!input) {
+                        const allInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+                        if (allInputs.length === 1) {
+                            input = allInputs[0];
+                        }
+                    }
+
+                    if (!input) return null;
+                    input.setAttribute(markerAttr, token);
+                    return `input[type="file"][${markerAttr}="${token}"]`;
+                }
+                """,
+                {
+                    "selector": selector,
+                    "x": x,
+                    "y": y,
+                    "token": token,
+                },
+            )
+        except Exception:
+            return None
+
+        if isinstance(resolved, str) and resolved.strip():
+            return resolved.strip()
+        return None
+
+    def _clear_upload_target_selector(self) -> None:
+        try:
+            self.browser.page.evaluate(
+                """
+                () => {
+                    for (const node of document.querySelectorAll('[data-codex-upload-target]')) {
+                        node.removeAttribute('data-codex-upload-target');
+                    }
+                }
+                """
+            )
+        except Exception:
+            pass
 
     def execute_upload(
         self,
@@ -2431,15 +2769,32 @@ class Executor:
             selector = self.selector_utils.get_element_selector_from_coordinates(x, y)
         except Exception:
             selector = None
+        upload_target_selector = self._resolve_upload_target_selector(
+            selector=selector,
+            x=x,
+            y=y,
+        )
+        attempted_selectors: list[str] = []
         try:
+            for candidate_selector in [upload_target_selector, selector]:
+                if not candidate_selector or candidate_selector in attempted_selectors:
+                    continue
+                attempted_selectors.append(candidate_selector)
+                try:
+                    self.browser.page.locator(candidate_selector).first.set_input_files(file_path)
+                    return True, None, candidate_selector
+                except Exception:
+                    continue
+
+            if upload_target_selector:
+                return False, f"Failed to set files on resolved upload target: {upload_target_selector}", upload_target_selector
             if selector:
-                self.browser.page.locator(selector).first.set_input_files(file_path)
-            else:
-                self.browser.page.mouse.click(x, y)
-                self.browser.page.set_input_files("input[type='file']", file_path)
-            return True, None, selector
+                return False, f"Resolved selector is not a usable file input: {selector}", selector
+            return False, "Could not resolve a file input near the chosen upload target", None
         except Exception as exc:
             return False, str(exc), selector
+        finally:
+            self._clear_upload_target_selector()
 
 
     def execute_datetime(

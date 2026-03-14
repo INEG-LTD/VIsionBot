@@ -183,7 +183,7 @@ def _build_fallback_narrative(function_name: str, args: Dict[str, Any]) -> str:
         return "I'm clearing an input field."
 
     if tool == "select_option":
-        option = _compact_text(args.get("option"), 60)
+        option = _compact_text(args.get("intent"), 60)
         dropdown = _compact_text(args.get("dropdown_description"), 90)
         if option and dropdown:
             return f"I'm selecting '{option}' in the {dropdown}."
