@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,23 @@ from lib.ai import generate_model
 
 _MAX_VISIBLE_TEXT_CHARS = 18000
 _RETRY_WAIT_MS = 750
+_GOOGLE_SEARCH_TITLE_SUFFIX = " - Google Search"
+_SEARCH_CONTEXT_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "for",
+        "in",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "with",
+    }
+)
 
 _PROCESS_FOCUSED_JOB_SYSTEM_PROMPT = """
 You extract and evaluate the single currently focused Google Jobs detail panel.
@@ -36,7 +54,6 @@ Rules:
 - Do not end job_summary with an ellipsis.
 - matches_profile should be true only when the focused job clearly fits the provided job profile.
 - For profile fit, prioritize job title and location. Use posted date as supporting context when relevant.
-- apply_labels should contain visible application labels if available.
 """.strip()
 
 
@@ -60,7 +77,6 @@ class FocusedJobExtraction(BaseModel):
     salary: Optional[str] = None
     employment_type: Optional[str] = None
     job_summary: Optional[str] = None
-    apply_labels: list[str] = Field(default_factory=list)
     matches_profile: bool = False
     match_reason: str = ""
 
@@ -128,6 +144,131 @@ def _normalize_text(value: Any) -> str:
     return text
 
 
+def _get_page_url(page: Any) -> str:
+    try:
+        return str(page.url or "")
+    except Exception:
+        return ""
+
+
+def _get_page_title(page: Any) -> str:
+    try:
+        return str(page.title() or "")
+    except Exception:
+        return ""
+
+
+def _extract_google_query_from_url(current_url: str) -> str:
+    if not current_url:
+        return ""
+    try:
+        parsed = urlparse(current_url)
+        query_values = parse_qs(parsed.query).get("q", ())
+    except Exception:
+        return ""
+    if not query_values:
+        return ""
+    return str(query_values[0] or "").strip()
+
+
+def _extract_google_query_from_title(page_title: str) -> str:
+    title = str(page_title or "").strip()
+    if not title:
+        return ""
+    if title.casefold().endswith(_GOOGLE_SEARCH_TITLE_SUFFIX.casefold()):
+        return title[: -len(_GOOGLE_SEARCH_TITLE_SUFFIX)].strip()
+    return ""
+
+
+def _read_google_search_box_value(page: Any) -> str:
+    script = """
+    () => {
+        const node = document.querySelector('input[name="q"], textarea[name="q"]');
+        if (!node) return "";
+        return String(node.value || node.textContent || "").trim();
+    }
+    """
+    try:
+        value = page.evaluate(script)
+    except Exception:
+        return ""
+    return str(value or "").strip()
+
+
+def _tokenize_search_context(value: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+    return {token for token in tokens if token and token not in _SEARCH_CONTEXT_STOPWORDS}
+
+
+def _queries_semantically_match(expected_query: str, observed_query: str) -> bool:
+    expected_normalized = _normalize_text(expected_query)
+    observed_normalized = _normalize_text(observed_query)
+    if not expected_normalized or not observed_normalized:
+        return False
+    if expected_normalized == observed_normalized:
+        return True
+    if expected_normalized in observed_normalized or observed_normalized in expected_normalized:
+        return True
+
+    expected_tokens = _tokenize_search_context(expected_query)
+    observed_tokens = _tokenize_search_context(observed_query)
+    if not expected_tokens or not observed_tokens:
+        return False
+
+    overlap_ratio = len(expected_tokens.intersection(observed_tokens)) / float(len(expected_tokens))
+    return overlap_ratio >= 0.5
+
+
+def _detect_search_context_mismatch(
+    ctx: ToolContext,
+    args: ProcessFocusedJobArgs,
+) -> Optional[dict[str, Any]]:
+    expected_query = str(args.search_query or "").strip()
+    if not expected_query:
+        return None
+
+    page = getattr(ctx, "page", None)
+    if page is None:
+        return None
+
+    current_url = _get_page_url(page)
+    page_title = _get_page_title(page)
+    observed_candidates = [
+        ("url_q", _extract_google_query_from_url(current_url)),
+        ("search_box", _read_google_search_box_value(page)),
+        ("page_title", _extract_google_query_from_title(page_title)),
+    ]
+    non_empty_candidates = [
+        (source, str(value or "").strip())
+        for source, value in observed_candidates
+        if str(value or "").strip()
+    ]
+    if not non_empty_candidates:
+        return None
+
+    for _, observed_query in non_empty_candidates:
+        if _queries_semantically_match(expected_query, observed_query):
+            return None
+
+    observed_source, observed_query = non_empty_candidates[0]
+    return {
+        "processable": False,
+        "saved": False,
+        "duplicate": False,
+        "matches_profile": None,
+        "reason": "search_context_mismatch",
+        "recoverable": True,
+        "search_context_valid": False,
+        "missing_fields": [],
+        "dedupe_key": "",
+        "expected_search_query": expected_query,
+        "observed_search_query": observed_query,
+        "observed_query_source": observed_source,
+        "current_url": current_url,
+        "page_title": page_title,
+    }
+
+
 def _build_dedupe_key(*, job_title: str, location: str, company_name: Optional[str]) -> str:
     title = _normalize_text(job_title)
     loc = _normalize_text(location)
@@ -183,16 +324,8 @@ def _extract_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> Focus
 
     screenshot = page.screenshot(full_page=False)
     visible_text = _collect_page_text(ctx)
-    page_url = ""
-    page_title = ""
-    try:
-        page_url = str(page.url or "")
-    except Exception:
-        page_url = ""
-    try:
-        page_title = str(page.title() or "")
-    except Exception:
-        page_title = ""
+    page_url = _get_page_url(page)
+    page_title = _get_page_title(page)
 
     prompt = (
         "Extract the currently focused Google job from the open Google Jobs page.\n\n"
@@ -207,7 +340,6 @@ def _extract_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> Focus
         "- salary\n"
         "- employment_type\n"
         "- job_summary\n"
-        "- apply_labels\n"
         "- matches_profile\n"
         "- match_reason\n\n"
         "Required fields for processability are job_title, location, and posted_date.\n"
@@ -245,21 +377,7 @@ def _collect_apply_links(ctx: ToolContext) -> list[ApplyLink]:
         const looksInteresting = (label) => {
             const text = normalize(label).toLowerCase();
             if (!text) return false;
-            return (
-                text.includes("apply") ||
-                text.includes("application") ||
-                text.includes("company site") ||
-                text.includes("employer site") ||
-                text.includes("external site") ||
-                text.includes("careers") ||
-                text.includes("linkedin") ||
-                text.includes("indeed") ||
-                text.includes("reed") ||
-                text.includes("glassdoor") ||
-                text.includes("cv-library") ||
-                text.includes("adzuna") ||
-                text.includes("monster")
-            );
+            return text.startsWith("apply");
         };
         const isVisible = (element) => {
             if (!element) return false;
@@ -330,7 +448,7 @@ def _collect_apply_links(ctx: ToolContext) -> list[ApplyLink]:
             continue
         label = str(item.get("label", "") or "").strip()
         url = str(item.get("url", "") or "").strip()
-        if not label or not url:
+        if not label or not url or not _normalize_text(label).startswith("apply"):
             continue
         try:
             collected.append(ApplyLink(label=label, url=url))
@@ -339,38 +457,10 @@ def _collect_apply_links(ctx: ToolContext) -> list[ApplyLink]:
     return collected
 
 
-def _merge_apply_links(
-    extracted: FocusedJobExtraction,
-    dom_links: list[ApplyLink],
-) -> tuple[list[dict[str, str]], list[str]]:
-    normalized_labels: list[str] = []
-    seen_labels: set[str] = set()
-    for raw in extracted.apply_labels:
-        label = str(raw or "").strip()
-        norm = _normalize_text(label)
-        if not label or not norm or norm in seen_labels:
-            continue
-        normalized_labels.append(label)
-        seen_labels.add(norm)
-
-    if not dom_links:
-        return [], normalized_labels
-
+def _normalize_apply_links(dom_links: list[ApplyLink]) -> list[dict[str, str]]:
     preferred: list[dict[str, str]] = []
     seen_pairs: set[str] = set()
-    label_norms = {_normalize_text(label) for label in normalized_labels}
-
-    ordered_links = list(dom_links)
-    if label_norms:
-        ordered_links.sort(
-            key=lambda item: (
-                0 if _normalize_text(item.label) in label_norms else 1,
-                _normalize_text(item.label),
-                item.url,
-            )
-        )
-
-    for item in ordered_links:
+    for item in dom_links:
         label = str(item.label or "").strip()
         url = str(item.url or "").strip()
         pair_key = f"{_normalize_text(label)}|{url}"
@@ -379,7 +469,20 @@ def _merge_apply_links(
         seen_pairs.add(pair_key)
         preferred.append({"label": label, "url": url})
 
-    return preferred, normalized_labels
+    return preferred
+
+
+def _select_apply_directly_link(apply_links: list[dict[str, str]]) -> Optional[str]:
+    for item in apply_links:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "") or "").strip()
+        url = str(item.get("url", "") or "").strip()
+        if not label or not url:
+            continue
+        if _normalize_text(label).startswith("apply directly on"):
+            return url
+    return None
 
 
 def _resolve_output_path(ctx: ToolContext, file_name: str) -> Path:
@@ -506,6 +609,32 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
     if page is None:
         return _fail(ctx, args, "page is unavailable")
 
+    search_context_mismatch = _detect_search_context_mismatch(ctx, args)
+    if search_context_mismatch:
+        _record_tool_action(
+            ctx,
+            args=args,
+            success=True,
+            error_message=None,
+            result_data=search_context_mismatch,
+        )
+        observed_search_query = str(
+            search_context_mismatch.get("observed_search_query", "") or ""
+        ).strip()
+        expected_search_query = str(
+            search_context_mismatch.get("expected_search_query", "") or ""
+        ).strip()
+        return ToolOutcome(
+            output=ToolOutput(
+                success=True,
+                summary=(
+                    "process_focused_job: search context mismatch "
+                    f"(expected '{expected_search_query}', observed '{observed_search_query or 'unknown'}')"
+                ),
+                data=search_context_mismatch,
+            )
+        )
+
     try:
         target_path = _resolve_output_path(ctx, args.file_name)
     except Exception as exc:
@@ -531,7 +660,8 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
     if extracted is None:
         return _fail(ctx, args, "focused job extraction returned no data")
 
-    apply_links, apply_labels = _merge_apply_links(extracted, _collect_apply_links(ctx))
+    apply_links = _normalize_apply_links(_collect_apply_links(ctx))
+    apply_directly_link = _select_apply_directly_link(apply_links)
     dedupe_key = _build_dedupe_key(
         job_title=extracted.job_title,
         location=extracted.location,
@@ -597,7 +727,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
                 "company_name": extracted.company_name,
                 "job_summary": extracted.job_summary,
                 "apply_links": apply_links,
-                "apply_labels": apply_labels,
+                "apply_directly_link": apply_directly_link,
             },
             "match_reason": extracted.match_reason,
         }
@@ -633,7 +763,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
                 "company_name": extracted.company_name,
                 "job_summary": extracted.job_summary,
                 "apply_links": apply_links,
-                "apply_labels": apply_labels,
+                "apply_directly_link": apply_directly_link,
             },
             "match_reason": extracted.match_reason,
         }
@@ -661,7 +791,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
         "employment_type": extracted.employment_type,
         "job_summary": extracted.job_summary,
         "apply_links": apply_links,
-        "apply_labels": apply_labels,
+        "apply_directly_link": apply_directly_link,
         "search_query": str(args.search_query or "").strip() or None,
         "source": "Google Jobs",
         "dedupe_key": dedupe_key,

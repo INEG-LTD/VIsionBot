@@ -79,7 +79,6 @@ def _job_context(job: dict) -> str:
         ("employment_type", job.get("employment_type")),
         ("job_summary", job.get("job_summary")),
         ("apply_links", job.get("apply_links")),
-        ("apply_labels", job.get("apply_labels")),
         ("source", job.get("source")),
     ]
     filtered = {

@@ -17,6 +17,8 @@ USER_DETAILS_FILENAME = "user_details.json"
 CV_MARKDOWN_FILENAME = "cv_markdown.md"
 CV_SUMMARY_CACHE_FILENAME = "cv_summary_cache.json"
 CV_SUMMARY_WORD_COUNT = 100
+APPLICATION_PREFERENCES_KEY = "application_preferences"
+EEO_PREFERENCES_KEY = "eeo_preferences"
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,161 @@ def _request_user_profile(workspace_root: Path) -> dict:
     }
 
 
+def _save_user_details(workspace_root: Path, user_details: dict) -> None:
+    user_details_path = workspace_root / USER_DETAILS_FILENAME
+    user_details_path.write_text(
+        json.dumps(user_details, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _prompt_with_default(prompt: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    return input(f"{prompt}{suffix}: ").strip() or default
+
+
+def _prompt_yes_no(prompt: str, *, default: bool) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    answer = input(f"{prompt} [{suffix}]: ").strip().lower()
+    if not answer:
+        return default
+    return answer in {"y", "yes"}
+
+
+def _prompt_choice(prompt: str, choices: list[str], *, default: str) -> str:
+    normalized = {choice.lower(): choice for choice in choices}
+    while True:
+        answer = input(f"{prompt} [{'/'.join(choices)}] [{default}]: ").strip().lower()
+        if not answer:
+            return default
+        if answer in normalized:
+            return normalized[answer]
+        print(f"Please choose one of: {', '.join(choices)}")
+
+
+def build_eeo_preferences(agent: Agent, user_details: dict) -> dict[str, str]:
+    workspace_root = agent.agent_workspace.workspace_root
+    existing = user_details.get(EEO_PREFERENCES_KEY)
+    if isinstance(existing, dict) and existing:
+        return {
+            "gender": str(existing.get("gender", "Prefer not to say")).strip() or "Prefer not to say",
+            "ethnicity": str(existing.get("ethnicity", "Prefer not to say")).strip() or "Prefer not to say",
+            "veteran_status": (
+                str(existing.get("veteran_status", "Prefer not to say")).strip() or "Prefer not to say"
+            ),
+            "disability_status": (
+                str(existing.get("disability_status", "Prefer not to say")).strip() or "Prefer not to say"
+            ),
+        }
+
+    print("Configure saved EEO responses for job applications.")
+    if not _prompt_yes_no(
+        "Do you want to configure EEO answers now? Leave this off to default to 'Prefer not to say'.",
+        default=False,
+    ):
+        eeo_preferences = {
+            "gender": "Prefer not to say",
+            "ethnicity": "Prefer not to say",
+            "veteran_status": "Prefer not to say",
+            "disability_status": "Prefer not to say",
+        }
+    else:
+        eeo_preferences = {
+            "gender": _prompt_with_default("Preferred gender response", "Prefer not to say"),
+            "ethnicity": _prompt_with_default("Preferred ethnicity response", "Prefer not to say"),
+            "veteran_status": _prompt_with_default("Preferred veteran status response", "Prefer not to say"),
+            "disability_status": _prompt_with_default(
+                "Preferred disability status response",
+                "Prefer not to say",
+            ),
+        }
+
+    user_details[EEO_PREFERENCES_KEY] = eeo_preferences
+    _save_user_details(workspace_root, user_details)
+    return eeo_preferences
+
+
+def build_application_preferences(agent: Agent, user_details: dict) -> dict:
+    workspace_root = agent.agent_workspace.workspace_root
+    preferences = user_details.get(APPLICATION_PREFERENCES_KEY)
+    if not isinstance(preferences, dict):
+        preferences = {}
+
+    changed = False
+
+    if "desired_salary" not in preferences:
+        preferences["desired_salary"] = input(
+            "Enter your desired salary for application forms (leave blank to answer case by case): "
+        ).strip()
+        changed = True
+
+    if "work_authorization" not in preferences:
+        preferences["work_authorization"] = "Yes" if _prompt_yes_no(
+            "Are you currently authorized to work without additional approval?",
+            default=True,
+        ) else "No"
+        changed = True
+
+    if "sponsorship_needed" not in preferences:
+        preferences["sponsorship_needed"] = "Yes" if _prompt_yes_no(
+            "Will you require visa sponsorship for these applications?",
+            default=False,
+        ) else "No"
+        changed = True
+
+    if "notice_period" not in preferences:
+        preferences["notice_period"] = input(
+            "Enter your notice period (leave blank if you want to answer later): "
+        ).strip()
+        changed = True
+
+    if "earliest_start_date" not in preferences:
+        preferences["earliest_start_date"] = input(
+            "Enter your earliest start date (leave blank if you want to answer later): "
+        ).strip()
+        changed = True
+
+    if "free_text_mode" not in preferences:
+        preferences["free_text_mode"] = _prompt_choice(
+            "How should open-ended application questions be handled?",
+            ["ask", "best_effort"],
+            default="ask",
+        )
+        changed = True
+
+    if "prefill_review_mode" not in preferences:
+        preferences["prefill_review_mode"] = _prompt_choice(
+            "How thoroughly should parsed resume prefills be reviewed?",
+            ["off", "smart", "full"],
+            default="smart",
+        )
+        changed = True
+
+    for key, prompt in [
+        ("marketing_opt_in_policy", "How should marketing opt-in fields be handled?"),
+        ("sms_consent_policy", "How should SMS consent fields be handled?"),
+        ("talent_pool_policy", "How should talent pool consent fields be handled?"),
+    ]:
+        if key not in preferences:
+            preferences[key] = _prompt_choice(
+                prompt,
+                ["auto_deny", "ask_user", "auto_allow"],
+                default="auto_deny",
+            )
+            changed = True
+
+    eeo_preferences = build_eeo_preferences(agent, user_details)
+    if preferences.get(EEO_PREFERENCES_KEY) != eeo_preferences:
+        preferences[EEO_PREFERENCES_KEY] = eeo_preferences
+        changed = True
+
+    if changed:
+        user_details[APPLICATION_PREFERENCES_KEY] = preferences
+        _save_user_details(workspace_root, user_details)
+
+    return preferences
+
+
 def build_user_data(agent: Agent) -> dict:
     workspace_root = agent.agent_workspace.workspace_root
     user_details_path = workspace_root / USER_DETAILS_FILENAME
@@ -116,10 +273,7 @@ def build_user_data(agent: Agent) -> dict:
 
     if not user_details:
         user_details = _request_user_profile(workspace_root)
-        user_details_path.write_text(
-            json.dumps(user_details, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        _save_user_details(workspace_root, user_details)
         print(f"Saved user profile to {user_details_path}")
         return user_details
 
@@ -131,10 +285,7 @@ def build_user_data(agent: Agent) -> dict:
             prompt_message="Saved profile CV is missing or unavailable. Please select your CV file again.",
         )
         user_details["cv_path"] = str(target_cv)
-        user_details_path.write_text(
-            json.dumps(user_details, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        _save_user_details(workspace_root, user_details)
     print(f"Loaded user profile from {user_details_path}")
     return user_details
 

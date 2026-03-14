@@ -33,6 +33,12 @@
 - If the current URL no longer contains the search query or `udm=8`, you've left the Jobs page
 - Recovery: `go_back`, then verify you're on the Jobs page. If not, re-open the URL.
 
+## Search Context Drift
+- Google can keep you inside the Jobs UI but silently switch the query context to a different search such as `Jobs at <company>`
+- Signs: the page title or `q=` parameter no longer matches the original requested search query
+- Action: treat this as recoverable workflow drift, not as a rejected job
+- Recovery: prefer `go_back` if the previous page in navigation history was the original Google Jobs results page; otherwise re-open the original search URL with `&udm=8`
+
 ## Incomplete Job Details
 - Some job cards load with partial details in the right panel (missing description, missing apply links)
 - `process_focused_job` retries once automatically if required fields are missing
