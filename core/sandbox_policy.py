@@ -36,9 +36,33 @@ class SandboxPolicyEngine:
         ["python3", "-c"],
     ]
 
-    def __init__(self, *, config: Any, workspace_root: Path, event_logger: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        config: Any,
+        workspace_root: Path,
+        profile_root: Optional[Path] = None,
+        outputs_root: Optional[Path] = None,
+        runtime_root: Optional[Path] = None,
+        event_logger: Any = None,
+    ) -> None:
         self.config = config
         self.workspace_root = workspace_root.expanduser().resolve()
+        self.profile_root = (
+            profile_root.expanduser().resolve()
+            if profile_root is not None
+            else self.workspace_root
+        )
+        self.outputs_root = (
+            outputs_root.expanduser().resolve()
+            if outputs_root is not None
+            else self.workspace_root
+        )
+        self.runtime_root = (
+            runtime_root.expanduser().resolve()
+            if runtime_root is not None
+            else self.workspace_root
+        )
         self.event_logger = event_logger
         self._audit_log_path: Optional[Path] = None
 
@@ -392,6 +416,9 @@ class SandboxPolicyEngine:
             if not text:
                 continue
             text = text.replace("{agent.workspace_root}", str(self.workspace_root))
+            text = text.replace("{agent.profile_root}", str(self.profile_root))
+            text = text.replace("{agent.outputs_root}", str(self.outputs_root))
+            text = text.replace("{agent.runtime_root}", str(self.runtime_root))
             try:
                 roots.append(Path(text).expanduser().resolve())
             except Exception:

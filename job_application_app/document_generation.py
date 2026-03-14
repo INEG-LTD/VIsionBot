@@ -215,12 +215,12 @@ def generate_cv(
     existing_markdown_path: str | None = None,
 ) -> dict:
     app_paths = resolve_app_paths(project_root=project_root, agent_id=agent_id)
-    user_details = load_saved_user_details(app_paths.workspace_root)
-    source_cv_markdown = load_cv_markdown_for_generation(app_paths.workspace_root, user_details)
+    user_details = load_saved_user_details(app_paths.profile_root)
+    source_cv_markdown = load_cv_markdown_for_generation(app_paths.profile_root, user_details)
 
     existing_markdown = None
     job_stem = _safe_job_stem(_job_name(job))
-    default_markdown_path = app_paths.written_data_dir / f"{job_stem}-cv.md"
+    default_markdown_path = app_paths.outputs_root / f"{job_stem}-cv.md"
     if existing_markdown_path:
         candidate_path = Path(existing_markdown_path).expanduser().resolve()
         if candidate_path.exists():
@@ -246,7 +246,7 @@ def generate_cv(
     changes = [str(item).strip() for item in edit_result.changes if str(item).strip()]
 
     markdown_path = _write_text_file(default_markdown_path, modified_cv)
-    pdf_path = app_paths.written_data_dir / f"{job_stem}-cv.pdf"
+    pdf_path = app_paths.outputs_root / f"{job_stem}-cv.pdf"
     pdf_pages = _render_pdf_via_subprocess(
         markdown_path=markdown_path,
         pdf_path=pdf_path,
@@ -259,7 +259,7 @@ def generate_cv(
         "changes": changes,
         "pdf_pages": int(pdf_pages),
         "modified_cv": modified_cv,
-        "source_of_truth_markdown": str(app_paths.workspace_root / CV_MARKDOWN_FILENAME),
+        "source_of_truth_markdown": str(app_paths.profile_root / CV_MARKDOWN_FILENAME),
     }
 
 
@@ -272,12 +272,12 @@ def generate_cover_letter(
     existing_markdown_path: str | None = None,
 ) -> dict:
     app_paths = resolve_app_paths(project_root=project_root, agent_id=agent_id)
-    user_details = load_saved_user_details(app_paths.workspace_root)
-    cv_markdown = load_cv_markdown_for_generation(app_paths.workspace_root, user_details)
+    user_details = load_saved_user_details(app_paths.profile_root)
+    cv_markdown = load_cv_markdown_for_generation(app_paths.profile_root, user_details)
 
     existing_markdown = None
     job_stem = _safe_job_stem(_job_name(job))
-    default_markdown_path = app_paths.written_data_dir / f"{job_stem}-cover-letter.md"
+    default_markdown_path = app_paths.outputs_root / f"{job_stem}-cover-letter.md"
     if existing_markdown_path:
         candidate_path = Path(existing_markdown_path).expanduser().resolve()
         if candidate_path.exists():
@@ -304,7 +304,7 @@ def generate_cover_letter(
     cover_letter_markdown = _format_with_br_line_breaks(cover_letter_markdown)
 
     markdown_path = _write_text_file(default_markdown_path, cover_letter_markdown)
-    pdf_path = app_paths.written_data_dir / f"{job_stem}-cover-letter.pdf"
+    pdf_path = app_paths.outputs_root / f"{job_stem}-cover-letter.pdf"
     pdf_pages = _render_pdf_via_subprocess(
         markdown_path=markdown_path,
         pdf_path=pdf_path,

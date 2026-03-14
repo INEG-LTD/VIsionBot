@@ -959,7 +959,7 @@ class Executor:
 
         if self.force_workspace_write_data:
             used_default_location = True
-            workspace_default = str(self.workspace_paths.get("written_data_dir", "")).strip()
+            workspace_default = str(self.workspace_paths.get("outputs_root", "")).strip()
             if workspace_default:
                 target = Path(workspace_default).expanduser().resolve()
             else:
@@ -970,7 +970,7 @@ class Executor:
                 self.event_logger.system_info(
                     "write_data ignored explicit path because force_workspace_write_data is enabled",
                     requested_path=path_arg,
-                    workspace_root=str(target),
+                    outputs_root=str(target),
                 )
         elif path_arg:
             explicit_dir_hint = path_arg.endswith("/") or path_arg.endswith("\\")
@@ -979,7 +979,7 @@ class Executor:
                 target = (Path.cwd() / target).resolve()
         else:
             used_default_location = True
-            workspace_default = str(self.workspace_paths.get("written_data_dir", "")).strip()
+            workspace_default = str(self.workspace_paths.get("outputs_root", "")).strip()
             if workspace_default:
                 target = Path(workspace_default).expanduser().resolve()
             else:

@@ -574,6 +574,9 @@ class Agent:
         self.sandbox_policy = SandboxPolicyEngine(
             config=self.config,
             workspace_root=self.agent_workspace.workspace_root,
+            profile_root=self.agent_workspace.profile_root,
+            outputs_root=self.agent_workspace.outputs_root,
+            runtime_root=self.agent_workspace.runtime_root,
             event_logger=self.event_logger,
         )
 
@@ -2196,13 +2199,16 @@ class Agent:
         self.config.debug.screenshot_stream_dir = str(ws.stream_screenshots_dir)
 
         for path in (
+            ws.profile_root,
             ws.workspace_root,
-            ws.written_data_dir,
+            ws.outputs_root,
+            ws.runtime_root,
             ws.browser_profile_dir,
             ws.browser_downloads_dir,
             ws.screenshots_dir,
             ws.stream_screenshots_dir,
             ws.runs_root,
+            ws.agent_info_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -2343,7 +2349,7 @@ class Agent:
             agent_talk_callback=self.agent_talk_callback,
             data_report_callback=self.data_report_callback,
             workspace_paths={
-                "written_data_dir": str(self.agent_workspace.written_data_dir),
+                "outputs_root": str(self.agent_workspace.outputs_root),
                 "workspace_root": str(self.agent_workspace.workspace_root),
             },
             upload_mode=getattr(self.config.execution, "upload_mode", "auto"),

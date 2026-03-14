@@ -30,6 +30,7 @@ _CV_EXTENSIONS = {".pdf", ".md", ".txt"}
 _CV_NAME_TOKENS = ("cv", "resume")
 _GENERATED_PREFIX = "tailored_cv_"
 _MAX_CHANGE_SUMMARY_ITEMS = 10
+_USER_DETAILS_FILENAME = "user_details.json"
 
 _CV_SYSTEM_PROMPT = """
 You tailor CVs for specific jobs while preserving factual integrity.
@@ -151,11 +152,38 @@ def _find_cv_file(
     search_dirs: list[Path],
     ctx: ToolContext,
     warnings: list[str],
+    preferred_files: Optional[list[Path]] = None,
 ) -> tuple[Optional[Path], list[str], list[str]]:
     searched_dirs: list[str] = []
     blocked_errors: list[str] = []
     seen_dirs: set[Path] = set()
     candidates: list[tuple[float, Path]] = []
+    seen_files: set[Path] = set()
+
+    for preferred_path in preferred_files or []:
+        try:
+            resolved_file = preferred_path.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved_file in seen_files:
+            continue
+        seen_files.add(resolved_file)
+        if not resolved_file.exists() or not resolved_file.is_file():
+            continue
+        resolved_dir = resolved_file.parent
+        if resolved_dir not in seen_dirs:
+            seen_dirs.add(resolved_dir)
+            searched_dirs.append(str(resolved_dir))
+        read_error = _check_path_policy(
+            ctx,
+            resolved_file,
+            operation="read",
+            warnings=warnings,
+        )
+        if read_error:
+            blocked_errors.append(read_error)
+            continue
+        return resolved_file, searched_dirs, blocked_errors
 
     for directory in search_dirs:
         try:
@@ -218,6 +246,51 @@ def _find_cv_file(
     # Auto-pick most recently modified candidate.
     candidates.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
     return candidates[0][1], searched_dirs, blocked_errors
+
+
+def _resolve_profile_cv_candidate(workspace: Any) -> Optional[Path]:
+    profile_root_raw = getattr(workspace, "profile_root", None)
+    if profile_root_raw is None:
+        return None
+    try:
+        profile_root = Path(profile_root_raw).expanduser().resolve()
+    except Exception:
+        return None
+    if not profile_root.exists() or not profile_root.is_dir():
+        return None
+
+    user_details_path = profile_root / _USER_DETAILS_FILENAME
+    if user_details_path.exists():
+        try:
+            payload = json.loads(user_details_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            cv_path_raw = str(payload.get("cv_path", "")).strip()
+            if cv_path_raw:
+                try:
+                    cv_path = Path(cv_path_raw).expanduser().resolve()
+                except Exception:
+                    cv_path = None
+                if cv_path is not None and cv_path.exists() and cv_path.is_file():
+                    return cv_path
+
+    candidates: list[tuple[float, Path]] = []
+    for candidate in profile_root.glob("user_cv.*"):
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() not in _CV_EXTENSIONS:
+            continue
+        try:
+            mtime = float(candidate.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        candidates.append((mtime, candidate))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
+    return candidates[0][1]
 
 
 def _file_to_markdown(path: Path) -> str:
@@ -617,15 +690,18 @@ def modify_cv(ctx: ToolContext, args: ModifyCvArgs) -> ToolOutcome:
         return _fail("agent workspace is unavailable on tool runtime state")
 
     warnings: list[str] = []
+    preferred_cv = _resolve_profile_cv_candidate(workspace)
     search_dirs = [
+        Path(workspace.profile_root),
         Path(workspace.workspace_root),
-        Path(workspace.written_data_dir),
+        Path(workspace.outputs_root),
         Path(workspace.browser_downloads_dir),
     ]
     cv_path, searched_dirs, blocked_errors = _find_cv_file(
         search_dirs=search_dirs,
         ctx=ctx,
         warnings=warnings,
+        preferred_files=[preferred_cv] if preferred_cv is not None else None,
     )
     if cv_path is None:
         details = {
@@ -670,7 +746,7 @@ def modify_cv(ctx: ToolContext, args: ModifyCvArgs) -> ToolOutcome:
     ]
 
     try:
-        output_dir = Path(workspace.written_data_dir).expanduser().resolve()
+        output_dir = Path(workspace.outputs_root).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
         return _fail(f"failed to prepare output directory: {exc}")

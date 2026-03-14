@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import shutil
 import time
 import uuid
 from typing import Any, Optional, List, Dict
@@ -18,14 +19,16 @@ class AgentWorkspace:
     persistence_mode: str
     base_dir: Path
     agent_root: Path
+    profile_root: Path
     workspace_root: Path
-    written_data_dir: Path
+    outputs_root: Path
+    runtime_root: Path
     browser_profile_dir: Path
     browser_downloads_dir: Path
     screenshots_dir: Path
     stream_screenshots_dir: Path
     runs_root: Path
-    meta_dir: Path
+    agent_info_dir: Path
     current_run_root: Optional[Path] = None
 
     @property
@@ -48,6 +51,154 @@ class AgentWorkspace:
         return self.current_run_root / "state" / "checkpoint.json"
 
 
+def _resolve_agents_root(base_dir: Path) -> Path:
+    """Normalize configured base_dir to an agents root."""
+    if base_dir.name.lower() == "agents":
+        return base_dir
+    return base_dir / "agents"
+
+
+def _normalize_mode(value: Any) -> str:
+    mode = str(value or "temp").strip().lower()
+    if mode not in {"temp", "persistent"}:
+        return "temp"
+    return mode
+
+
+def _warn(event_logger: Optional[Any], message: str, **kwargs: Any) -> None:
+    if event_logger is None:
+        return
+    try:
+        event_logger.system_warning(message, **kwargs)
+    except Exception:
+        pass
+
+
+def _remove_if_empty(path: Path) -> None:
+    try:
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    except Exception:
+        pass
+
+
+def _move_legacy_path(
+    *,
+    old_path: Path,
+    new_path: Path,
+    event_logger: Optional[Any],
+    label: str,
+) -> None:
+    if not old_path.exists():
+        return
+    if new_path.exists():
+        _warn(
+            event_logger,
+            f"Keeping new workspace path and leaving legacy path untouched for {label}",
+            legacy_path=str(old_path),
+            canonical_path=str(new_path),
+            label=label,
+        )
+        return
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(old_path), str(new_path))
+    except Exception as exc:
+        _warn(
+            event_logger,
+            f"Failed to migrate legacy workspace path for {label}",
+            legacy_path=str(old_path),
+            canonical_path=str(new_path),
+            label=label,
+            error=str(exc),
+        )
+
+
+def _migrate_legacy_layout(workspace: AgentWorkspace, *, event_logger: Optional[Any]) -> None:
+    agent_root = workspace.agent_root
+    _move_legacy_path(
+        old_path=agent_root / "data" / "written",
+        new_path=workspace.outputs_root,
+        event_logger=event_logger,
+        label="outputs",
+    )
+    _remove_if_empty(agent_root / "data")
+
+    _move_legacy_path(
+        old_path=agent_root / "browser",
+        new_path=workspace.runtime_root / "browser",
+        event_logger=event_logger,
+        label="runtime browser",
+    )
+    _move_legacy_path(
+        old_path=agent_root / "artifacts",
+        new_path=workspace.runtime_root / "captures",
+        event_logger=event_logger,
+        label="runtime captures",
+    )
+    _move_legacy_path(
+        old_path=agent_root / "runs",
+        new_path=workspace.runs_root,
+        event_logger=event_logger,
+        label="runtime runs",
+    )
+    _move_legacy_path(
+        old_path=agent_root / "meta",
+        new_path=workspace.agent_info_dir,
+        event_logger=event_logger,
+        label="agent info",
+    )
+
+
+def resolve_agent_workspace(
+    *,
+    base_dir: str | Path,
+    agent_id: str,
+    persistence_mode: str = "temp",
+    event_logger: Optional[Any] = None,
+) -> AgentWorkspace:
+    resolved_base_dir = Path(base_dir).expanduser().resolve()
+    resolved_base_dir.mkdir(parents=True, exist_ok=True)
+    agents_root = _resolve_agents_root(resolved_base_dir)
+    agents_root.mkdir(parents=True, exist_ok=True)
+
+    resolved_mode = _normalize_mode(persistence_mode)
+    resolved_agent_id = str(agent_id or "").strip() or f"agent_{uuid.uuid4().hex[:10]}"
+    agent_root = agents_root / resolved_agent_id
+    workspace = AgentWorkspace(
+        agent_id=resolved_agent_id,
+        persistence_mode=resolved_mode,
+        base_dir=agents_root,
+        agent_root=agent_root,
+        profile_root=agent_root / "profile",
+        workspace_root=agent_root / "workspace",
+        outputs_root=agent_root / "outputs",
+        runtime_root=agent_root / "runtime",
+        browser_profile_dir=agent_root / "runtime" / "browser" / "profile",
+        browser_downloads_dir=agent_root / "runtime" / "browser" / "downloads",
+        screenshots_dir=agent_root / "runtime" / "captures" / "screenshots",
+        stream_screenshots_dir=agent_root / "runtime" / "captures" / "stream",
+        runs_root=agent_root / "runtime" / "runs",
+        agent_info_dir=agent_root / "runtime" / "agent-info",
+    )
+    workspace.agent_root.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_layout(workspace, event_logger=event_logger)
+    for path in (
+        workspace.profile_root,
+        workspace.workspace_root,
+        workspace.outputs_root,
+        workspace.runtime_root,
+        workspace.browser_profile_dir,
+        workspace.browser_downloads_dir,
+        workspace.screenshots_dir,
+        workspace.stream_screenshots_dir,
+        workspace.runs_root,
+        workspace.agent_info_dir,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
 class AgentWorkspaceManager:
     """Creates and tracks agent workspace directories."""
 
@@ -59,7 +210,7 @@ class AgentWorkspaceManager:
     ) -> None:
         resolved_base_dir = Path(base_dir).expanduser().resolve()
         resolved_base_dir.mkdir(parents=True, exist_ok=True)
-        self.agents_root = self._resolve_agents_root(resolved_base_dir)
+        self.agents_root = _resolve_agents_root(resolved_base_dir)
         self.agents_root.mkdir(parents=True, exist_ok=True)
         self.base_dir = self.agents_root
         self.event_logger = event_logger
@@ -70,35 +221,12 @@ class AgentWorkspaceManager:
         persistence_mode: str = "temp",
         agent_id: Optional[str] = None,
     ) -> AgentWorkspace:
-        resolved_mode = self._normalize_mode(persistence_mode)
-        resolved_agent_id = (agent_id or f"agent_{uuid.uuid4().hex[:10]}").strip()
-        agent_root = self.agents_root / resolved_agent_id
-        workspace = AgentWorkspace(
-            agent_id=resolved_agent_id,
-            persistence_mode=resolved_mode,
+        workspace = resolve_agent_workspace(
             base_dir=self.agents_root,
-            agent_root=agent_root,
-            workspace_root=agent_root / "workspace",
-            written_data_dir=agent_root / "data" / "written",
-            browser_profile_dir=agent_root / "browser" / "profile",
-            browser_downloads_dir=agent_root / "browser" / "downloads",
-            screenshots_dir=agent_root / "artifacts" / "screenshots",
-            stream_screenshots_dir=agent_root / "artifacts" / "stream",
-            runs_root=agent_root / "runs",
-            meta_dir=agent_root / "meta",
+            agent_id=(agent_id or f"agent_{uuid.uuid4().hex[:10]}").strip(),
+            persistence_mode=persistence_mode,
+            event_logger=self.event_logger,
         )
-        for path in (
-            workspace.workspace_root,
-            workspace.written_data_dir,
-            workspace.browser_profile_dir,
-            workspace.browser_downloads_dir,
-            workspace.screenshots_dir,
-            workspace.stream_screenshots_dir,
-            workspace.runs_root,
-            workspace.meta_dir,
-        ):
-            path.mkdir(parents=True, exist_ok=True)
-
         self._write_agent_meta(workspace, created=True)
         return workspace
 
@@ -301,22 +429,8 @@ class AgentWorkspaceManager:
             pass
         self._write_agent_meta(workspace, created=False)
 
-    @staticmethod
-    def _resolve_agents_root(base_dir: Path) -> Path:
-        """Normalize configured base_dir to an agents root."""
-        if base_dir.name.lower() == "agents":
-            return base_dir
-        return base_dir / "agents"
-
-    @staticmethod
-    def _normalize_mode(value: Any) -> str:
-        mode = str(value or "temp").strip().lower()
-        if mode not in {"temp", "persistent"}:
-            return "temp"
-        return mode
-
     def _write_agent_meta(self, workspace: AgentWorkspace, *, created: bool) -> None:
-        meta_path = workspace.meta_dir / "agent.json"
+        meta_path = workspace.agent_info_dir / "agent.json"
         payload = self._read_json(meta_path)
         if created:
             payload.setdefault("created_at", time.time())

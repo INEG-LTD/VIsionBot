@@ -494,7 +494,7 @@ def _resolve_output_path(ctx: ToolContext, file_name: str) -> Path:
 
     safe_name = Path(str(file_name or "").strip() or "google-jobs-list.jsonl").name
     safe_name = safe_name or "google-jobs-list.jsonl"
-    return Path(workspace.written_data_dir).expanduser().resolve() / safe_name
+    return Path(workspace.outputs_root).expanduser().resolve() / safe_name
 
 
 def _load_existing_entries(ctx: ToolContext, target_path: Path) -> tuple[list[dict[str, Any]], set[str]]:

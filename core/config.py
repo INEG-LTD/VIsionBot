@@ -424,7 +424,8 @@ class SandboxFilesystemConfig(BaseModel):
         default_factory=lambda: ["{agent.workspace_root}"],
         description=(
             "Allowed filesystem roots for local read/find operations. "
-            "Supports {agent.workspace_root} placeholder."
+            "Supports {agent.workspace_root}, {agent.profile_root}, "
+            "{agent.outputs_root}, and {agent.runtime_root} placeholders."
         ),
     )
 

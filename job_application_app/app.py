@@ -18,6 +18,7 @@ from job_application_app.profile_store import (
     build_application_preferences,
     build_cv_professional_summary,
     build_user_data,
+    ensure_workspace_source_cv_alias,
     resolve_app_paths,
 )
 from lib.ai import ReasoningLevel
@@ -299,6 +300,7 @@ def _build_common_candidate_knowledge(
     *,
     cv_professional_summary: str = "",
     desired_salary: str = "",
+    source_cv_upload_path: str = "",
 ) -> list[str]:
     first_name = str(user_details.get("first_name", "")).strip()
     last_name = str(user_details.get("last_name", "")).strip()
@@ -312,6 +314,7 @@ def _build_common_candidate_knowledge(
     linkedin_url = str(user_details.get("linkedin_url", "")).strip()
     github_url = str(user_details.get("github_url", "")).strip()
     cv_path = str(user_details.get("cv_path", "")).strip()
+    effective_source_cv_path = str(source_cv_upload_path or "").strip() or cv_path
 
     knowledge = ["Use these candidate facts when filling forms and writing answers."]
     full_name = f"{first_name} {last_name}".strip()
@@ -330,8 +333,8 @@ def _build_common_candidate_knowledge(
         knowledge.append(f"Candidate LinkedIn: {linkedin_url}")
     if github_url:
         knowledge.append(f"Candidate GitHub: {github_url}")
-    if cv_path:
-        knowledge.append(f"Candidate source CV path: {cv_path}")
+    if effective_source_cv_path:
+        knowledge.append(f"Candidate source CV path: {effective_source_cv_path}")
     if desired_salary:
         knowledge.append(f"Desired salary: {desired_salary}")
     if cv_professional_summary:
@@ -352,12 +355,14 @@ def build_search_base_knowledge(
     is_remote: str,
     desired_salary: str,
     cv_professional_summary: str,
+    source_cv_upload_path: str = "",
 ) -> list[str]:
     remote_preference = "Yes" if is_remote.lower() in {"y", "yes", "true"} else "No"
     base_knowledge = _build_common_candidate_knowledge(
         user_details,
         cv_professional_summary=cv_professional_summary,
         desired_salary=desired_salary,
+        source_cv_upload_path=source_cv_upload_path,
     )
     if years_of_experience:
         base_knowledge.append(f"Candidate years of experience: {years_of_experience}")
@@ -378,12 +383,14 @@ def build_application_base_knowledge(
     cv_professional_summary: str,
     application_preferences: dict,
     staged_artifacts: dict[str, str],
+    source_cv_upload_path: str = "",
 ) -> list[str]:
     desired_salary = str(application_preferences.get("desired_salary", "")).strip()
     base_knowledge = _build_common_candidate_knowledge(
         user_details,
         cv_professional_summary=cv_professional_summary,
         desired_salary=desired_salary,
+        source_cv_upload_path=source_cv_upload_path,
     )
 
     job_title = str(job.get("job_title", "")).strip()
@@ -679,7 +686,7 @@ def log_application_outcome(
             for event in recorded_events
         ],
     }
-    _append_jsonl(agent.agent_workspace.written_data_dir / APPLICATIONS_LOG_FILENAME, payload)
+    _append_jsonl(agent.agent_workspace.outputs_root / APPLICATIONS_LOG_FILENAME, payload)
     return payload
 
 
@@ -813,7 +820,7 @@ def find_jobs(debug: bool = False) -> list[dict]:
         0 if target_job_count == 0 else max(1, min(target_job_count, 50))
     )
     app_paths = resolve_app_paths(project_root=PROJECT_ROOT, agent_id=STABLE_AGENT_ID)
-    google_jobs_list_path = app_paths.written_data_dir / "google-jobs-list.jsonl"
+    google_jobs_list_path = app_paths.outputs_root / "google-jobs-list.jsonl"
     requested_search_query = _build_google_jobs_search_query(
         job_title=job_title,
         job_location=job_location,
@@ -838,6 +845,10 @@ def find_jobs(debug: bool = False) -> list[dict]:
         sync_skills_to_agent_workspace(agent)
         user_details = build_user_data(agent)
         cv_professional_summary = build_cv_professional_summary(agent, user_details)
+        source_cv_upload_path = ensure_workspace_source_cv_alias(
+            agent.agent_workspace.workspace_root,
+            user_details,
+        )
 
         base_knowledge = build_search_base_knowledge(
             user_details,
@@ -848,6 +859,7 @@ def find_jobs(debug: bool = False) -> list[dict]:
             is_remote=is_remote,
             desired_salary=desired_salary,
             cv_professional_summary=cv_professional_summary,
+            source_cv_upload_path=source_cv_upload_path,
         )
 
         mission_result = agent.execute_mission(
@@ -886,6 +898,10 @@ def apply_to_job(
         user_details = build_user_data(agent)
         application_preferences = build_application_preferences(agent, user_details)
         cv_professional_summary = build_cv_professional_summary(agent, user_details)
+        source_cv_upload_path = ensure_workspace_source_cv_alias(
+            agent.agent_workspace.workspace_root,
+            user_details,
+        )
         staged_artifacts = stage_application_artifacts(
             agent,
             job=job,
@@ -900,6 +916,7 @@ def apply_to_job(
             cv_professional_summary=cv_professional_summary,
             application_preferences=application_preferences,
             staged_artifacts=staged_artifacts,
+            source_cv_upload_path=source_cv_upload_path,
         )
 
         mission_result = agent.execute_mission(

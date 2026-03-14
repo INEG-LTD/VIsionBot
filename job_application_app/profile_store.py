@@ -10,6 +10,7 @@ import re
 from tkinter import filedialog
 
 from agent.agent_controller import Agent
+from core.agent_workspace import resolve_agent_workspace
 from job_application_app.modify_cv_tool import _file_to_markdown
 from lib.ai import generate_text
 
@@ -19,26 +20,29 @@ CV_SUMMARY_CACHE_FILENAME = "cv_summary_cache.json"
 CV_SUMMARY_WORD_COUNT = 100
 APPLICATION_PREFERENCES_KEY = "application_preferences"
 EEO_PREFERENCES_KEY = "eeo_preferences"
+ACTIVE_SOURCE_CV_STEM = "active-source-cv"
 
 
 @dataclass(frozen=True)
 class AppPaths:
     agent_root: Path
+    profile_root: Path
     workspace_root: Path
-    written_data_dir: Path
+    outputs_root: Path
 
 
 def resolve_app_paths(*, project_root: Path, agent_id: str) -> AppPaths:
-    agents_root = (project_root / "job-application-data" / "agents").resolve()
-    agent_root = agents_root / str(agent_id or "").strip()
-    workspace_root = agent_root / "workspace"
-    written_data_dir = agent_root / "data" / "written"
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    written_data_dir.mkdir(parents=True, exist_ok=True)
+    workspace = resolve_agent_workspace(
+        base_dir=project_root / "job-application-data" / "agents",
+        agent_id=agent_id,
+        persistence_mode="persistent",
+    )
+    _migrate_profile_files(workspace.workspace_root, workspace.profile_root)
     return AppPaths(
-        agent_root=agent_root,
-        workspace_root=workspace_root,
-        written_data_dir=written_data_dir,
+        agent_root=workspace.agent_root,
+        profile_root=workspace.profile_root,
+        workspace_root=workspace.workspace_root,
+        outputs_root=workspace.outputs_root,
     )
 
 
@@ -52,7 +56,7 @@ def _pick_file() -> str:
     return str(file_path or "").strip()
 
 
-def _copy_cv_to_workspace(workspace_root: Path, prompt_message: str) -> Path:
+def _copy_cv_to_profile(profile_root: Path, prompt_message: str) -> Path:
     print(prompt_message)
     selected_cv = _pick_file()
     if not selected_cv:
@@ -61,12 +65,86 @@ def _copy_cv_to_workspace(workspace_root: Path, prompt_message: str) -> Path:
     if not source_cv.exists():
         raise FileNotFoundError(f"Selected CV file does not exist: {source_cv}")
 
-    target_cv = workspace_root / f"user_cv{source_cv.suffix.lower()}"
+    profile_root.mkdir(parents=True, exist_ok=True)
+    target_cv = profile_root / f"user_cv{source_cv.suffix.lower()}"
     shutil.copy2(source_cv, target_cv)
     return target_cv
 
 
-def _request_user_profile(workspace_root: Path) -> dict:
+def ensure_workspace_source_cv_alias(workspace_root: Path, user_details: dict) -> str:
+    cv_path_raw = str(user_details.get("cv_path", "")).strip()
+    if not cv_path_raw:
+        return ""
+    try:
+        source_cv = Path(cv_path_raw).expanduser().resolve()
+    except Exception:
+        return ""
+    if not source_cv.exists() or not source_cv.is_file():
+        return ""
+
+    try:
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        alias_path = workspace_root / f"{ACTIVE_SOURCE_CV_STEM}{source_cv.suffix.lower()}"
+        for stale_alias in workspace_root.glob(f"{ACTIVE_SOURCE_CV_STEM}.*"):
+            if stale_alias == alias_path or not stale_alias.is_file():
+                continue
+            stale_alias.unlink(missing_ok=True)
+        shutil.copy2(source_cv, alias_path)
+        return str(alias_path)
+    except Exception:
+        return ""
+
+
+def _move_profile_path(old_path: Path, new_path: Path) -> bool:
+    if not old_path.exists() or new_path.exists():
+        return False
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(old_path), str(new_path))
+    return True
+
+
+def _migrate_profile_files(workspace_root: Path, profile_root: Path) -> None:
+    profile_root.mkdir(parents=True, exist_ok=True)
+    for filename in (USER_DETAILS_FILENAME, CV_MARKDOWN_FILENAME, CV_SUMMARY_CACHE_FILENAME):
+        _move_profile_path(workspace_root / filename, profile_root / filename)
+
+    for legacy_cv in workspace_root.glob("user_cv.*"):
+        _move_profile_path(legacy_cv, profile_root / legacy_cv.name)
+
+    user_details_path = profile_root / USER_DETAILS_FILENAME
+    if not user_details_path.exists():
+        return
+    try:
+        payload = json.loads(user_details_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+
+    cv_path_raw = str(payload.get("cv_path", "")).strip()
+    if not cv_path_raw:
+        return
+    try:
+        cv_path = Path(cv_path_raw).expanduser().resolve()
+    except Exception:
+        return
+    if cv_path.parent != workspace_root or not cv_path.name.startswith("user_cv"):
+        return
+
+    migrated_cv = profile_root / cv_path.name
+    if not migrated_cv.exists():
+        if not cv_path.exists():
+            return
+        _move_profile_path(cv_path, migrated_cv)
+    if migrated_cv.exists():
+        payload["cv_path"] = str(migrated_cv)
+        user_details_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+
+def _request_user_profile(profile_root: Path) -> dict:
     print("No saved user profile found. Please enter your details.")
     first_name = input("Enter your first name: ").strip()
     last_name = input("Enter your last name: ").strip()
@@ -80,8 +158,8 @@ def _request_user_profile(workspace_root: Path) -> dict:
     linkedin_url = input("Enter your LinkedIn URL: ").strip()
     github_url = input("Enter your GitHub URL: ").strip()
 
-    target_cv = _copy_cv_to_workspace(
-        workspace_root,
+    target_cv = _copy_cv_to_profile(
+        profile_root,
         prompt_message="Please select your CV file.",
     )
 
@@ -101,8 +179,9 @@ def _request_user_profile(workspace_root: Path) -> dict:
     }
 
 
-def _save_user_details(workspace_root: Path, user_details: dict) -> None:
-    user_details_path = workspace_root / USER_DETAILS_FILENAME
+def _save_user_details(profile_root: Path, user_details: dict) -> None:
+    profile_root.mkdir(parents=True, exist_ok=True)
+    user_details_path = profile_root / USER_DETAILS_FILENAME
     user_details_path.write_text(
         json.dumps(user_details, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -134,7 +213,7 @@ def _prompt_choice(prompt: str, choices: list[str], *, default: str) -> str:
 
 
 def build_eeo_preferences(agent: Agent, user_details: dict) -> dict[str, str]:
-    workspace_root = agent.agent_workspace.workspace_root
+    profile_root = agent.agent_workspace.profile_root
     existing = user_details.get(EEO_PREFERENCES_KEY)
     if isinstance(existing, dict) and existing:
         return {
@@ -171,12 +250,12 @@ def build_eeo_preferences(agent: Agent, user_details: dict) -> dict[str, str]:
         }
 
     user_details[EEO_PREFERENCES_KEY] = eeo_preferences
-    _save_user_details(workspace_root, user_details)
+    _save_user_details(profile_root, user_details)
     return eeo_preferences
 
 
 def build_application_preferences(agent: Agent, user_details: dict) -> dict:
-    workspace_root = agent.agent_workspace.workspace_root
+    profile_root = agent.agent_workspace.profile_root
     preferences = user_details.get(APPLICATION_PREFERENCES_KEY)
     if not isinstance(preferences, dict):
         preferences = {}
@@ -251,14 +330,16 @@ def build_application_preferences(agent: Agent, user_details: dict) -> dict:
 
     if changed:
         user_details[APPLICATION_PREFERENCES_KEY] = preferences
-        _save_user_details(workspace_root, user_details)
+        _save_user_details(profile_root, user_details)
 
     return preferences
 
 
 def build_user_data(agent: Agent) -> dict:
     workspace_root = agent.agent_workspace.workspace_root
-    user_details_path = workspace_root / USER_DETAILS_FILENAME
+    profile_root = agent.agent_workspace.profile_root
+    _migrate_profile_files(workspace_root, profile_root)
+    user_details_path = profile_root / USER_DETAILS_FILENAME
     user_details: dict = {}
 
     if user_details_path.exists():
@@ -272,20 +353,20 @@ def build_user_data(agent: Agent) -> dict:
             print(f"Failed to read saved profile at {user_details_path}. Recreating it.")
 
     if not user_details:
-        user_details = _request_user_profile(workspace_root)
-        _save_user_details(workspace_root, user_details)
+        user_details = _request_user_profile(profile_root)
+        _save_user_details(profile_root, user_details)
         print(f"Saved user profile to {user_details_path}")
         return user_details
 
     cv_path_raw = str(user_details.get("cv_path", "")).strip()
     cv_path = Path(cv_path_raw).expanduser().resolve() if cv_path_raw else None
     if cv_path is None or not cv_path.exists():
-        target_cv = _copy_cv_to_workspace(
-            workspace_root,
+        target_cv = _copy_cv_to_profile(
+            profile_root,
             prompt_message="Saved profile CV is missing or unavailable. Please select your CV file again.",
         )
         user_details["cv_path"] = str(target_cv)
-        _save_user_details(workspace_root, user_details)
+        _save_user_details(profile_root, user_details)
     print(f"Loaded user profile from {user_details_path}")
     return user_details
 
@@ -341,7 +422,7 @@ def _summarize_cv_markdown(cv_markdown: str) -> str:
 
 
 def build_cv_professional_summary(agent: Agent, user_details: dict) -> str:
-    workspace_root = agent.agent_workspace.workspace_root
+    profile_root = agent.agent_workspace.profile_root
     cv_path_raw = str(user_details.get("cv_path", "")).strip()
     if not cv_path_raw:
         return ""
@@ -359,11 +440,12 @@ def build_cv_professional_summary(agent: Agent, user_details: dict) -> str:
     if not cv_markdown.strip():
         return ""
 
-    markdown_path = workspace_root / CV_MARKDOWN_FILENAME
+    profile_root.mkdir(parents=True, exist_ok=True)
+    markdown_path = profile_root / CV_MARKDOWN_FILENAME
     markdown_path.write_text(cv_markdown.strip() + "\n", encoding="utf-8")
 
     markdown_hash = sha256(cv_markdown.encode("utf-8")).hexdigest()
-    cache_path = workspace_root / CV_SUMMARY_CACHE_FILENAME
+    cache_path = profile_root / CV_SUMMARY_CACHE_FILENAME
     if cache_path.exists():
         try:
             cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -400,8 +482,8 @@ def build_cv_professional_summary(agent: Agent, user_details: dict) -> str:
     return summary
 
 
-def load_saved_user_details(workspace_root: Path) -> dict:
-    user_details_path = workspace_root / USER_DETAILS_FILENAME
+def load_saved_user_details(profile_root: Path) -> dict:
+    user_details_path = profile_root / USER_DETAILS_FILENAME
     if not user_details_path.exists():
         raise FileNotFoundError(
             f"User details not found at {user_details_path}. Run the job finder first to create the profile."
@@ -412,8 +494,8 @@ def load_saved_user_details(workspace_root: Path) -> dict:
     return loaded
 
 
-def load_cv_markdown_for_generation(workspace_root: Path, user_details: dict) -> str:
-    markdown_path = workspace_root / CV_MARKDOWN_FILENAME
+def load_cv_markdown_for_generation(profile_root: Path, user_details: dict) -> str:
+    markdown_path = profile_root / CV_MARKDOWN_FILENAME
     if markdown_path.exists():
         markdown = markdown_path.read_text(encoding="utf-8", errors="replace").strip()
         if markdown:
