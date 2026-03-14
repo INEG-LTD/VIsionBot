@@ -45,7 +45,7 @@ You extract and evaluate the single currently focused Google Jobs detail panel.
 Rules:
 - Use only information visible in the current screenshot and provided page text.
 - Never invent missing values.
-- Required fields are: job_title, location, posted_date.
+    - Required fields are: job_title and location.
 - If a required field is not clearly visible, return an empty string for that field.
 - Optional fields may be omitted or returned as empty values when unavailable.
 - job_summary should be a concise, complete summary of the most important visible parts of the role.
@@ -53,7 +53,7 @@ Rules:
 - Do not quote the full job description.
 - Do not end job_summary with an ellipsis.
 - matches_profile should be true only when the focused job clearly fits the provided job profile.
-- For profile fit, prioritize job title and location. Use posted date as supporting context when relevant.
+    - For profile fit, prioritize job title and location. Use posted date as optional supporting context when relevant.
 """.strip()
 
 
@@ -284,8 +284,6 @@ def _missing_required_fields(extracted: FocusedJobExtraction) -> list[str]:
         missing.append("job_title")
     if not str(extracted.location or "").strip():
         missing.append("location")
-    if not str(extracted.posted_date or "").strip():
-        missing.append("posted_date")
     return missing
 
 
@@ -342,7 +340,7 @@ def _extract_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> Focus
         "- job_summary\n"
         "- matches_profile\n"
         "- match_reason\n\n"
-        "Required fields for processability are job_title, location, and posted_date.\n"
+        "Required fields for processability are job_title and location.\n"
         "If any required field is not visible, return an empty string for it.\n"
         "job_summary must be a concise complete summary of the most important visible parts of the role.\n"
         "Do not return a raw copied block of description text, and do not end job_summary with an ellipsis.\n"
