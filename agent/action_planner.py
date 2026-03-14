@@ -126,7 +126,9 @@ class ActionPlanner:
         in_loop: bool = False,
         loop_round: int = 0,
         loop_count: Optional[int] = None,
+        loop_mode: str = "counted",
         loop_description: str = "",
+        loop_exit_condition: str = "",
         recent_actions: Optional[List[str]] = None,
         agent_notes: Optional[List[tuple[int, str]]] = None,
         iterations_remaining: int = 0,
@@ -139,6 +141,7 @@ class ActionPlanner:
         effect_policy_engine: Optional[Any] = None,
         event_definitions: Optional[List[EventDefinition]] = None,
         agent_events_status: Optional[Dict[str, Any]] = None,
+        mission_progress_context: Optional[str] = None,
         available_skills_metadata: Optional[str] = None,
         active_skill_context: Optional[str] = None,
         active_skill_name: Optional[str] = None,
@@ -181,7 +184,9 @@ class ActionPlanner:
         self.in_loop = in_loop
         self.loop_round = loop_round
         self.loop_count = loop_count
+        self.loop_mode = str(loop_mode or "counted").strip().lower() or "counted"
         self.loop_description = loop_description
+        self.loop_exit_condition = str(loop_exit_condition or "").strip()
         self.recent_actions = recent_actions or []
         self.agent_notes: List[tuple[int, str]] = list(agent_notes or [])
         self._new_notes: List[str] = []
@@ -198,6 +203,7 @@ class ActionPlanner:
         self.agent_events_status: Dict[str, Any] = (
             dict(agent_events_status) if isinstance(agent_events_status, dict) else {}
         )
+        self.mission_progress_context = str(mission_progress_context or "").strip()
         self.available_skills_metadata = str(available_skills_metadata or "").strip()
         self.active_skill_context = str(active_skill_context or "").strip()
         self.active_skill_name = str(active_skill_name or "").strip()
@@ -319,14 +325,22 @@ class ActionPlanner:
                     parts.append("You are near budget exhaustion — prioritize completion-oriented actions.\n")
 
         # Loop framing
-        if self.in_loop and self.loop_count:
-            remaining = max(0, self.loop_count - self.loop_round + 1)
-            parts.append(
-                f"═══ LOOP {self.loop_round} OF {self.loop_count}: {self.loop_description} ═══\n"
-                f"Elements marked [DONE] in the index have already been handled.\n"
-                f"{remaining} round{'s' if remaining != 1 else ''} remaining.\n"
-                f"After completing this round, call think(next_action=advance).\n"
-            )
+        if self.in_loop:
+            if self.loop_mode == "until_done":
+                parts.append(
+                    f"═══ LOOP {self.loop_round} (UNTIL DONE): {self.loop_description} ═══\n"
+                    f"Elements marked [DONE] in the index have already been handled.\n"
+                    f"Exit condition: {self.loop_exit_condition or 'End only when the stated completion condition is satisfied.'}\n"
+                    "After completing a meaningful user-facing round, call think(next_action=advance).\n"
+                )
+            elif self.loop_count:
+                remaining = max(0, self.loop_count - self.loop_round + 1)
+                parts.append(
+                    f"═══ LOOP {self.loop_round} OF {self.loop_count}: {self.loop_description} ═══\n"
+                    f"Elements marked [DONE] in the index have already been handled.\n"
+                    f"{remaining} round{'s' if remaining != 1 else ''} remaining.\n"
+                    f"After completing this round, call think(next_action=advance).\n"
+                )
 
         if self.last_action_summary:
             parts.append(f"LAST ACTION:\n{self.last_action_summary}\n")
@@ -759,7 +773,7 @@ Tool schemas are provided as function definitions. Categories:
 • Browser: click, type_text, clear_text, select_option, upload_file, press_key, scroll_down, scroll_up, scroll_container, scroll_to_element, open_url, go_back, go_forward
 • Data/Comm: extract_data, ask_user, report_data, write_data, send_email, bash, read_file, find_files, read_clipboard, flag
 • Tabs: switch_tab, close_tab, open_tab, dismiss_dialog
-• Cognitive: think (next_action: continue|start_loop|advance|end_loop|done|stuck), assert_condition, wait_for
+• Cognitive: think (next_action: continue|start_loop|advance|end_loop|done|stuck; start_loop supports loop_mode=counted|until_done), assert_condition, wait_for
 • Skills: activate_skill
 
 Scroll rules:
@@ -769,8 +783,9 @@ Scroll rules:
 
 Select rules:
 • ALWAYS use select_option for dropdowns and select fields — never click+type manually.
-• select_option handles native <select>, custom dropdowns, and searchable selects automatically.
-• It will fuzzy-match your option text against available choices (e.g. "UK" → "United Kingdom").
+• Describe your INTENT (what value to set), not exact option text. The tool reads options and picks the best match.
+• Example: intent="the user's country of residence", NOT intent="United Kingdom".
+• element_id is REQUIRED for select_option.
 
 {self._build_upload_rules_section()}
 
@@ -781,12 +796,16 @@ Select rules:
 LOOPS
 ═══════════════════════════════════════════════════════════════
 When you need to repeat an action for multiple targets:
-1. Do the first action normally.
-2. At the checkpoint, call think(next_action="start_loop", loop_count=N, loop_description="...").
-   N includes the action you already did (round 1).
-3. Each subsequent round: do the action, then think(next_action="advance").
-4. Elements you've already interacted with show [DONE] in the element index.
-5. The loop auto-completes after the last round, or use think(next_action="end_loop") to exit early.
+1. Loops start at round 1 by default. Start the loop before the first repeated round when possible.
+2. For counted loops, call think(next_action="start_loop", loop_mode="counted", loop_count=N, loop_description="...").
+   loop_count is the total intended number of rounds.
+3. For condition-based loops, call think(next_action="start_loop", loop_mode="until_done", loop_description="...", loop_exit_condition="...").
+4. If some rounds already happened before you start the loop, add completed_rounds=N.
+   The loop will begin at round N+1 while preserving the original total loop_count for counted loops.
+5. Each round: do a meaningful user-facing action, then think(next_action="advance").
+6. Elements you've already interacted with show [DONE] in the element index.
+7. Counted loops auto-complete after the last round. Until-done loops end only via think(next_action="end_loop"), think(next_action="done"), or a terminal event.
+8. Prefer counted loops when you know the number of rounds. Use until_done only when repetition depends on a condition that cannot be known in advance.
 
 ═══════════════════════════════════════════════════════════════
 ERROR RECOVERY
@@ -812,7 +831,7 @@ GUIDELINES
 ═══════════════════════════════════════════════════════════════
 1. Only act on elements visible in the screenshot — click by their visual position
 2. Be specific in element descriptions
-3. type_text REPLACES content (doesn't append)
+3. If a text field already contains text and you need to replace it, call clear_text first, then call type_text. If you want to append or continue typing, use type_text without clear_text.
 4. Check focused=true before clicking to focus
 5. Don't repeat failed actions
 6. think(next_action=continue) should be a brief natural first-person status + immediate next step (no full re-plan)
@@ -853,6 +872,16 @@ ACTIVE SKILL
 {self.active_skill_context}
 """
 
+    def _build_mission_progress_block(self) -> str:
+        if not self.mission_progress_context:
+            return ""
+        return f"""
+═══════════════════════════════════════════════════════════════
+MISSION PROGRESS
+═══════════════════════════════════════════════════════════════
+{self.mission_progress_context}
+"""
+
     def _build_function_calling_dynamic_context(
         self,
         state: EnvironmentState,
@@ -867,6 +896,7 @@ ACTIVE SKILL
             for hint in self.user_hints:
                 user_hints_section += f"- {hint}\n"
         events_status_section = self._build_agent_events_status_block()
+        mission_progress_section = self._build_mission_progress_block()
         active_skill_section = self._build_active_skill_context_block(phase="dynamic")
 
         # Get history and navigation info
@@ -929,7 +959,8 @@ HOW TO CLICK:
 
 FOCUS STATE:
 • focused → Element already has keyboard focus
-• If you need to type and input is focused → Just call type_text (don't click first)"""
+• If you need to replace existing text in a focused input → call clear_text first, then type_text
+• If you want to append in a focused input, or it is already empty → call type_text directly (don't click first)"""
 
         return f"""
 ═══════════════════════════════════════════════════════════════
@@ -966,6 +997,7 @@ Navigation history:
 
 {user_hints_section}
 {events_status_section}
+{mission_progress_section}
 {active_skill_section}
 
 Choose the next action to take.
@@ -1011,6 +1043,7 @@ OPEN TABS
             hints_str = "\n".join(f"- {h}" for h in self.user_hints)
             user_hints_section = f"\nHINTS FROM USER:\n{hints_str}\n"
         events_status_section = self._build_agent_events_status_block()
+        mission_progress_section = self._build_mission_progress_block()
         active_skill_section = self._build_active_skill_context_block(phase="delta")
 
         # Element index — always fresh (page may have changed)
@@ -1028,7 +1061,8 @@ HOW TO CLICK:
 
 FOCUS STATE:
 • focused → Element already has keyboard focus
-• If you need to type and input is focused → Just call type_text (don't click first)"""
+• If you need to replace existing text in a focused input → call clear_text first, then type_text
+• If you want to append in a focused input, or it is already empty → call type_text directly (don't click first)"""
 
         # Notebook — include if non-empty (agent needs to see what it has collected)
         notebook_section = self._format_notebook(notebook)
@@ -1042,6 +1076,7 @@ Title: {state.page_title}
 {gallery_note}
 (Prior context — mission history, action ledger, navigation history, memory entries — is available from your previous conversation turns.)
 {tab_section}{user_hints_section}{events_status_section}
+{mission_progress_section}
 {active_skill_section}
 {element_section}
 

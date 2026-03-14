@@ -112,10 +112,18 @@ class ToolEngine:
             loop_count_val = int(loop_count) if loop_count is not None else None
         except Exception:
             loop_count_val = None
+        completed_rounds = value.get("completed_rounds", 0)
+        try:
+            completed_rounds_val = max(0, int(completed_rounds or 0))
+        except Exception:
+            completed_rounds_val = 0
         return ThinkControl(
             next_action=next_action,
             loop_count=loop_count_val,
+            loop_mode=str(value.get("loop_mode", "") or "").strip() or "counted",
             loop_description=str(value.get("loop_description", "") or "").strip() or None,
+            loop_exit_condition=str(value.get("loop_exit_condition", "") or "").strip() or None,
+            completed_rounds=completed_rounds_val,
             hint_message=str(value.get("hint_message", "") or "").strip() or None,
             done_reasoning=str(value.get("done_reasoning", "") or "").strip() or None,
         )

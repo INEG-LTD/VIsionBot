@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -34,7 +34,10 @@ class ThinkArgs(BaseModel):
     next_action: ThinkNextAction
     recommended_next_step: Optional[str] = None
     loop_count: Optional[int] = Field(default=None, ge=1)
+    loop_mode: Literal["counted", "until_done"] = "counted"
     loop_description: Optional[str] = None
+    loop_exit_condition: Optional[str] = None
+    completed_rounds: int = Field(default=0, ge=0)
     stuck_pattern: Optional[StuckPattern] = None
     memory_evidence_ids: Optional[list[str]] = None
     remember_for_later: Optional[str] = Field(
@@ -48,10 +51,19 @@ class ThinkArgs(BaseModel):
     @model_validator(mode="after")
     def _validate_contract(self) -> "ThinkArgs":
         if self.next_action == ThinkNextAction.START_LOOP:
-            if self.loop_count is None:
-                raise ValueError("loop_count is required when next_action=start_loop")
+            if self.loop_mode == "counted" and self.loop_count is None:
+                raise ValueError("loop_count is required when next_action=start_loop and loop_mode=counted")
             if not str(self.loop_description or "").strip():
                 raise ValueError("loop_description is required when next_action=start_loop")
+            if self.loop_mode == "until_done" and not str(self.loop_exit_condition or "").strip():
+                raise ValueError(
+                    "loop_exit_condition is required when next_action=start_loop and loop_mode=until_done"
+                )
+            if self.loop_mode == "counted" and self.loop_count is not None:
+                if int(self.completed_rounds or 0) >= int(self.loop_count):
+                    raise ValueError(
+                        "completed_rounds must be smaller than loop_count when next_action=start_loop and loop_mode=counted"
+                    )
         if self.next_action == ThinkNextAction.STUCK and self.stuck_pattern is None:
             raise ValueError("stuck_pattern is required when next_action=stuck")
         return self
@@ -96,7 +108,10 @@ def think(ctx: ToolContext, args: ThinkArgs) -> ToolOutcome:
     outcome.control = ThinkControl(
         next_action=args.next_action,
         loop_count=int(args.loop_count) if args.loop_count is not None else None,
+        loop_mode=str(args.loop_mode or "counted").strip() or "counted",
         loop_description=str(args.loop_description or "").strip() or None,
+        loop_exit_condition=str(args.loop_exit_condition or "").strip() or None,
+        completed_rounds=int(args.completed_rounds or 0),
         hint_message=hint_message,
         done_reasoning=done_reasoning,
     )

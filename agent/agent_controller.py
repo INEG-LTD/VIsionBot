@@ -27,6 +27,12 @@ from core.executor.base import Executor
 from core.agent_workspace import AgentWorkspace, AgentWorkspaceManager
 from core.sandbox_policy import SandboxPolicyEngine
 from agent.memory import InteractionType, MemoryEntryKind, MemoryState, NarrativeMemory
+from agent.mission_progress import (
+    ActionResultPayload,
+    FinishAttemptPayload,
+    FinishDecision,
+    MissionProgressPolicy,
+)
 from models import PageElements, PageInfo
 from models.models import ActionStep, FailedAction, set_action_text_renderer
 from agent.results import MissionResult
@@ -114,7 +120,9 @@ class ExecutionState:
     in_loop: bool = False
     loop_count: Optional[int] = None
     loop_round: int = 0
+    loop_mode: str = "counted"
     loop_description: str = ""
+    loop_exit_condition: str = ""
     # Recent action log (compact summaries)
     recent_actions: List[str] = field(default_factory=list)
     # Mission-scoped planner scratchpad notes: (note_id, note_text)
@@ -123,6 +131,8 @@ class ExecutionState:
     # Skill context
     active_skill_name: Optional[str] = None
     active_skill_body: Optional[str] = None
+    # App-defined mission progress state
+    progress_state: Dict[str, Any] = field(default_factory=dict)
     # Budget telemetry
     budget_total: int = 0
     budget_spent: int = 0
@@ -405,6 +415,8 @@ class Agent:
         event_callback: Optional[EventCallback] = None,
         # Allowed event definitions exposed to planner/runtime.
         event_definitions: Optional[List[EventDefinition]] = None,
+        # Optional app-defined mission progress policy.
+        mission_progress_policy: Optional[MissionProgressPolicy] = None,
         # Callback to request a hint when the agent declares itself stuck
         on_stuck_callback: Optional[Callable[[str, int], Optional[str]]] = None,
         # Optional existing agent id to reuse/load its workspace.
@@ -452,6 +464,7 @@ class Agent:
         self.completion_callback = completion_callback
         self.data_report_callback = data_report_callback
         self.event_callback = event_callback
+        self.mission_progress_policy = mission_progress_policy
         normalized_event_definitions, event_lookup = normalize_event_definitions(event_definitions)
         self.event_definitions: List[EventDefinition] = normalized_event_definitions
         self.event_definition_map: Dict[str, EventDefinition] = event_lookup
@@ -698,27 +711,70 @@ class Agent:
         next_action = control.next_action
 
         if next_action == ThinkNextAction.START_LOOP:
-            requested_count = int(control.loop_count or 1)
-            count, clamped = self._clamp_loop_count_to_budget(
-                requested_loop_count=requested_count,
-                budget_remaining=(state.budget_remaining if state.budget_constraints_enabled else 0),
-            )
+            if state.in_loop:
+                state.last_action_summary = "start_loop BLOCKED: already in an active loop. End the current loop first."
+                with self._hints_lock:
+                    self._pending_hints.append(
+                        "You are already inside an active loop. Use think(next_action=end_loop) before starting a new loop."
+                    )
+                return None, True
+            loop_mode = self._normalize_loop_mode(getattr(control, "loop_mode", "counted"))
             description = str(control.loop_description or "").strip() or "loop"
+            loop_exit_condition = str(getattr(control, "loop_exit_condition", "") or "").strip()
+            try:
+                completed_rounds = max(0, int(getattr(control, "completed_rounds", 0) or 0))
+            except (TypeError, ValueError):
+                completed_rounds = 0
+            current_round = completed_rounds + 1
+            count = None
+            clamped = False
+            if loop_mode == "counted":
+                requested_count = max(1, int(control.loop_count or 1))
+                if completed_rounds >= requested_count:
+                    state.last_action_summary = (
+                        "start_loop BLOCKED: completed_rounds must be smaller than loop_count."
+                    )
+                    with self._hints_lock:
+                        self._pending_hints.append(
+                            "When starting a counted loop, completed_rounds must be smaller than loop_count. "
+                            "Use the total intended rounds in loop_count and only count prior rounds in completed_rounds."
+                        )
+                    return None, True
+                remaining_rounds = requested_count - completed_rounds
+                remaining_count, clamped = self._clamp_loop_count_to_budget(
+                    requested_loop_count=remaining_rounds,
+                    budget_remaining=(state.budget_remaining if state.budget_constraints_enabled else 0),
+                )
+                count = completed_rounds + remaining_count
             state.in_loop = True
             state.loop_count = count
-            state.loop_round = 2
+            state.loop_round = current_round
+            state.loop_mode = loop_mode
             state.loop_description = description
+            state.loop_exit_condition = loop_exit_condition
             state.user_facing_actions_since_progress = 0
-            summary = f"Loop started: {description} (round 2 of {count})"
-            if clamped:
-                summary += f" [clamped to budget remaining={state.budget_remaining}]"
+            if loop_mode == "until_done":
+                summary = (
+                    f"Loop started: {description} (round {current_round}, until done; exit when {loop_exit_condition or 'the stated completion condition is satisfied'})"
+                )
+                append_recent_action(f"[LOOP START] {description} — round {current_round} (until done)")
+            else:
+                summary = f"Loop started: {description} (round {current_round} of {count})"
+                if clamped:
+                    remaining_display = max(1, count - completed_rounds)
+                    summary += (
+                        f" [remaining rounds clamped to budget; total now {count}, remaining rounds={remaining_display}, "
+                        f"budget remaining={state.budget_remaining}]"
+                    )
+                append_recent_action(f"[LOOP START] {description} — round {current_round} of {count}")
             state.last_action_summary = summary
-            append_recent_action(f"[LOOP START] {description} — {count} total rounds")
             self.event_logger.loop_state_changed(
                 change="start",
                 loop_round=state.loop_round,
                 loop_count=state.loop_count,
                 loop_description=state.loop_description,
+                loop_mode=state.loop_mode,
+                loop_exit_condition=state.loop_exit_condition,
             )
             return None, True
 
@@ -731,6 +787,23 @@ class Agent:
                     "advance BLOCKED: No user-facing actions since last advance. Do a user-facing action first."
                 )
                 return None, True
+            if self._normalize_loop_mode(state.loop_mode) == "until_done":
+                state.loop_round += 1
+                state.user_facing_actions_since_progress = 0
+                state.last_action_summary = (
+                    f"Advanced to loop round {state.loop_round} (until done; exit when {state.loop_exit_condition or 'the stated completion condition is satisfied'})"
+                )
+                append_recent_action(f"[ADVANCE] Round {state.loop_round} (until done)")
+                self.event_logger.loop_state_changed(
+                    change="advance",
+                    loop_round=state.loop_round,
+                    loop_count=state.loop_count,
+                    loop_description=state.loop_description,
+                    loop_mode=state.loop_mode,
+                    loop_exit_condition=state.loop_exit_condition,
+                )
+                return None, True
+
             state.loop_round += 1
             state.user_facing_actions_since_progress = 0
             if state.loop_count and state.loop_round > state.loop_count:
@@ -741,6 +814,7 @@ class Agent:
                     loop_round=state.loop_count,
                     loop_count=state.loop_count,
                     loop_description=state.loop_description,
+                    loop_mode=state.loop_mode,
                 )
                 exit_loop()
                 return None, True
@@ -754,6 +828,7 @@ class Agent:
                 loop_round=state.loop_round,
                 loop_count=state.loop_count,
                 loop_description=state.loop_description,
+                loop_mode=state.loop_mode,
             )
             return None, True
 
@@ -768,6 +843,8 @@ class Agent:
                 loop_round=state.loop_round,
                 loop_count=state.loop_count,
                 loop_description=state.loop_description,
+                loop_mode=state.loop_mode,
+                loop_exit_condition=state.loop_exit_condition,
             )
             exit_loop()
             return None, True
@@ -803,6 +880,24 @@ class Agent:
                 self.event_logger.system_warning(
                     "Mission done blocked by required Agent Events",
                     missing_required=missing_required,
+                )
+                return None, True
+            finish_decision = self._evaluate_finish_attempt(
+                state=state,
+                kind="done",
+            )
+            if not finish_decision.allow:
+                reason = str(finish_decision.reason or "blocked by mission progress policy").strip()
+                state.last_action_summary = f"done BLOCKED: {reason}"
+                with self._hints_lock:
+                    self._pending_hints.append(
+                        f"Mission completion blocked by mission progress policy: {reason}."
+                    )
+                    if finish_decision.hint:
+                        self._pending_hints.append(str(finish_decision.hint).strip())
+                self.event_logger.system_warning(
+                    "Mission done blocked by mission progress policy",
+                    reason=reason,
                 )
                 return None, True
             reasoning = str(control.done_reasoning or "").strip() or "Mission complete"
@@ -2570,10 +2665,15 @@ class Agent:
         if self.base_knowledge:
             self.memory_store.set_base_knowledge(self.base_knowledge)
         self.memory_store.start_mission(user_mission)
+        initial_execution_state = ExecutionState(
+            budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
+        )
+        initial_execution_state.progress_state = self._initialize_progress_state(mission=user_mission)
+        self.execution_state = initial_execution_state
         # Persist an initial checkpoint so a crash before iteration 1 is still resumable.
         self._persist_resume_checkpoint(
             mission=user_mission,
-            state=self.execution_state,
+            state=initial_execution_state,
             status="running",
         )
 
@@ -2593,6 +2693,7 @@ class Agent:
         # Execute the mission directly
         self.mission_result = self._run_execution_loop(
             user_mission,
+            existing_state=initial_execution_state,
         )
 
         if self.execution_timer.mission_start_time is not None:
@@ -2990,6 +3091,22 @@ class Agent:
     def _event_once_per_mission_already_accepted(self, event_name: str) -> bool:
         return int(self._accepted_agent_event_counts.get(event_name, 0) or 0) > 0
 
+    def _first_accepted_terminal_event_name(
+        self,
+        event_results: List[EventResult],
+    ) -> Optional[str]:
+        for result in event_results or []:
+            if not result.delivered:
+                continue
+            definition = self.event_definition_map.get(str(result.name or "").strip())
+            if definition and definition.terminal:
+                return definition.name
+        return None
+
+    @staticmethod
+    def _terminal_event_success(event_name: str) -> bool:
+        return not str(event_name or "").strip().lower().endswith("_failed")
+
     def _build_agent_events_status(self) -> dict[str, Any]:
         if not self.event_definitions:
             return {
@@ -3039,6 +3156,207 @@ class Agent:
         if isinstance(ack_value, bool):
             return ack_value, reason
         return None, reason
+
+    def _current_page_metadata(self) -> tuple[str, str]:
+        if self.browser and self.browser.page:
+            try:
+                current_url = str(self.browser.page.url or "")
+            except Exception:
+                current_url = ""
+            try:
+                page_title = str(self.browser.page.title() or "")
+            except Exception:
+                page_title = ""
+            return current_url, page_title
+        return "", ""
+
+    def _accepted_agent_event_names(self) -> tuple[str, ...]:
+        return tuple(
+            definition.name
+            for definition in self.event_definitions
+            if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) > 0
+        )
+
+    @staticmethod
+    def _coerce_finish_decision(raw_decision: Any) -> FinishDecision:
+        if isinstance(raw_decision, FinishDecision):
+            return raw_decision
+        if isinstance(raw_decision, dict):
+            return FinishDecision(
+                allow=bool(raw_decision.get("allow", True)),
+                reason=str(raw_decision.get("reason", "") or "").strip(),
+                hint=str(raw_decision.get("hint", "") or "").strip(),
+            )
+        return FinishDecision(allow=True)
+
+    def _initialize_progress_state(self, *, mission: str) -> dict[str, Any]:
+        policy = self.mission_progress_policy
+        if policy is None:
+            return {}
+        try:
+            initial_state = policy.on_mission_start(
+                mission=str(mission or ""),
+                starting_url=str(self.mission_start_url or ""),
+                base_knowledge=list(self.base_knowledge or []),
+            )
+            if isinstance(initial_state, dict):
+                return copy.deepcopy(initial_state)
+            self.event_logger.system_warning(
+                "mission_progress_policy.on_mission_start returned non-dict state; ignoring"
+            )
+        except Exception as exc:
+            self.event_logger.system_warning(f"mission_progress_policy.on_mission_start failed: {exc}")
+        return {}
+
+    def _render_progress_context(self, *, state: ExecutionState) -> str:
+        policy = self.mission_progress_policy
+        if policy is None:
+            return ""
+        try:
+            raw_context = policy.get_progress_context(
+                progress_state=copy.deepcopy(state.progress_state or {}),
+            )
+        except Exception as exc:
+            self.event_logger.system_warning(f"mission_progress_policy.get_progress_context failed: {exc}")
+            return ""
+        return str(raw_context or "").strip()
+
+    @staticmethod
+    def _normalize_loop_mode(raw_mode: Any) -> str:
+        mode = str(raw_mode or "counted").strip().lower()
+        return "until_done" if mode == "until_done" else "counted"
+
+    def _update_progress_state_from_action_result(
+        self,
+        *,
+        state: ExecutionState,
+        action_result: ActionResultPayload,
+    ) -> list[str]:
+        policy = self.mission_progress_policy
+        if policy is None:
+            return []
+        try:
+            raw_response = policy.on_action_result(
+                progress_state=copy.deepcopy(state.progress_state or {}),
+                action_result=action_result,
+            )
+        except Exception as exc:
+            self.event_logger.system_warning(f"mission_progress_policy.on_action_result failed: {exc}")
+            return []
+
+        updated_state: dict[str, Any] = copy.deepcopy(state.progress_state or {})
+        hints: list[str] = []
+        if isinstance(raw_response, tuple) and len(raw_response) == 2:
+            candidate_state, candidate_hints = raw_response
+        else:
+            candidate_state, candidate_hints = raw_response, []
+
+        if isinstance(candidate_state, dict):
+            updated_state = copy.deepcopy(candidate_state)
+        else:
+            self.event_logger.system_warning(
+                "mission_progress_policy.on_action_result returned non-dict state; keeping previous progress_state"
+            )
+
+        if isinstance(candidate_hints, (list, tuple)):
+            hints = [
+                str(item).strip()
+                for item in candidate_hints
+                if str(item).strip()
+            ]
+        elif candidate_hints:
+            hint_text = str(candidate_hints).strip()
+            if hint_text:
+                hints = [hint_text]
+
+        state.progress_state = updated_state
+        return hints
+
+    def _evaluate_finish_attempt(
+        self,
+        *,
+        state: ExecutionState,
+        kind: str,
+        event_name: str = "",
+        event_data: Optional[dict[str, Any]] = None,
+        current_url: Optional[str] = None,
+        page_title: Optional[str] = None,
+    ) -> FinishDecision:
+        policy = self.mission_progress_policy
+        if policy is None:
+            return FinishDecision(allow=True)
+        url = str(current_url or "")
+        title = str(page_title or "")
+        if not url and not title:
+            url, title = self._current_page_metadata()
+        payload = FinishAttemptPayload(
+            kind=str(kind or "").strip(),
+            current_url=url,
+            page_title=title,
+            accepted_event_names=self._accepted_agent_event_names(),
+            event_name=str(event_name or "").strip(),
+            event_data=dict(event_data or {}),
+        )
+        try:
+            raw_decision = policy.on_finish_attempt(
+                progress_state=copy.deepcopy(state.progress_state or {}),
+                finish_attempt=payload,
+            )
+        except Exception as exc:
+            self.event_logger.system_warning(f"mission_progress_policy.on_finish_attempt failed: {exc}")
+            return FinishDecision(allow=True)
+        return self._coerce_finish_decision(raw_decision)
+
+    def _preflight_pending_events_for_finish_policy(
+        self,
+        *,
+        pending_events: List[dict[str, Any]],
+        function_name: str,
+        state: ExecutionState,
+    ) -> tuple[List[dict[str, Any]], str, List[str]]:
+        if not pending_events or self.mission_progress_policy is None:
+            return list(pending_events or []), "", []
+
+        filtered_events: List[dict[str, Any]] = []
+        blocked_fragments: List[str] = []
+        blocked_hints: List[str] = []
+        current_url, page_title = self._current_page_metadata()
+
+        for item in pending_events:
+            name = str(item.get("name", "") or "").strip()
+            definition = self.event_definition_map.get(name)
+            if not definition or not definition.terminal:
+                filtered_events.append(item)
+                continue
+
+            decision = self._evaluate_finish_attempt(
+                state=state,
+                kind="terminal_event",
+                event_name=name,
+                event_data=(item.get("data") if isinstance(item.get("data"), dict) else {}),
+                current_url=current_url,
+                page_title=page_title,
+            )
+            if decision.allow:
+                filtered_events.append(item)
+                continue
+
+            reason = str(decision.reason or "blocked by mission progress policy").strip()
+            hint = str(decision.hint or "").strip()
+            blocked_fragments.append(f"{name}=blocked({reason})")
+            blocked_hints.append(
+                f'Mission progress policy blocked terminal event "{name}": {reason}.'
+            )
+            if hint:
+                blocked_hints.append(hint)
+            self.event_logger.system_warning(
+                "Terminal event blocked by mission progress policy",
+                name=name,
+                tool=function_name,
+                reason=reason,
+            )
+
+        return filtered_events, "; ".join(blocked_fragments[:4]), blocked_hints
 
     def _collect_pending_agent_events(
         self,
@@ -3363,9 +3681,9 @@ class Agent:
             field = args.get("field_description", "input field")
             return f"You cleared the text in {field}. Result: {result_str}."
         elif fn == "select_option":
-            option = args.get("option", "")
+            intent = args.get("intent", "")
             dropdown = args.get("dropdown_description", "dropdown")
-            return f"You selected \"{option}\" in {dropdown}. Result: {result_str}."
+            return f"You used select_option on {dropdown} with intent \"{intent}\". Result: {result_str}."
         elif fn == "scroll_down":
             return f"You scrolled down. Result: {result_str}."
         elif fn == "scroll_up":
@@ -3892,6 +4210,7 @@ class Agent:
             state = ExecutionState(
                 budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
             )
+            state.progress_state = self._initialize_progress_state(mission=mission)
         else:
             # Resume path: continue from the loaded state snapshot.
             state = copy.deepcopy(existing_state)
@@ -3938,7 +4257,9 @@ class Agent:
             state.in_loop = False
             state.loop_count = None
             state.loop_round = 0
+            state.loop_mode = "counted"
             state.loop_description = ""
+            state.loop_exit_condition = ""
             try:
                 self.action_executor.clear_done_markers()
             except Exception:
@@ -4489,6 +4810,7 @@ class Agent:
                 adaptive_image_detail = "high" if len(gallery_images or []) > 5 else "low"
                 stage_timings_ms["screenshot_ms"] = (time.perf_counter() - screenshot_started) * 1000.0
                 active_skill_context = self._build_active_skill_context(state)
+                mission_progress_context = self._render_progress_context(state=state)
 
                 action_planner = ActionPlanner(
                     mission,
@@ -4521,7 +4843,9 @@ class Agent:
                     in_loop=state.in_loop,
                     loop_round=state.loop_round,
                     loop_count=state.loop_count,
+                    loop_mode=state.loop_mode,
                     loop_description=state.loop_description,
+                    loop_exit_condition=state.loop_exit_condition,
                     recent_actions=state.recent_actions,
                     agent_notes=state.agent_notes,
                     iterations_remaining=state.budget_remaining,
@@ -4534,6 +4858,7 @@ class Agent:
                     effect_policy_engine=self.effect_policy,
                     event_definitions=self.event_definitions,
                     agent_events_status=self._build_agent_events_status(),
+                    mission_progress_context=mission_progress_context,
                     available_skills_metadata=self.available_skills_catalog,
                     active_skill_context=active_skill_context,
                     active_skill_name=state.active_skill_name,
@@ -4814,9 +5139,12 @@ class Agent:
                             nav_break = True
 
                     mission_done_reasoning: Optional[str] = None
+                    terminal_event_name: Optional[str] = None
                     should_replan_after_control = False
                     event_summary_text = ""
+                    blocked_event_summary_text = ""
                     event_hint_lines: List[str] = []
+                    accepted_event_payloads: List[dict[str, Any]] = []
                     if function_name == "think" and result_success and outcome.control is None:
                         control_error = "think must return a control payload."
                         self._record_failure(
@@ -4859,13 +5187,40 @@ class Agent:
                             )
 
                     if pending_events:
+                        if result_success:
+                            (
+                                pending_events,
+                                blocked_event_summary_text,
+                                blocked_event_hints,
+                            ) = self._preflight_pending_events_for_finish_policy(
+                                pending_events=pending_events,
+                                function_name=function_name,
+                                state=state,
+                            )
+                            if blocked_event_hints:
+                                with self._hints_lock:
+                                    self._pending_hints.extend(blocked_event_hints)
                         event_results = self._dispatch_agent_events(
                             pending_events=pending_events,
                             function_name=function_name,
                             action_id=action_id,
                             action_success=result_success,
                         )
+                        terminal_event_name = self._first_accepted_terminal_event_name(event_results)
                         event_summary_text, event_hint_lines = self._summarize_event_results(event_results)
+                        for pending_event, event_result in zip(pending_events, event_results):
+                            if not event_result.delivered:
+                                continue
+                            accepted_event_payloads.append(
+                                {
+                                    "name": str(pending_event.get("name", "") or "").strip(),
+                                    "data": (
+                                        dict(pending_event.get("data") or {})
+                                        if isinstance(pending_event.get("data"), dict)
+                                        else {}
+                                    ),
+                                }
+                            )
                         if event_hint_lines:
                             with self._hints_lock:
                                 self._pending_hints.extend(event_hint_lines)
@@ -4892,6 +5247,12 @@ class Agent:
                         summary = f"{summary} | {result_error}" if summary else result_error
                     if event_summary_text:
                         summary = f"{summary} | events: {event_summary_text}" if summary else f"events: {event_summary_text}"
+                    if blocked_event_summary_text:
+                        summary = (
+                            f"{summary} | blocked_events: {blocked_event_summary_text}"
+                            if summary
+                            else f"blocked_events: {blocked_event_summary_text}"
+                        )
                     state.last_action_summary = summary
                     _append_recent_action(summary)
 
@@ -4938,6 +5299,29 @@ class Agent:
                             with self._hints_lock:
                                 self._pending_hints.append(hint)
 
+                    current_url, page_title = self._current_page_metadata()
+                    progress_hints = self._update_progress_state_from_action_result(
+                        state=state,
+                        action_result=ActionResultPayload(
+                            action_name=function_name,
+                            action_args=dict(action_args or {}),
+                            success=result_success,
+                            result_data=dict(result_data or {}),
+                            summary=summary,
+                            current_url=current_url,
+                            page_title=page_title,
+                            accepted_event_names=tuple(
+                                item["name"]
+                                for item in accepted_event_payloads
+                                if str(item.get("name", "") or "").strip()
+                            ),
+                            accepted_events=tuple(copy.deepcopy(accepted_event_payloads)),
+                        ),
+                    )
+                    if progress_hints:
+                        with self._hints_lock:
+                            self._pending_hints.extend(progress_hints)
+
                     self.event_logger.action_complete(
                         tool=function_name,
                         narrative=narrative,
@@ -4979,6 +5363,23 @@ class Agent:
                         active_tab = self.tab_manager.get_active()
                         if active_tab and self.browser.page is not active_tab.page:
                             self.action_executor.set_page(active_tab.page)
+
+                    if result_success and terminal_event_name:
+                        terminal_success = self._terminal_event_success(terminal_event_name)
+                        if state.in_loop:
+                            self.event_logger.loop_state_changed(
+                                change="end",
+                                loop_round=state.loop_round,
+                                loop_count=state.loop_count,
+                                loop_description=state.loop_description,
+                            )
+                            _exit_loop()
+                        return _mission_result(
+                            success=terminal_success,
+                            reasoning=state.last_action_summary or f"Terminal event accepted: {terminal_event_name}",
+                            narrative=narrative or state.last_action_summary or f"Terminal event accepted: {terminal_event_name}",
+                            state=state,
+                        )
 
                     if result_success and mission_done_reasoning:
                         if state.in_loop:

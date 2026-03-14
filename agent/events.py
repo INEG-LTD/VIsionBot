@@ -36,6 +36,8 @@ class EventDefinition:
         once_per_mission:
             If True, after the first accepted emission, further emissions for
             this event are rejected for the remainder of the mission.
+        terminal:
+            If True, an accepted emission ends the current mission immediately.
         require_callback_ack:
             If True, emission is accepted only when callback returns a dict with
             ``{"ack": true}``. Missing callback, callback errors/timeouts, or
@@ -51,6 +53,7 @@ class EventDefinition:
     schema: Optional[dict[str, Any]] = None
     required: bool = False
     once_per_mission: bool = False
+    terminal: bool = False
     require_callback_ack: bool = False
     allowed_tools: Optional[list[str]] = None
 
@@ -101,6 +104,7 @@ def normalize_event_definitions(
             schema=schema,
             required=bool(item.required),
             once_per_mission=bool(item.once_per_mission),
+            terminal=bool(item.terminal),
             require_callback_ack=bool(item.require_callback_ack),
             allowed_tools=(allowed_tools or None),
             description=desc,
@@ -116,17 +120,24 @@ def build_emit_events_field(
     max_items: int = 4,
 ) -> dict[str, Any]:
     names = [d.name for d in definitions if d.name]
-    description_lines = ["Emit domain events for this tool action."]
+    description_lines = [
+        "Emit domain events for this tool action.",
+        "Always include every required field in emit_events[].data exactly as named below.",
+    ]
     if names:
         description_lines.append("Allowed event names:")
         for d in definitions:
             constraints: list[str] = []
             if d.when:
                 constraints.append(f"when={d.when}")
+            if d.schema:
+                constraints.append(f"required_data={_format_event_schema(d.schema)}")
             if d.required:
                 constraints.append("required")
             if d.once_per_mission:
                 constraints.append("once_per_mission")
+            if d.terminal:
+                constraints.append("terminal")
             if d.require_callback_ack:
                 constraints.append("require_callback_ack")
             if d.allowed_tools:
@@ -160,6 +171,23 @@ def build_emit_events_field(
             "description": "\n".join(description_lines),
         }
     }
+
+
+def _format_event_schema(schema: dict[str, Any]) -> str:
+    fields: list[str] = []
+    for key, expected in schema.items():
+        fields.append(f"{key}:{_describe_event_type(expected)}")
+    return "{" + ", ".join(fields) + "}"
+
+
+def _describe_event_type(expected: Any) -> str:
+    if isinstance(expected, str):
+        return expected.strip().lower() or "any"
+    if isinstance(expected, type):
+        return expected.__name__
+    if isinstance(expected, tuple) and expected and all(isinstance(item, type) for item in expected):
+        return "|".join(item.__name__ for item in expected)
+    return "any"
 
 
 def coerce_emit_events(raw: Any) -> list[dict[str, Any]]:

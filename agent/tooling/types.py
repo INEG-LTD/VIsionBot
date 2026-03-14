@@ -50,7 +50,10 @@ class ToolOutput:
 class ThinkControl:
     next_action: ThinkNextAction
     loop_count: Optional[int] = None
+    loop_mode: str = "counted"
     loop_description: Optional[str] = None
+    loop_exit_condition: Optional[str] = None
+    completed_rounds: int = 0
     hint_message: Optional[str] = None
     done_reasoning: Optional[str] = None
 
