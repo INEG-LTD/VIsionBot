@@ -29,7 +29,10 @@ See [troubleshooting](references/troubleshooting.md) if you encounter captchas, 
   - Payload should include:
     - `job_title`
     - `file_name`
+    - `dedupe_key`
+  - Always copy `dedupe_key` exactly from the successful `process_focused_job` result. Do not invent or recompute it yourself.
   - This still applies when the saved job reaches `target_job_count`.
+  - After that `job_saved` has been emitted, do not emit `job_saved` again unless a later `process_focused_job` returns `saved=true` for a new job.
   - Never emit `job_collection_done` on the same successful action that must emit `job_saved` for the most recent save.
   - `job_collection_done(outcome="complete")` may only be emitted on a later successful action after that `job_saved` event has already been emitted.
 - After `process_focused_job` returns a non-saved outcome, the next successful action must emit `job_rejected`, except for recoverable workflow problems such as `search_context_mismatch`, which must emit `job_collection_error` instead.
@@ -86,10 +89,10 @@ See [troubleshooting](references/troubleshooting.md) if you encounter captchas, 
    - Examples that indicate this kind of restriction include text like `For Premium Members only`, `Members only`, or similar gated-access wording.
 4. Inside the active until-done loop, react to the result:
    - `saved=true` and mission progress does not yet allow `job_collection_done(outcome="complete")` -> call `think(next_action="advance")` and emit:
-     - `emit_events=[{"name":"job_saved","data":{"job_title":"<job_title>","file_name":"google-jobs-list.jsonl"}}]`
+     - `emit_events=[{"name":"job_saved","data":{"job_title":"<job_title>","file_name":"google-jobs-list.jsonl","dedupe_key":"<returned dedupe_key>"}}]`
    - `saved=true` and this save now satisfies `target_job_count` -> do not skip straight to terminal completion.
      - On the next successful action, call `think(next_action="end_loop")` and emit:
-       - `emit_events=[{"name":"job_saved","data":{"job_title":"<job_title>","file_name":"google-jobs-list.jsonl"}}]`
+       - `emit_events=[{"name":"job_saved","data":{"job_title":"<job_title>","file_name":"google-jobs-list.jsonl","dedupe_key":"<returned dedupe_key>"}}]`
      - On a later successful action after that, proceed to terminal `job_collection_done(outcome="complete")`.
    - `reason="search_context_mismatch"` or `search_context_valid=false` -> this is a recoverable workflow problem, not a rejected job.
      - On the next successful recovery or notification action emit:

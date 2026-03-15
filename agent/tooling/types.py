@@ -113,7 +113,6 @@ BUDGET_FIELDS = {
 EVENTS_FIELD = {
     "emit_events": {
         "type": "array",
-        "maxItems": 4,
         "items": {
             "type": "object",
             "properties": {
@@ -128,6 +127,6 @@ EVENTS_FIELD = {
             "required": ["name"],
             "additionalProperties": False,
         },
-        "description": "Emit domain events for this tool action.",
+        "description": "Emit zero or more domain events for this tool action.",
     }
 }

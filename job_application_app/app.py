@@ -50,7 +50,9 @@ JOB_COLLECTION_EVENTS = [
         schema={
             "job_title": str,
             "file_name": str,
+            "dedupe_key": str,
         },
+        dedupe_by_payload=True,
     ),
     EventDefinition(
         name="job_rejected",

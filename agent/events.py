@@ -45,6 +45,9 @@ class EventDefinition:
         allowed_tools:
             Optional list of tool names that are allowed to emit this event.
             Empty/None means all tools may emit it.
+        dedupe_by_payload:
+            If True, duplicate accepted emissions with the same event name and
+            canonical payload are ignored for the remainder of the mission.
     """
 
     name: str
@@ -56,6 +59,7 @@ class EventDefinition:
     terminal: bool = False
     require_callback_ack: bool = False
     allowed_tools: Optional[list[str]] = None
+    dedupe_by_payload: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,8 @@ class EventResult:
     delivered: bool
     response: Any = None
     error: Optional[str] = None
+    ignored: bool = False
+    ignore_reason: Optional[str] = None
 
 
 def normalize_event_definitions(
@@ -107,6 +113,7 @@ def normalize_event_definitions(
             terminal=bool(item.terminal),
             require_callback_ack=bool(item.require_callback_ack),
             allowed_tools=(allowed_tools or None),
+            dedupe_by_payload=bool(item.dedupe_by_payload),
             description=desc,
         )
         normalized.append(definition)
@@ -116,13 +123,11 @@ def normalize_event_definitions(
 
 def build_emit_events_field(
     definitions: Sequence[EventDefinition],
-    *,
-    max_items: int = 4,
 ) -> dict[str, Any]:
     names = [d.name for d in definitions if d.name]
     description_lines = [
-        "Emit domain events for this tool action.",
-        "Always include every required field in emit_events[].data exactly as named below.",
+        "Emit zero or more domain events for this tool action using emit_events.",
+        "Always include every required field in each emit_events[i].data exactly as named below.",
     ]
     if names:
         description_lines.append("Allowed event names:")
@@ -142,6 +147,8 @@ def build_emit_events_field(
                 constraints.append("require_callback_ack")
             if d.allowed_tools:
                 constraints.append(f"allowed_tools={','.join(d.allowed_tools)}")
+            if d.dedupe_by_payload:
+                constraints.append("dedupe_by_payload")
             line = f"- {d.name}"
             if d.description:
                 line += f": {d.description}"
@@ -152,7 +159,6 @@ def build_emit_events_field(
     return {
         "emit_events": {
             "type": "array",
-            "maxItems": max(1, int(max_items or 1)),
             "items": {
                 "type": "object",
                 "properties": {

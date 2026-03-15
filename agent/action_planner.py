@@ -733,6 +733,8 @@ POLICY CONSTRAINTS
                     details.append("required")
                 if event.once_per_mission:
                     details.append("once_per_mission")
+                if event.dedupe_by_payload:
+                    details.append("dedupe_by_payload")
                 if event.require_callback_ack:
                     details.append("require_callback_ack")
                 if event.allowed_tools:
@@ -745,7 +747,7 @@ POLICY CONSTRAINTS
                 event_lines.append(line)
             events_text = "\n".join(event_lines)
             events_section = f"""
-13. `emit_events` is available on every tool call when a business milestone is reached.
+13. `emit_events` is available on every tool call when business milestones are reached.
     Allowed event names:
 {events_text}
     Emit only factual, already-completed milestones for the current action.

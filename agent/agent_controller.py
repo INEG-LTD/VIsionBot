@@ -133,6 +133,9 @@ class ExecutionState:
     active_skill_body: Optional[str] = None
     # App-defined mission progress state
     progress_state: Dict[str, Any] = field(default_factory=dict)
+    # Accepted mission event tracking
+    accepted_event_counts: Dict[str, int] = field(default_factory=dict)
+    accepted_event_fingerprints: List[str] = field(default_factory=list)
     # Budget telemetry
     budget_total: int = 0
     budget_spent: int = 0
@@ -468,8 +471,6 @@ class Agent:
         normalized_event_definitions, event_lookup = normalize_event_definitions(event_definitions)
         self.event_definitions: List[EventDefinition] = normalized_event_definitions
         self.event_definition_map: Dict[str, EventDefinition] = event_lookup
-        self._accepted_agent_event_counts: Dict[str, int] = {}
-        self._reset_agent_event_tracking()
         self.event_callback_timeout_seconds: float = float(
             max(0.0, float(getattr(self.config.execution, "agent_events_callback_timeout_seconds", 0.0) or 0.0))
         )
@@ -869,7 +870,7 @@ class Agent:
             return None, True
 
         if next_action == ThinkNextAction.DONE:
-            missing_required = self._missing_required_agent_events()
+            missing_required = self._missing_required_agent_events(state)
             if missing_required:
                 missing_text = ", ".join(sorted(missing_required))
                 state.last_action_summary = (
@@ -2043,6 +2044,7 @@ class Agent:
         self.mission_start_url = str(payload.get("mission_start_url", "") or "")
         self.mission_start_time = float(payload.get("mission_start_time", 0.0) or 0.0) or None
         self.execution_state = self._execution_state_from_payload(payload.get("execution_state", {}))
+        self._normalize_event_tracking_state(self.execution_state)
         self.mission_result = self._mission_result_from_payload(payload.get("mission_result", {}))
 
         memory_payload = payload.get("memory", {})
@@ -2074,7 +2076,6 @@ class Agent:
         self._cached_snapshot_fingerprint = None
         self._cached_page_info = None
         self._cached_detected_elements = None
-        self._reset_agent_event_tracking()
         self._reset_speculative_state()
 
         self._loaded_resume_run_id = resolved_run_id
@@ -2675,6 +2676,7 @@ class Agent:
             budget_constraints_enabled=bool(self.config.execution.budget_constraints_enabled),
         )
         initial_execution_state.progress_state = self._initialize_progress_state(mission=user_mission)
+        self._normalize_event_tracking_state(initial_execution_state)
         self.execution_state = initial_execution_state
         # Persist an initial checkpoint so a crash before iteration 1 is still resumable.
         self._persist_resume_checkpoint(
@@ -3075,27 +3077,49 @@ class Agent:
         except Exception:
             pass
 
-    def _reset_agent_event_tracking(self) -> None:
-        self._accepted_agent_event_counts = {
-            name: 0
-            for name in self.event_definition_map.keys()
-        }
+    def _normalize_event_tracking_state(self, state: ExecutionState) -> None:
+        counts: Dict[str, int] = {}
+        raw_counts = getattr(state, "accepted_event_counts", None)
+        if isinstance(raw_counts, dict):
+            for definition in self.event_definitions:
+                counts[definition.name] = int(raw_counts.get(definition.name, 0) or 0)
+        else:
+            for definition in self.event_definitions:
+                counts[definition.name] = 0
+        state.accepted_event_counts = counts
 
-    def _mark_agent_event_accepted(self, event_name: str) -> None:
-        current = int(self._accepted_agent_event_counts.get(event_name, 0) or 0)
-        self._accepted_agent_event_counts[event_name] = current + 1
+        raw_fingerprints = getattr(state, "accepted_event_fingerprints", None)
+        if isinstance(raw_fingerprints, list):
+            state.accepted_event_fingerprints = [
+                str(item).strip()
+                for item in raw_fingerprints
+                if str(item).strip()
+            ]
+        else:
+            state.accepted_event_fingerprints = []
 
-    def _missing_required_agent_events(self) -> List[str]:
+    def _mark_agent_event_accepted(self, state: ExecutionState, event_name: str) -> None:
+        self._normalize_event_tracking_state(state)
+        current = int(state.accepted_event_counts.get(event_name, 0) or 0)
+        state.accepted_event_counts[event_name] = current + 1
+
+    def _missing_required_agent_events(self, state: ExecutionState) -> List[str]:
+        self._normalize_event_tracking_state(state)
         missing: List[str] = []
         for definition in self.event_definitions:
             if not definition.required:
                 continue
-            if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) <= 0:
+            if int(state.accepted_event_counts.get(definition.name, 0) or 0) <= 0:
                 missing.append(definition.name)
         return missing
 
-    def _event_once_per_mission_already_accepted(self, event_name: str) -> bool:
-        return int(self._accepted_agent_event_counts.get(event_name, 0) or 0) > 0
+    def _event_once_per_mission_already_accepted(
+        self,
+        state: ExecutionState,
+        event_name: str,
+    ) -> bool:
+        self._normalize_event_tracking_state(state)
+        return int(state.accepted_event_counts.get(event_name, 0) or 0) > 0
 
     def _first_accepted_terminal_event_name(
         self,
@@ -3113,7 +3137,7 @@ class Agent:
     def _terminal_event_success(event_name: str) -> bool:
         return not str(event_name or "").strip().lower().endswith("_failed")
 
-    def _build_agent_events_status(self) -> dict[str, Any]:
+    def _build_agent_events_status(self, state: ExecutionState) -> dict[str, Any]:
         if not self.event_definitions:
             return {
                 "enabled": False,
@@ -3123,7 +3147,8 @@ class Agent:
                 "accepted_counts": {},
                 "ack_required_events": [],
             }
-        missing_required = self._missing_required_agent_events()
+        self._normalize_event_tracking_state(state)
+        missing_required = self._missing_required_agent_events(state)
         completion_blockers: List[str] = []
         if missing_required:
             completion_blockers.append(
@@ -3136,7 +3161,7 @@ class Agent:
                 continue
             required_states[definition.name] = (
                 "accepted"
-                if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) > 0
+                if int(state.accepted_event_counts.get(definition.name, 0) or 0) > 0
                 else "missing"
             )
         ack_required = [
@@ -3149,7 +3174,7 @@ class Agent:
             "can_complete_mission": can_complete,
             "completion_blockers": completion_blockers,
             "required_events": required_states,
-            "accepted_counts": dict(self._accepted_agent_event_counts),
+            "accepted_counts": dict(state.accepted_event_counts),
             "ack_required_events": ack_required,
         }
 
@@ -3176,12 +3201,37 @@ class Agent:
             return current_url, page_title
         return "", ""
 
-    def _accepted_agent_event_names(self) -> tuple[str, ...]:
+    def _accepted_agent_event_names(self, state: ExecutionState) -> tuple[str, ...]:
+        self._normalize_event_tracking_state(state)
         return tuple(
             definition.name
             for definition in self.event_definitions
-            if int(self._accepted_agent_event_counts.get(definition.name, 0) or 0) > 0
+            if int(state.accepted_event_counts.get(definition.name, 0) or 0) > 0
         )
+
+    @staticmethod
+    def _event_payload_fingerprint(name: str, data: dict[str, Any]) -> str:
+        canonical = json.dumps(
+            {
+                "name": str(name or "").strip(),
+                "data": (data if isinstance(data, dict) else {}),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _event_payload_already_accepted(self, state: ExecutionState, fingerprint: str) -> bool:
+        self._normalize_event_tracking_state(state)
+        return str(fingerprint or "") in state.accepted_event_fingerprints
+
+    def _mark_event_payload_accepted(self, state: ExecutionState, fingerprint: str) -> None:
+        self._normalize_event_tracking_state(state)
+        fp = str(fingerprint or "").strip()
+        if fp and fp not in state.accepted_event_fingerprints:
+            state.accepted_event_fingerprints.append(fp)
 
     @staticmethod
     def _coerce_finish_decision(raw_decision: Any) -> FinishDecision:
@@ -3299,7 +3349,7 @@ class Agent:
             kind=str(kind or "").strip(),
             current_url=url,
             page_title=title,
-            accepted_event_names=self._accepted_agent_event_names(),
+            accepted_event_names=self._accepted_agent_event_names(state),
             event_name=str(event_name or "").strip(),
             event_data=dict(event_data or {}),
         )
@@ -3320,7 +3370,10 @@ class Agent:
         function_name: str,
         state: ExecutionState,
     ) -> tuple[List[dict[str, Any]], str, List[str]]:
-        if not pending_events or self.mission_progress_policy is None:
+        if not pending_events:
+            return [], "", []
+
+        if self.mission_progress_policy is None:
             return list(pending_events or []), "", []
 
         filtered_events: List[dict[str, Any]] = []
@@ -3373,7 +3426,7 @@ class Agent:
         merged: List[dict[str, Any]] = []
         existing = getattr(action_step, "pending_events", []) or []
         if isinstance(existing, list):
-            merged.extend(coerce_emit_events(existing))
+            merged.extend(existing)
         raw_emit = action_args.pop("emit_events", None) if isinstance(action_args, dict) else None
         merged.extend(coerce_emit_events(raw_emit))
         action_step.function_arguments = dict(action_args or {})
@@ -3387,10 +3440,12 @@ class Agent:
         function_name: str,
         action_id: str,
         action_success: bool,
+        state: ExecutionState,
     ) -> List[EventResult]:
         results: List[EventResult] = []
         if not pending_events:
             return results
+        self._normalize_event_tracking_state(state)
 
         if not action_success:
             for item in pending_events:
@@ -3471,7 +3526,7 @@ class Agent:
                 results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
                 continue
 
-            if definition.once_per_mission and self._event_once_per_mission_already_accepted(name):
+            if definition.once_per_mission and self._event_once_per_mission_already_accepted(state, name):
                 error = f"event '{name}' is once_per_mission and was already accepted"
                 self.event_logger.agent_event_callback_error(
                     event_id=event_id,
@@ -3497,6 +3552,21 @@ class Agent:
                 )
                 results.append(EventResult(event_id=event_id, name=name, delivered=False, error=error))
                 continue
+
+            fingerprint = ""
+            if definition.dedupe_by_payload:
+                fingerprint = self._event_payload_fingerprint(name, data)
+                if self._event_payload_already_accepted(state, fingerprint):
+                    results.append(
+                        EventResult(
+                            event_id=event_id,
+                            name=name,
+                            delivered=False,
+                            ignored=True,
+                            ignore_reason="ignored_duplicate",
+                        )
+                    )
+                    continue
 
             event = AgentEvent(
                 event_id=event_id,
@@ -3575,7 +3645,9 @@ class Agent:
                 )
                 continue
 
-            self._mark_agent_event_accepted(event.name)
+            self._mark_agent_event_accepted(state, event.name)
+            if fingerprint:
+                self._mark_event_payload_accepted(state, fingerprint)
             results.append(
                 EventResult(
                     event_id=event.event_id,
@@ -3627,7 +3699,9 @@ class Agent:
         fragments: List[str] = []
         hints: List[str] = []
         for result in event_results:
-            if result.delivered:
+            if result.ignored:
+                fragments.append(f"{result.name}={str(result.ignore_reason or 'ignored').strip()}")
+            elif result.delivered:
                 if result.response is None:
                     fragments.append(f"{result.name}=emitted")
                     continue
@@ -4221,6 +4295,7 @@ class Agent:
             # Resume path: continue from the loaded state snapshot.
             state = copy.deepcopy(existing_state)
             state.budget_constraints_enabled = bool(self.config.execution.budget_constraints_enabled)
+        self._normalize_event_tracking_state(state)
         state.budget_total = max_actions
         state.planning_batch_limit = min(
             int(self.config.execution.max_actions_per_plan or 1),
@@ -4863,7 +4938,7 @@ class Agent:
                     tool_registry=self.tool_registry,
                     effect_policy_engine=self.effect_policy,
                     event_definitions=self.event_definitions,
-                    agent_events_status=self._build_agent_events_status(),
+                    agent_events_status=self._build_agent_events_status(state),
                     mission_progress_context=mission_progress_context,
                     available_skills_metadata=self.available_skills_catalog,
                     active_skill_context=active_skill_context,
@@ -5211,6 +5286,7 @@ class Agent:
                             function_name=function_name,
                             action_id=action_id,
                             action_success=result_success,
+                            state=state,
                         )
                         terminal_event_name = self._first_accepted_terminal_event_name(event_results)
                         event_summary_text, event_hint_lines = self._summarize_event_results(event_results)
