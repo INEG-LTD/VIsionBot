@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel, Field
 
@@ -276,6 +276,62 @@ def _build_dedupe_key(*, job_title: str, location: str, company_name: Optional[s
     if company:
         return "|".join(part for part in (title, company, loc) if part)
     return "|".join(part for part in (title, loc) if part)
+
+
+def _extract_google_docid_from_url(current_url: str) -> str:
+    decoded_url = unquote(str(current_url or "")).strip()
+    if not decoded_url:
+        return ""
+    match = re.search(r"(?:^|[/?#&])(?:docid|htidocid)=([^&#/]+)", decoded_url)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip()
+
+
+def _build_job_record(
+    *,
+    extracted: FocusedJobExtraction,
+    apply_links: list[dict[str, str]],
+    apply_directly_link: Optional[dict[str, str]],
+    search_query: Optional[str],
+    dedupe_key: str,
+    source_job_url: str,
+) -> dict[str, Any]:
+    return {
+        "job_title": extracted.job_title,
+        "location": extracted.location,
+        "posted_date": extracted.posted_date,
+        "company_name": extracted.company_name,
+        "salary": extracted.salary,
+        "employment_type": extracted.employment_type,
+        "job_summary": extracted.job_summary,
+        "apply_links": apply_links,
+        "apply_directly_link": apply_directly_link,
+        "search_query": str(search_query or "").strip() or None,
+        "source": "Google Jobs",
+        "source_docid": _extract_google_docid_from_url(source_job_url),
+        "source_job_url": str(source_job_url or "").strip(),
+        "dedupe_key": dedupe_key,
+        "match_reason": extracted.match_reason,
+    }
+
+
+def _build_job_saved_event_data(
+    *,
+    file_name: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "job_title": str(record.get("job_title", "") or "").strip(),
+        "company_name": record.get("company_name"),
+        "location": str(record.get("location", "") or "").strip(),
+        "file_name": str(file_name or "").strip(),
+        "dedupe_key": str(record.get("dedupe_key", "") or "").strip(),
+        "source": str(record.get("source", "") or "").strip(),
+        "source_docid": str(record.get("source_docid", "") or "").strip(),
+        "source_job_url": str(record.get("source_job_url", "") or "").strip(),
+        "job": dict(record),
+    }
 
 
 def _missing_required_fields(extracted: FocusedJobExtraction) -> list[str]:
@@ -665,6 +721,15 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
         location=extracted.location,
         company_name=extracted.company_name,
     )
+    source_job_url = _get_page_url(page)
+    job_record = _build_job_record(
+        extracted=extracted,
+        apply_links=apply_links,
+        apply_directly_link=apply_directly_link,
+        search_query=args.search_query,
+        dedupe_key=dedupe_key,
+        source_job_url=source_job_url,
+    )
 
     if missing_fields:
         result_data = {
@@ -675,6 +740,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
             "reason": "missing_required_fields",
             "missing_fields": missing_fields,
             "dedupe_key": dedupe_key,
+            "job": job_record,
         }
         _record_tool_action(
             ctx,
@@ -718,15 +784,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
             "missing_fields": [],
             "dedupe_key": dedupe_key,
             "resolved_path": str(target_path),
-            "job": {
-                "job_title": extracted.job_title,
-                "location": extracted.location,
-                "posted_date": extracted.posted_date,
-                "company_name": extracted.company_name,
-                "job_summary": extracted.job_summary,
-                "apply_links": apply_links,
-                "apply_directly_link": apply_directly_link,
-            },
+            "job": job_record,
             "match_reason": extracted.match_reason,
         }
         _record_tool_action(
@@ -754,15 +812,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
             "missing_fields": [],
             "dedupe_key": dedupe_key,
             "resolved_path": str(target_path),
-            "job": {
-                "job_title": extracted.job_title,
-                "location": extracted.location,
-                "posted_date": extracted.posted_date,
-                "company_name": extracted.company_name,
-                "job_summary": extracted.job_summary,
-                "apply_links": apply_links,
-                "apply_directly_link": apply_directly_link,
-            },
+            "job": job_record,
             "match_reason": extracted.match_reason,
         }
         _record_tool_action(
@@ -780,21 +830,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
             )
         )
 
-    record = {
-        "job_title": extracted.job_title,
-        "location": extracted.location,
-        "posted_date": extracted.posted_date,
-        "company_name": extracted.company_name,
-        "salary": extracted.salary,
-        "employment_type": extracted.employment_type,
-        "job_summary": extracted.job_summary,
-        "apply_links": apply_links,
-        "apply_directly_link": apply_directly_link,
-        "search_query": str(args.search_query or "").strip() or None,
-        "source": "Google Jobs",
-        "dedupe_key": dedupe_key,
-        "match_reason": extracted.match_reason,
-    }
+    record = job_record
     record_json = json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n"
 
     try:
@@ -818,6 +854,7 @@ def process_focused_job(ctx: ToolContext, args: ProcessFocusedJobArgs) -> ToolOu
         "dedupe_key": dedupe_key,
         "resolved_path": str(target_path),
         "job": record,
+        "job_saved_event": _build_job_saved_event_data(file_name=args.file_name, record=record),
         "match_reason": extracted.match_reason,
     }
     _log_info(

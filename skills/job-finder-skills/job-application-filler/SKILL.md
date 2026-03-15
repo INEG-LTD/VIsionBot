@@ -6,6 +6,7 @@ description: Fill and submit a single job application from a job or ATS URL usin
 Complete exactly one job application per mission.
 Use the application URL, staged file paths, candidate facts, and preferences from CUSTOM RULES as the source of truth.
 Prefer the staged resume and cover letter files over the source CV path.
+Use the resume fallback path from CUSTOM RULES only when the primary staged resume is rejected or the portal explicitly requires a different file type.
 
 Open references only when needed:
 - ATS-specific quirks: `references/ats-patterns.md`
@@ -27,9 +28,12 @@ Open references only when needed:
 - Always prefer continuing with the user's staged resume and staged cover letter files from CUSTOM RULES.
 - If the site does not allow continuing with the user's own resume or cover letter and only offers builder/import services, fail the application.
 - If the job page, redirect destination, or application flow visibly states that the role is restricted to premium members, members-only users, subscribers, special-access users, or any similar gated audience, fail the application immediately.
+- Treat Cloudflare, "Checking your browser", rate-limit pages, and similar anti-bot interstitials as auth handoff blockers.
 - Skip unknown optional fields.
 - Ask the user about unknown required fields.
 - Never invent legal status, technical experience, credentials, dates, compensation facts, or anything not grounded in CUSTOM RULES or visible page content.
+- Never call `think(next_action="done")` until one terminal application event has already been accepted.
+- Do not click the final submit button more than once unless the page clearly returns to an editable validation-error state.
 - Always ask the user before the final submit click.
 
 ## Event Emission
@@ -48,7 +52,18 @@ Open references only when needed:
   - `application_failed`
   - `application_error`
 - Emit `application_form_detected` once the first real application form is visible.
-- Emit `application_auth_required` when login, registration, MFA, email verification, magic link, or captcha requires the user.
+  - Example:
+    `emit_events=[{"name":"application_form_detected","data":{"form_url":"https://jobs.example.com/apply","ats_type":"workday"}}]`
+- Emit `application_auth_required` when login, registration, MFA, email verification, magic link, captcha, Cloudflare interstitial, or similar anti-bot gating requires the user.
+  - Always include `data.auth_type` and `data.message`.
+  - Example:
+    `emit_events=[{"name":"application_auth_required","data":{"auth_type":"captcha","message":"captcha must be completed before the application can continue"}}]`
+- Emit `application_page_filled` after a page or major step is successfully completed and you advance or confirm it.
+  - Always include `data.page_number` and `data.fields_filled`.
+  - If the UI does not show a step number, count completed major form pages starting at `1`.
+  - Count only fields you actively filled or corrected on that step, not untouched prefills.
+  - Example:
+    `emit_events=[{"name":"application_page_filled","data":{"page_number":2,"fields_filled":6}}]`
 - Emit `application_file_uploaded` after a resume or cover letter upload succeeds.
   - Always include `data.file_type` as `resume` or `cover_letter`.
   - Always include `data.file_name` as the uploaded basename, not the full path.
@@ -56,13 +71,26 @@ Open references only when needed:
     `emit_events=[{"name":"application_file_uploaded","data":{"file_type":"resume","file_name":"active-application-resume.pdf"}}]`
   - Example cover letter upload event:
     `emit_events=[{"name":"application_file_uploaded","data":{"file_type":"cover_letter","file_name":"active-application-cover-letter.pdf"}}]`
-- Emit `application_page_filled` after a page or major step is successfully completed and you advance or confirm it.
 - Emit `application_review_reached` when the final review step or final submit screen is visible.
+  - Example:
+    `emit_events=[{"name":"application_review_reached","data":{"review_visible":true}}]`
 - Emit `application_submit_attempted` immediately after clicking the final submit button.
+  - Example:
+    `emit_events=[{"name":"application_submit_attempted","data":{"submit_button_label":"Submit Application"}}]`
 - Emit `application_submitted` only after a confirmation page or clear success message is visible.
+  - Example:
+    `emit_events=[{"name":"application_submitted","data":{"confirmation_detected":true,"confirmation_text":"Application submitted successfully"}}]`
 - Emit `application_manual_followup_required` when the workflow stops at an assessment, scheduler, external verification, already-applied message, or another human-only next step.
+  - Always include `data.followup_type` and `data.instructions`.
+  - Example:
+    `emit_events=[{"name":"application_manual_followup_required","data":{"followup_type":"assessment_required","instructions":"Complete the coding assessment from the next page before the application can proceed"}}]`
 - Emit `application_failed` only for terminal unrecoverable failures.
+  - Example:
+    `emit_events=[{"name":"application_failed","data":{"failure_code":"builder_only_flow","reason":"the site only allows resume builder or import flows instead of direct document upload"}}]`
 - Emit `application_error` for recoverable problems.
+  - Always include `data.error_code`, `data.message`, and `data.recoverable`.
+  - Example:
+    `emit_events=[{"name":"application_error","data":{"error_code":"upload_retry_failed","message":"resume upload failed twice and needs user help","recoverable":true}}]`
 
 ## Entry
 
@@ -73,7 +101,7 @@ Open references only when needed:
    - email-first gate that asks only for the candidate email before continuing
    - real application form
    - login or registration wall
-   - captcha or anti-bot gate
+   - captcha, Cloudflare, rate-limit, or another anti-bot gate
    - builder/import service that wants to create or rewrite the resume or cover letter
    - restricted-access job page that visibly requires premium/member/subscriber/special access
    - confirmation or already-applied state
@@ -81,19 +109,19 @@ Open references only when needed:
 3. If a redirect or landing page is visible, wait for it to settle, then re-detect the state.
 4. If an email-first gate is visible and it only asks for the candidate email, fill the candidate email from CUSTOM RULES, continue, and re-detect the state.
 5. If a login or registration wall is visible, go to `Auth Handoff`.
-6. If a captcha is visible, go to `Auth Handoff`.
+6. If a captcha or anti-bot gate is visible, go to `Auth Handoff`.
 7. If a restricted-access job page is visible, fail immediately.
 8. If a builder/import service is visible, go to `Resume Builder Rejection`.
 9. If a job posting page is visible and Apply is available, click Apply and re-detect.
 10. When the first real application form is visible, emit:
    - `emit_events=[{"name":"application_form_detected","data":{"form_url":"<current url>","ats_type":"<detected ATS or generic>"}}]`
-11. Call `think(next_action="start_loop", loop_count=40, loop_description="Fill one job application safely")`.
+11. Call `think(next_action="start_loop", loop_mode="until_done", loop_description="Fill one job application safely", loop_exit_condition="Stop only after one terminal application event has been accepted: application_submitted, application_cancelled, application_manual_followup_required, or application_failed")`.
 
 ## Decision Table
 
 | Situation | Action |
 | --- | --- |
-| Login, registration, MFA, OTP, magic link, email verification, or captcha is required | Emit `application_auth_required`, call `ask_user`, then re-detect the page after the user returns |
+| Login, registration, MFA, OTP, magic link, email verification, captcha, Cloudflare, or another anti-bot interstitial is required | Emit `application_auth_required`, call `ask_user`, then re-detect the page after the user returns |
 | Job posting is visible instead of the form | Click Apply, then re-detect |
 | A redirect lands on another employer, ATS, or application-host domain | Wait for the new page to stabilize, then re-detect and continue from the new state |
 | The page asks only for the candidate email before the real form | Fill the candidate email from CUSTOM RULES, continue, then re-detect |
@@ -105,7 +133,9 @@ Open references only when needed:
 | Unknown optional field | Skip it |
 | Resume upload field | Call `upload_file` with the staged resume path from CUSTOM RULES |
 | Cover letter upload field | Call `upload_file` with the staged cover letter path from CUSTOM RULES |
+| The primary resume upload is rejected because of file type or the portal explicitly requires another format | Use the resume fallback order from `Attachment Rules` |
 | Cover letter text area | Call `read_file` on the staged cover letter text path, then paste the content |
+| A required supporting document such as portfolio, transcript, certification, work sample, or visa document is requested | Use the staged supporting document path from CUSTOM RULES when available; otherwise ask once, then use manual follow-up if the document is still unavailable |
 | Marketing, SMS, or talent pool consent | Apply the configured policy from CUSTOM RULES |
 | Required terms, privacy acknowledgement, or accuracy certification | Accept it |
 | EEO field with configured answer | Use the configured answer |
@@ -155,6 +185,23 @@ Open references only when needed:
    - `emit_events=[{"name":"application_failed","data":{"failure_code":"builder_only_flow","reason":"the site only allows resume or cover letter builder/import services instead of the user's own files"}}]`
    then call `flag` and `think(next_action="done")`.
 
+## Attachment Rules
+
+- Resume uploads:
+  - Try the staged primary resume upload path first.
+  - If the portal rejects that file type or explicitly requires another format, use the resume fallback path from CUSTOM RULES.
+  - If CUSTOM RULES also provide a staged `.doc` or `.docx` resume path, use it only after the earlier options are truthfully disallowed.
+  - Never switch to a fallback unless the page clearly rejects or disallows the earlier option.
+- Cover letter uploads:
+  - Use the staged cover letter upload path.
+  - Use the staged cover letter text path only for text boxes that clearly request the cover letter body.
+- Supporting documents:
+  - If a required portfolio, transcript, certification, work sample, visa document, or similar attachment is requested and CUSTOM RULES provide a staged path, upload it.
+  - If the document is required and no staged path exists, call `ask_user` once.
+  - If the document is still unavailable after that handoff, emit:
+    - `emit_events=[{"name":"application_manual_followup_required","data":{"followup_type":"missing_required_document","instructions":"Upload the required supporting document manually, then resume or restart the application"}}]`
+    then call `think(next_action="done")`.
+
 ## Filling Loop
 
 For each visible step:
@@ -166,17 +213,19 @@ For each visible step:
    - phone
    - address
    - city, state, postcode, country
-   - LinkedIn, GitHub, website
+   - LinkedIn, GitHub, website, portfolio URL
    - work authorization
    - sponsorship needed
    - notice period
    - earliest start date
+   - relocation willingness
+   - travel willingness
    - desired salary
 3. If the visible step is an email-first gate, fill only the candidate email, continue, and re-detect before treating it as the full form.
 4. If the page redirects to another site or ATS during the flow, wait for the destination to stabilize and re-detect before continuing.
 5. If the page visibly shows a premium/member/subscriber/special-access restriction, use `Restricted Access Rejection`.
 6. If the page tries to route the candidate into a resume or cover-letter builder/import flow, use `Resume Builder Rejection`.
-7. Upload files with the exact staged paths from CUSTOM RULES.
+7. Upload files with the exact staged paths from CUSTOM RULES and follow `Attachment Rules` for any required fallback.
 8. Follow the question and consent policies below.
 9. Fix any visible validation errors before advancing.
 10. Advance with the visible `Next`, `Continue`, `Review`, or equivalent action.
@@ -196,6 +245,12 @@ For each visible step:
 - Availability and relocation:
   - Use stored values when present.
   - Otherwise ask the user if the field is required.
+- Travel:
+  - Use stored values when present.
+  - Otherwise ask the user if the field is required.
+- Website, portfolio, LinkedIn, and GitHub:
+  - Use the stored field that truthfully matches what the form is asking for.
+  - Do not substitute LinkedIn, GitHub, website, or portfolio for each other unless CUSTOM RULES explicitly say they are interchangeable.
 - EEO and demographics:
   - Use stored preferences first.
   - Else select `Prefer not to say` when available.
@@ -241,7 +296,8 @@ For each visible step:
    then call `think(next_action="done")`.
 4. If the user approves, click the final submit button and emit:
    - `emit_events=[{"name":"application_submit_attempted","data":{"submit_button_label":"<visible label>"}}]`
-5. Wait for confirmation.
+5. After clicking submit once, wait for confirmation, redirect completion, or validation errors.
+   - Do not click the submit button again unless the page clearly returns to an editable validation-error state on the same review step.
 6. If confirmation is visible, emit:
    - `emit_events=[{"name":"application_submitted","data":{"confirmation_detected":true,"confirmation_text":"<short visible confirmation text>"}}]`
    then report completion and call `think(next_action="done")`.
@@ -259,6 +315,9 @@ For each visible step:
 - If the session times out:
   - emit `application_auth_required`
   - ask the user to refresh or sign in again
+- If Cloudflare, "Checking your browser", rate-limit pages, or similar anti-bot interstitials appear:
+  - emit `application_auth_required`
+  - ask the user to clear the blocker, then re-detect the page
 - If the site opens the form in a new tab:
   - switch to the new tab and continue
 - If file upload fails:

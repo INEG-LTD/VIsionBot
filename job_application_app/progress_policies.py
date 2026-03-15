@@ -12,6 +12,117 @@ from agent.mission_progress import (
     FinishDecision,
 )
 
+APPLICATION_TERMINAL_EVENT_NAMES = {
+    "application_submitted",
+    "application_cancelled",
+    "application_manual_followup_required",
+    "application_failed",
+}
+
+
+class ApplicationMissionProgressPolicy:
+    """Progress policy for single job application missions."""
+
+    def on_mission_start(
+        self,
+        *,
+        mission: str,
+        starting_url: str,
+        base_knowledge: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "terminal_event_seen": False,
+            "terminal_event_name": "",
+            "auth_interruptions": 0,
+            "recoverable_errors": 0,
+        }
+
+    def on_action_result(
+        self,
+        *,
+        progress_state: dict[str, Any],
+        action_result: ActionResultPayload,
+    ) -> tuple[dict[str, Any], list[str]]:
+        state = self._coerce_state(progress_state)
+        hints: list[str] = []
+        accepted_names = set(action_result.accepted_event_names or ())
+
+        terminal_name = next(
+            (name for name in APPLICATION_TERMINAL_EVENT_NAMES if name in accepted_names),
+            "",
+        )
+        if terminal_name:
+            state["terminal_event_seen"] = True
+            state["terminal_event_name"] = terminal_name
+
+        if "application_auth_required" in accepted_names:
+            state["auth_interruptions"] = int(state.get("auth_interruptions", 0) or 0) + 1
+            hints.append(
+                "Wait for the user to complete the required sign-in, verification, or anti-bot step, then re-detect the page before continuing."
+            )
+
+        if "application_error" in accepted_names:
+            state["recoverable_errors"] = int(state.get("recoverable_errors", 0) or 0) + 1
+            hints.append(
+                "Recover only if the browser returns to the same application flow. Otherwise end with application_failed or application_manual_followup_required."
+            )
+
+        return state, hints
+
+    def get_progress_context(
+        self,
+        *,
+        progress_state: dict[str, Any],
+    ) -> str:
+        state = self._coerce_state(progress_state)
+        return "\n".join(
+            [
+                f"- terminal_event_seen: {str(bool(state['terminal_event_seen'])).lower()}",
+                f"- terminal_event_name: {state['terminal_event_name'] or 'none'}",
+                f"- auth_interruptions: {state['auth_interruptions']}",
+                f"- recoverable_errors: {state['recoverable_errors']}",
+                "- Mission completion is blocked until one terminal application event is accepted.",
+            ]
+        )
+
+    def on_finish_attempt(
+        self,
+        *,
+        progress_state: dict[str, Any],
+        finish_attempt: FinishAttemptPayload,
+    ) -> FinishDecision:
+        state = self._coerce_state(progress_state)
+        accepted_names = set(finish_attempt.accepted_event_names or ())
+
+        if finish_attempt.kind == "terminal_event":
+            if finish_attempt.event_name in APPLICATION_TERMINAL_EVENT_NAMES:
+                return FinishDecision(allow=True)
+            return FinishDecision(
+                allow=False,
+                reason=f"unknown application terminal event '{finish_attempt.event_name or 'missing'}'",
+            )
+
+        if finish_attempt.kind == "done":
+            if state["terminal_event_seen"] or accepted_names.intersection(APPLICATION_TERMINAL_EVENT_NAMES):
+                return FinishDecision(allow=True)
+            return FinishDecision(
+                allow=False,
+                reason="application mission cannot end before a terminal application event is accepted",
+                hint="Continue until the flow reaches submission, cancellation, manual follow-up, or failure.",
+            )
+
+        return FinishDecision(allow=True)
+
+    @staticmethod
+    def _coerce_state(progress_state: dict[str, Any]) -> dict[str, Any]:
+        source = dict(progress_state or {})
+        return {
+            "terminal_event_seen": bool(source.get("terminal_event_seen", False)),
+            "terminal_event_name": str(source.get("terminal_event_name", "") or "").strip(),
+            "auth_interruptions": int(source.get("auth_interruptions", 0) or 0),
+            "recoverable_errors": int(source.get("recoverable_errors", 0) or 0),
+        }
+
 
 class GoogleJobsMissionProgressPolicy:
     """Progress policy for Google Jobs collection missions."""

@@ -21,6 +21,14 @@ CV_SUMMARY_WORD_COUNT = 100
 APPLICATION_PREFERENCES_KEY = "application_preferences"
 EEO_PREFERENCES_KEY = "eeo_preferences"
 ACTIVE_SOURCE_CV_STEM = "active-source-cv"
+SUPPORTING_DOCUMENTS_DIRNAME = "supporting_documents"
+COMMON_SUPPORTING_DOCUMENTS = (
+    ("portfolio", "portfolio file"),
+    ("transcript", "transcript"),
+    ("certification", "certification"),
+    ("work_sample", "work sample"),
+    ("visa_document", "visa document"),
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,23 @@ def _copy_cv_to_profile(profile_root: Path, prompt_message: str) -> Path:
     target_cv = profile_root / f"user_cv{source_cv.suffix.lower()}"
     shutil.copy2(source_cv, target_cv)
     return target_cv
+
+
+def _copy_optional_file_to_profile(profile_root: Path, *, prompt_message: str, target_stem: str) -> str:
+    print(prompt_message)
+    selected_path = _pick_file()
+    if not selected_path:
+        return ""
+
+    source_path = Path(selected_path).expanduser().resolve()
+    if not source_path.exists():
+        raise FileNotFoundError(f"Selected file does not exist: {source_path}")
+
+    documents_dir = profile_root / SUPPORTING_DOCUMENTS_DIRNAME
+    documents_dir.mkdir(parents=True, exist_ok=True)
+    destination = documents_dir / f"{target_stem}{source_path.suffix.lower()}"
+    shutil.copy2(source_path, destination)
+    return str(destination)
 
 
 def ensure_workspace_source_cv_alias(workspace_root: Path, user_details: dict) -> str:
@@ -155,6 +180,8 @@ def _request_user_profile(profile_root: Path) -> dict:
     state = input("Enter your state: ").strip()
     post_code = input("Enter your post code: ").strip()
     country = input("Enter your country: ").strip()
+    website_url = input("Enter your website URL (leave blank if none): ").strip()
+    portfolio_url = input("Enter your portfolio URL (leave blank if none): ").strip()
     linkedin_url = input("Enter your LinkedIn URL: ").strip()
     github_url = input("Enter your GitHub URL: ").strip()
 
@@ -173,9 +200,12 @@ def _request_user_profile(profile_root: Path) -> dict:
         "state": state,
         "post_code": post_code,
         "country": country,
+        "website_url": website_url,
+        "portfolio_url": portfolio_url,
         "linkedin_url": linkedin_url,
         "github_url": github_url,
         "cv_path": str(target_cv),
+        "supporting_documents": _prompt_supporting_documents(profile_root),
     }
 
 
@@ -210,6 +240,44 @@ def _prompt_choice(prompt: str, choices: list[str], *, default: str) -> str:
         if answer in normalized:
             return normalized[answer]
         print(f"Please choose one of: {', '.join(choices)}")
+
+
+def _normalize_supporting_documents(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+
+    normalized: dict[str, str] = {}
+    for raw_key, raw_path in value.items():
+        key = str(raw_key or "").strip()
+        path_text = str(raw_path or "").strip()
+        if not key or not path_text:
+            continue
+        try:
+            resolved_path = Path(path_text).expanduser().resolve()
+        except Exception:
+            continue
+        if resolved_path.exists() and resolved_path.is_file():
+            normalized[key] = str(resolved_path)
+    return normalized
+
+
+def _prompt_supporting_documents(profile_root: Path) -> dict[str, str]:
+    print("You can optionally stage supporting documents for job applications.")
+    if not _prompt_yes_no("Do you want to add optional supporting documents now?", default=False):
+        return {}
+
+    documents: dict[str, str] = {}
+    for key, label in COMMON_SUPPORTING_DOCUMENTS:
+        if not _prompt_yes_no(f"Do you want to add a {label}?", default=False):
+            continue
+        selected_path = _copy_optional_file_to_profile(
+            profile_root,
+            prompt_message=f"Please select your {label}. Cancel to skip it.",
+            target_stem=key.replace("_", "-"),
+        )
+        if selected_path:
+            documents[key] = selected_path
+    return documents
 
 
 def build_eeo_preferences(agent: Agent, user_details: dict) -> dict[str, str]:
@@ -294,6 +362,18 @@ def build_application_preferences(agent: Agent, user_details: dict) -> dict:
         ).strip()
         changed = True
 
+    if "relocation_willingness" not in preferences:
+        preferences["relocation_willingness"] = input(
+            "Enter your relocation preference (for example: Yes, No, or Case by case): "
+        ).strip()
+        changed = True
+
+    if "travel_willingness" not in preferences:
+        preferences["travel_willingness"] = input(
+            "Enter your travel preference (for example: Yes, No, or Up to 25%): "
+        ).strip()
+        changed = True
+
     if "free_text_mode" not in preferences:
         preferences["free_text_mode"] = _prompt_choice(
             "How should open-ended application questions be handled?",
@@ -360,12 +440,32 @@ def build_user_data(agent: Agent) -> dict:
 
     cv_path_raw = str(user_details.get("cv_path", "")).strip()
     cv_path = Path(cv_path_raw).expanduser().resolve() if cv_path_raw else None
+    changed = False
     if cv_path is None or not cv_path.exists():
         target_cv = _copy_cv_to_profile(
             profile_root,
             prompt_message="Saved profile CV is missing or unavailable. Please select your CV file again.",
         )
         user_details["cv_path"] = str(target_cv)
+        changed = True
+
+    if "website_url" not in user_details:
+        user_details["website_url"] = input("Enter your website URL (leave blank if none): ").strip()
+        changed = True
+
+    if "portfolio_url" not in user_details:
+        user_details["portfolio_url"] = input("Enter your portfolio URL (leave blank if none): ").strip()
+        changed = True
+
+    normalized_documents = _normalize_supporting_documents(user_details.get("supporting_documents", {}))
+    if "supporting_documents" not in user_details:
+        user_details["supporting_documents"] = _prompt_supporting_documents(profile_root)
+        changed = True
+    elif normalized_documents != user_details.get("supporting_documents"):
+        user_details["supporting_documents"] = normalized_documents
+        changed = True
+
+    if changed:
         _save_user_details(profile_root, user_details)
     print(f"Loaded user profile from {user_details_path}")
     return user_details

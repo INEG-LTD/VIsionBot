@@ -13,7 +13,10 @@ from agent.events import EventDefinition
 from core.config import Config, DebugConfig, ExecutionConfig, ModelConfig, SandboxConfig, StorageConfig
 from job_application_app.document_generation import generate_cover_letter, generate_cv
 from job_application_app.process_focused_job_tool import process_focused_job
-from job_application_app.progress_policies import GoogleJobsMissionProgressPolicy
+from job_application_app.progress_policies import (
+    ApplicationMissionProgressPolicy,
+    GoogleJobsMissionProgressPolicy,
+)
 from job_application_app.profile_store import (
     build_application_preferences,
     build_cv_professional_summary,
@@ -45,12 +48,18 @@ JOB_COLLECTION_EVENTS = [
     ),
     EventDefinition(
         name="job_saved",
-        description="A focused job was saved to the jobs JSONL file.",
-        when="after reading a successful process_focused_job result and taking the next successful action",
+        description="A focused job was saved to the jobs JSONL file using the canonical job data returned by process_focused_job.",
+        when="after reading a successful process_focused_job result and taking the next successful action; copy the returned job_saved_event payload exactly",
         schema={
             "job_title": str,
+            "company_name": (str, type(None)),
+            "location": str,
             "file_name": str,
             "dedupe_key": str,
+            "source": str,
+            "source_docid": str,
+            "source_job_url": str,
+            "job": dict,
         },
         dedupe_by_payload=True,
     ),
@@ -313,6 +322,8 @@ def _build_common_candidate_knowledge(
     state = str(user_details.get("state", "")).strip()
     post_code = str(user_details.get("post_code", "")).strip()
     country = str(user_details.get("country", "")).strip()
+    website_url = str(user_details.get("website_url", "")).strip()
+    portfolio_url = str(user_details.get("portfolio_url", "")).strip()
     linkedin_url = str(user_details.get("linkedin_url", "")).strip()
     github_url = str(user_details.get("github_url", "")).strip()
     cv_path = str(user_details.get("cv_path", "")).strip()
@@ -328,9 +339,21 @@ def _build_common_candidate_knowledge(
         knowledge.append(f"Candidate phone: {phone}")
     if address:
         knowledge.append(f"Candidate address: {address}")
+    if city:
+        knowledge.append(f"Candidate city: {city}")
+    if state:
+        knowledge.append(f"Candidate state: {state}")
+    if post_code:
+        knowledge.append(f"Candidate post code: {post_code}")
+    if country:
+        knowledge.append(f"Candidate country: {country}")
     if city or state or post_code or country:
         location_parts = [part for part in [city, state, post_code, country] if part]
         knowledge.append(f"Candidate location: {', '.join(location_parts)}")
+    if website_url:
+        knowledge.append(f"Candidate website: {website_url}")
+    if portfolio_url:
+        knowledge.append(f"Candidate portfolio URL: {portfolio_url}")
     if linkedin_url:
         knowledge.append(f"Candidate LinkedIn: {linkedin_url}")
     if github_url:
@@ -384,7 +407,7 @@ def build_application_base_knowledge(
     application_url: str,
     cv_professional_summary: str,
     application_preferences: dict,
-    staged_artifacts: dict[str, str],
+    staged_artifacts: dict[str, Any],
     source_cv_upload_path: str = "",
 ) -> list[str]:
     desired_salary = str(application_preferences.get("desired_salary", "")).strip()
@@ -403,6 +426,8 @@ def build_application_base_knowledge(
     sponsorship_needed = str(application_preferences.get("sponsorship_needed", "")).strip()
     notice_period = str(application_preferences.get("notice_period", "")).strip()
     earliest_start_date = str(application_preferences.get("earliest_start_date", "")).strip()
+    relocation_willingness = str(application_preferences.get("relocation_willingness", "")).strip()
+    travel_willingness = str(application_preferences.get("travel_willingness", "")).strip()
     free_text_mode = str(application_preferences.get("free_text_mode", "ask")).strip() or "ask"
     prefill_review_mode = (
         str(application_preferences.get("prefill_review_mode", "smart")).strip() or "smart"
@@ -435,6 +460,10 @@ def build_application_base_knowledge(
         base_knowledge.append(f"Notice period: {notice_period}")
     if earliest_start_date:
         base_knowledge.append(f"Earliest start date: {earliest_start_date}")
+    if relocation_willingness:
+        base_knowledge.append(f"Relocation willingness: {relocation_willingness}")
+    if travel_willingness:
+        base_knowledge.append(f"Travel willingness: {travel_willingness}")
     base_knowledge.append(f"Free text response mode: {free_text_mode}")
     base_knowledge.append(f"Prefill review mode: {prefill_review_mode}")
     base_knowledge.append(f"Marketing opt-in policy: {marketing_policy}")
@@ -454,6 +483,9 @@ def build_application_base_knowledge(
         "Use the exact staged application file paths from these rules when calling upload_file or read_file."
     )
     base_knowledge.append(f"Resume upload file path: {staged_artifacts['resume_upload_path']}")
+    resume_upload_fallback_path = str(staged_artifacts.get("resume_upload_fallback_path", "") or "").strip()
+    if resume_upload_fallback_path:
+        base_knowledge.append(f"Resume upload fallback path: {resume_upload_fallback_path}")
     base_knowledge.append(
         f"Cover letter upload file path: {staged_artifacts['cover_letter_upload_path']}"
     )
@@ -466,6 +498,12 @@ def build_application_base_knowledge(
     base_knowledge.append(
         f"Application context file path: {staged_artifacts['application_context_path']}"
     )
+    additional_document_paths = staged_artifacts.get("additional_document_paths", {})
+    if isinstance(additional_document_paths, dict) and additional_document_paths:
+        base_knowledge.append(
+            "Additional supporting document paths: "
+            f"{json.dumps(additional_document_paths, sort_keys=True)}"
+        )
     base_knowledge.append(
         "Use the staged resume and staged cover letter for uploads. Use the cover letter text file for any "
         "cover letter text area or essay box that clearly requests the cover letter body."
@@ -536,6 +574,32 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _stage_supporting_documents(
+    *,
+    user_details: dict,
+    application_dir: Path,
+) -> dict[str, str]:
+    supporting_documents = user_details.get("supporting_documents", {})
+    if not isinstance(supporting_documents, dict):
+        return {}
+
+    staged_documents: dict[str, str] = {}
+    for raw_key, raw_path in sorted(supporting_documents.items()):
+        document_key = str(raw_key or "").strip()
+        source_text = str(raw_path or "").strip()
+        if not document_key or not source_text:
+            continue
+        try:
+            source_path = Path(source_text).expanduser().resolve()
+        except Exception:
+            continue
+        if not source_path.exists() or not source_path.is_file():
+            continue
+        destination = application_dir / "supporting-documents" / f"{_safe_slug(document_key)}{source_path.suffix.lower()}"
+        staged_documents[document_key] = str(_copy_file(source_path, destination))
+    return staged_documents
+
+
 def stage_application_artifacts(
     agent: Agent,
     *,
@@ -543,7 +607,10 @@ def stage_application_artifacts(
     application_url: str,
     cv_result: dict,
     cover_letter_result: dict,
-) -> dict[str, str]:
+    user_details: dict,
+    application_preferences: dict,
+    source_cv_upload_path: str = "",
+) -> dict[str, Any]:
     workspace_root = agent.agent_workspace.workspace_root
     application_slug = _safe_slug(
         f"{job.get('company_name', '')}-{job.get('job_title', '')}"
@@ -588,6 +655,25 @@ def stage_application_artifacts(
         workspace_root / ACTIVE_COVER_LETTER_TEXT_FILENAME,
         cover_letter_text,
     )
+    canonical_source_resume_path = ""
+    resume_upload_fallback_path = ""
+    if source_cv_upload_path:
+        try:
+            source_resume = Path(source_cv_upload_path).expanduser().resolve()
+        except Exception:
+            source_resume = None
+        if source_resume and source_resume.exists() and source_resume.is_file():
+            canonical_source_resume = _copy_file(
+                source_resume,
+                application_dir / f"source-resume{source_resume.suffix.lower()}",
+            )
+            canonical_source_resume_path = str(canonical_source_resume)
+            resume_upload_fallback_path = str(source_resume)
+
+    additional_document_paths = _stage_supporting_documents(
+        user_details=user_details,
+        application_dir=application_dir,
+    )
 
     application_context = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -598,8 +684,24 @@ def stage_application_artifacts(
             "job_summary": str(job.get("job_summary", "")).strip(),
         },
         "application_url": application_url,
+        "candidate": {
+            "website_url": str(user_details.get("website_url", "")).strip(),
+            "portfolio_url": str(user_details.get("portfolio_url", "")).strip(),
+        },
+        "preferences": {
+            "work_authorization": str(application_preferences.get("work_authorization", "")).strip(),
+            "sponsorship_needed": str(application_preferences.get("sponsorship_needed", "")).strip(),
+            "notice_period": str(application_preferences.get("notice_period", "")).strip(),
+            "earliest_start_date": str(application_preferences.get("earliest_start_date", "")).strip(),
+            "relocation_willingness": str(application_preferences.get("relocation_willingness", "")).strip(),
+            "travel_willingness": str(application_preferences.get("travel_willingness", "")).strip(),
+            "desired_salary": str(application_preferences.get("desired_salary", "")).strip(),
+        },
         "artifacts": {
+            "resume_upload_path": str(active_resume_path),
+            "resume_upload_fallback_path": resume_upload_fallback_path,
             "canonical_resume_path": str(canonical_resume_path),
+            "canonical_source_resume_path": canonical_source_resume_path,
             "canonical_cover_letter_path": str(canonical_cover_letter_path),
             "canonical_cover_letter_markdown_path": str(canonical_cover_letter_markdown_path),
             "canonical_cover_letter_text_path": str(canonical_cover_letter_text_path),
@@ -607,6 +709,7 @@ def stage_application_artifacts(
             "active_cover_letter_path": str(active_cover_letter_path),
             "active_cover_letter_markdown_path": str(active_cover_letter_markdown_path),
             "active_cover_letter_text_path": str(active_cover_letter_text_path),
+            "additional_document_paths": additional_document_paths,
         },
     }
     canonical_context_path = _write_json_file(
@@ -621,14 +724,17 @@ def stage_application_artifacts(
     return {
         "application_dir": str(application_dir),
         "resume_upload_path": str(active_resume_path),
+        "resume_upload_fallback_path": resume_upload_fallback_path,
         "cover_letter_upload_path": str(active_cover_letter_path),
         "cover_letter_markdown_path": str(active_cover_letter_markdown_path),
         "cover_letter_text_path": str(active_cover_letter_text_path),
         "application_context_path": str(active_context_path),
         "canonical_resume_path": str(canonical_resume_path),
+        "canonical_source_resume_path": canonical_source_resume_path,
         "canonical_cover_letter_path": str(canonical_cover_letter_path),
         "canonical_cover_letter_text_path": str(canonical_cover_letter_text_path),
         "canonical_application_context_path": str(canonical_context_path),
+        "additional_document_paths": additional_document_paths,
     }
 
 
@@ -646,7 +752,7 @@ def log_application_outcome(
     application_url: str,
     mission_result,
     recorded_events: list[AgentEvent],
-    staged_artifacts: dict[str, str],
+    staged_artifacts: dict[str, Any],
 ) -> dict[str, Any]:
     terminal_names = {
         "application_submitted",
@@ -656,7 +762,9 @@ def log_application_outcome(
     }
     terminal_event = next((event for event in reversed(recorded_events) if event.name in terminal_names), None)
 
-    outcome = terminal_event.name if terminal_event else ("application_submitted" if mission_result.success else "application_failed")
+    outcome = terminal_event.name if terminal_event else (
+        "unknown_terminal_state" if mission_result.success else "application_failed"
+    )
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "job_title": str(job.get("job_title", "")).strip(),
@@ -894,6 +1002,7 @@ def apply_to_job(
         agent_id=STABLE_AGENT_ID,
         event_definitions=APPLICATION_EVENTS,
         event_callback=make_event_callback(recorded_events),
+        mission_progress_policy=ApplicationMissionProgressPolicy(),
         user_question_callback=on_user_question,
     ) as agent:
         sync_skills_to_agent_workspace(agent)
@@ -910,6 +1019,9 @@ def apply_to_job(
             application_url=application_url,
             cv_result=cv_result,
             cover_letter_result=cover_letter_result,
+            user_details=user_details,
+            application_preferences=application_preferences,
+            source_cv_upload_path=source_cv_upload_path,
         )
         base_knowledge = build_application_base_knowledge(
             user_details,
